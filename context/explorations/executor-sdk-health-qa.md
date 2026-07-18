@@ -49,16 +49,16 @@ metadata, tests, docs, and the plan are counted separately.
 | Phase 5: watchdog before contraction                           |       467 |      49 |       +418 |             <= +200 |
 | Watchdog contraction                                           |        49 |      74 |        -25 |  contraction credit |
 | Final redundant-comment contraction                            |         0 |      10 |        -10 |        Phase 6 <= 0 |
-| Review hardening and mutation-surface contraction              |       173 |      87 |        +86 |   correctness delta |
-| **Beyond PR #1888 (per-commit gross)**                         | **1,750** | **464** | **+1,286** |       **<= +1,200** |
-| **Total (per-commit gross)**                                   | **2,119** | **525** | **+1,594** |       **<= +2,500** |
-| **Final product diff**                                         | **1,920** | **326** | **+1,594** |       **<= +2,500** |
+| Review hardening and mutation-surface contraction              |       192 |      87 |       +105 |   correctness delta |
+| **Beyond PR #1888 (per-commit gross)**                         | **1,769** | **464** | **+1,305** |       **<= +1,200** |
+| **Total (per-commit gross)**                                   | **2,138** | **525** | **+1,613** |       **<= +2,500** |
+| **Final product diff**                                         | **1,939** | **326** | **+1,613** |       **<= +2,500** |
 
 Phase 5's original slice estimate was too low: the final watchdog mechanism is +393 after its
 own contraction. Review hardening then removed external Task update authority, constrained the
 documented create/run API to dormant tasks, made deletion atomic queued-work cancellation, and
 added strict executor patch, identity, configuration, and adapter-session boundaries. That
-correctness delta exceeds the reviewed post-#1888 target by 86 net lines while remaining below the
+correctness delta exceeds the reviewed post-#1888 target by 105 net lines while remaining below the
 global ceiling, with three focused production modules, three Task custom methods, one column, and
 no new tables. The variance is disclosed rather than hidden by reclassification.
 
@@ -87,10 +87,11 @@ Deletion happened with replacement, not as a compatibility tail:
 | Short-ID contract       | `node scripts/check-no-ad-hoc-shortid.mjs` — passed                                                        |
 | Focused telemetry       | Connection/telemetry and coordinator suites — 10 tests passed                                              |
 | Focused watchdog        | Watchdog/heartbeat suites — 13 tests passed                                                                |
-| Review hardening        | Task authority/identity, strict config, and OpenCode session ownership — 179 focused tests passed          |
+| Watchdog handoff        | Unacknowledged enforced failure stops liveness and exits after the bounded abort grace — passed            |
+| Review hardening        | Task authority/identity, strict config, adapter session ownership, and handoff — 180 focused tests passed  |
 | Migrations              | Core migration suite passed for both schema histories; PostgreSQL live repository test skipped without URL |
 
-The full executor suite reached 37 passing files and 507 passing tests, with three unrelated
+The full executor suite reached 38 passing files and 508 passing tests, with three unrelated
 existing/environment failures:
 
 - Two Gemini suites cannot import the installed OpenTelemetry ESM package because its published

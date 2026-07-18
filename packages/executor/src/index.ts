@@ -233,9 +233,13 @@ export class AgorExecutor {
     evidence: Omit<import('@agor/core/types').SdkHealthFailureInput, 'task_id'>
   ): Promise<void> {
     if (!this.client) return;
+    let acknowledged = false;
     const report = this.client
       .service('tasks')
       .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
+      .then(() => {
+        acknowledged = true;
+      })
       .catch((error) => console.error('[executor] Failed to report SDK health:', error));
     if (evidence.watchdog_action !== 'enforced') {
       await report;
@@ -252,6 +256,21 @@ export class AgorExecutor {
     ]);
     if (deadline) clearTimeout(deadline);
     markSdkHealthAbort(this.abortController);
+    if (!acknowledged) {
+      this.heartbeat?.stop();
+      this.heartbeat = null;
+      const abortGraceMs =
+        this.config.resolvedConfig?.execution?.sdk_watchdog?.abort_grace_ms ??
+        resolveSdkWatchdogConfig().abort_grace_ms;
+      const exitDeadline = setTimeout(() => {
+        if (acknowledged) return;
+        console.error(
+          '[executor] SDK health report remained unacknowledged; exiting for containment'
+        );
+        process.exit(70);
+      }, abortGraceMs);
+      exitDeadline.unref?.();
+    }
   }
 
   /**
