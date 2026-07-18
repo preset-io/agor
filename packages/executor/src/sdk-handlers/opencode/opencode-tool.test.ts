@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { OpenCodeTool } from './opencode-tool.js';
+import { isOpenCodeSessionEvent, OpenCodeTool } from './opencode-tool.js';
 
 // Track client creation calls
 let clientCreateCount = 0;
@@ -80,6 +80,24 @@ describe('OpenCodeTool', () => {
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;
     vi.clearAllMocks();
+  });
+
+  describe('Event session ownership', () => {
+    it.each([
+      [{ type: 'session.status', properties: { sessionID: 'session-1' } }, 'session-1'],
+      [{ type: 'message.updated', properties: { info: { sessionID: 'session-2' } } }, 'session-2'],
+      [
+        { type: 'message.part.updated', properties: { part: { sessionID: 'session-3' } } },
+        'session-3',
+      ],
+      [{ type: 'session.updated', properties: { info: { id: 'session-4' } } }, 'session-4'],
+      [{ type: 'server.connected', properties: {} }, undefined],
+    ])('accepts only the owning session from %j', (event, expected) => {
+      expect(isOpenCodeSessionEvent(event as never, expected ?? 'session-1')).toBe(
+        expected !== undefined
+      );
+      if (expected) expect(isOpenCodeSessionEvent(event as never, 'other-session')).toBe(false);
+    });
   });
 
   describe('Constructor', () => {

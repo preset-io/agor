@@ -59,7 +59,7 @@ describe('protectServerManagedTaskWrites', () => {
     branch_id: 'branch-1',
   };
   const externalContext = (
-    method: 'create' | 'update' | 'patch',
+    method: 'patch',
     data: unknown,
     options: {
       taskId?: string;
@@ -87,104 +87,88 @@ describe('protectServerManagedTaskWrites', () => {
         : undefined,
     }) as import('@agor/core/types').HookContext;
 
-  it.each([
-    'create',
-    'update',
-    'patch',
-  ] as const)('rejects executor_connected_at on external %s', async (method) => {
+  it('rejects every normal-user patch, including terminality', async () => {
     await expect(
       protectServerManagedTaskWrites(
-        externalContext(method, { executor_connected_at: '2026-07-10T20:00:00.000Z' })
+        externalContext('patch', { status: TaskStatus.COMPLETED }, { taskId: 'task-1' })
       )
-    ).rejects.toThrow('executor_connected_at is server-managed');
+    ).rejects.toThrow('executor token scoped to this task');
   });
 
-  it('rejects executor_connected_at in bulk create data', async () => {
+  it('rejects an executor token scoped to another task', async () => {
     await expect(
       protectServerManagedTaskWrites(
-        externalContext('create', [
-          { full_prompt: 'safe' },
-          { executor_connected_at: '2026-07-10T20:00:00.000Z' },
-        ])
+        externalContext(
+          'patch',
+          { status: TaskStatus.COMPLETED },
+          { taskId: 'task-1', executorTaskId: 'task-2' }
+        )
       )
-    ).rejects.toThrow('executor_connected_at is server-managed');
-  });
-
-  it('rejects executor_mode on external patches', async () => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { executor_mode: 'local' }))
-    ).rejects.toThrow('executor_mode is server-managed');
+    ).rejects.toThrow('executor token scoped to this task');
   });
 
   it.each([
-    'last_executor_heartbeat_at',
-    'latest_executor_pulse',
+    'task_id',
+    'session_id',
+    'created_by',
+    'queue_position',
     'sdk_failure',
-    'termination_request',
-    'sdk_watchdog_mode',
-  ])('rejects server-owned health field %s at top level or in data', async (field) => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { [field]: 'forged' }))
-    ).rejects.toThrow('executor health fields are server-managed');
-    await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { data: { [field]: 'forged' } }))
-    ).rejects.toThrow('executor health fields are server-managed');
-  });
-
-  it.each([
-    'create',
-    'update',
-    'patch',
-  ] as const)('rejects server-owned dispatching status on external %s', async (method) => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.DISPATCHING }))
-    ).rejects.toThrow('dispatching task status is server-managed');
-  });
-
-  it.each([
-    'create',
-    'update',
-    'patch',
-  ] as const)('rejects server-owned dispatching status in external %s array data', async (method) => {
+  ])('rejects executor patch field %s outside the result allowlist', async (field) => {
     await expect(
       protectServerManagedTaskWrites(
-        externalContext(method, [
-          { status: TaskStatus.CREATED },
-          { status: TaskStatus.DISPATCHING },
-        ])
+        externalContext(
+          'patch',
+          { [field]: 'forged' },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+          }
+        )
       )
-    ).rejects.toThrow('dispatching task status is server-managed');
+    ).rejects.toThrow('not executor-managed');
   });
 
-  it.each([
-    'create',
-    'update',
-    'patch',
-  ] as const)('rejects server-owned running status on external %s', async (method) => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.RUNNING }))
-    ).rejects.toThrow('running task status is server-managed');
-  });
-
-  it.each([
-    'create',
-    'update',
-    'patch',
-  ] as const)('rejects server-owned running status in external %s array data', async (method) => {
+  it('allows a task-scoped executor to publish bounded result fields', async () => {
     await expect(
       protectServerManagedTaskWrites(
-        externalContext(method, [{ status: TaskStatus.CREATED }, { status: TaskStatus.RUNNING }])
+        externalContext(
+          'patch',
+          {
+            status: TaskStatus.COMPLETED,
+            completed_at: '2026-07-10T20:00:00.000Z',
+            model: 'test-model',
+            git_state: { sha_at_end: 'abc' },
+          },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+            persistedTask: {
+              status: TaskStatus.RUNNING,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
       )
-    ).rejects.toThrow('running task status is server-managed');
-  });
-
-  it('blocks the external dispatching-to-created-to-running bypass', async () => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.CREATED }))
     ).resolves.toBeDefined();
+  });
+
+  it('rejects a task-scoped executor forging dispatching', async () => {
     await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.RUNNING }))
-    ).rejects.toThrow('running task status is server-managed');
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.DISPATCHING },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+            persistedTask: {
+              status: TaskStatus.RUNNING,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('not executor-managed');
   });
 
   it('rejects a pre-claim executor running patch', async () => {
@@ -204,46 +188,26 @@ describe('protectServerManagedTaskWrites', () => {
           }
         )
       )
-    ).rejects.toThrow('running task status is server-managed');
+    ).rejects.toThrow('not connected and executor-writable');
   });
 
-  it('rejects a connected task-scoped executor forging dispatching', async () => {
+  it('rejects terminal results before the authenticated connection', async () => {
     await expect(
       protectServerManagedTaskWrites(
         externalContext(
           'patch',
-          { status: TaskStatus.DISPATCHING },
+          { status: TaskStatus.COMPLETED },
           {
             taskId: 'task-1',
             executorTaskId: 'task-1',
             persistedTask: {
-              task_id: 'task-1',
-              status: TaskStatus.AWAITING_INPUT,
-              executor_connected_at: '2026-07-10T20:00:00.000Z',
+              status: TaskStatus.DISPATCHING,
+              executor_connected_at: null,
             },
           }
         )
       )
-    ).rejects.toThrow('dispatching task status is server-managed');
-  });
-
-  it('rejects a normal user resuming an already-connected task', async () => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { status: TaskStatus.RUNNING },
-          {
-            taskId: 'task-1',
-            persistedTask: {
-              task_id: 'task-1',
-              status: TaskStatus.AWAITING_PERMISSION,
-              executor_connected_at: '2026-07-10T20:00:00.000Z',
-            },
-          }
-        )
-      )
-    ).rejects.toThrow('running task status is server-managed');
+    ).rejects.toThrow('not connected and executor-writable');
   });
 
   it.each([
@@ -265,32 +229,6 @@ describe('protectServerManagedTaskWrites', () => {
     );
 
     await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
-  });
-
-  it('rejects a connected executor token scoped to another task', async () => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { status: TaskStatus.RUNNING },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-2',
-            persistedTask: {
-              task_id: 'task-1',
-              status: TaskStatus.AWAITING_PERMISSION,
-              executor_connected_at: '2026-07-10T20:00:00.000Z',
-            },
-          }
-        )
-      )
-    ).rejects.toThrow('running task status is server-managed');
-  });
-
-  it('allows external executors to finish running tasks', async () => {
-    await expect(
-      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.COMPLETED }))
-    ).resolves.toBeDefined();
   });
 
   it('preserves trusted internal direct-to-running task writes', async () => {

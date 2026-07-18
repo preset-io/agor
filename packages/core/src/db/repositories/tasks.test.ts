@@ -903,6 +903,33 @@ describe('TaskRepository.update', () => {
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
 
+  dbTest('keeps persisted identity authoritative over update payloads', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(createTaskData({ session_id: sessionId }));
+
+    const updated = await taskRepo.update(created.task_id, {
+      task_id: generateId(),
+      session_id: await createSessionWithDeps(db),
+      created_by: 'forged-user',
+      created_at: '2000-01-01T00:00:00.000Z',
+      status: TaskStatus.COMPLETED,
+    });
+
+    expect(updated).toMatchObject({
+      task_id: created.task_id,
+      session_id: created.session_id,
+      created_by: created.created_by,
+      created_at: created.created_at,
+      status: TaskStatus.COMPLETED,
+    });
+    expect(await taskRepo.findById(created.task_id)).toMatchObject({
+      task_id: created.task_id,
+      session_id: created.session_id,
+      created_by: created.created_by,
+    });
+  });
+
   dbTest('allows a running executor task to complete normally', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

@@ -44,12 +44,18 @@ export interface RuntimeTelemetryInput {
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
 }
 
+export const SDK_WATCHDOG_FAILURE_REASONS = [
+  'no_first_progress',
+  'progress_stalled',
+  'stream_disconnected',
+  'unknown_activity',
+] as const;
+
+export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[number];
+
 export type SdkFailureReason =
   | 'startup_timeout'
-  | 'no_first_progress'
-  | 'progress_stalled'
-  | 'stream_disconnected'
-  | 'unknown_activity'
+  | SdkWatchdogFailureReason
   | 'heartbeat_lost'
   | 'termination_unverified';
 
@@ -67,8 +73,8 @@ export interface SdkFailure {
 
 export type SdkHealthFailureInput = Pick<
   SdkFailure,
-  'reason' | 'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
-> & { task_id: string };
+  'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
+> & { task_id: string; reason: SdkWatchdogFailureReason };
 
 export type TerminationCause =
   | 'user_stop'

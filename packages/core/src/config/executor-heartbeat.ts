@@ -24,6 +24,14 @@ function positiveIntegerOrDefault(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function positiveSafeInteger(value: number | undefined, fallback: number, path: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Config error: ${path} must be a positive safe integer`);
+  }
+  return value;
+}
+
 export function resolveExecutorHeartbeatConfig(
   execution?: AgorExecutionSettings
 ): ResolvedExecutorHeartbeatConfig {
@@ -55,9 +63,10 @@ export function resolveExecutorHeartbeatConfig(
 }
 
 export function resolveDispatchConnectTimeoutMs(execution?: AgorExecutionSettings): number {
-  return positiveIntegerOrDefault(
-    execution?.dispatch_connect_timeout_ms,
-    EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS
+  return positiveSafeInteger(
+    execution?.dispatch_connect_timeout_ms ?? undefined,
+    EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS,
+    'execution.dispatch_connect_timeout_ms'
   );
 }
 
@@ -70,25 +79,22 @@ export function resolveSdkWatchdogConfig(
       'Config error: execution.sdk_watchdog.mode must be disabled, observe, or enforce'
     );
   }
-  const positive = (value: number | undefined, fallback: number, path: string): number => {
-    if (value === undefined) return fallback;
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      throw new Error(`Config error: ${path} must be a positive safe integer`);
-    }
-    return value;
-  };
   return {
     mode: raw?.mode ?? 'observe',
-    first_progress_timeout_ms: positive(
+    first_progress_timeout_ms: positiveSafeInteger(
       raw?.first_progress_timeout_ms,
       180_000,
       'execution.sdk_watchdog.first_progress_timeout_ms'
     ),
-    abort_grace_ms: positive(raw?.abort_grace_ms, 15_000, 'execution.sdk_watchdog.abort_grace_ms'),
+    abort_grace_ms: positiveSafeInteger(
+      raw?.abort_grace_ms,
+      15_000,
+      'execution.sdk_watchdog.abort_grace_ms'
+    ),
     claude_idle_timeout_ms:
       raw?.claude_idle_timeout_ms === null
         ? null
-        : positive(
+        : positiveSafeInteger(
             raw?.claude_idle_timeout_ms,
             3_600_000,
             'execution.sdk_watchdog.claude_idle_timeout_ms'

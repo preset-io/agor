@@ -57,6 +57,16 @@ describe('TasksService SDK health reports', () => {
     expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
 
+  it('rejects non-watchdog failure reasons at the runtime boundary', async () => {
+    await expect(
+      serviceFor().reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'heartbeat_lost' as never,
+        watchdog_action: 'would_fire',
+      })
+    ).rejects.toThrow('invalid SDK health reason');
+  });
+
   it('hands enforced decisions to the shared coordinator with the configured grace', async () => {
     const current = { ...task, sdk_watchdog_mode: 'enforce' as const };
     const service = serviceFor(current);

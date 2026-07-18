@@ -468,71 +468,89 @@ const EXECUTOR_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
   TaskStatus.AWAITING_INPUT,
 ]);
 
-async function isConnectedExecutorResume(context: HookContext): Promise<boolean> {
-  if (context.method !== 'patch' || typeof context.id !== 'string') return false;
-  if (!isTaskScopedExecutorRequest(context, context.id)) return false;
+const EXECUTOR_ACTIVE_TASK_STATUSES = new Set<TaskStatus>([
+  TaskStatus.RUNNING,
+  ...EXECUTOR_RESUMABLE_TASK_STATUSES,
+]);
 
+const EXECUTOR_WRITABLE_TASK_STATUSES = new Set<TaskStatus>([
+  TaskStatus.RUNNING,
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+  TaskStatus.TIMED_OUT,
+  TaskStatus.COMPLETED,
+  TaskStatus.FAILED,
+  TaskStatus.STOPPED,
+]);
+
+const EXECUTOR_TASK_PATCH_FIELDS = new Set([
+  'status',
+  'completed_at',
+  'git_state',
+  'message_range',
+  'model',
+  'raw_sdk_response',
+  'normalized_sdk_response',
+  'computed_context_window',
+  'tool_use_count',
+  'duration_ms',
+  'agent_session_id',
+  'error_message',
+  'report',
+  'permission_request',
+  'session_md5',
+]);
+
+async function taskForExecutorPatch(context: HookContext): Promise<{
+  status?: unknown;
+  executor_connected_at?: unknown;
+} | null> {
   const service = context.service as unknown as {
     findByIdForScopeCheck?: (id: string) => Promise<unknown>;
   };
-  const existing = await service.findByIdForScopeCheck?.(context.id);
-  if (!existing || typeof existing !== 'object') return false;
-
-  const task = existing as { status?: unknown; executor_connected_at?: unknown };
-  return (
-    EXECUTOR_RESUMABLE_TASK_STATUSES.has(task.status as TaskStatus) &&
-    typeof task.executor_connected_at === 'string' &&
-    task.executor_connected_at.length > 0
-  );
+  const existing = await service.findByIdForScopeCheck?.(String(context.id));
+  return existing && typeof existing === 'object'
+    ? (existing as { status?: unknown; executor_connected_at?: unknown })
+    : null;
 }
 
 /** Prevent callers on a Feathers transport from forging executor-owned task state. */
 export async function protectServerManagedTaskWrites(context: HookContext): Promise<HookContext> {
   if (!context.params.provider) return context;
 
-  const writes = Array.isArray(context.data) ? context.data : [context.data];
-  const records = writes.filter(
-    (write): write is Record<string, unknown> => write !== null && typeof write === 'object'
-  );
-  if (records.some((write) => Object.hasOwn(write, 'executor_connected_at'))) {
-    throw new Forbidden('executor_connected_at is server-managed');
-  }
-  if (records.some((write) => Object.hasOwn(write, 'executor_mode'))) {
-    throw new Forbidden('executor_mode is server-managed');
-  }
-  const healthFields = [
-    'last_executor_heartbeat_at',
-    'latest_executor_pulse',
-    'sdk_failure',
-    'termination_request',
-    'sdk_watchdog_mode',
-  ];
-  if (
-    records.some((write) => {
-      const nested =
-        write.data && typeof write.data === 'object'
-          ? (write.data as Record<string, unknown>)
-          : undefined;
-      return healthFields.some(
-        (field) => Object.hasOwn(write, field) || Object.hasOwn(nested ?? {}, field)
-      );
-    })
-  ) {
-    throw new Forbidden('executor health fields are server-managed');
-  }
-  if (records.some((write) => write.status === TaskStatus.DISPATCHING)) {
-    throw new Forbidden('dispatching task status is server-managed');
-  }
-  if (records.some((write) => write.status === TaskStatus.RUNNING)) {
-    const isSingleRunningPatch =
-      records.length === 1 &&
-      records[0].status === TaskStatus.RUNNING &&
-      !Array.isArray(context.data);
-    if (!isSingleRunningPatch || !(await isConnectedExecutorResume(context))) {
-      throw new Forbidden('running task status is server-managed');
-    }
+  if (typeof context.id !== 'string' || !isTaskScopedExecutorRequest(context, context.id)) {
+    throw new Forbidden('Task patches require an executor token scoped to this task');
   }
 
+  const write =
+    context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+      ? (context.data as Record<string, unknown>)
+      : undefined;
+  if (!write || Object.keys(write).some((field) => !EXECUTOR_TASK_PATCH_FIELDS.has(field))) {
+    throw new Forbidden('Task patch contains fields that are not executor-managed');
+  }
+
+  const task = await taskForExecutorPatch(context);
+  if (
+    !task ||
+    typeof task.executor_connected_at !== 'string' ||
+    !task.executor_connected_at ||
+    !EXECUTOR_ACTIVE_TASK_STATUSES.has(task.status as TaskStatus)
+  ) {
+    throw new Forbidden('Task is not connected and executor-writable');
+  }
+  if (
+    write.status !== undefined &&
+    !EXECUTOR_WRITABLE_TASK_STATUSES.has(write.status as TaskStatus)
+  ) {
+    throw new Forbidden('Task status is not executor-managed');
+  }
+  if (
+    write.status === TaskStatus.RUNNING &&
+    !EXECUTOR_RESUMABLE_TASK_STATUSES.has(task.status as TaskStatus)
+  ) {
+    throw new Forbidden('running task status is server-managed');
+  }
   return context;
 }
 
@@ -2980,7 +2998,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       create: [
-        protectServerManagedTaskWrites,
         requireMinimumRole(ROLES.MEMBER, 'create tasks'),
         ...(branchRbacEnabled
           ? [
@@ -2993,7 +3010,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         injectCreatedBy(),
       ],
-      update: [protectServerManagedTaskWrites],
       patch: [
         protectServerManagedTaskWrites,
         ...(branchRbacEnabled

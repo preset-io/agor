@@ -33,7 +33,19 @@ describe('resolveExecutorHeartbeatConfig', () => {
 
   it('resolves the independent local dispatch connection deadline', () => {
     expect(resolveDispatchConnectTimeoutMs()).toBe(5 * 60_000);
+    expect(resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms: null })).toBe(5 * 60_000);
     expect(resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms: 42_000 })).toBe(42_000);
+  });
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])('rejects invalid dispatch timeout %s instead of changing policy', (dispatch_connect_timeout_ms) => {
+    expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
+      'positive safe integer'
+    );
   });
 });
 

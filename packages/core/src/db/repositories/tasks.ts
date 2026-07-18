@@ -534,7 +534,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
           // STEP 2: Deep merge updates into current task (in memory)
           // Preserves nested objects like message_range when doing partial updates.
-          const merged = deepMerge(current, updates);
+          const merged = {
+            ...deepMerge(current, updates),
+            task_id: current.task_id,
+            session_id: current.session_id,
+            created_by: current.created_by,
+            created_at: current.created_at,
+          };
           const insertData = this.taskToInsert(merged);
 
           // STEP 3: Write merged task (within same transaction)

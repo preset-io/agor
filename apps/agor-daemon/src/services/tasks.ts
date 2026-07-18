@@ -39,6 +39,7 @@ import type {
 import {
   ExecutorPulseKind,
   isTerminalTaskStatus,
+  SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
   type TaskMetadata,
   TaskStatus,
@@ -1294,14 +1295,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {
-    if (
-      ![
-        'no_first_progress',
-        'progress_stalled',
-        'stream_disconnected',
-        'unknown_activity',
-      ].includes(data.reason)
-    )
+    if (!SDK_WATCHDOG_FAILURE_REASONS.includes(data.reason))
       throw new BadRequest('invalid SDK health reason');
     for (const [name, value] of Object.entries({
       elapsed_ms: data.elapsed_ms,

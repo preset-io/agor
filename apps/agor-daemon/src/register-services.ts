@@ -244,8 +244,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: [
       'find',
       'get',
-      'create',
-      'update',
       'patch',
       'remove',
       'connectExecutor',
@@ -1091,7 +1089,9 @@ function createExecuteHandler(
                 if (filePath) {
                   const md5 = await computeFileHash(filePath);
                   if (md5) {
-                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                    await app
+                      .service('tasks')
+                      .patch(taskId, { session_md5: md5 }, { ...params, provider: undefined });
                   }
                 }
               } catch (md5Err) {
