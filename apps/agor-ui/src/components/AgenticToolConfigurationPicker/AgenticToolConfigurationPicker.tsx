@@ -118,7 +118,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
                 ? 'Using the workspace default'
                 : 'Managed by preset'
           }
-          description="The concrete preset or inline configuration will be resolved when this is saved."
+          description="Default selections are resolved when the session starts, so later default changes apply."
         />
       )}
       <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={formProps.showHelpText} />

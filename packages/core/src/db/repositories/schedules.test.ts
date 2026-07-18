@@ -8,7 +8,12 @@
  *   - basic CRUD round-trip + agentic_tool_config jsonb/text roundtrip
  */
 
-import type { BranchID, UUID } from '@agor/core/types';
+import {
+  type BranchID,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  type UUID,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -83,6 +88,28 @@ function scheduleData(overrides?: {
 }
 
 describe('ScheduleRepository.create + findById', () => {
+  for (const reference of [
+    USER_DEFAULT_AGENTIC_CONFIGURATION,
+    WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+  ] as const) {
+    dbTest(`persists ${reference} for run-time resolution`, async ({ db }) => {
+      const ctx = await setupContext(db);
+      const created = await ctx.scheduleRepo.create({
+        ...scheduleData(),
+        branch_id: ctx.branchId,
+        created_by: ctx.userId,
+        agentic_tool_config: {
+          agentic_tool: 'claude-code',
+          configuration_reference: reference,
+        },
+      });
+
+      await expect(ctx.scheduleRepo.findById(created.schedule_id)).resolves.toMatchObject({
+        agentic_tool_config: { configuration_reference: reference },
+      });
+    });
+  }
+
   dbTest('round-trips a schedule with all fields populated', async ({ db }) => {
     const ctx = await setupContext(db);
 

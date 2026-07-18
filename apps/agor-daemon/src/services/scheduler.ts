@@ -40,6 +40,7 @@
 import {
   assertInlineAgenticConfigurationAllowed,
   presetConfigurationToScheduleConfig,
+  resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
 } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
@@ -630,7 +631,32 @@ export class SchedulerService {
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
       let cfg = schedule.agentic_tool_config;
-      if (cfg.preset_id) {
+      if (cfg.configuration_reference) {
+        const reference = cfg.configuration_reference;
+        const resolved = await this.withTenantDatabase(() =>
+          resolveAgenticConfigurationReference(
+            this.db,
+            cfg.agentic_tool,
+            reference,
+            schedule.created_by as import('@agor/core/types').UserID
+          )
+        );
+        cfg = resolved.preset
+          ? presetConfigurationToScheduleConfig(
+              cfg.agentic_tool,
+              resolved.preset.preset_id,
+              resolved.preset.configuration
+            )
+          : (() => {
+              const materialized = presetConfigurationToScheduleConfig(
+                cfg.agentic_tool,
+                reference,
+                resolved.configuration ?? {}
+              );
+              const { preset_id: _presetId, ...inline } = materialized;
+              return inline;
+            })();
+      } else if (cfg.preset_id) {
         const presetId = cfg.preset_id;
         // Cron ticks carry tenant identity but no ambient DB scope — open a
         // short tenant unit of work like the repo calls above.

@@ -17,13 +17,13 @@
 import {
   assertInlineAgenticConfigurationAllowed,
   PAGINATION,
-  presetConfigurationToScheduleConfig,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
 } from '@agor/core/config';
 import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { AuthenticatedParams, BranchID, QueryParams, Schedule, UUID } from '@agor/core/types';
+import { isAgenticToolDefaultConfigurationReference } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 export type ScheduleParams = QueryParams<{
@@ -49,8 +49,23 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     this.db = db;
   }
 
-  private async validateConfig(config: Schedule['agentic_tool_config']): Promise<void> {
+  private async validateConfig(
+    config: Schedule['agentic_tool_config'],
+    params?: ScheduleParams
+  ): Promise<void> {
+    if (config.configuration_reference) {
+      await resolveAgenticConfigurationReference(
+        this.db,
+        config.agentic_tool,
+        config.configuration_reference,
+        params?.user?.user_id as import('@agor/core/types').UserID | undefined
+      );
+      return;
+    }
     if (config.preset_id) {
+      // Older clients send default references through preset_id. Do not let
+      // those reserved values fall through to the literal preset lookup.
+      if (isAgenticToolDefaultConfigurationReference(config.preset_id)) return;
       await resolveAgenticToolPreset(this.db, config.agentic_tool, config.preset_id);
       const hasOverrides = Object.entries(config).some(
         ([key, value]) => !['agentic_tool', 'preset_id'].includes(key) && value !== undefined
@@ -64,36 +79,21 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
   }
 
   private async normalizeConfig(
-    config: Schedule['agentic_tool_config'],
-    params?: ScheduleParams
+    config: Schedule['agentic_tool_config']
   ): Promise<Schedule['agentic_tool_config']> {
-    if (!config.preset_id) return config;
-    const resolved = await resolveAgenticConfigurationReference(
-      this.db,
-      config.agentic_tool,
-      config.preset_id,
-      params?.user?.user_id as import('@agor/core/types').UserID | undefined
-    );
-    const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
-    if (resolved.preset) {
-      return {
-        agentic_tool: config.agentic_tool,
-        preset_id: resolved.preset.preset_id,
-      };
+    if (!config.preset_id || !isAgenticToolDefaultConfigurationReference(config.preset_id)) {
+      return config;
     }
-    const normalized = presetConfigurationToScheduleConfig(
-      config.agentic_tool,
-      config.preset_id,
-      configuration
-    );
-    const { preset_id: _presetId, ...inline } = normalized;
-    return inline;
+    return {
+      agentic_tool: config.agentic_tool,
+      configuration_reference: config.preset_id,
+    };
   }
 
   async create(data: Partial<Schedule>, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
-      await this.validateConfig(data.agentic_tool_config);
-      const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config, params);
+      await this.validateConfig(data.agentic_tool_config, params);
+      const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,
@@ -104,8 +104,8 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
 
   async patch(id: string | null, data: Partial<Schedule>, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
-      await this.validateConfig(data.agentic_tool_config);
-      const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config, params);
+      await this.validateConfig(data.agentic_tool_config, params);
+      const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,

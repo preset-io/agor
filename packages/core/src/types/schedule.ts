@@ -43,6 +43,8 @@ export interface ScheduleAgenticToolConfig {
   agentic_tool: AgenticToolName;
   /** Live preset reference. Remaining runtime fields are ignored when present. */
   preset_id?: import('./agentic-tool-preset').AgenticToolPresetID;
+  /** User/workspace default reference, deliberately resolved for every run. */
+  configuration_reference?: import('./agentic-tool-preset').AgenticToolDefaultConfigurationReference;
 
   /** Permission mode for spawned sessions (e.g., 'auto', 'ask', 'default'). */
   permission_mode?: PermissionMode;
