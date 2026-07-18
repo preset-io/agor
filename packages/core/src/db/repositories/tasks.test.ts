@@ -1213,6 +1213,29 @@ describe('TaskRepository.delete', () => {
       status: TaskStatus.RUNNING,
     });
   });
+
+  dbTest('never deletes work that concurrently leaves the queue', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const queued = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+
+    const [deletion, dispatch] = await Promise.allSettled([
+      taskRepo.delete(queued.task_id),
+      taskRepo.update(queued.task_id, { status: TaskStatus.DISPATCHING }),
+    ]);
+
+    const survivor = await taskRepo.findById(queued.task_id);
+    if (survivor) {
+      expect(survivor.status).toBe(TaskStatus.DISPATCHING);
+      expect(dispatch.status).toBe('fulfilled');
+      expect(deletion.status).toBe('rejected');
+    } else {
+      expect(deletion.status).toBe('fulfilled');
+      expect(dispatch.status).toBe('rejected');
+    }
+  });
 });
 
 // ============================================================================

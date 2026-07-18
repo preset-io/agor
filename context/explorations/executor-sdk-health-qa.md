@@ -77,7 +77,7 @@ Deletion happened with replacement, not as a compatibility tail:
 
 | Area                    | Command/result                                                                                             |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Core full suite         | `pnpm --filter @agor/core test` — 108 passed, 1 skipped files; 2,820 passed, 2 skipped tests               |
+| Core full suite         | `pnpm --filter @agor/core test` — 108 passed, 1 skipped files; 2,821 passed, 2 skipped tests               |
 | Daemon full suite       | `pnpm --filter @agor/daemon test` — 141 passed, 1 skipped files; 1,788 passed, 31 skipped tests            |
 | UI full suite           | `pnpm --filter @agor/ui test` — 147 files, 941 tests passed                                                |
 | CLI full suite          | `pnpm --filter @agor/cli test` — 3 files, 19 tests passed                                                  |
@@ -87,7 +87,7 @@ Deletion happened with replacement, not as a compatibility tail:
 | Short-ID contract       | `node scripts/check-no-ad-hoc-shortid.mjs` — passed                                                        |
 | Focused telemetry       | Connection/telemetry and coordinator suites — 10 tests passed                                              |
 | Focused watchdog        | Watchdog/heartbeat suites — 13 tests passed                                                                |
-| Review hardening        | Task authority/identity, strict config, and OpenCode session ownership — 178 focused tests passed          |
+| Review hardening        | Task authority/identity, strict config, and OpenCode session ownership — 179 focused tests passed          |
 | Migrations              | Core migration suite passed for both schema histories; PostgreSQL live repository test skipped without URL |
 
 The full executor suite reached 37 passing files and 507 passing tests, with three unrelated
