@@ -13,9 +13,8 @@ import {
   PauseCircleOutlined,
   QuestionCircleOutlined,
   StopOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Popover, theme } from 'antd';
+import { Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { formatAbsoluteTime } from '../../utils/time';
@@ -41,6 +40,31 @@ const ACTIVE_STATUSES: TimerStatus[] = [
   TaskStatus.AWAITING_PERMISSION,
   TaskStatus.AWAITING_INPUT,
 ];
+
+const PULSE_LABELS: Record<ExecutorPulse['kind'], string> = {
+  sdk_started: 'Starting',
+  progress: 'Working',
+  waiting: 'Waiting',
+  unknown_activity: 'Active',
+};
+
+const PulseIcon = () => (
+  <svg
+    aria-hidden="true"
+    focusable="false"
+    viewBox="0 0 24 24"
+    width="1em"
+    height="1em"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ marginRight: 4, verticalAlign: '-0.125em' }}
+  >
+    <path d="M2 12h4l3-9 6 18 3-9h4" />
+  </svg>
+);
 
 const statusConfig: Record<
   TimerStatus,
@@ -269,12 +293,19 @@ export const TimerPill: React.FC<TimerPillProps> = ({
           <div style={rowStyle}>
             <span style={labelStyle}>Pulse</span>
             <span style={valueStyle}>
-              <ThunderboltOutlined style={{ marginRight: 4 }} />
+              <PulseIcon />
               {pulseAgeMs !== null ? `${formatDuration(pulseAgeMs)} ago` : '—'}
-              <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
-                {latestExecutorPulse.kind}
-                {latestExecutorPulse.detail ? ` · ${latestExecutorPulse.detail}` : ''}
-              </span>
+              <Tooltip
+                title={
+                  latestExecutorPulse.detail
+                    ? `Latest SDK event: ${latestExecutorPulse.detail}`
+                    : undefined
+                }
+              >
+                <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
+                  {PULSE_LABELS[latestExecutorPulse.kind]}
+                </span>
+              </Tooltip>
             </span>
           </div>
         )}
