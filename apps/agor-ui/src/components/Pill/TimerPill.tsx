@@ -50,7 +50,6 @@ const statusConfig: Record<
   [TaskStatus.DISPATCHING]: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.processing,
-    label: 'Starting executor…',
   },
   [TaskStatus.RUNNING]: {
     icon: <HourglassOutlined />,
