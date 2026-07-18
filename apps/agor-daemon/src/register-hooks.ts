@@ -63,6 +63,7 @@ import type {
   Paginated,
   Params,
   Session,
+  Task,
   User,
   UserID,
 } from '@agor/core/types';
@@ -70,6 +71,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
+  isTerminalTaskStatus,
   ROLES,
   TaskStatus,
 } from '@agor/core/types';
@@ -473,17 +475,17 @@ const EXECUTOR_ACTIVE_TASK_STATUSES = new Set<TaskStatus>([
   ...EXECUTOR_RESUMABLE_TASK_STATUSES,
 ]);
 
-const EXECUTOR_WRITABLE_TASK_STATUSES = new Set<TaskStatus>([
-  TaskStatus.RUNNING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-  TaskStatus.TIMED_OUT,
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-]);
+function isExecutorWritableTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === TaskStatus.RUNNING ||
+    EXECUTOR_RESUMABLE_TASK_STATUSES.has(status) ||
+    isTerminalTaskStatus(status)
+  );
+}
 
-const EXECUTOR_TASK_PATCH_FIELDS = new Set([
+const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
+
+const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'status',
   'completed_at',
   'git_state',
@@ -498,10 +500,10 @@ const EXECUTOR_TASK_PATCH_FIELDS = new Set([
   'error_message',
   'report',
   'permission_request',
-  'session_md5',
-]);
+  'session_md5'
+);
 
-const EXTERNAL_TASK_CREATE_FIELDS = new Set(['session_id', 'full_prompt', 'status']);
+const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
 
 /** Keep the documented two-step create/run API dormant until the explicit run call. */
 export function protectExternalTaskCreate(context: HookContext): HookContext {
@@ -567,10 +569,7 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   ) {
     throw new Forbidden('Task is not connected and executor-writable');
   }
-  if (
-    write.status !== undefined &&
-    !EXECUTOR_WRITABLE_TASK_STATUSES.has(write.status as TaskStatus)
-  ) {
+  if (write.status !== undefined && !isExecutorWritableTaskStatus(write.status as TaskStatus)) {
     throw new Forbidden('Task status is not executor-managed');
   }
   if (
