@@ -1,4 +1,5 @@
 import type {
+  ExecutorPulse,
   SessionStatus as SessionStatusValue,
   TaskStatus as TaskStatusValue,
 } from '@agor-live/client';
@@ -12,6 +13,7 @@ import {
   PauseCircleOutlined,
   QuestionCircleOutlined,
   StopOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Popover, theme } from 'antd';
 import type React from 'react';
@@ -28,6 +30,7 @@ interface TimerPillProps {
   endedAt?: string | number | Date;
   durationMs?: number | null;
   lastExecutorHeartbeatAt?: string | number | Date | null;
+  latestExecutorPulse?: ExecutorPulse | null;
   style?: React.CSSProperties;
 }
 
@@ -143,6 +146,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   endedAt,
   durationMs,
   lastExecutorHeartbeatAt,
+  latestExecutorPulse,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -151,6 +155,10 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   const heartbeatMs = useMemo(
     () => parseTimestamp(lastExecutorHeartbeatAt ?? undefined),
     [lastExecutorHeartbeatAt]
+  );
+  const pulseMs = useMemo(
+    () => parseTimestamp(latestExecutorPulse?.observed_at),
+    [latestExecutorPulse?.observed_at]
   );
 
   const fixedDuration = useMemo(() => {
@@ -225,6 +233,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     };
 
     const heartbeatAgeMs = heartbeatMs ? Math.max(0, Date.now() - heartbeatMs) : null;
+    const pulseAgeMs = pulseMs ? Math.max(0, Date.now() - pulseMs) : null;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
@@ -256,9 +265,22 @@ export const TimerPill: React.FC<TimerPillProps> = ({
             </span>
           </div>
         )}
+        {pulseMs && latestExecutorPulse && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Pulse</span>
+            <span style={valueStyle}>
+              <ThunderboltOutlined style={{ marginRight: 4 }} />
+              {pulseAgeMs !== null ? `${formatDuration(pulseAgeMs)} ago` : '—'}
+              <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
+                {latestExecutorPulse.kind}
+                {latestExecutorPulse.detail ? ` · ${latestExecutorPulse.detail}` : ''}
+              </span>
+            </span>
+          </div>
+        )}
       </div>
     );
-  }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, token]);
+  }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, pulseMs, latestExecutorPulse, token]);
 
   if (!startMs && fixedDuration === null) {
     return null;
