@@ -83,6 +83,7 @@ import {
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import type { SessionParams } from './sessions.js';
 
 /**
  * Session statuses that count as "actively consuming the branch" for
@@ -736,9 +737,10 @@ export class SchedulerService {
       // catches any concurrent path that raced past the dedup check —
       // we surface that as a normal dedup hit rather than an error.
       const sessionsService = this.app.service('sessions');
+      const sessionCreateParams: SessionParams = { _agenticConfigResolved: true };
       let createdSession: Session;
       try {
-        createdSession = await sessionsService.create(session, { _agenticConfigResolved: true });
+        createdSession = await sessionsService.create(session, sessionCreateParams);
       } catch (err) {
         if (isUniqueConstraintError(err)) {
           const winner = await this.withTenantDatabase(() =>
