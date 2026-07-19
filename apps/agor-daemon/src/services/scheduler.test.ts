@@ -361,7 +361,10 @@ describe('materializeScheduleAgenticToolConfig', () => {
 
     expect(createSession.mock.calls[0][0]).toMatchObject({
       permission_config: expected.permission_config,
-      model_config: expected.model_config,
+      model_config: {
+        ...expected.model_config,
+        updated_at: expect.any(String),
+      },
     });
     expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('stale-user-model');
   });
