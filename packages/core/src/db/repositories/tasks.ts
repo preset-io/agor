@@ -4,7 +4,15 @@
  * Type-safe CRUD operations for tasks with short ID support.
  */
 
-import type { ExecutorPulse, SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
+import type {
+  ExecutorPulse,
+  SdkFailure,
+  SessionID,
+  Task,
+  TaskMetadata,
+  TerminationCause,
+  UUID,
+} from '@agor/core/types';
 import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
@@ -37,6 +45,36 @@ function isSQLiteBusyError(error: unknown): boolean {
     return true;
   }
   return 'cause' in error && isSQLiteBusyError(error.cause);
+}
+
+export interface TerminationClaimInput {
+  taskId: string;
+  cause: TerminationCause;
+  errorMessage: string;
+  sdkFailure?: SdkFailure;
+  expectedStatus?: Task['status'];
+  expectedHeartbeatAt?: string;
+  heartbeatStaleBefore?: string;
+  requireExecutorDisconnected?: boolean;
+  now?: Date;
+}
+
+export interface TerminationClaimResult {
+  outcome: 'claimed' | 'unchanged' | 'condition_changed' | 'terminal';
+  task: Task;
+}
+
+export interface TerminationSettlementInput {
+  taskId: string;
+  outcome: 'verified_absent' | 'unverified' | 'forced_unverified';
+  errorMessage?: string;
+  sdkFailure?: SdkFailure;
+  now?: Date;
+}
+
+export interface TerminationSettlementResult {
+  outcome: 'transitioned' | 'unverified' | 'condition_changed' | 'terminal';
+  task: Task;
 }
 
 /**
@@ -480,6 +518,163 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     );
   }
 
+  /** Atomically validate and persist ownership of a termination request. */
+  async claimTermination(input: TerminationClaimInput): Promise<TerminationClaimResult> {
+    const fullId = await this.resolveId(input.taskId);
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(this.db, async (txDb) => {
+        await this.lockTaskForMutation(txDb, fullId);
+        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', input.taskId);
+        const current = this.rowToTask(row);
+        if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+
+        const staleBefore = input.heartbeatStaleBefore
+          ? Date.parse(input.heartbeatStaleBefore)
+          : undefined;
+        const heartbeatAt = current.last_executor_heartbeat_at
+          ? Date.parse(current.last_executor_heartbeat_at)
+          : undefined;
+        const conditionChanged =
+          (input.expectedStatus !== undefined && current.status !== input.expectedStatus) ||
+          (input.expectedHeartbeatAt !== undefined &&
+            current.last_executor_heartbeat_at !== input.expectedHeartbeatAt) ||
+          (staleBefore !== undefined &&
+            (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
+          (input.requireExecutorDisconnected === true && !!current.executor_connected_at);
+        if (conditionChanged) return { outcome: 'condition_changed', task: current };
+
+        const existing = current.termination_request;
+        const cause = input.cause === 'user_stop' || !existing ? input.cause : existing.cause;
+        if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
+          return { outcome: 'unchanged', task: current };
+        }
+        const incomingWins =
+          !existing || input.cause === 'user_stop' || existing.cause === input.cause;
+        const request = {
+          cause,
+          requested_at: existing?.requested_at ?? (input.now ?? new Date()).toISOString(),
+          final_status: cause === 'user_stop' ? ('stopped' as const) : ('failed' as const),
+          error_message:
+            cause === input.cause
+              ? input.errorMessage
+              : (existing?.error_message ?? input.errorMessage),
+        };
+        const sdkFailure = incomingWins
+          ? (input.sdkFailure ?? current.sdk_failure)
+          : current.sdk_failure;
+        const data = {
+          ...row.data,
+          termination_request: request,
+          ...(sdkFailure
+            ? { sdk_failure: { ...sdkFailure, termination: 'requested' as const } }
+            : {}),
+        };
+        await update(txDb, tasks)
+          .set({ status: TaskStatus.STOPPING, data })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        return {
+          outcome: 'claimed',
+          task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
+        };
+      })
+    );
+  }
+
+  /** Atomically record containment evidence and, when safe, terminalize the task. */
+  async settleTermination(input: TerminationSettlementInput): Promise<TerminationSettlementResult> {
+    const fullId = await this.resolveId(input.taskId);
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(this.db, async (txDb) => {
+        await this.lockTaskForMutation(txDb, fullId);
+        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', input.taskId);
+        const current = this.rowToTask(row);
+        if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+        if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
+          return { outcome: 'condition_changed', task: current };
+        }
+
+        if (input.outcome === 'unverified') {
+          const failure = input.sdkFailure ?? current.sdk_failure;
+          if (!failure || !input.errorMessage) {
+            throw new RepositoryError('unverified settlement requires failure evidence');
+          }
+          const data = {
+            ...row.data,
+            sdk_failure: { ...failure, termination: 'unverified' as const },
+            error_message: input.errorMessage,
+          };
+          await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+          return {
+            outcome: 'unverified',
+            task: this.rowToTask({ ...row, data }),
+          };
+        }
+
+        if (
+          input.outcome === 'forced_unverified' &&
+          current.sdk_failure?.termination !== 'unverified'
+        ) {
+          return { outcome: 'condition_changed', task: current };
+        }
+
+        const completedAt = input.now ?? new Date();
+        const completedAtIso = completedAt.toISOString();
+        const finalStatus =
+          input.outcome === 'forced_unverified'
+            ? TaskStatus.FAILED
+            : current.termination_request.cause === 'user_stop'
+              ? TaskStatus.STOPPED
+              : TaskStatus.FAILED;
+        const startAt =
+          current.started_at ?? current.message_range?.start_timestamp ?? current.created_at;
+        const durationMs =
+          current.duration_ms ??
+          (startAt ? Math.max(0, completedAt.getTime() - new Date(startAt).getTime()) : undefined);
+        const range = current.message_range;
+        const messageRange =
+          range && (!range.end_timestamp || range.end_timestamp === range.start_timestamp)
+            ? { ...range, end_timestamp: completedAtIso }
+            : range;
+        const failure = input.sdkFailure ?? current.sdk_failure;
+        const data = {
+          ...row.data,
+          duration_ms: durationMs,
+          message_range: messageRange,
+          ...(failure
+            ? {
+                sdk_failure: {
+                  ...failure,
+                  termination:
+                    input.outcome === 'forced_unverified'
+                      ? ('unverified' as const)
+                      : ('verified' as const),
+                },
+              }
+            : {}),
+          ...(finalStatus === TaskStatus.FAILED
+            ? {
+                error_message:
+                  input.errorMessage ??
+                  current.termination_request.error_message ??
+                  current.error_message,
+              }
+            : {}),
+        };
+        await update(txDb, tasks)
+          .set({ status: finalStatus, completed_at: completedAt, data })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        return {
+          outcome: 'transitioned',
+          task: this.rowToTask({ ...row, status: finalStatus, completed_at: completedAt, data }),
+        };
+      })
+    );
+  }
+
   /**
    * Update task by ID (atomic with database-level transaction)
    *
@@ -530,6 +725,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           // above; generic service update/patch calls flow through this method.
           if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
             throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
+          }
+          if (updates.status === TaskStatus.STOPPING && current.status !== TaskStatus.STOPPING) {
+            throw new RepositoryError('stopping tasks must be claimed through claimTermination');
+          }
+          if (
+            current.status === TaskStatus.STOPPING &&
+            current.termination_request &&
+            updates.status !== undefined &&
+            isTerminalTaskStatus(updates.status)
+          ) {
+            throw new RepositoryError(
+              'termination-owned tasks must be settled through settleTermination'
+            );
           }
 
           // STEP 2: Deep merge updates into current task (in memory)

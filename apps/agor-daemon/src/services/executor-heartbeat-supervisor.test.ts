@@ -54,27 +54,26 @@ describe('ExecutorHeartbeatSupervisor', () => {
         taskId: staleTask.task_id,
         cause: 'heartbeat_lost',
         errorMessage: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
+        expectedStatus: staleTask.status,
+        expectedHeartbeatAt: staleTask.last_executor_heartbeat_at,
+        heartbeatStaleBefore: '2026-01-01T00:00:02.000Z',
       })
     );
   });
 
-  it('skips tasks that refreshed before failure', async () => {
+  it('treats an atomically rejected stale claim as a normal skip', async () => {
     const task = {
       task_id: '018f0000-0000-7000-8000-000000000001',
       session_id: '018f0000-0000-7000-8000-000000000002',
       status: 'running',
       last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
     };
-    const tasksPatch = vi.fn();
+    requestExecutorTermination.mockResolvedValueOnce({ status: 'condition_changed', task });
     const app = {
-      service: (name: string) => ({
+      service: () => ({
         getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([task]),
         getOrphaned: vi.fn().mockResolvedValue([]),
-        get: vi.fn().mockResolvedValue({
-          ...task,
-          last_executor_heartbeat_at: '2026-01-01T00:00:04.500Z',
-        }),
-        patch: name === 'tasks' ? tasksPatch : vi.fn(),
+        get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }),
       }),
     } as any;
 
@@ -90,8 +89,7 @@ describe('ExecutorHeartbeatSupervisor', () => {
     });
 
     await supervisor.checkOnce();
-    expect(tasksPatch).not.toHaveBeenCalled();
-    expect(requestExecutorTermination).not.toHaveBeenCalled();
+    expect(requestExecutorTermination).toHaveBeenCalledOnce();
   });
 
   it('contains a local dispatch that never connects', async () => {
@@ -128,7 +126,12 @@ describe('ExecutorHeartbeatSupervisor', () => {
 
     await supervisor.checkOnce();
     expect(requestExecutorTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: task.task_id, cause: 'startup_timeout' })
+      expect.objectContaining({
+        taskId: task.task_id,
+        cause: 'startup_timeout',
+        expectedStatus: 'dispatching',
+        requireExecutorDisconnected: true,
+      })
     );
   });
 

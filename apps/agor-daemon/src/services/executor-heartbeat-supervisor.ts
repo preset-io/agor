@@ -56,24 +56,24 @@ export class ExecutorHeartbeatSupervisor {
         ) {
           continue;
         }
-        const current = await this.options.app.service('tasks').get(task.task_id);
-        if (current.status !== TaskStatus.DISPATCHING || current.executor_connected_at) continue;
-        if (current.executor_mode === 'templated') {
+        if (task.executor_mode === 'templated') {
           const warning =
             'Remote executor has not connected within the configured startup window; still waiting.';
-          if (current.error_message !== warning) {
+          if (task.error_message !== warning) {
             await this.options.app
               .service('tasks')
-              .patch(current.task_id, { error_message: warning }, { provider: undefined });
+              .patch(task.task_id, { error_message: warning }, { provider: undefined });
           }
           continue;
         }
-        const session = await this.options.app.service('sessions').get(current.session_id);
-        await requestExecutorTermination({
+        const session = await this.options.app.service('sessions').get(task.session_id);
+        const result = await requestExecutorTermination({
           app: this.options.app,
-          taskId: current.task_id,
+          taskId: task.task_id,
           cause: 'startup_timeout',
           errorMessage: 'Local executor did not connect before the startup deadline.',
+          expectedStatus: TaskStatus.DISPATCHING,
+          requireExecutorDisconnected: true,
           sdkFailure: {
             reason: 'startup_timeout',
             detected_at: this.now().toISOString(),
@@ -81,6 +81,7 @@ export class ExecutorHeartbeatSupervisor {
             termination: 'requested',
           },
         });
+        if (result.status === 'condition_changed') continue;
       }
 
       if (!this.options.config.enabled) return;
@@ -92,28 +93,28 @@ export class ExecutorHeartbeatSupervisor {
         if (nowMs - heartbeatMs <= this.options.config.stale_after_ms) continue;
 
         try {
-          const current = await this.options.app.service('tasks').get(task.task_id);
-          if (current.status !== task.status || !current.last_executor_heartbeat_at) continue;
-          const currentHeartbeatMs = new Date(current.last_executor_heartbeat_at).getTime();
-          if (!Number.isFinite(currentHeartbeatMs)) continue;
-          if (nowMs - currentHeartbeatMs <= this.options.config.stale_after_ms) continue;
-
-          const session = await this.options.app.service('sessions').get(current.session_id);
+          const session = await this.options.app.service('sessions').get(task.session_id);
           const result = await requestExecutorTermination({
             app: this.options.app,
-            taskId: current.task_id,
+            taskId: task.task_id,
             cause: 'heartbeat_lost',
             errorMessage: EXECUTOR_HEARTBEAT_LOST_MESSAGE,
+            expectedStatus: task.status,
+            expectedHeartbeatAt: task.last_executor_heartbeat_at,
+            heartbeatStaleBefore: new Date(
+              nowMs - this.options.config.stale_after_ms
+            ).toISOString(),
             sdkFailure: {
               reason: 'heartbeat_lost',
               detected_at: this.now().toISOString(),
               tool: session.agentic_tool,
-              last_pulse: current.latest_executor_pulse,
+              last_pulse: task.latest_executor_pulse,
               termination: 'requested',
             },
           });
+          if (result.status === 'condition_changed') continue;
           console.warn(
-            `[executor-heartbeat] Stale task ${shortId(task.task_id)} containment ${result.status} (${nowMs - currentHeartbeatMs}ms old)`
+            `[executor-heartbeat] Stale task ${shortId(task.task_id)} containment ${result.status} (${nowMs - heartbeatMs}ms old)`
           );
         } catch (error) {
           console.warn(

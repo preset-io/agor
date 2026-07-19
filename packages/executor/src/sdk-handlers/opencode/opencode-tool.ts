@@ -411,6 +411,24 @@ export class OpenCodeTool implements ITool {
     }
   }
 
+  async stopTask(sessionId: string): Promise<{ success: boolean; reason?: string }> {
+    const context = this.getSessionContext(sessionId);
+    if (!context) return { success: false, reason: 'OpenCode session is not initialized' };
+
+    try {
+      const response = await this.getClientForDirectory(context.branchPath).session.abort({
+        path: { id: context.opencodeSessionId },
+        query: context.branchPath ? { directory: context.branchPath } : undefined,
+      });
+      if (response.error) {
+        return { success: false, reason: JSON.stringify(response.error) };
+      }
+      return { success: true };
+    } catch (error) {
+      return { success: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   /**
    * Create a new OpenCode session
    */

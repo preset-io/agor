@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
@@ -11,7 +11,7 @@ import {
   requestExecutorTermination,
 } from './termination-coordinator.js';
 
-function appDouble() {
+function appDouble(tool = 'codex') {
   let task: any = {
     task_id: '018f0000-0000-7000-8000-000000000001',
     session_id: '018f0000-0000-7000-8000-000000000002',
@@ -20,24 +20,61 @@ function appDouble() {
   };
   let session: any = {
     session_id: task.session_id,
-    agentic_tool: 'codex',
-    status: 'running',
+    agentic_tool: tool,
+    status: SessionStatus.RUNNING,
     ready_for_prompt: false,
   };
-  const taskPatch = vi.fn(async (_id, data) => (task = { ...task, ...data }));
-  const sessionPatch = vi.fn(async (_id, data) => (session = { ...session, ...data }));
-  const failForLostHeartbeat = vi.fn(async (_id, data) => {
-    task = { ...task, ...data, status: TaskStatus.FAILED };
-    session = { ...session, status: 'failed', ready_for_prompt: true };
-    return task;
+  const claimTermination = vi.fn(async (input) => {
+    if ([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED].includes(task.status)) {
+      return { outcome: 'terminal', task };
+    }
+    const existing = task.termination_request;
+    const cause = input.cause === 'user_stop' || !existing ? input.cause : existing.cause;
+    task = {
+      ...task,
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause,
+        requested_at: existing?.requested_at ?? '2026-01-01T00:00:01.000Z',
+        final_status: cause === 'user_stop' ? 'stopped' : 'failed',
+        error_message: cause === input.cause ? input.errorMessage : existing?.error_message,
+      },
+      sdk_failure:
+        input.cause === 'user_stop' ? task.sdk_failure : (input.sdkFailure ?? task.sdk_failure),
+    };
+    session = { ...session, status: SessionStatus.STOPPING, ready_for_prompt: false };
+    return { outcome: existing?.cause === cause ? 'unchanged' : 'claimed', task };
+  });
+  const settleTermination = vi.fn(async (input) => {
+    if (input.outcome === 'unverified') {
+      task = {
+        ...task,
+        error_message: input.errorMessage,
+        sdk_failure: { ...input.sdkFailure, termination: 'unverified' },
+      };
+      return { outcome: 'unverified', task };
+    }
+    const status =
+      input.outcome === 'forced_unverified'
+        ? TaskStatus.FAILED
+        : task.termination_request.cause === 'user_stop'
+          ? TaskStatus.STOPPED
+          : TaskStatus.FAILED;
+    task = { ...task, status };
+    session = {
+      ...session,
+      status: status === TaskStatus.STOPPED ? SessionStatus.IDLE : SessionStatus.FAILED,
+      ready_for_prompt: true,
+    };
+    return { outcome: 'transitioned', task };
   });
   const app = {
     service: (name: string) =>
       name === 'tasks'
-        ? { get: async () => task, patch: taskPatch, failForLostHeartbeat }
-        : { get: async () => session, patch: sessionPatch },
+        ? { get: async () => task, claimTermination, settleTermination }
+        : { get: async () => session },
   } as never;
-  return { app, task: () => task, session: () => session, taskPatch, failForLostHeartbeat };
+  return { app, task: () => task, session: () => session, claimTermination, settleTermination };
 }
 
 describe('termination coordinator', () => {
@@ -75,13 +112,12 @@ describe('termination coordinator', () => {
     });
 
     expect(requested.status).toBe(TaskStatus.STOPPING);
-    expect(state.session()).toMatchObject({ status: 'stopping', ready_for_prompt: false });
-    expect(state.failForLostHeartbeat).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
     release({ status: 'verified_absent' });
-    await vi.waitFor(() => expect(state.failForLostHeartbeat).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.settleTermination).toHaveBeenCalledOnce());
   });
 
-  it('lets user Stop override a concurrent health failure without duplicate containment', async () => {
+  it('observes a user Stop recorded while containment is running', async () => {
     let release!: (value: { status: 'verified_absent' }) => void;
     containExecutorProcess.mockReturnValue(new Promise((resolve) => (release = resolve)));
     const state = appDouble();
@@ -105,29 +141,35 @@ describe('termination coordinator', () => {
     expect(containExecutorProcess).toHaveBeenCalledOnce();
   });
 
-  it('keeps the session blocked and visible when absence is unverified', async () => {
+  it('keeps local and OpenCode work blocked when absence is unverified', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
-    const state = appDouble();
+    for (const tool of ['codex', 'opencode']) {
+      const state = appDouble(tool);
+      const result = await requestExecutorTermination({
+        app: state.app,
+        taskId: state.task().task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'heartbeat lost',
+      });
+      expect(result.status).toBe('unverified');
+      expect(state.task()).toMatchObject({
+        status: TaskStatus.STOPPING,
+        sdk_failure: { termination: 'unverified' },
+      });
+    }
+  });
+
+  it('does not infer OpenCode provider quiescence from local process absence', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble('opencode');
     const result = await requestExecutorTermination({
       app: state.app,
       taskId: state.task().task_id,
-      cause: 'heartbeat_lost',
-      errorMessage: 'heartbeat lost',
-      sdkFailure: {
-        reason: 'heartbeat_lost',
-        detected_at: '2026-01-01T00:00:05.000Z',
-        tool: 'codex',
-        termination: 'requested',
-      },
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
     });
-
     expect(result.status).toBe('unverified');
-    expect(state.task()).toMatchObject({
-      status: TaskStatus.STOPPING,
-      sdk_failure: { reason: 'heartbeat_lost', termination: 'unverified' },
-    });
-    expect(state.session()).toMatchObject({ status: 'stopping', ready_for_prompt: false });
-    expect(state.failForLostHeartbeat).not.toHaveBeenCalled();
+    expect(state.task().status).toBe(TaskStatus.STOPPING);
   });
 
   it('requires the short Task ID before force-failing unverified work', async () => {

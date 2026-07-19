@@ -194,7 +194,7 @@ export class AgorLocalStrategy extends LocalStrategy {
 /**
  * Extended Params with route ID parameter.
  */
-interface RouteParams extends Params {
+export interface RouteParams extends Params {
   route?: {
     id?: string;
     messageId?: string;
@@ -256,6 +256,39 @@ export interface RegisterRoutesContext {
     typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
   >;
   terminalsService: TerminalsService | null;
+}
+
+export async function authorizeTaskTerminalRoute(input: {
+  id: string;
+  params: RouteParams;
+  branchRbacEnabled: boolean;
+  allowSuperadmin: boolean;
+  tasksService: Pick<TasksServiceImpl, 'get'>;
+  sessionsService: Pick<SessionsServiceImpl, 'get'>;
+  branchRepository: Pick<BranchRepository, 'findById' | 'isOwner' | 'resolveUserPermission'>;
+}): Promise<void> {
+  if (!input.branchRbacEnabled) return;
+  const internalParams = { ...input.params, provider: undefined };
+  const task = await input.tasksService.get(input.id, internalParams);
+  const session = await input.sessionsService.get(task.session_id, internalParams);
+  const userId = input.params.user?.user_id as UUID | undefined;
+  if (!userId) throw new NotAuthenticated('Authentication required to update tasks');
+  const branch = await input.branchRepository.findById(session.branch_id);
+  if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
+  const isOwner = await input.branchRepository.isOwner(branch.branch_id, userId);
+  const branchPermission = await input.branchRepository.resolveUserPermission(branch, userId);
+  const effectiveLevel = resolveBranchPermission(
+    branch,
+    userId,
+    isOwner,
+    input.params.user?.role,
+    input.allowSuperadmin,
+    branchPermission
+  );
+  const authorized =
+    PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
+    (effectiveLevel === 'session' && session.created_by === userId);
+  if (!authorized) throw new Forbidden('Not authorized to update tasks in this session');
 }
 
 /**
@@ -2270,7 +2303,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           )
         );
 
-        if (result.success) {
+        if (result.success && !result.queueHandled) {
           deferInFreshTenantScope(params, async () => {
             try {
               await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
@@ -2703,7 +2736,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        return tasksService.complete(id, data, params);
+        await authorizeTaskTerminalRoute({
+          id,
+          params,
+          branchRbacEnabled,
+          allowSuperadmin: superadminOpts.allowSuperadmin,
+          tasksService,
+          sessionsService,
+          branchRepository,
+        });
+        return tasksService.complete(id, data, { ...params, provider: undefined });
       },
     },
     {
@@ -2719,7 +2761,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { error?: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        return tasksService.fail(id, data, params);
+        await authorizeTaskTerminalRoute({
+          id,
+          params,
+          branchRbacEnabled,
+          allowSuperadmin: superadminOpts.allowSuperadmin,
+          tasksService,
+          sessionsService,
+          branchRepository,
+        });
+        return tasksService.fail(id, data, { ...params, provider: undefined });
       },
     },
     {

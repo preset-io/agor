@@ -1,7 +1,7 @@
 import { shortId, type TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Params, SessionID } from '@agor/core/types';
-import { isSessionExecuting, SessionStatus } from '@agor/core/types';
+import { isSessionExecuting, SessionStatus, usesExecutorRuntime } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requestExecutorTermination, type TerminationResult } from '../termination-coordinator.js';
 import { findActiveTasksForSession } from './session-tasks.js';
@@ -12,6 +12,7 @@ export interface StopSessionResult {
   reason?: string;
   stoppedTaskId?: string;
   queuedTasksPreserved?: number;
+  queueHandled?: boolean;
 }
 
 export interface StopSessionDeps {
@@ -95,6 +96,24 @@ export async function stopSessionPreserveQueue(
     `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}${options.reason ? ` (reason: ${options.reason})` : ''}`
   );
 
+  if (!usesExecutorRuntime(session.agentic_tool)) {
+    const { stopClaudeCliTask } = await import('../services/claude-cli-integration.js');
+    const termination = await stopClaudeCliTask({
+      app: deps.app,
+      session,
+      task: latestTask,
+      params,
+    });
+    return {
+      success: termination.status === 'terminal',
+      status: termination.status === 'terminal' ? SessionStatus.IDLE : undefined,
+      reason: termination.reason,
+      stoppedTaskId: latestTask.task_id,
+      queuedTasksPreserved: queuedTasks.length,
+      queueHandled: termination.queueHandled,
+    };
+  }
+
   const terminate = deps.requestTermination ?? requestExecutorTermination;
   const termination: TerminationResult = await terminate({
     app: deps.app,
@@ -103,10 +122,13 @@ export async function stopSessionPreserveQueue(
     errorMessage: options.reason ?? 'Stopped by user.',
     params,
   });
-  if (termination.status === 'unverified') {
+  if (termination.status !== 'terminal') {
     return {
       success: false,
-      reason: termination.task.error_message ?? termination.reason,
+      reason:
+        termination.task.error_message ??
+        termination.reason ??
+        'Task state changed before Stop could be completed.',
       stoppedTaskId: latestTask.task_id,
       queuedTasksPreserved: queuedTasks.length,
     };

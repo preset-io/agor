@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionsServiceImpl } from '../declarations.js';
+
+const stopClaudeCliTask = vi.hoisted(() => vi.fn());
+vi.mock('../services/claude-cli-integration.js', () => ({ stopClaudeCliTask }));
+
 import { markStoppedSessionPromptableNoDrain, stopSessionPreserveQueue } from './session-stop.js';
 
 describe('markStoppedSessionPromptableNoDrain', () => {
@@ -43,6 +47,39 @@ describe('markStoppedSessionPromptableNoDrain', () => {
 });
 
 describe('stopSessionPreserveQueue', () => {
+  it('uses the CLI watcher stop path without requesting executor containment', async () => {
+    const task = {
+      task_id: 'task-cli',
+      session_id: 'session-cli',
+      status: 'running',
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    const session = {
+      session_id: task.session_id,
+      agentic_tool: 'claude-code-cli',
+      status: 'running',
+      ready_for_prompt: false,
+      tasks: [task.task_id],
+    };
+    stopClaudeCliTask.mockResolvedValueOnce({ status: 'terminal', task, queueHandled: false });
+    const requestTermination = vi.fn();
+    const result = await stopSessionPreserveQueue(
+      {
+        app: {
+          service: () => ({ find: vi.fn().mockResolvedValue({ data: [task] }) }),
+        } as never,
+        taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+        sessionsService: { get: vi.fn().mockResolvedValue(session), patch: vi.fn() } as never,
+        requestTermination: requestTermination as never,
+      },
+      session.session_id as never
+    );
+
+    expect(stopClaudeCliTask).toHaveBeenCalledWith(expect.objectContaining({ session, task }));
+    expect(requestTermination).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true, queueHandled: false });
+  });
+
   it('stops only the active task and preserves queued tasks for the caller to drain after the lock', async () => {
     const sessionId = 'session-1';
     const runningTask = {

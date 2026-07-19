@@ -1,12 +1,12 @@
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Params, SdkFailure, Task, TaskID, TerminationCause } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import { containExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
 
 export interface TerminationResult {
-  status: 'terminal' | 'unverified';
+  status: 'terminal' | 'unverified' | 'condition_changed';
   task: Task;
   reason?: string;
 }
@@ -20,6 +20,10 @@ export interface TerminationInput {
   signalDelayMs?: number;
   absenceVerified?: boolean;
   sdkFailure?: SdkFailure;
+  expectedStatus?: Task['status'];
+  expectedHeartbeatAt?: string;
+  heartbeatStaleBefore?: string;
+  requireExecutorDisconnected?: boolean;
 }
 
 const operations = new Map<string, Promise<TerminationResult>>();
@@ -36,37 +40,21 @@ function unverifiedMessage(taskId: string, detail: string): string {
   );
 }
 
-async function recordRequest(input: TerminationInput): Promise<Task> {
+async function claimRequest(input: TerminationInput) {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
-  const current = await tasks.get(input.taskId, input.params);
-  if (isTerminalTaskStatus(current.status)) return current;
-
-  const now = new Date().toISOString();
-  const existingRequest = current.termination_request;
-  const cause =
-    input.cause === 'user_stop' || !existingRequest ? input.cause : existingRequest.cause;
-  const sdkFailure = input.sdkFailure ?? current.sdk_failure;
-  const task = await tasks.patch(
-    input.taskId,
+  return tasks.claimTermination(
     {
-      status: TaskStatus.STOPPING,
-      termination_request: {
-        cause,
-        requested_at: existingRequest?.requested_at ?? now,
-        final_status: cause === 'user_stop' ? 'stopped' : 'failed',
-      },
-      ...(sdkFailure ? { sdk_failure: { ...sdkFailure, termination: 'requested' as const } } : {}),
+      taskId: String(input.taskId),
+      cause: input.cause,
+      errorMessage: input.errorMessage,
+      sdkFailure: input.sdkFailure,
+      expectedStatus: input.expectedStatus,
+      expectedHeartbeatAt: input.expectedHeartbeatAt,
+      heartbeatStaleBefore: input.heartbeatStaleBefore,
+      requireExecutorDisconnected: input.requireExecutorDisconnected,
     },
     internalParams(input.params)
   );
-  await input.app
-    .service('sessions')
-    .patch(
-      current.session_id,
-      { status: SessionStatus.STOPPING, ready_for_prompt: false },
-      internalParams(input.params)
-    );
-  return task as Task;
 }
 
 async function runContainment(
@@ -80,91 +68,69 @@ async function runContainment(
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
     : await containExecutorProcess(requested.session_id, requested.task_id);
-  const current = await tasks.get(requested.task_id, internalParams(input.params));
-  if (isTerminalTaskStatus(current.status)) {
-    untrackExecutorProcess(current.session_id, current.task_id);
-    return { status: 'terminal', task: current };
-  }
-
-  if (containment.status === 'unverified') {
-    const existingFailure = current.sdk_failure;
-    const diagnosis: SdkFailure = existingFailure
-      ? { ...existingFailure, termination: 'unverified' }
+  const session = await input.app.service('sessions').get(requested.session_id);
+  const providerUnverified = session.agentic_tool === 'opencode';
+  if (containment.status === 'unverified' || providerUnverified) {
+    const reason =
+      containment.status === 'unverified'
+        ? containment.reason
+        : 'OpenCode server-side execution termination is not verified.';
+    const diagnosis: SdkFailure = requested.sdk_failure
+      ? { ...requested.sdk_failure, termination: 'unverified' }
       : {
           reason: 'termination_unverified',
           detected_at: new Date().toISOString(),
-          tool: (await input.app.service('sessions').get(current.session_id)).agentic_tool,
-          last_pulse: current.latest_executor_pulse,
+          tool: session.agentic_tool,
+          last_pulse: requested.latest_executor_pulse,
           termination: 'unverified',
         };
-    const task = await tasks.patch(
-      current.task_id,
+    const settlement = await tasks.settleTermination(
       {
-        sdk_failure: diagnosis,
-        error_message: unverifiedMessage(current.task_id, containment.reason),
+        taskId: requested.task_id,
+        outcome: 'unverified',
+        sdkFailure: diagnosis,
+        errorMessage: unverifiedMessage(requested.task_id, reason),
       },
-      internalParams(input.params)
+      { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
     );
-    return { status: 'unverified', task: task as Task, reason: containment.reason };
+    if (settlement.outcome === 'terminal') {
+      untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id);
+      return { status: 'terminal', task: settlement.task };
+    }
+    if (settlement.outcome === 'condition_changed') {
+      return { status: 'condition_changed', task: settlement.task };
+    }
+    return { status: 'unverified', task: settlement.task, reason };
   }
 
-  const finalRequest = current.termination_request;
-  const finalCause = finalRequest?.cause ?? input.cause;
-  const verifiedFailure = current.sdk_failure
-    ? { ...current.sdk_failure, termination: 'verified' as const }
-    : undefined;
-  let terminal: Task;
-  if (finalCause === 'user_stop') {
-    const stopParams = {
-      ...internalParams(input.params),
-      suppressTerminalQueueProcessing: true,
-      suppressCompletionCallbacks: true,
-    } as Params;
-    terminal = (await tasks.patch(
-      current.task_id,
-      {
-        status: TaskStatus.STOPPED,
-        completed_at: new Date().toISOString(),
-        ...(verifiedFailure ? { sdk_failure: verifiedFailure } : {}),
-      },
-      stopParams
-    )) as Task;
-    const sessionParams = {
-      ...internalParams(input.params),
-      suppressTerminalQueueProcessing: true,
-    } as Params;
-    await input.app
-      .service('sessions')
-      .patch(
-        current.session_id,
-        { status: SessionStatus.IDLE, ready_for_prompt: true },
-        sessionParams
-      );
-  } else {
-    terminal = await tasks.failForLostHeartbeat(
-      current.task_id,
-      {
-        completed_at: new Date().toISOString(),
-        error_message: input.errorMessage,
-        ...(verifiedFailure ? { sdk_failure: verifiedFailure } : {}),
-      },
-      internalParams(input.params)
-    );
+  const settlement = await tasks.settleTermination(
+    {
+      taskId: requested.task_id,
+      outcome: 'verified_absent',
+      errorMessage: input.errorMessage,
+    },
+    { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
+  );
+  if (settlement.outcome === 'condition_changed') {
+    return { status: 'condition_changed', task: settlement.task };
   }
-  untrackExecutorProcess(current.session_id, current.task_id);
-  return { status: 'terminal', task: terminal };
+  untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id);
+  return { status: 'terminal', task: settlement.task };
 }
 
 export async function requestExecutorTermination(
   input: TerminationInput
 ): Promise<TerminationResult> {
-  const requested = await recordRequest(input);
-  if (isTerminalTaskStatus(requested.status)) {
-    untrackExecutorProcess(requested.session_id, requested.task_id);
-    return { status: 'terminal', task: requested };
+  const claim = await claimRequest(input);
+  if (claim.outcome === 'terminal') {
+    untrackExecutorProcess(claim.task.session_id, claim.task.task_id);
+    return { status: 'terminal', task: claim.task };
+  }
+  if (claim.outcome === 'condition_changed') {
+    return { status: 'condition_changed', task: claim.task };
   }
 
-  return startContainment(input, requested);
+  return startContainment(input, claim.task);
 }
 
 function startContainment(input: TerminationInput, requested: Task): Promise<TerminationResult> {
@@ -182,10 +148,10 @@ function startContainment(input: TerminationInput, requested: Task): Promise<Ter
 
 /** Persist ownership before returning, then contain asynchronously. */
 export async function beginExecutorTermination(input: TerminationInput): Promise<Task> {
-  const requested = await recordRequest(input);
-  if (isTerminalTaskStatus(requested.status) || operations.has(requested.task_id)) return requested;
-  startContainment(input, requested);
-  return requested;
+  const claim = await claimRequest(input);
+  if (claim.outcome === 'terminal' || claim.outcome === 'condition_changed') return claim.task;
+  if (!operations.has(claim.task.task_id)) startContainment(input, claim.task);
+  return claim.task;
 }
 
 export async function forceFailUnverifiedTask(input: {
@@ -209,15 +175,17 @@ export async function forceFailUnverifiedTask(input: {
   console.warn(
     `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
   );
-  const terminal = await tasks.failForLostHeartbeat(
-    current.task_id,
+  const settlement = await tasks.settleTermination(
     {
-      completed_at: new Date().toISOString(),
-      error_message: 'Force-failed by an authorized user; executor termination remains unverified.',
-      sdk_failure: { ...current.sdk_failure, termination: 'unverified' },
+      taskId: current.task_id,
+      outcome: 'forced_unverified',
+      errorMessage: 'Force-failed by an authorized user; executor termination remains unverified.',
     },
-    internalParams(input.params)
+    { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
   );
-  untrackExecutorProcess(current.session_id, current.task_id);
-  return terminal;
+  if (settlement.outcome !== 'transitioned' && settlement.outcome !== 'terminal') {
+    throw new Error('Task termination state changed before force-fail could be applied.');
+  }
+  untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id);
+  return settlement.task;
 }

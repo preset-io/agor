@@ -20,6 +20,10 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  type TerminationClaimInput,
+  type TerminationClaimResult,
+  type TerminationSettlementInput,
+  type TerminationSettlementResult,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -53,7 +57,6 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import type { TerminalQueueProcessingParams } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -314,80 +317,96 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.findActiveWithExecutorHeartbeat();
   }
 
-  async failForLostHeartbeat(
-    id: string,
-    data: { completed_at?: string; error_message: string; sdk_failure?: Task['sdk_failure'] },
+  async claimTermination(
+    input: TerminationClaimInput,
     params?: TaskParams
-  ): Promise<Task> {
-    const result = await this.patch(
-      id,
-      {
-        status: TaskStatus.FAILED,
-        completed_at: data.completed_at,
-        error_message: data.error_message,
-        ...(data.sdk_failure ? { sdk_failure: data.sdk_failure } : {}),
-      },
-      {
-        ...params,
-        suppressTerminalSessionStateUpdate: true,
-        suppressTerminalQueueProcessing: true,
-        // Suppress callbacks here — dispatchCompletionCallbacks runs inside the
-        // tenantDatabaseScopeAround transaction (it does SELECT session_relationships +
-        // INSERT callback task), extending the transaction's idle time between statements.
-        // This triggered write CONNECTION_CLOSED + zombie idle-in-transaction connections.
-        // We dispatch manually below, after both patches commit, in their own transactions.
-        suppressCompletionCallbacks: true,
-      }
-    );
-    const failedTask = result as Task;
-    const heartbeatFailureWon =
-      failedTask.status === TaskStatus.FAILED &&
-      failedTask.error_message === data.error_message &&
-      (!data.completed_at || failedTask.completed_at === data.completed_at);
-    if (!heartbeatFailureWon) {
-      console.log(
-        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; ` +
-          `heartbeat failure did not win (status=${failedTask.status})`
+  ): Promise<TerminationClaimResult> {
+    const result = await this.taskRepo.claimTermination(input);
+    if (result.outcome !== 'claimed') return result;
+
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: result.task,
+      id: result.task.task_id,
+      params,
+    });
+    try {
+      await this.app
+        .service('sessions')
+        .patch(
+          result.task.session_id,
+          { status: SessionStatus.STOPPING, ready_for_prompt: false },
+          { ...(params ?? {}), provider: undefined }
+        );
+    } catch (error) {
+      // The durable Task claim owns termination. A transient projection write
+      // must not prevent the coordinator from containing the process.
+      console.warn(
+        `[termination] Failed to project STOPPING onto session ${shortId(result.task.session_id)}:`,
+        error instanceof Error ? error.message : String(error)
       );
-      return failedTask;
     }
-    const sessionPatchParams: TerminalQueueProcessingParams = {
-      ...params,
+    return result;
+  }
+
+  async settleTermination(
+    input: TerminationSettlementInput,
+    params?: TaskParams
+  ): Promise<TerminationSettlementResult> {
+    const result = await this.taskRepo.settleTermination(input);
+    if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
+
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: result.task,
+      id: result.task.task_id,
+      params,
+    });
+    if (result.outcome === 'unverified') return result;
+
+    this.trackTaskCompleted(result.task);
+    const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+    await this.processCompletionSideEffects(result.task, result.task.status, {
+      ...internalParams,
+      suppressTerminalSessionStateUpdate: true,
       suppressTerminalQueueProcessing: true,
-    };
+      suppressCompletionCallbacks: true,
+    });
+
+    const isStop = result.task.status === TaskStatus.STOPPED;
     let updatedSession: Session | undefined;
-    await this.app
-      .service('sessions')
-      .patch(
-        failedTask.session_id,
+    try {
+      const sessionParams: TaskParams = {
+        ...internalParams,
+        suppressTerminalQueueProcessing: true,
+      };
+      updatedSession = (await this.app.service('sessions').patch(
+        result.task.session_id,
         {
-          status: SessionStatus.FAILED,
+          status: isStop ? SessionStatus.IDLE : SessionStatus.FAILED,
           ready_for_prompt: true,
         },
-        sessionPatchParams
-      )
-      .then((s) => {
-        updatedSession = s as Session;
-      })
-      .catch((error: unknown) => {
-        console.warn(
-          `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      });
-    // Dispatch completion callbacks outside the task-patch transaction.
-    // Both patches have committed at this point, so callbacks run in fresh transactions.
-    if (updatedSession) {
-      void this.dispatchCompletionCallbacksAfterCommit(failedTask, updatedSession, params).catch(
-        (error: unknown) => {
-          console.warn(
-            `[executor-heartbeat] Failed to dispatch completion callbacks for task ${shortId(failedTask.task_id)}:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        }
+        sessionParams
+      )) as Session;
+    } catch (error) {
+      console.warn(
+        `[termination] Failed to settle session ${shortId(result.task.session_id)}:`,
+        error instanceof Error ? error.message : String(error)
       );
     }
-    return failedTask;
+    if (!isStop && updatedSession) {
+      await this.dispatchCompletionCallbacksAfterCommit(
+        result.task,
+        updatedSession,
+        internalParams
+      );
+    }
+    if (isStop && params?.suppressTerminalQueueProcessing !== true) {
+      await this.triggerQueueProcessingAfterCommit(result.task.session_id, internalParams);
+    }
+    return result;
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -455,6 +474,151 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     await this.runAfterTenantDatabaseCommit('dispatchCompletionCallbacks', () =>
       this.dispatchCompletionCallbacks(task, session, params)
     );
+  }
+
+  private async processCompletionSideEffects(
+    task: Task,
+    status: Task['status'],
+    params?: TaskParams
+  ): Promise<void> {
+    if (!task.session_id || !this.app) return;
+    try {
+      const session = await this.app.service('sessions').get(task.session_id, params);
+
+      if (session.branch_id) {
+        this.app
+          .service('branches')
+          .get(session.branch_id, params)
+          .then((branch) => {
+            const repoId = branch?.repo_id;
+            if (!repoId) return;
+            return ensureRepoOriginAlignedById(this.app, repoId, params);
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
+            );
+          });
+      }
+
+      const latestTaskId = session.tasks?.[session.tasks.length - 1];
+      const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
+      const suppressBtwCleanup = params?.suppressBtwCleanup === true;
+      const isStop = status === TaskStatus.STOPPED;
+
+      if (latestTaskId && latestTaskId !== task.task_id) {
+        console.log(
+          `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
+        );
+        if (!suppressCompletionCallbacks && !isStop) {
+          await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
+        }
+        return;
+      }
+
+      if (isStop && params?.suppressTerminalQueueProcessing) {
+        console.log(
+          `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
+        );
+      } else if (params?.suppressTerminalSessionStateUpdate) {
+        console.log(
+          `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${status}) due to internal patch params`
+        );
+      } else {
+        // Keep the terminal status/ready update a pure prompt-flow patch
+        // with the caller's original params. Folding a server-generated
+        // `title` in here would make it a mixed metadata patch, which the
+        // sessions RBAC hook gates behind `all` permission — a non-owner
+        // collaborator's first completed task would then fail the whole
+        // patch and leave the session stuck running/not-ready. The title is
+        // written separately below and is allowed to fail independently.
+        await this.app.service('sessions').patch(
+          task.session_id,
+          {
+            status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+            ready_for_prompt: true,
+          },
+          params
+        );
+        console.log(
+          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+        );
+
+        // Auto-title: cheap heuristic, no LLM call — see
+        // `deriveTitleFromPrompt`. Fires on any completed task while the
+        // session still has no title, not just the first one, so a session
+        // whose first prompt was image-only/whitespace (empty derived
+        // title, skipped) or whose first task failed still picks one up on
+        // a later task.
+        //
+        // "Unset" is canonically null/undefined: an explicitly cleared
+        // title (empty string) is a deliberate user choice and must NOT be
+        // re-armed. The session is re-read immediately before the write and
+        // the title is only set if it is *still* unset, so a rename typed
+        // while this task ran is never clobbered (compare-and-set at the app
+        // layer; full row-locked atomicity is a follow-up). The write is a
+        // trusted system patch (no `provider`) so it bypasses the
+        // collaborator-metadata RBAC gate the status patch above avoids.
+        if (status === TaskStatus.COMPLETED && task.full_prompt) {
+          const autoTitle = deriveTitleFromPrompt(task.full_prompt);
+          if (autoTitle) {
+            try {
+              const fresh = await this.app.service('sessions').get(task.session_id, params);
+              if (fresh.title == null) {
+                await this.app
+                  .service('sessions')
+                  .patch(
+                    task.session_id,
+                    { title: autoTitle },
+                    { ...params, provider: undefined }
+                  );
+              }
+            } catch (titleError) {
+              const message =
+                titleError instanceof Error ? titleError.message : String(titleError);
+              console.warn(
+                `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
+              );
+            }
+          }
+        }
+      }
+
+      if (!suppressCompletionCallbacks && !isStop) {
+        await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
+      }
+
+      if (session.fork_origin === 'btw') {
+        if (!suppressBtwCleanup) {
+          try {
+            await this.app.service('sessions').patch(session.session_id, {
+              archived: true,
+              archived_reason: 'btw_completed',
+            });
+            console.log(
+              `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+            );
+          } catch (error) {
+            console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+          }
+        }
+
+        if (!suppressCompletionCallbacks && !isStop) {
+          await this.injectBtwResultMessage(task, session, params);
+        }
+      }
+
+      if (!params?.suppressTerminalQueueProcessing) {
+        await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+      } else {
+        console.log(
+          `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
+        );
+      }
+    } catch (error) {
+      console.error('❌ [TasksService] Failed to process task completion:', error);
+    }
   }
 
   /**
@@ -550,174 +714,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // executor turns. Timeout paths patch session state separately and should not
     // enqueue callbacks, mark sessions promptable, archive forks, or drain queues here.
     if (isCompletionSideEffectTransition) {
-      // Since tasks are patched one at a time, result is always a single Task (not an array)
-      const task = result as Task;
-
-      if (task.session_id && this.app) {
-        try {
-          // CRITICAL: Check if THIS task is still the current/latest task before updating session
-          // If a new task has started, we must NOT set the session to IDLE
-          const session = await this.app.service('sessions').get(task.session_id, params);
-
-          // Realign on terminal transition — decoupled from session-state
-          // updates and callback delivery so an error there doesn't skip it.
-          if (session.branch_id) {
-            this.app
-              .service('branches')
-              .get(session.branch_id, params)
-              .then((branch) => {
-                const repoId = branch?.repo_id;
-                if (!repoId) return;
-                return ensureRepoOriginAlignedById(this.app, repoId, params);
-              })
-              .catch((err: unknown) => {
-                const message = err instanceof Error ? err.message : String(err);
-                console.warn(
-                  `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${task.session_id ? shortId(task.session_id) : 'unknown'}: ${message}`
-                );
-              });
-          }
-
-          const latestTaskId = session.tasks?.[session.tasks.length - 1];
-
-          const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
-          const suppressBtwCleanup = params?.suppressBtwCleanup === true;
-
-          // STOPPED tasks (user-cancelled or daemon-shutdown cleanup) never notify
-          // parent sessions. A stopped child represents abandoned work — the parent
-          // should not resume or be informed; it has its own lifecycle.
-          const isStop = data.status === TaskStatus.STOPPED;
-
-          if (latestTaskId && latestTaskId !== task.task_id) {
-            console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
-            );
-            // Process completion callbacks only for naturally-terminal tasks (COMPLETED/FAILED).
-            // STOPPED means the work was abandoned — don't notify the parent.
-            if (!suppressCompletionCallbacks && !isStop) {
-              await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
-            }
-            return result;
-          }
-
-          // For stop-route/admin cleanup paths that explicitly suppress queue processing,
-          // the caller owns the follow-up session patch/drain. For an ordinary STOPPED
-          // terminal patch, still make the session promptable so queued work can drain.
-          if (isStop && params?.suppressTerminalQueueProcessing) {
-            console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
-            );
-          } else if (params?.suppressTerminalSessionStateUpdate) {
-            console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
-            );
-          } else {
-            // Keep the terminal status/ready update a pure prompt-flow patch
-            // with the caller's original params. Folding a server-generated
-            // `title` in here would make it a mixed metadata patch, which the
-            // sessions RBAC hook gates behind `all` permission — a non-owner
-            // collaborator's first completed task would then fail the whole
-            // patch and leave the session stuck running/not-ready. The title is
-            // written separately below and is allowed to fail independently.
-            await this.app.service('sessions').patch(
-              task.session_id,
-              {
-                status:
-                  data.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-                ready_for_prompt: true,
-              },
-              params
-            );
-
-            console.log(
-              `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${data.status})`
-            );
-
-            // Auto-title: cheap heuristic, no LLM call — see
-            // `deriveTitleFromPrompt`. Fires on any completed task while the
-            // session still has no title, not just the first one, so a session
-            // whose first prompt was image-only/whitespace (empty derived
-            // title, skipped) or whose first task failed still picks one up on
-            // a later task.
-            //
-            // "Unset" is canonically null/undefined: an explicitly cleared
-            // title (empty string) is a deliberate user choice and must NOT be
-            // re-armed. The session is re-read immediately before the write and
-            // the title is only set if it is *still* unset, so a rename typed
-            // while this task ran is never clobbered (compare-and-set at the app
-            // layer; full row-locked atomicity is a follow-up). The write is a
-            // trusted system patch (no `provider`) so it bypasses the
-            // collaborator-metadata RBAC gate the status patch above avoids.
-            if (data.status === TaskStatus.COMPLETED && task.full_prompt) {
-              const autoTitle = deriveTitleFromPrompt(task.full_prompt);
-              if (autoTitle) {
-                try {
-                  const fresh = await this.app.service('sessions').get(task.session_id, params);
-                  if (fresh.title == null) {
-                    await this.app
-                      .service('sessions')
-                      .patch(
-                        task.session_id,
-                        { title: autoTitle },
-                        { ...params, provider: undefined }
-                      );
-                  }
-                } catch (titleError) {
-                  const message =
-                    titleError instanceof Error ? titleError.message : String(titleError);
-                  console.warn(
-                    `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
-                  );
-                }
-              }
-            }
-          }
-
-          if (!suppressCompletionCallbacks && !isStop) {
-            await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
-          }
-
-          // "btw" fork origin: auto-archive the ephemeral fork after task completion.
-          // Runs regardless of callback success — btw forks should always be cleaned up.
-          // Administrative terminal patches may suppress parent callbacks/result injection,
-          // but still archive the ephemeral session unless explicitly told not to.
-          if (session.fork_origin === 'btw') {
-            if (!suppressBtwCleanup) {
-              try {
-                await this.app.service('sessions').patch(session.session_id, {
-                  archived: true,
-                  archived_reason: 'btw_completed',
-                });
-                console.log(
-                  `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-                );
-              } catch (error) {
-                console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
-              }
-            }
-
-            if (!suppressCompletionCallbacks && !isStop) {
-              // Inject a result message into the parent session's conversation.
-              // This is a non-prompt system message — it shows up in the UI but doesn't
-              // trigger a new prompt cycle. The parent's agent never sees it.
-              await this.injectBtwResultMessage(task, session, params);
-            }
-          }
-
-          // Fire queue processing after the outer transaction commits. spawnTaskExecutor
-          // (called inside the queue processor) does significant I/O that would otherwise
-          // extend this transaction and cause proxy CONNECTION_CLOSED kills.
-          if (!params?.suppressTerminalQueueProcessing) {
-            await this.triggerQueueProcessingAfterCommit(task.session_id, params);
-          } else if (params?.suppressTerminalQueueProcessing) {
-            console.log(
-              `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
-            );
-          }
-        } catch (error) {
-          console.error('❌ [TasksService] Failed to process task completion:', error);
-        }
-      }
+      await this.processCompletionSideEffects(result as Task, data.status!, params);
     }
 
     return result;

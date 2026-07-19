@@ -86,6 +86,8 @@ export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
   final_status: 'stopped' | 'failed';
+  /** Failure/stop reason captured with the winning claim. */
+  error_message?: string;
 }
 
 /**

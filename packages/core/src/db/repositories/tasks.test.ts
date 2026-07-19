@@ -977,6 +977,146 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  dbTest(
+    'atomically gives user Stop precedence over a concurrent health failure',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+
+      const [health, stop] = await Promise.all([
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'sdk_health_failure',
+          errorMessage: 'SDK stalled',
+          sdkFailure: {
+            reason: 'no_first_progress',
+            detected_at: '2026-07-10T20:03:00.000Z',
+            tool: 'codex',
+            termination: 'requested',
+          },
+        }),
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user',
+        }),
+      ]);
+
+      expect([health.outcome, stop.outcome]).toContain('claimed');
+      expect(await taskRepo.findById(task.task_id)).toMatchObject({
+        status: TaskStatus.STOPPING,
+        termination_request: { cause: 'user_stop', final_status: 'stopped' },
+      });
+
+      const settled = await taskRepo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+      });
+      expect(settled).toMatchObject({
+        outcome: 'transitioned',
+        task: { status: TaskStatus.STOPPED },
+      });
+    }
+  );
+
+  dbTest('rejects a stale-heartbeat claim when the observed heartbeat changed', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+        last_executor_heartbeat_at: '2026-07-10T20:00:01.000Z',
+      })
+    );
+    await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      undefined,
+      new Date('2026-07-10T20:00:05Z')
+    );
+
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'Heartbeat lost',
+      expectedStatus: TaskStatus.RUNNING,
+      expectedHeartbeatAt: '2026-07-10T20:00:01.000Z',
+      heartbeatStaleBefore: '2026-07-10T20:00:02.000Z',
+    });
+
+    expect(claim).toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
+    });
+  });
+
+  dbTest('rejects a startup-timeout claim after the executor connects', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    await taskRepo.connectExecutor(task.task_id);
+
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'startup_timeout',
+      errorMessage: 'Executor did not connect',
+      expectedStatus: TaskStatus.DISPATCHING,
+      requireExecutorDisconnected: true,
+    });
+
+    expect(claim).toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
+    });
+  });
+
+  dbTest('makes repeated claims and settlements idempotent', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const request = {
+      taskId: task.task_id,
+      cause: 'user_stop' as const,
+      errorMessage: 'Stopped by user',
+    };
+
+    expect((await taskRepo.claimTermination(request)).outcome).toBe('claimed');
+    expect((await taskRepo.claimTermination(request)).outcome).toBe('unchanged');
+    expect(
+      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
+        .outcome
+    ).toBe('transitioned');
+    expect(
+      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
+        .outcome
+    ).toBe('terminal');
+  });
+
+  dbTest('reserves termination-owned terminality for settlement', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      'termination-owned tasks must be settled through settleTermination'
+    );
+  });
+
   for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
     dbTest(
       `does not revive a ${terminalStatus} task through awaiting_permission then running`,

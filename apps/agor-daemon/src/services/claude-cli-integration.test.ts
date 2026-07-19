@@ -14,6 +14,7 @@ import {
   buildClaudeCliAgorMcpConfig,
   buildSpawnConfigForSession,
   resolveClaudeCliMcpConfigTargetUnixUser,
+  stopClaudeCliTask,
   writeClaudeCliMcpConfigFile,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration';
@@ -65,6 +66,47 @@ afterEach(() => {
 });
 
 describe('Claude CLI Agor MCP config', () => {
+  it('sends Ctrl-C through the existing terminal channel and stays unverified without watcher confirmation', async () => {
+    const task = {
+      task_id: '019e8abc-0000-7000-8000-000000000002',
+      session_id: makeSession().session_id,
+      status: 'running',
+      created_at: new Date().toISOString(),
+    };
+    const emit = vi.fn();
+    const settleTermination = vi.fn(async () => ({
+      outcome: 'unverified',
+      task: { ...task, status: 'stopping', sdk_failure: { termination: 'unverified' } },
+    }));
+    const app = {
+      io: { to: vi.fn(() => ({ emit })) },
+      service: () => ({
+        claimTermination: vi.fn(async () => ({
+          outcome: 'claimed',
+          task: { ...task, status: 'stopping' },
+        })),
+        settleTermination,
+      }),
+    } as unknown as Application;
+
+    const result = await stopClaudeCliTask({
+      app,
+      session: makeSession({ status: 'running', tasks: [task.task_id] as never }),
+      task: task as never,
+      timeoutMs: 1,
+    });
+
+    expect(emit).toHaveBeenCalledWith('terminal:input', {
+      userId: 'user-1',
+      input: '\x03',
+    });
+    expect(settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.objectContaining({ provider: undefined })
+    );
+    expect(result.status).toBe('unverified');
+  });
+
   it('renders the Claude CLI mcpServers file shape with a session bearer token', () => {
     expect(
       buildClaudeCliAgorMcpConfig({ daemonUrl: 'https://agor.example.test/', mcpToken: 'tok_123' })

@@ -189,6 +189,9 @@ export class AgorExecutor {
         sdkVersion: getSdkActivityVersion(this.config.tool),
         onDecision: (evidence) => this.handleWatchdogDecision(evidence),
       });
+      // Start at the executor boundary so imports, subscriptions, prompt
+      // submission, and a silent first SDK event are all covered.
+      this.recordPulse('sdk_started', this.config.tool);
     }
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);

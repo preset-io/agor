@@ -495,7 +495,6 @@ export async function executeToolTask(params: {
   params.abortController.signal.addEventListener('abort', abortHandler);
 
   try {
-    ctx.callbacks.onPulse?.('sdk_started', toolName);
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
     const result = await tool.executePromptWithStreaming(
