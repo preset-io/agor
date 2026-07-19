@@ -12,6 +12,7 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '../types';
 import {
+  AgenticConfigurationResolutionError,
   assertInlineAgenticConfigurationAllowed,
   presetConfigurationToSessionPatch,
   resolveAgenticConfigurationReference,
@@ -44,7 +45,7 @@ describe('agentic tool preset resolution', () => {
       preset_id: preset.preset_id,
     });
     await expect(resolveAgenticToolPreset(db, 'claude-code', preset.preset_id)).rejects.toThrow(
-      /belongs to codex/
+      AgenticConfigurationResolutionError
     );
   });
 

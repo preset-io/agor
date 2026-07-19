@@ -23,4 +23,22 @@ describe('buildScheduleConfigFromFormValues', () => {
     });
     expect(result.preset_id).toBeUndefined();
   });
+
+  it('detaches a previous default reference when switching to inline configuration', () => {
+    const previous = {
+      agentic_tool: 'codex',
+      configuration_reference: '__user_default__',
+      context_files: ['AGENTS.md'],
+    } as ScheduleAgenticToolConfig;
+
+    const result = buildScheduleConfigFromFormValues(
+      'codex',
+      { permissionMode: 'default', modelConfig: { model: 'gpt-5.4' } },
+      previous
+    );
+
+    expect(result.configuration_reference).toBeUndefined();
+    expect(result.preset_id).toBeUndefined();
+    expect(result.context_files).toEqual(['AGENTS.md']);
+  });
 });

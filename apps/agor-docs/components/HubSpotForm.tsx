@@ -175,9 +175,9 @@ export function HubSpotForm({
         onReady={() => setScriptReady(true)}
       />
       {!formReady && (
-        <div className={styles.loading} role="status" aria-label="Loading form">
+        <output className={styles.loading} aria-label="Loading form">
           <span className={styles.spinner} aria-hidden="true" />
-        </div>
+        </output>
       )}
       <div id={targetId} className={styles.form} />
       {showDemoLink && (

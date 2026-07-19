@@ -25,9 +25,9 @@ export function MeetingEmbed() {
   return (
     <>
       {!frameReady && (
-        <div className={styles.meetingLoading} role="status" aria-label="Loading scheduler">
+        <output className={styles.meetingLoading} aria-label="Loading scheduler">
           <span className={styles.meetingSpinner} aria-hidden="true" />
-        </div>
+        </output>
       )}
       <iframe
         src={`${AGOR_CLOUD_DEMO_URL}?embed=true`}

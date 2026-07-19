@@ -117,6 +117,8 @@ export type SessionParams = QueryParams<{
     _agorSqlSessionAccessUserId?: UUID;
     /** Internal task-start reconciliation of a live preset. */
     _applyingAgenticToolPreset?: boolean;
+    /** Internal caller already resolved permission/model fallbacks and must not inherit user defaults. */
+    _agenticConfigResolved?: boolean;
   };
 
 /**

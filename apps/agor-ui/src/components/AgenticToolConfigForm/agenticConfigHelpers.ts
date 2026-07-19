@@ -125,6 +125,7 @@ export function buildScheduleConfigFromFormValues(
     // Selecting inline configuration must detach any previously selected
     // live preset; otherwise the daemon correctly rejects the mixed payload.
     preset_id: undefined,
+    configuration_reference: undefined,
     agentic_tool: tool,
     permission_mode: builtDefault.permissionMode,
     model_config: builtDefault.modelConfig,

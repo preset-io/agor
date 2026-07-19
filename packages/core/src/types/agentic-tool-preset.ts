@@ -36,13 +36,20 @@ export type AgenticToolDefaultConfigurationReference =
   | typeof USER_DEFAULT_AGENTIC_CONFIGURATION
   | typeof WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
 
+export function normalizeAgenticToolDefaultConfigurationReference(
+  reference: string
+): AgenticToolDefaultConfigurationReference | undefined {
+  if (reference === USER_DEFAULT_AGENTIC_CONFIGURATION) return USER_DEFAULT_AGENTIC_CONFIGURATION;
+  if (reference === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION) {
+    return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+  }
+  return undefined;
+}
+
 export function isAgenticToolDefaultConfigurationReference(
   reference: string
 ): reference is AgenticToolDefaultConfigurationReference {
-  return (
-    reference === USER_DEFAULT_AGENTIC_CONFIGURATION ||
-    reference === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-  );
+  return normalizeAgenticToolDefaultConfigurationReference(reference) !== undefined;
 }
 
 export type UserAgenticDefaultSelection =

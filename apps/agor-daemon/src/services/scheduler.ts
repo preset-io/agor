@@ -39,6 +39,7 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
+  normalizeScheduleAgenticToolConfig,
   presetConfigurationToScheduleConfig,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
@@ -57,12 +58,13 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
-import { resolvePermissionConfig, resolveSessionDefaults } from '@agor/core/sessions';
+import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   Branch,
   MCPServerID,
   PermissionMode,
   Schedule,
+  ScheduleAgenticToolConfig,
   ScheduleID,
   Session,
   SessionID,
@@ -160,6 +162,46 @@ export function renderSchedulePrompt(
     console.error(`❌ Failed to render prompt template:`, error);
     return template;
   }
+}
+
+/** Resolve a persisted schedule source into session-ready configuration for one run. */
+export async function materializeScheduleAgenticToolConfig(
+  db: TenantScopeAwareDatabase,
+  schedule: Pick<Schedule, 'agentic_tool_config' | 'created_by'>
+): Promise<ScheduleAgenticToolConfig> {
+  const cfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
+  if (cfg.configuration_reference) {
+    const resolved = await resolveAgenticConfigurationReference(
+      db,
+      cfg.agentic_tool,
+      cfg.configuration_reference,
+      schedule.created_by as import('@agor/core/types').UserID
+    );
+    if (resolved.preset) {
+      return presetConfigurationToScheduleConfig(
+        cfg.agentic_tool,
+        resolved.preset.preset_id,
+        resolved.preset.configuration
+      );
+    }
+    const materialized = presetConfigurationToScheduleConfig(
+      cfg.agentic_tool,
+      cfg.configuration_reference,
+      resolved.configuration ?? {}
+    );
+    const { preset_id: _presetId, ...inline } = materialized;
+    return inline;
+  }
+  if (cfg.preset_id) {
+    const preset = await resolveAgenticToolPreset(db, cfg.agentic_tool, cfg.preset_id);
+    return presetConfigurationToScheduleConfig(
+      cfg.agentic_tool,
+      preset.preset_id,
+      preset.configuration
+    );
+  }
+  await assertInlineAgenticConfigurationAllowed(db, cfg.agentic_tool);
+  return cfg;
 }
 
 /**
@@ -630,57 +672,24 @@ export class SchedulerService {
       // 5. Resolve unix_username (schedule's creator is the execution identity).
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
-      let cfg = schedule.agentic_tool_config;
-      if (cfg.configuration_reference) {
-        const reference = cfg.configuration_reference;
-        const resolved = await this.withTenantDatabase(() =>
-          resolveAgenticConfigurationReference(
-            this.db,
-            cfg.agentic_tool,
-            reference,
-            schedule.created_by as import('@agor/core/types').UserID
-          )
-        );
-        cfg = resolved.preset
-          ? presetConfigurationToScheduleConfig(
-              cfg.agentic_tool,
-              resolved.preset.preset_id,
-              resolved.preset.configuration
-            )
-          : (() => {
-              const materialized = presetConfigurationToScheduleConfig(
-                cfg.agentic_tool,
-                reference,
-                resolved.configuration ?? {}
-              );
-              const { preset_id: _presetId, ...inline } = materialized;
-              return inline;
-            })();
-      } else if (cfg.preset_id) {
-        const presetId = cfg.preset_id;
-        // Cron ticks carry tenant identity but no ambient DB scope — open a
-        // short tenant unit of work like the repo calls above.
-        const preset = await this.withTenantDatabase(() =>
-          resolveAgenticToolPreset(this.db, cfg.agentic_tool, presetId)
-        );
-        cfg = presetConfigurationToScheduleConfig(
-          cfg.agentic_tool,
-          cfg.preset_id,
-          preset.configuration
-        );
-      } else {
-        await this.withTenantDatabase(() =>
-          assertInlineAgenticConfigurationAllowed(this.db, cfg.agentic_tool)
-        );
-      }
-      const scheduleModelConfig = cfg.model_config
-        ? resolveSessionDefaults({
-            agenticTool: cfg.agentic_tool,
-            user: creator,
-            overrides: { modelConfig: cfg.model_config },
-            now: new Date(now),
-          }).model_config
-        : undefined;
+      const persistedCfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
+      const cfg = await this.withTenantDatabase(() =>
+        materializeScheduleAgenticToolConfig(this.db, schedule)
+      );
+      const inheritsCreatorDefaults =
+        persistedCfg.configuration_reference === undefined && persistedCfg.preset_id === undefined;
+      const runtimeDefaults = resolveSessionDefaults({
+        agenticTool: cfg.agentic_tool,
+        user: inheritsCreatorDefaults ? creator : null,
+        overrides: {
+          permissionMode: cfg.permission_mode as PermissionMode | undefined,
+          modelConfig: cfg.model_config,
+          codexSandboxMode: cfg.codex_sandbox_mode,
+          codexApprovalPolicy: cfg.codex_approval_policy,
+          codexNetworkAccess: cfg.codex_network_access,
+        },
+        now: new Date(now),
+      });
 
       // 6. Create session with schedule metadata + FK back to schedule.
       const session: Partial<Session> = {
@@ -700,20 +709,11 @@ export class SchedulerService {
           ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
           : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
         contextFiles: cfg.context_files ?? [],
-        permission_config: resolvePermissionConfig({
-          effectiveTool: cfg.agentic_tool,
-          overrides: {
-            permissionMode: cfg.permission_mode as PermissionMode | undefined,
-            codexSandboxMode: cfg.codex_sandbox_mode,
-            codexApprovalPolicy: cfg.codex_approval_policy,
-            codexNetworkAccess: cfg.codex_network_access,
-          },
-          userToolDefaults: creator?.default_agentic_config?.[cfg.agentic_tool],
-        }),
+        permission_config: runtimeDefaults.permission_config,
         // DefaultModelConfig → Session.model_config. If the schedule
         // only sets ancillary fields (e.g. Claude effort), resolve them
         // against the same model defaults used by fresh sessions.
-        model_config: scheduleModelConfig,
+        model_config: runtimeDefaults.model_config,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,
@@ -738,7 +738,7 @@ export class SchedulerService {
       const sessionsService = this.app.service('sessions');
       let createdSession: Session;
       try {
-        createdSession = await sessionsService.create(session);
+        createdSession = await sessionsService.create(session, { _agenticConfigResolved: true });
       } catch (err) {
         if (isUniqueConstraintError(err)) {
           const winner = await this.withTenantDatabase(() =>

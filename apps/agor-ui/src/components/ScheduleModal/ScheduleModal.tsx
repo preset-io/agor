@@ -417,6 +417,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           tool={agentTool}
           mcpServerById={mcpServerById}
           client={client}
+          defaultResolution="schedule-run"
         />
 
         <Collapse

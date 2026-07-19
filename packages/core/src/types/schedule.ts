@@ -41,7 +41,7 @@ export type TimezoneMode = 'local' | 'utc';
 export interface ScheduleAgenticToolConfig {
   /** Agent to spawn for this schedule's runs. */
   agentic_tool: AgenticToolName;
-  /** Live preset reference. Remaining runtime fields are ignored when present. */
+  /** Live preset reference. Inline runtime fields cannot coexist with this source. */
   preset_id?: import('./agentic-tool-preset').AgenticToolPresetID;
   /** User/workspace default reference, deliberately resolved for every run. */
   configuration_reference?: import('./agentic-tool-preset').AgenticToolDefaultConfigurationReference;
