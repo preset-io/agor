@@ -57,7 +57,7 @@ jobs:
           ref: ${{ env.IMAGE_REVISION }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Fork and Dependabot PRs cannot access repository secrets. Keep their
       # build and smoke test useful without authenticating or publishing.
