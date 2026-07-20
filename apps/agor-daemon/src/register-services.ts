@@ -1049,8 +1049,8 @@ function createExecuteHandler(
               tool: session.agentic_tool,
               termination: 'requested',
             },
-            // A remote executor may connect after the classification read.
-            // Revalidate at the row-locked claim before stopping it.
+            // A remote executor may connect while its launcher is exiting.
+            // Resolve that race only at the row-locked claim.
             ...(spawnContext.mode === 'templated'
               ? {
                   expectedStatus: TaskStatus.DISPATCHING,
