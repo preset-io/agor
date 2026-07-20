@@ -38,7 +38,8 @@
     "load:fixtures": "tsx scripts/load-fixtures.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
-    "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs"
+    "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
+    "knip": "knip"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
