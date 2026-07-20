@@ -140,6 +140,7 @@ describe('Claude CLI integration', () => {
       outcome: 'transitioned',
       task: { ...stoppingTask, status: TaskStatus.STOPPED },
     }));
+    const claimTermination = vi.fn(async () => ({ outcome: 'claimed', task: stoppingTask }));
     const patchSession = vi.fn();
     const app = {
       get: () => undefined,
@@ -148,6 +149,7 @@ describe('Claude CLI integration', () => {
           return {
             get: vi.fn(async () => runningTask),
             patch: patchTask,
+            claimTermination,
             settleTermination,
           };
         }
@@ -168,8 +170,13 @@ describe('Claude CLI integration', () => {
       type: 'turn_end',
       messageId: 'turn-end',
       timestamp: '2026-07-20T10:00:02.000Z',
+      interrupted: true,
     });
 
+    expect(claimTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, cause: 'user_stop' }),
+      { provider: undefined }
+    );
     expect(patchTask).toHaveBeenCalledWith(
       taskId,
       expect.objectContaining({ status: TaskStatus.COMPLETED }),

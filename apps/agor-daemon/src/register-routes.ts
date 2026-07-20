@@ -2262,8 +2262,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+        const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+        const triggerPreservedQueue = () => {
+          deferInFreshTenantScope(params, async () => {
+            try {
+              await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
+            } catch (error) {
+              console.error(
+                `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,
+                error
+              );
+            }
+          });
+        };
         if (body.force_unverified === true) {
-          return withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+          const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
             const session = await app.service('sessions').get(id, params);
             const task = findUnverifiedTerminationTask(
               await findActiveTasksForSession(app, session.session_id, params)
@@ -2292,11 +2305,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               stoppedTaskId: failedTask.task_id,
             };
           });
+          triggerPreservedQueue();
+          return result;
         }
+
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
-
-        const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
-
         const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
           stopSessionPreserveQueue(
             {
@@ -2311,16 +2324,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
 
         if (result.success && !result.queueHandled) {
-          deferInFreshTenantScope(params, async () => {
-            try {
-              await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
-            } catch (error) {
-              console.error(
-                `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,
-                error
-              );
-            }
-          });
+          triggerPreservedQueue();
         }
 
         return result;

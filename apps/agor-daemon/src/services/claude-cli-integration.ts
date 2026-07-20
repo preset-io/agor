@@ -1007,6 +1007,16 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         }
         const tasks = app.service('tasks') as unknown as TasksServiceImpl;
         const currentTask = await tasks.get(active.taskId, { provider: undefined });
+        if (event.interrupted) {
+          await tasks.claimTermination(
+            {
+              taskId: active.taskId,
+              cause: 'user_stop',
+              errorMessage: 'Stopped through Claude CLI.',
+            },
+            { provider: undefined }
+          );
+        }
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
         const endedAtMs = Date.parse(ts) || Date.now();
         const durationMs = Math.max(0, endedAtMs - active.startedAtMs);

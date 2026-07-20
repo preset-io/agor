@@ -123,6 +123,28 @@ describe('JsonlEventTranslator', () => {
     ]);
   });
 
+  it('closes an interrupted turn instead of creating another user turn', () => {
+    const t = new JsonlEventTranslator();
+    expect(
+      t.translateParsed({
+        type: 'user',
+        uuid: 'interrupt-1',
+        timestamp: 't1',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }],
+        },
+      })
+    ).toEqual([
+      {
+        type: 'turn_end',
+        messageId: 'interrupt-1',
+        timestamp: 't1',
+        interrupted: true,
+      },
+    ]);
+  });
+
   it('routes ai-title to ai_title events', () => {
     const t = new JsonlEventTranslator();
     expect(
