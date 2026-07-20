@@ -1117,6 +1117,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           force_unverified: true,
           confirmation,
         });
+      } catch (error) {
+        console.error('Failed to force-fail execution:', error);
+        showError('Failed to force-fail execution. You can try again.');
       } finally {
         setStopRequestInFlight(false);
       }

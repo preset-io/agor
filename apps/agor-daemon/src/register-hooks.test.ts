@@ -100,7 +100,6 @@ describe('protectServerManagedTaskWrites', () => {
     options: {
       taskId?: string;
       executorTaskId?: string;
-      persistedTask?: Record<string, unknown>;
     } = {}
   ): import('@agor/core/types').HookContext =>
     ({
@@ -118,9 +117,6 @@ describe('protectServerManagedTaskWrites', () => {
             }
           : {}),
       },
-      service: options.persistedTask
-        ? { findByIdForScopeCheck: async () => options.persistedTask }
-        : undefined,
     }) as import('@agor/core/types').HookContext;
 
   it('rejects every normal-user patch, including terminality', async () => {
@@ -178,89 +174,22 @@ describe('protectServerManagedTaskWrites', () => {
           {
             taskId: 'task-1',
             executorTaskId: 'task-1',
-            persistedTask: {
-              status: TaskStatus.RUNNING,
-              executor_connected_at: '2026-07-10T20:00:00.000Z',
-            },
           }
         )
       )
     ).resolves.toBeDefined();
   });
 
-  it('rejects a task-scoped executor forging dispatching', async () => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { status: TaskStatus.DISPATCHING },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-1',
-            persistedTask: {
-              status: TaskStatus.RUNNING,
-              executor_connected_at: '2026-07-10T20:00:00.000Z',
-            },
-          }
-        )
-      )
-    ).rejects.toThrow('not executor-managed');
-  });
-
-  it('rejects a pre-claim executor running patch', async () => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { status: TaskStatus.RUNNING },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-1',
-            persistedTask: {
-              task_id: 'task-1',
-              status: TaskStatus.DISPATCHING,
-              executor_connected_at: null,
-            },
-          }
-        )
-      )
-    ).rejects.toThrow('not connected and executor-writable');
-  });
-
-  it('rejects terminal results before the authenticated connection', async () => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { status: TaskStatus.COMPLETED },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-1',
-            persistedTask: {
-              status: TaskStatus.DISPATCHING,
-              executor_connected_at: null,
-            },
-          }
-        )
-      )
-    ).rejects.toThrow('not connected and executor-writable');
-  });
-
   it.each([
     TaskStatus.AWAITING_PERMISSION,
     TaskStatus.AWAITING_INPUT,
-  ])('allows a connected scoped executor to resume from %s', async (status) => {
+  ])('allows a scoped executor to request resume from %s', async () => {
     const context = externalContext(
       'patch',
       { status: TaskStatus.RUNNING },
       {
         taskId: 'task-1',
         executorTaskId: 'task-1',
-        persistedTask: {
-          task_id: 'task-1',
-          status,
-          executor_connected_at: '2026-07-10T20:00:00.000Z',
-        },
       }
     );
 

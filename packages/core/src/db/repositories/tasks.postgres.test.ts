@@ -82,9 +82,26 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
 
     expect(first?.transitioned).toBe(true);
     expect(second).toEqual({ task: first?.task, transitioned: false });
+    expect(first?.task.last_executor_heartbeat_at).toBe(first?.task.executor_connected_at);
     const connectedAt = Date.parse(first!.task.executor_connected_at!);
     expect(connectedAt).toBeGreaterThanOrEqual(beforeClaim);
     expect(connectedAt).toBeLessThanOrEqual(afterClaim);
+
+    await Promise.allSettled([
+      tasks.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+      }),
+      tasks.updateFromExecutor(task.task_id, { status: TaskStatus.AWAITING_INPUT }),
+    ]);
+    expect(await tasks.findById(task.task_id)).toMatchObject({
+      status: TaskStatus.STOPPING,
+      termination_request: { cause: 'user_stop' },
+    });
+    await expect(tasks.updateFromExecutor(task.task_id, { model: 'late' })).rejects.toThrow(
+      'not connected and executor-writable'
+    );
 
     if (!isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
     const [column] = await db.execute(sql`

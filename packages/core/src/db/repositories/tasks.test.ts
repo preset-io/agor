@@ -746,10 +746,14 @@ describe('TaskRepository.connectExecutor', () => {
       expect(connection?.task.status).toBe(TaskStatus.RUNNING);
       expect(connection?.task.started_at).toBe(startedAt);
       expect(connection?.task.executor_connected_at).toBeDefined();
+      expect(connection?.task.last_executor_heartbeat_at).toBe(
+        connection?.task.executor_connected_at
+      );
       expect(found).toMatchObject({
         status: TaskStatus.RUNNING,
         started_at: startedAt,
         executor_connected_at: connection?.task.executor_connected_at,
+        last_executor_heartbeat_at: connection?.task.executor_connected_at,
       });
     }
   );
@@ -784,6 +788,7 @@ describe('TaskRepository.connectExecutor', () => {
 
     expect(claims.map((claim) => claim?.transitioned).sort()).toEqual([false, true]);
     expect(new Set(claims.map((claim) => claim?.task.executor_connected_at)).size).toBe(1);
+    expect(new Set(claims.map((claim) => claim?.task.last_executor_heartbeat_at)).size).toBe(1);
     expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.RUNNING);
   });
 
@@ -1308,6 +1313,9 @@ describe('TaskRepository.update', () => {
     await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
       'termination-owned tasks must be settled through settleTermination'
     );
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.RUNNING })).rejects.toThrow(
+      'termination-owned tasks must be settled through settleTermination'
+    );
   });
 
   for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
@@ -1374,6 +1382,83 @@ describe('TaskRepository.update', () => {
       expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, tool_use_count: 7 });
     }
   );
+
+  dbTest('rejects executor writes after termination owns the locked row', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    const [claim, executorWrite] = await Promise.allSettled([
+      taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+      }),
+      taskRepo.updateFromExecutor(task.task_id, { status: TaskStatus.AWAITING_PERMISSION }),
+    ]);
+
+    expect(claim).toMatchObject({ status: 'fulfilled', value: { outcome: 'claimed' } });
+    if (executorWrite.status === 'rejected') {
+      expect(String(executorWrite.reason)).toContain('not connected and executor-writable');
+    }
+    expect(await taskRepo.findById(task.task_id)).toMatchObject({
+      status: TaskStatus.STOPPING,
+      termination_request: { cause: 'user_stop' },
+    });
+    await expect(taskRepo.updateFromExecutor(task.task_id, { model: 'late' })).rejects.toThrow(
+      'not connected and executor-writable'
+    );
+  });
+
+  dbTest(
+    'freezes executor metadata after terminality without freezing internal writes',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.COMPLETED,
+          executor_connected_at: '2026-07-10T20:00:00.000Z',
+        })
+      );
+
+      await expect(taskRepo.updateFromExecutor(task.task_id, { model: 'late' })).rejects.toThrow(
+        'not connected and executor-writable'
+      );
+      await expect(taskRepo.update(task.task_id, { model: 'internal' })).resolves.toMatchObject({
+        model: 'internal',
+      });
+    }
+  );
+
+  dbTest('accepts executor results while the connected executor owns the row', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    await expect(
+      taskRepo.updateFromExecutor(task.task_id, { status: TaskStatus.DISPATCHING })
+    ).rejects.toThrow('Task status is not executor-managed');
+    await expect(
+      taskRepo.updateFromExecutor(task.task_id, {
+        status: TaskStatus.COMPLETED,
+        model: 'test-model',
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.COMPLETED, model: 'test-model' });
+  });
 
   for (const resumableStatus of [TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT]) {
     dbTest(

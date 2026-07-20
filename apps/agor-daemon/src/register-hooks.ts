@@ -71,7 +71,6 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
-  isTerminalTaskStatus,
   ROLES,
   TaskStatus,
 } from '@agor/core/types';
@@ -465,24 +464,6 @@ const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'terminals',
 ] as const;
 
-const EXECUTOR_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-]);
-
-const EXECUTOR_ACTIVE_TASK_STATUSES = new Set<TaskStatus>([
-  TaskStatus.RUNNING,
-  ...EXECUTOR_RESUMABLE_TASK_STATUSES,
-]);
-
-function isExecutorWritableTaskStatus(status: TaskStatus): boolean {
-  return (
-    status === TaskStatus.RUNNING ||
-    EXECUTOR_RESUMABLE_TASK_STATUSES.has(status) ||
-    isTerminalTaskStatus(status)
-  );
-}
-
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
 const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
@@ -531,19 +512,6 @@ export function protectExternalTaskCreate(context: HookContext): HookContext {
   return context;
 }
 
-async function taskForExecutorPatch(context: HookContext): Promise<{
-  status?: unknown;
-  executor_connected_at?: unknown;
-} | null> {
-  const service = context.service as unknown as {
-    findByIdForScopeCheck?: (id: string) => Promise<unknown>;
-  };
-  const existing = await service.findByIdForScopeCheck?.(String(context.id));
-  return existing && typeof existing === 'object'
-    ? (existing as { status?: unknown; executor_connected_at?: unknown })
-    : null;
-}
-
 /** Prevent callers on a Feathers transport from forging executor-owned task state. */
 export async function protectServerManagedTaskWrites(context: HookContext): Promise<HookContext> {
   if (!context.params.provider) return context;
@@ -560,24 +528,6 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
     throw new Forbidden('Task patch contains fields that are not executor-managed');
   }
 
-  const task = await taskForExecutorPatch(context);
-  if (
-    !task ||
-    typeof task.executor_connected_at !== 'string' ||
-    !task.executor_connected_at ||
-    !EXECUTOR_ACTIVE_TASK_STATUSES.has(task.status as TaskStatus)
-  ) {
-    throw new Forbidden('Task is not connected and executor-writable');
-  }
-  if (write.status !== undefined && !isExecutorWritableTaskStatus(write.status as TaskStatus)) {
-    throw new Forbidden('Task status is not executor-managed');
-  }
-  if (
-    write.status === TaskStatus.RUNNING &&
-    !EXECUTOR_RESUMABLE_TASK_STATUSES.has(task.status as TaskStatus)
-  ) {
-    throw new Forbidden('running task status is server-managed');
-  }
   return context;
 }
 

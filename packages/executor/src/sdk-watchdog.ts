@@ -107,7 +107,7 @@ interface WatchdogState {
   firstProgressAt?: number;
   idleAnchor?: number;
   pausedAt?: number;
-  toolActive: boolean;
+  activeToolCount: number;
   unknownCount: number;
   unknownReported: boolean;
 }
@@ -124,7 +124,7 @@ function inspectSdkWatchdog(
     config.mode === 'disabled' ||
     state.startedAt === undefined ||
     state.pausedAt !== undefined ||
-    state.toolActive
+    state.activeToolCount > 0
   ) {
     return {};
   }
@@ -162,7 +162,7 @@ function inspectSdkWatchdog(
 
 export class SdkWatchdog {
   private state: WatchdogState = {
-    toolActive: false,
+    activeToolCount: 0,
     unknownCount: 0,
     unknownReported: false,
   };
@@ -190,6 +190,9 @@ export class SdkWatchdog {
       return;
     }
     const pausedAt = this.state.pausedAt;
+    if (pausedAt !== undefined && !(kind === 'sdk_started' && detail === 'permission.resolved')) {
+      return;
+    }
     const resumed = pausedAt !== undefined;
     if (pausedAt !== undefined) {
       const pausedFor = now - pausedAt;
@@ -206,8 +209,10 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (detail === 'tool.start') this.state.toolActive = true;
-      if (detail === 'tool.complete' || detail === 'tool.error') this.state.toolActive = false;
+      if (detail === 'tool.start') this.state.activeToolCount++;
+      if (detail === 'tool.complete') {
+        this.state.activeToolCount = Math.max(0, this.state.activeToolCount - 1);
+      }
     }
     this.check();
   }

@@ -48,6 +48,15 @@ function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>
   );
 }
 
+function isExecutorResultStatus(status: Task['status']): boolean {
+  return (
+    status === TaskStatus.RUNNING ||
+    status === TaskStatus.AWAITING_PERMISSION ||
+    status === TaskStatus.AWAITING_INPUT ||
+    isTerminalTaskStatus(status)
+  );
+}
+
 function isSQLiteBusyError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error.message.includes('SQLITE_BUSY') || error.message.includes('database is locked')) {
@@ -497,7 +506,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const data = { ...row.data };
         delete data.error_message;
         await update(txDb, tasks)
-          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt, data })
+          .set({
+            status: TaskStatus.RUNNING,
+            executor_connected_at: connectedAt,
+            last_executor_heartbeat_at: connectedAt,
+            data,
+          })
           .where(eq(tasks.task_id, fullId))
           .run();
 
@@ -506,6 +520,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             ...row,
             status: TaskStatus.RUNNING,
             executor_connected_at: connectedAt,
+            last_executor_heartbeat_at: connectedAt,
             data,
           }),
           transitioned: true,
@@ -725,13 +740,33 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
    * when multiple updates happen concurrently (e.g., task status + message_range updates).
    */
-  async update(id: string, updates: Partial<Task>): Promise<Task> {
+  private async updateTask(
+    id: string,
+    updates: Partial<Task>,
+    executorUpdate: boolean
+  ): Promise<Task> {
     try {
       return await this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {
         console.debug(
           `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
         );
         const current = this.rowToTask(currentRow);
+
+        if (executorUpdate) {
+          if (!executorOwnsTask(currentRow)) {
+            throw new RepositoryError('Task is not connected and executor-writable');
+          }
+          if (updates.status !== undefined && !isExecutorResultStatus(updates.status)) {
+            throw new RepositoryError('Task status is not executor-managed');
+          }
+          if (
+            updates.status === TaskStatus.RUNNING &&
+            current.status !== TaskStatus.AWAITING_PERMISSION &&
+            current.status !== TaskStatus.AWAITING_INPUT
+          ) {
+            throw new RepositoryError('running task status is server-managed');
+          }
+        }
 
         // Terminal task status is immutable at the row-locked mutation boundary.
         // Service-level checks are useful for friendly idempotence, but cannot
@@ -761,7 +796,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           current.status === TaskStatus.STOPPING &&
           current.termination_request &&
           updates.status !== undefined &&
-          isTerminalTaskStatus(updates.status)
+          updates.status !== TaskStatus.STOPPING
         ) {
           throw new RepositoryError(
             'termination-owned tasks must be settled through settleTermination'
@@ -800,6 +835,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  async update(id: string, updates: Partial<Task>): Promise<Task> {
+    return this.updateTask(id, updates, false);
+  }
+
+  /** Apply executor-owned result fields only while the executor still owns the locked row. */
+  async updateFromExecutor(id: string, updates: Partial<Task>): Promise<Task> {
+    return this.updateTask(id, updates, true);
   }
 
   /**

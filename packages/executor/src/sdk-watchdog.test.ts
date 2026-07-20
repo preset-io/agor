@@ -84,6 +84,9 @@ describe('SdkWatchdog', () => {
     watchdog.record('waiting');
     vi.advanceTimersByTime(5_000);
     expect(decisions).toEqual([]);
+    watchdog.record('progress', 'unrelated');
+    vi.advanceTimersByTime(5_000);
+    expect(decisions).toEqual([]);
     watchdog.record('sdk_started', 'permission.resolved');
     vi.advanceTimersByTime(599);
     expect(decisions).toEqual([]);
@@ -103,6 +106,20 @@ describe('SdkWatchdog', () => {
     vi.advanceTimersByTime(1_999);
     expect(decisions).toEqual([]);
     vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('progress_stalled');
+  });
+
+  it('keeps Claude idle policy paused until every parallel tool completes', () => {
+    const { watchdog, decisions } = harness({}, 'claude-code');
+    watchdog.record('sdk_started');
+    watchdog.record('progress', 'assistant');
+    watchdog.record('progress', 'tool.start');
+    watchdog.record('progress', 'tool.start');
+    watchdog.record('progress', 'tool.complete');
+    vi.advanceTimersByTime(10_000);
+    expect(decisions).toEqual([]);
+    watchdog.record('progress', 'tool.complete');
+    vi.advanceTimersByTime(2_000);
     expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 

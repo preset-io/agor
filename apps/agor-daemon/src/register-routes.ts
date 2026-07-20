@@ -2724,11 +2724,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/tasks/bulk',
     {
       async create(data: unknown, params: RouteParams) {
-        return tasksService.createMany(data as Partial<Task>[]);
+        if (!Array.isArray(data)) throw new BadRequest('Task import requires an array');
+        const createdBy = params.user?.user_id;
+        if (!createdBy) throw new NotAuthenticated('Authentication required to import tasks');
+        return tasksService.createMany(
+          (data as Partial<Task>[]).map((task) => ({
+            ...task,
+            created_by: createdBy as UUID,
+          }))
+        );
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'create tasks' },
+      create: { role: ROLES.ADMIN, action: 'import tasks' },
     },
     requireAuth
   );

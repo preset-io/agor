@@ -28,7 +28,7 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   // on the connection while dropping the decoded JWT payload. Treat those
   // fields as executor scope only when they came from JWT auth and carry a task
   // claim; normal user/API-key auth must continue through unscoped.
-  if (params.authentication?.strategy === 'jwt' && params.task_id) {
+  if (params.authentication?.strategy === 'jwt' && payload === undefined && params.task_id) {
     return {
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,

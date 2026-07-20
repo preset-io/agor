@@ -64,6 +64,33 @@ describe('TasksService executor connection', () => {
   });
 });
 
+describe('TasksService executor patches', () => {
+  it('uses the row-locked executor mutation path for transport patches', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const updateFromExecutor = vi
+      .fn()
+      .mockResolvedValue({ task_id: 'task-1', model: 'test-model' });
+    Reflect.set(service, 'taskRepo', { updateFromExecutor });
+
+    await service.patch('task-1', { model: 'test-model' }, { provider: 'rest' });
+
+    expect(updateFromExecutor).toHaveBeenCalledWith('task-1', { model: 'test-model' });
+  });
+
+  it('preserves explicit failure details', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    service.patch = vi.fn().mockResolvedValue({ task_id: 'task-1', status: TaskStatus.FAILED });
+
+    await service.fail('task-1', { error: 'launch rejected' });
+
+    expect(service.patch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: TaskStatus.FAILED, error_message: 'launch rejected' }),
+      undefined
+    );
+  });
+});
+
 describe('TasksService runtime telemetry', () => {
   const task = {
     task_id: '018f0000-0000-7000-8000-000000000001',

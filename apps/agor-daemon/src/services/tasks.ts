@@ -632,7 +632,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
-    const result = await super.patch(id, data, params);
+    const result = params?.provider
+      ? await this.taskRepo.updateFromExecutor(id, data)
+      : await super.patch(id, data, params);
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
@@ -1372,13 +1374,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   /**
    * Custom method: Fail a task
    */
-  async fail(id: string, _data: { error?: string }, params?: TaskParams): Promise<Task> {
+  async fail(id: string, data: { error?: string }, params?: TaskParams): Promise<Task> {
     // Terminal timing is computed atomically by TaskRepository.update().
     return this.patch(
       id,
       {
         status: TaskStatus.FAILED,
         completed_at: new Date().toISOString(),
+        error_message: data.error,
       },
       params
     ) as Promise<Task>;

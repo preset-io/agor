@@ -22,11 +22,12 @@ function appDouble(tool = 'codex') {
   let current = task();
   const claimTermination = vi.fn();
   const settleTermination = vi.fn();
+  const sessionGet = vi.fn(async () => ({ session_id: sessionId, agentic_tool: tool }));
   const app = {
     service: (name: string) =>
       name === 'tasks'
         ? { get: async () => current, claimTermination, settleTermination }
-        : { get: async () => ({ session_id: sessionId, agentic_tool: tool }) },
+        : { get: sessionGet },
   } as never;
   const claim = (value: ReturnType<typeof task>, outcome = 'claimed') => {
     claimTermination.mockImplementationOnce(async () => {
@@ -40,7 +41,7 @@ function appDouble(tool = 'codex') {
       return { outcome, task: value };
     });
   };
-  return { app, claim, settle, claimTermination, settleTermination };
+  return { app, claim, settle, claimTermination, settleTermination, sessionGet };
 }
 
 const stopping = (cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') =>
@@ -83,6 +84,15 @@ describe('termination coordinator', () => {
       task: { status: TaskStatus.STOPPED },
     });
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
+  });
+
+  it('does not claim or signal when provider context cannot be loaded', async () => {
+    const state = appDouble();
+    state.sessionGet.mockRejectedValue(new Error('session unavailable'));
+
+    await expect(request(state.app, 'user_stop')).rejects.toThrow('session unavailable');
+    expect(state.claimTermination).not.toHaveBeenCalled();
+    expect(containExecutorProcess).not.toHaveBeenCalled();
   });
 
   it('persists ownership before background containment completes', async () => {

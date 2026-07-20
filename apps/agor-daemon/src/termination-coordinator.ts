@@ -1,6 +1,13 @@
 import { shortId } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
-import type { Params, SdkFailure, Task, TaskID, TerminationCause } from '@agor/core/types';
+import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
+import type {
+  AgenticToolName,
+  Params,
+  SdkFailure,
+  Task,
+  TaskID,
+  TerminationCause,
+} from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import { containExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
@@ -57,9 +64,18 @@ async function claimRequest(input: TerminationInput) {
   );
 }
 
+async function loadAgenticTool(input: TerminationInput): Promise<AgenticToolName> {
+  const task = await input.app.service('tasks').get(input.taskId, internalParams(input.params));
+  const session = await input.app
+    .service('sessions')
+    .get(task.session_id, internalParams(input.params));
+  return session.agentic_tool;
+}
+
 async function runContainment(
   input: TerminationInput,
-  requested: Task
+  requested: Task,
+  tool: AgenticToolName
 ): Promise<TerminationResult> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   if (input.signalDelayMs) {
@@ -68,8 +84,7 @@ async function runContainment(
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
     : await containExecutorProcess(requested.session_id, requested.task_id);
-  const session = await input.app.service('sessions').get(requested.session_id);
-  const providerUnverified = session.agentic_tool === 'opencode';
+  const providerUnverified = tool === 'opencode';
   if (containment.status === 'unverified' || providerUnverified) {
     const reason =
       containment.status === 'unverified'
@@ -80,7 +95,7 @@ async function runContainment(
       : {
           reason: 'termination_unverified',
           detected_at: new Date().toISOString(),
-          tool: session.agentic_tool,
+          tool,
           last_pulse: requested.latest_executor_pulse,
           termination: 'unverified',
         };
@@ -121,6 +136,7 @@ async function runContainment(
 export async function requestExecutorTermination(
   input: TerminationInput
 ): Promise<TerminationResult> {
+  const tool = await loadAgenticTool(input);
   const claim = await claimRequest(input);
   if (claim.outcome === 'terminal') {
     untrackExecutorProcess(claim.task.session_id, claim.task.task_id);
@@ -130,13 +146,17 @@ export async function requestExecutorTermination(
     return { status: 'condition_changed', task: claim.task };
   }
 
-  return startContainment(input, claim.task);
+  return startContainment(input, claim.task, tool);
 }
 
-function startContainment(input: TerminationInput, requested: Task): Promise<TerminationResult> {
+function startContainment(
+  input: TerminationInput,
+  requested: Task,
+  tool: AgenticToolName
+): Promise<TerminationResult> {
   const existing = operations.get(requested.task_id);
   if (existing) return existing;
-  const operation = runContainment(input, requested).finally(() => {
+  const operation = runContainment(input, requested, tool).finally(() => {
     operations.delete(requested.task_id);
   });
   operations.set(requested.task_id, operation);
@@ -148,9 +168,10 @@ function startContainment(input: TerminationInput, requested: Task): Promise<Ter
 
 /** Persist ownership before returning, then contain asynchronously. */
 export async function beginExecutorTermination(input: TerminationInput): Promise<Task> {
+  const tool = await loadAgenticTool(input);
   const claim = await claimRequest(input);
   if (claim.outcome === 'terminal' || claim.outcome === 'condition_changed') return claim.task;
-  if (!operations.has(claim.task.task_id)) startContainment(input, claim.task);
+  if (!operations.has(claim.task.task_id)) startContainment(input, claim.task, tool);
   return claim.task;
 }
 
@@ -167,10 +188,10 @@ export async function forceFailUnverifiedTask(input: {
     !current.termination_request ||
     current.sdk_failure?.termination !== 'unverified'
   ) {
-    throw new Error('Only a Task with unverified termination may be force-failed.');
+    throw new Conflict('Only a Task with unverified termination may be force-failed.');
   }
   if (input.confirmation !== shortId(current.task_id)) {
-    throw new Error(`Type ${shortId(current.task_id)} to confirm force-fail.`);
+    throw new BadRequest(`Type ${shortId(current.task_id)} to confirm force-fail.`);
   }
   console.warn(
     `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
@@ -184,7 +205,7 @@ export async function forceFailUnverifiedTask(input: {
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
   );
   if (settlement.outcome !== 'transitioned' && settlement.outcome !== 'terminal') {
-    throw new Error('Task termination state changed before force-fail could be applied.');
+    throw new Conflict('Task termination state changed before force-fail could be applied.');
   }
   untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id);
   return settlement.task;

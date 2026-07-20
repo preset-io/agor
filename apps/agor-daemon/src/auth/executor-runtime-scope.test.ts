@@ -426,6 +426,22 @@ describe('executorRuntimeScopeGuard', () => {
     expect(context.data).toMatchObject({ taskId: 'task-1' });
   });
 
+  it('does not treat ordinary JWT payloads with transport fields as executor scope', async () => {
+    const context = ctx({
+      method: 'patch',
+      id: 'task-1',
+      data: { status: 'completed' },
+      params: {
+        authentication: { strategy: 'jwt', payload: { type: 'access' } },
+        task_id: 'task-1',
+        query: {},
+        provider: 'socketio',
+      } as never,
+    });
+
+    await expect(requireExecutorRuntimeToken()(context)).rejects.toThrow(/executor token/);
+  });
+
   it('rejects API key resolution for another task under executor token auth', async () => {
     const context = ctx({
       path: 'config/resolve-api-key',

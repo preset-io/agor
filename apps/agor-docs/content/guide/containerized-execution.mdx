@@ -1017,7 +1017,8 @@ execution:
 Remote executors may be deployed independently, but they are part of the same
 runtime contract as the daemon. Upgrade remote executor images to the same Agor
 release when upgrading the daemon; mixed-version daemon/executor deployments are
-not a supported rollout mode.
+not a supported rollout mode. Before downgrading to a release that predates the
+`dispatching` state, stop or settle pending dispatches with the current daemon.
 
 ### SDK Health Watchdog
 
