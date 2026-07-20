@@ -358,13 +358,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.trackTaskCompleted(result.task);
     const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
     const isStop = result.task.status === TaskStatus.STOPPED;
-    await this.processCompletionSideEffects(result.task, result.task.status, {
+    const completionParams = {
       ...internalParams,
       // Failure containment never drains queued work automatically. User Stop
       // delegates that hand-off to its caller while the session lock is held;
       // a late CLI confirmation has no caller and drains here instead.
       suppressTerminalQueueProcessing: !isStop || params?.suppressTerminalQueueProcessing === true,
-    });
+    };
+    const sessionProjected = await this.processCompletionSideEffects(
+      result.task,
+      result.task.status,
+      completionParams
+    );
+    if (!sessionProjected) {
+      try {
+        await this.projectTerminalSession(result.task, result.task.status, completionParams);
+      } catch (error) {
+        console.warn(
+          `[termination] Failed to settle session ${shortId(result.task.session_id)}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
     return result;
   }
 
@@ -435,12 +450,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  private projectTerminalSession(
+    task: Task,
+    status: Task['status'],
+    params?: TaskParams
+  ): Promise<Session> {
+    return this.app.service('sessions').patch(
+      task.session_id,
+      {
+        status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+        ready_for_prompt: true,
+      },
+      params
+    ) as Promise<Session>;
+  }
+
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
     params?: TaskParams
-  ): Promise<void> {
-    if (!task.session_id || !this.app) return;
+  ): Promise<boolean> {
+    if (!task.session_id || !this.app) return false;
     try {
       const session = await this.app.service('sessions').get(task.session_id, params);
 
@@ -473,7 +503,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         if (!isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
-        return;
+        return false;
       }
 
       // Keep the terminal status/ready update a pure prompt-flow patch
@@ -483,14 +513,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // collaborator's first completed task would then fail the whole
       // patch and leave the session stuck running/not-ready. The title is
       // written separately below and is allowed to fail independently.
-      await this.app.service('sessions').patch(
-        task.session_id,
-        {
-          status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-          ready_for_prompt: true,
-        },
-        params
-      );
+      await this.projectTerminalSession(task, status, params);
       console.log(
         `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
       );
@@ -564,8 +587,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
         );
       }
+      return true;
     } catch (error) {
       console.error('❌ [TasksService] Failed to process task completion:', error);
+      return false;
     }
   }
 

@@ -2,6 +2,54 @@ import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
+function completionHarness(input: {
+  currentTask: Record<string, unknown>;
+  resultTask: Record<string, unknown>;
+  sessionTasks?: string[];
+  sessionReadFails?: boolean;
+}) {
+  const sessionsPatch = vi.fn().mockResolvedValue({ session_id: input.resultTask.session_id });
+  const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
+  const service = Object.create(TasksService.prototype) as TasksService & {
+    app: unknown;
+    get: ReturnType<typeof vi.fn>;
+    repository: { update: ReturnType<typeof vi.fn> };
+    id: string;
+    emit: ReturnType<typeof vi.fn>;
+  };
+  service.get = vi.fn().mockResolvedValue(input.currentTask);
+  service.repository = { update: vi.fn().mockResolvedValue(input.resultTask) };
+  service.id = 'task_id';
+  service.emit = vi.fn();
+  (service as unknown as { taskRepo: { settleTermination: ReturnType<typeof vi.fn> } }).taskRepo = {
+    settleTermination: vi
+      .fn()
+      .mockResolvedValue({ outcome: 'transitioned', task: input.resultTask }),
+  };
+  service.app = {
+    service: (name: string) => {
+      if (name === 'tasks') return { emit: vi.fn() };
+      if (name === 'branches') return { get: vi.fn() };
+      if (name === 'sessions') {
+        return {
+          get: input.sessionReadFails
+            ? vi.fn().mockRejectedValue(new Error('transient read'))
+            : vi.fn().mockResolvedValue({
+                session_id: input.resultTask.session_id,
+                status: 'running',
+                ready_for_prompt: false,
+                tasks: input.sessionTasks ?? [input.resultTask.task_id as string],
+              }),
+          patch: sessionsPatch,
+          triggerQueueProcessing,
+        };
+      }
+      throw new Error(`unexpected service ${name}`);
+    },
+  };
+  return { service, sessionsPatch, triggerQueueProcessing };
+}
+
 describe('TasksService executor heartbeat helpers', () => {
   it('does not let an executor terminal patch bypass coordinator-owned stopping', async () => {
     const stoppingTask = {
@@ -91,6 +139,36 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(service.emit).not.toHaveBeenCalled();
   });
 
+  it('falls back to the canonical session projection when completion context cannot load', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000010';
+    const sessionId = '018f0000-0000-7000-8000-000000000011';
+    const failedTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.FAILED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '2026-01-01T00:00:04.000Z',
+        final_status: 'failed',
+      },
+    };
+    const { service, sessionsPatch } = completionHarness({
+      currentTask: failedTask,
+      resultTask: failedTask,
+      sessionReadFails: true,
+    });
+
+    await service.settleTermination({ taskId, outcome: 'verified_absent' });
+
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      sessionId,
+      { status: 'failed', ready_for_prompt: true },
+      expect.objectContaining({ provider: undefined, suppressTerminalQueueProcessing: true })
+    );
+  });
+
   it('settles a stopped active task ahead of queued work and triggers queue processing', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000030';
     const sessionId = '018f0000-0000-7000-8000-000000000031';
@@ -112,44 +190,11 @@ describe('TasksService executor heartbeat helpers', () => {
         final_status: 'stopped',
       },
     };
-    const sessionsPatch = vi.fn().mockResolvedValue({
-      session_id: sessionId,
-      status: 'idle',
-      ready_for_prompt: true,
-      tasks: [taskId],
+    const { service, sessionsPatch, triggerQueueProcessing } = completionHarness({
+      currentTask,
+      resultTask: stoppedTask,
+      sessionTasks: [taskId, '018f0000-0000-7000-8000-000000000032'],
     });
-    const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-      dispatchCompletionCallbacks: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(currentTask);
-    service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.dispatchCompletionCallbacks = vi.fn();
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return {
-            get: vi.fn().mockResolvedValue({
-              session_id: sessionId,
-              status: 'running',
-              ready_for_prompt: false,
-              tasks: [taskId, '018f0000-0000-7000-8000-000000000032'],
-            }),
-            patch: sessionsPatch,
-            triggerQueueProcessing,
-          };
-        }
-        if (name === 'branches') return { get: vi.fn() };
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
 
     const result = await service.patch(taskId, {
       status: TaskStatus.STOPPED,
@@ -162,7 +207,6 @@ describe('TasksService executor heartbeat helpers', () => {
       { status: 'idle', ready_for_prompt: true },
       undefined
     );
-    expect(service.dispatchCompletionCallbacks).not.toHaveBeenCalled();
     expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, undefined);
   });
 
