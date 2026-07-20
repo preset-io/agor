@@ -1036,7 +1036,7 @@ function createExecuteHandler(
         }
 
         try {
-          await requestExecutorTermination({
+          const termination = await requestExecutorTermination({
             app,
             taskId,
             cause: 'heartbeat_lost',
@@ -1058,6 +1058,10 @@ function createExecuteHandler(
                 }
               : {}),
           });
+          if (termination.status === 'condition_changed') {
+            console.log(`${logPrefix} Connected executor won the launcher-exit race`);
+            return;
+          }
         } catch (error) {
           console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
         }

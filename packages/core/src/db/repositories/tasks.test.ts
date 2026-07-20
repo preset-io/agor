@@ -1111,6 +1111,41 @@ describe('TaskRepository.update', () => {
     }
   );
 
+  dbTest('does not erase unverified evidence when user Stop takes precedence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.STOPPING,
+        termination_request: {
+          cause: 'sdk_health_failure',
+          requested_at: '2026-07-10T20:03:00.000Z',
+        },
+        sdk_failure: {
+          reason: 'termination_unverified',
+          detected_at: '2026-07-10T20:03:00.000Z',
+          tool: 'codex',
+          termination: 'unverified',
+        },
+      })
+    );
+
+    const result = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'claimed',
+      task: {
+        termination_request: { cause: 'user_stop' },
+        sdk_failure: { termination: 'unverified' },
+      },
+    });
+  });
+
   dbTest('rejects a stale-heartbeat claim when the observed heartbeat changed', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

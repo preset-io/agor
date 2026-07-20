@@ -598,12 +598,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const sdkFailure = incomingWins
         ? (input.sdkFailure ?? current.sdk_failure)
         : current.sdk_failure;
+      const failureTermination: SdkFailure['termination'] =
+        sdkFailure?.termination === 'unverified' ? 'unverified' : 'requested';
       const data = {
         ...row.data,
         termination_request: request,
-        ...(sdkFailure
-          ? { sdk_failure: { ...sdkFailure, termination: 'requested' as const } }
-          : {}),
+        ...(sdkFailure ? { sdk_failure: { ...sdkFailure, termination: failureTermination } } : {}),
       };
       await update(txDb, tasks)
         .set({ status: TaskStatus.STOPPING, data })
