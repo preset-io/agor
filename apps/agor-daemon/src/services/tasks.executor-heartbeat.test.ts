@@ -91,78 +91,7 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(service.emit).not.toHaveBeenCalled();
   });
 
-  it('supports administrative stopped patches without callbacks or queue draining', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000010';
-    const sessionId = '018f0000-0000-7000-8000-000000000011';
-    const currentTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.RUNNING,
-      created_at: '2026-01-01T00:00:00.000Z',
-      started_at: '2026-01-01T00:00:00.000Z',
-    };
-    const stoppedTask = {
-      ...currentTask,
-      status: TaskStatus.STOPPED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-      duration_ms: 5000,
-    };
-    const sessionsPatch = vi.fn();
-    const triggerQueueProcessing = vi.fn();
-    const dispatchCompletionCallbacks = vi.fn();
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-      dispatchCompletionCallbacks: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(currentTask);
-    service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.dispatchCompletionCallbacks = dispatchCompletionCallbacks;
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return {
-            get: vi.fn().mockResolvedValue({
-              session_id: sessionId,
-              status: 'running',
-              ready_for_prompt: false,
-              tasks: [taskId],
-            }),
-            patch: sessionsPatch,
-            triggerQueueProcessing,
-          };
-        }
-        if (name === 'branches') {
-          return { get: vi.fn() };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
-
-    const result = await service.patch(
-      taskId,
-      {
-        status: TaskStatus.STOPPED,
-        completed_at: '2026-01-01T00:00:05.000Z',
-      },
-      {
-        suppressTerminalQueueProcessing: true,
-        suppressCompletionCallbacks: true,
-      }
-    );
-
-    expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
-    expect(dispatchCompletionCallbacks).not.toHaveBeenCalled();
-    expect(sessionsPatch).not.toHaveBeenCalled();
-    expect(triggerQueueProcessing).not.toHaveBeenCalled();
-  });
-
-  it('marks directly stopped tasks promptable and triggers queue processing', async () => {
+  it('settles a stopped active task ahead of queued work and triggers queue processing', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000030';
     const sessionId = '018f0000-0000-7000-8000-000000000031';
     const currentTask = {
@@ -177,6 +106,11 @@ describe('TasksService executor heartbeat helpers', () => {
       status: TaskStatus.STOPPED,
       completed_at: '2026-01-01T00:00:05.000Z',
       duration_ms: 5000,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-01-01T00:00:04.000Z',
+        final_status: 'stopped',
+      },
     };
     const sessionsPatch = vi.fn().mockResolvedValue({
       session_id: sessionId,
@@ -206,7 +140,7 @@ describe('TasksService executor heartbeat helpers', () => {
               session_id: sessionId,
               status: 'running',
               ready_for_prompt: false,
-              tasks: [taskId],
+              tasks: [taskId, '018f0000-0000-7000-8000-000000000032'],
             }),
             patch: sessionsPatch,
             triggerQueueProcessing,

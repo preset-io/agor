@@ -4,7 +4,6 @@ import {
   mapSdkActivity,
   reportSdkActivity,
   SDK_ACTIVITY_VERSION_MANIFEST,
-  type SdkActivityAdapter,
 } from '../sdk-watchdog.js';
 
 describe('SDK activity mapping', () => {
@@ -53,16 +52,6 @@ describe('SDK activity mapping', () => {
 });
 
 describe('SDK activity version manifest', () => {
-  it('starts the watchdog once at the executor boundary', () => {
-    const executor = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-    const sharedHandler = readFileSync(
-      new URL('../handlers/sdk/base-executor.ts', import.meta.url),
-      'utf8'
-    );
-    expect(executor).toContain("this.recordPulse('sdk_started', this.config.tool)");
-    expect(sharedHandler).not.toContain("onPulse?.('sdk_started', toolName)");
-  });
-
   it('matches every reviewed resolved dependency version', () => {
     const lockfile = readFileSync(new URL('../../../../pnpm-lock.yaml', import.meta.url), 'utf8');
     expect(Object.keys(SDK_ACTIVITY_VERSION_MANIFEST).sort()).toEqual(
@@ -71,17 +60,5 @@ describe('SDK activity version manifest', () => {
     for (const dependency of Object.values(SDK_ACTIVITY_VERSION_MANIFEST)) {
       expect(lockfile).toContain(`'${dependency}':`);
     }
-  });
-
-  it.each([
-    ['claude-code', 'claude/prompt-service.ts'],
-    ['codex', 'codex/prompt-service.ts'],
-    ['gemini', 'gemini/prompt-service.ts'],
-    ['copilot', 'copilot/prompt-service.ts'],
-    ['opencode', 'opencode/opencode-tool.ts'],
-  ] as const)('%s raw event loop uses the shared mapper', (adapter, file) => {
-    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
-    expect(source).toContain('reportSdkActivity');
-    expect(SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkActivityAdapter]).toBeTruthy();
   });
 });

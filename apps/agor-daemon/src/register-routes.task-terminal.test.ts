@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { Forbidden } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { authorizeTaskTerminalRoute } from './register-routes.js';
@@ -33,9 +32,9 @@ describe('task complete/fail route authorization', () => {
     ['prompt', 'other-user'],
     ['session', 'user-1'],
   ] as const)('allows %s access for the applicable session', async (permission, createdBy) => {
-    await expect(
-      authorizeTaskTerminalRoute(harness(permission, createdBy))
-    ).resolves.toBeUndefined();
+    await expect(authorizeTaskTerminalRoute(harness(permission, createdBy))).resolves.toMatchObject(
+      { provider: undefined }
+    );
   });
 
   it.each([
@@ -50,13 +49,10 @@ describe('task complete/fail route authorization', () => {
   it('does not add branch machinery when RBAC is disabled', async () => {
     const input = harness('view');
     input.branchRbacEnabled = false;
-    await expect(authorizeTaskTerminalRoute(input)).resolves.toBeUndefined();
+    await expect(authorizeTaskTerminalRoute(input)).resolves.toMatchObject({
+      provider: undefined,
+      user: input.params.user,
+    });
     expect(input.tasksService.get).not.toHaveBeenCalled();
-  });
-
-  it('internalizes only the authorized complete and fail route writes', () => {
-    const source = readFileSync(new URL('./register-routes.ts', import.meta.url), 'utf8');
-    expect(source).toContain('tasksService.complete(id, data, { ...params, provider: undefined })');
-    expect(source).toContain('tasksService.fail(id, data, { ...params, provider: undefined })');
   });
 });

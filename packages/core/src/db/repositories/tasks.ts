@@ -47,6 +47,34 @@ function isSQLiteBusyError(error: unknown): boolean {
   return 'cause' in error && isSQLiteBusyError(error.cause);
 }
 
+function withTerminalTiming(
+  current: Task,
+  updates: Partial<Task>,
+  now = new Date()
+): Partial<Task> {
+  if (!isTerminalTaskStatus(updates.status) || isTerminalTaskStatus(current.status)) return updates;
+
+  const completedAt = updates.completed_at ?? now.toISOString();
+  const startAt =
+    current.started_at ?? current.message_range?.start_timestamp ?? current.created_at;
+  const durationMs =
+    updates.duration_ms ??
+    current.duration_ms ??
+    (startAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startAt)) : undefined);
+  const range = current.message_range;
+  const messageRange =
+    range && (!range.end_timestamp || range.end_timestamp === range.start_timestamp)
+      ? { ...range, ...updates.message_range, end_timestamp: completedAt }
+      : updates.message_range;
+
+  return {
+    ...updates,
+    completed_at: completedAt,
+    duration_ms: durationMs,
+    ...(messageRange ? { message_range: messageRange } : {}),
+  };
+}
+
 export interface TerminationClaimInput {
   taskId: string;
   cause: TerminationCause;
@@ -620,29 +648,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           return { outcome: 'condition_changed', task: current };
         }
 
-        const completedAt = input.now ?? new Date();
-        const completedAtIso = completedAt.toISOString();
         const finalStatus =
           input.outcome === 'forced_unverified'
             ? TaskStatus.FAILED
             : current.termination_request.cause === 'user_stop'
               ? TaskStatus.STOPPED
               : TaskStatus.FAILED;
-        const startAt =
-          current.started_at ?? current.message_range?.start_timestamp ?? current.created_at;
-        const durationMs =
-          current.duration_ms ??
-          (startAt ? Math.max(0, completedAt.getTime() - new Date(startAt).getTime()) : undefined);
-        const range = current.message_range;
-        const messageRange =
-          range && (!range.end_timestamp || range.end_timestamp === range.start_timestamp)
-            ? { ...range, end_timestamp: completedAtIso }
-            : range;
+        const terminal = withTerminalTiming(
+          current,
+          { status: finalStatus },
+          input.now ?? new Date()
+        );
+        const completedAt = new Date(terminal.completed_at!);
         const failure = input.sdkFailure ?? current.sdk_failure;
         const data = {
           ...row.data,
-          duration_ms: durationMs,
-          message_range: messageRange,
+          duration_ms: terminal.duration_ms,
+          message_range: terminal.message_range ?? current.message_range,
           ...(failure
             ? {
                 sdk_failure: {
@@ -743,7 +765,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           // STEP 2: Deep merge updates into current task (in memory)
           // Preserves nested objects like message_range when doing partial updates.
           const merged = {
-            ...deepMerge(current, updates),
+            ...deepMerge(current, withTerminalTiming(current, updates)),
             task_id: current.task_id,
             session_id: current.session_id,
             created_by: current.created_by,

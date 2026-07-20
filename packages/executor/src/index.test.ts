@@ -1,4 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const runtime = vi.hoisted(() => ({
+  execute: vi.fn().mockResolvedValue(undefined),
+  initialize: vi.fn().mockResolvedValue(undefined),
+  recordPulse: vi.fn(),
+  stopHeartbeat: vi.fn(),
+}));
+vi.mock('./executor-heartbeat.js', () => ({
+  startExecutorHeartbeat: () => ({
+    recordPulse: runtime.recordPulse,
+    stop: runtime.stopHeartbeat,
+  }),
+}));
+vi.mock('./handlers/sdk/tool-registry.js', () => ({
+  initializeToolRegistry: runtime.initialize,
+  ToolRegistry: { execute: runtime.execute },
+}));
+
 import { AgorExecutor } from './index.js';
 
 const evidence = {
@@ -40,6 +58,39 @@ describe('AgorExecutor watchdog handoff', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it('starts SDK observation before invoking the tool', async () => {
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+      resolvedConfig: {
+        execution: {
+          sdk_watchdog: {
+            mode: 'observe',
+            first_progress_timeout_ms: 60_000,
+            abort_grace_ms: 100,
+            claude_idle_timeout_ms: null,
+          },
+        },
+      },
+    }) as unknown as {
+      client: object;
+      executeTask(): Promise<void>;
+    };
+    executor.client = {};
+
+    await executor.executeTask();
+
+    expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', 'opencode');
+    expect(runtime.recordPulse.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.execute.mock.invocationCallOrder[0]!
+    );
   });
 
   it('stops liveness and exits for containment when the daemon does not acknowledge', async () => {

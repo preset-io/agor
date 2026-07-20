@@ -123,8 +123,7 @@ import {
   checkSessionOwnerOrAdmin,
   ensureBranchPermission,
   loadScheduleAndBranch,
-  PERMISSION_RANK,
-  resolveBranchPermission,
+  resolveSessionPromptAccess,
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
@@ -266,9 +265,9 @@ export async function authorizeTaskTerminalRoute(input: {
   tasksService: Pick<TasksServiceImpl, 'get'>;
   sessionsService: Pick<SessionsServiceImpl, 'get'>;
   branchRepository: Pick<BranchRepository, 'findById' | 'isOwner' | 'resolveUserPermission'>;
-}): Promise<void> {
-  if (!input.branchRbacEnabled) return;
+}): Promise<RouteParams> {
   const internalParams = { ...input.params, provider: undefined };
+  if (!input.branchRbacEnabled) return internalParams;
   const task = await input.tasksService.get(input.id, internalParams);
   const session = await input.sessionsService.get(task.session_id, internalParams);
   const userId = input.params.user?.user_id as UUID | undefined;
@@ -277,18 +276,17 @@ export async function authorizeTaskTerminalRoute(input: {
   if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
   const isOwner = await input.branchRepository.isOwner(branch.branch_id, userId);
   const branchPermission = await input.branchRepository.resolveUserPermission(branch, userId);
-  const effectiveLevel = resolveBranchPermission(
+  const { allowed } = resolveSessionPromptAccess({
     branch,
+    session,
     userId,
     isOwner,
-    input.params.user?.role,
-    input.allowSuperadmin,
-    branchPermission
-  );
-  const authorized =
-    PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-    (effectiveLevel === 'session' && session.created_by === userId);
-  if (!authorized) throw new Forbidden('Not authorized to update tasks in this session');
+    userRole: input.params.user?.role,
+    allowSuperadmin: input.allowSuperadmin,
+    branchPermission,
+  });
+  if (!allowed) throw new Forbidden('Not authorized to update tasks in this session');
+  return internalParams;
 }
 
 /**
@@ -1752,18 +1750,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
             const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
             const branchPermission = await branchRepository.resolveUserPermission(wt, userId);
-            const effectiveLevel = resolveBranchPermission(
-              wt,
+            const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+              branch: wt,
+              session,
               userId,
               isOwner,
-              params.user?.role,
-              superadminOpts.allowSuperadmin,
-              branchPermission
-            );
-            const canRun =
-              PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-              (effectiveLevel === 'session' && session.created_by === userId);
-            if (!canRun) {
+              userRole: params.user?.role,
+              allowSuperadmin: superadminOpts.allowSuperadmin,
+              branchPermission,
+            });
+            if (!allowed) {
               throw new Forbidden(
                 `You have '${effectiveLevel}' permission on this branch, which does not ` +
                   `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
@@ -2012,20 +2008,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return res.status(404).json({ error: 'Branch not found' });
         }
         const { branchPermission, isOwner, wt } = access;
-        const effectiveLevel = resolveBranchPermission(
-          wt,
+        const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+          branch: wt,
+          session,
           userId,
           isOwner,
-          params.user?.role,
-          superadminOpts.allowSuperadmin,
-          branchPermission
-        );
+          userRole: params.user?.role,
+          allowSuperadmin: superadminOpts.allowSuperadmin,
+          branchPermission,
+        });
 
-        const canUpload =
-          PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-          (effectiveLevel === 'session' && session.created_by === userId);
-
-        if (!canUpload) {
+        if (!allowed) {
           console.error(
             `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
@@ -2736,7 +2729,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        await authorizeTaskTerminalRoute({
+        const internalParams = await authorizeTaskTerminalRoute({
           id,
           params,
           branchRbacEnabled,
@@ -2745,7 +2738,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionsService,
           branchRepository,
         });
-        return tasksService.complete(id, data, { ...params, provider: undefined });
+        return tasksService.complete(id, data, internalParams);
       },
     },
     {
@@ -2761,7 +2754,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { error?: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        await authorizeTaskTerminalRoute({
+        const internalParams = await authorizeTaskTerminalRoute({
           id,
           params,
           branchRbacEnabled,
@@ -2770,7 +2763,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionsService,
           branchRepository,
         });
-        return tasksService.fail(id, data, { ...params, provider: undefined });
+        return tasksService.fail(id, data, internalParams);
       },
     },
     {

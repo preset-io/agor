@@ -81,21 +81,10 @@ export type TaskParams = QueryParams<{
   status?: Task['status'];
 }> & {
   /**
-   * Internal-only: terminal task patches normally transition the owning session
-   * back to a promptable terminal state. Heartbeat-loss handling marks the session failed instead.
-   */
-  suppressTerminalSessionStateUpdate?: boolean;
-  /**
    * Internal-only: terminal task patches normally drain queued work for the
    * owning session. Heartbeat-loss handling must not auto-start queued prompts.
    */
   suppressTerminalQueueProcessing?: boolean;
-  /**
-   * Internal-only: skip parent callback dispatch for terminal transitions that
-   * are administrative cancellation, not agent output. Does not disable BTW
-   * fork archival; those ephemeral sessions should still be cleaned up.
-   */
-  suppressCompletionCallbacks?: boolean;
   /**
    * Internal-only escape hatch for preserving an ephemeral BTW fork after
    * terminal transition. Most callers should leave this unset.
@@ -368,44 +357,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     this.trackTaskCompleted(result.task);
     const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+    const isStop = result.task.status === TaskStatus.STOPPED;
     await this.processCompletionSideEffects(result.task, result.task.status, {
       ...internalParams,
-      suppressTerminalSessionStateUpdate: true,
-      suppressTerminalQueueProcessing: true,
-      suppressCompletionCallbacks: true,
+      // Failure containment never drains queued work automatically. User Stop
+      // delegates that hand-off to its caller while the session lock is held;
+      // a late CLI confirmation has no caller and drains here instead.
+      suppressTerminalQueueProcessing: !isStop || params?.suppressTerminalQueueProcessing === true,
     });
-
-    const isStop = result.task.status === TaskStatus.STOPPED;
-    let updatedSession: Session | undefined;
-    try {
-      const sessionParams: TaskParams = {
-        ...internalParams,
-        suppressTerminalQueueProcessing: true,
-      };
-      updatedSession = (await this.app.service('sessions').patch(
-        result.task.session_id,
-        {
-          status: isStop ? SessionStatus.IDLE : SessionStatus.FAILED,
-          ready_for_prompt: true,
-        },
-        sessionParams
-      )) as Session;
-    } catch (error) {
-      console.warn(
-        `[termination] Failed to settle session ${shortId(result.task.session_id)}:`,
-        error instanceof Error ? error.message : String(error)
-      );
-    }
-    if (!isStop && updatedSession) {
-      await this.dispatchCompletionCallbacksAfterCommit(
-        result.task,
-        updatedSession,
-        internalParams
-      );
-    }
-    if (isStop && params?.suppressTerminalQueueProcessing !== true) {
-      await this.triggerQueueProcessingAfterCommit(result.task.session_id, internalParams);
-    }
     return result;
   }
 
@@ -503,89 +462,78 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];
-      const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
       const suppressBtwCleanup = params?.suppressBtwCleanup === true;
       const isStop = status === TaskStatus.STOPPED;
+      const isTermination = task.termination_request !== undefined;
 
-      if (latestTaskId && latestTaskId !== task.task_id) {
+      if (latestTaskId && latestTaskId !== task.task_id && !isTermination) {
         console.log(
           `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
         );
-        if (!suppressCompletionCallbacks && !isStop) {
+        if (!isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
         return;
       }
 
-      if (isStop && params?.suppressTerminalQueueProcessing) {
-        console.log(
-          `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
-        );
-      } else if (params?.suppressTerminalSessionStateUpdate) {
-        console.log(
-          `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${status}) due to internal patch params`
-        );
-      } else {
-        // Keep the terminal status/ready update a pure prompt-flow patch
-        // with the caller's original params. Folding a server-generated
-        // `title` in here would make it a mixed metadata patch, which the
-        // sessions RBAC hook gates behind `all` permission — a non-owner
-        // collaborator's first completed task would then fail the whole
-        // patch and leave the session stuck running/not-ready. The title is
-        // written separately below and is allowed to fail independently.
-        await this.app.service('sessions').patch(
-          task.session_id,
-          {
-            status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-            ready_for_prompt: true,
-          },
-          params
-        );
-        console.log(
-          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-        );
+      // Keep the terminal status/ready update a pure prompt-flow patch
+      // with the caller's original params. Folding a server-generated
+      // `title` in here would make it a mixed metadata patch, which the
+      // sessions RBAC hook gates behind `all` permission — a non-owner
+      // collaborator's first completed task would then fail the whole
+      // patch and leave the session stuck running/not-ready. The title is
+      // written separately below and is allowed to fail independently.
+      await this.app.service('sessions').patch(
+        task.session_id,
+        {
+          status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+          ready_for_prompt: true,
+        },
+        params
+      );
+      console.log(
+        `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+      );
 
-        // Auto-title: cheap heuristic, no LLM call — see
-        // `deriveTitleFromPrompt`. Fires on any completed task while the
-        // session still has no title, not just the first one, so a session
-        // whose first prompt was image-only/whitespace (empty derived
-        // title, skipped) or whose first task failed still picks one up on
-        // a later task.
-        //
-        // "Unset" is canonically null/undefined: an explicitly cleared
-        // title (empty string) is a deliberate user choice and must NOT be
-        // re-armed. The session is re-read immediately before the write and
-        // the title is only set if it is *still* unset, so a rename typed
-        // while this task ran is never clobbered (compare-and-set at the app
-        // layer; full row-locked atomicity is a follow-up). The write is a
-        // trusted system patch (no `provider`) so it bypasses the
-        // collaborator-metadata RBAC gate the status patch above avoids.
-        if (status === TaskStatus.COMPLETED && task.full_prompt) {
-          const autoTitle = deriveTitleFromPrompt(task.full_prompt);
-          if (autoTitle) {
-            try {
-              const fresh = await this.app.service('sessions').get(task.session_id, params);
-              if (fresh.title == null) {
-                await this.app
-                  .service('sessions')
-                  .patch(
-                    task.session_id,
-                    { title: autoTitle },
-                    { ...params, provider: undefined }
-                  );
-              }
-            } catch (titleError) {
-              const message =
-                titleError instanceof Error ? titleError.message : String(titleError);
-              console.warn(
-                `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
-              );
+      // Auto-title: cheap heuristic, no LLM call — see
+      // `deriveTitleFromPrompt`. Fires on any completed task while the
+      // session still has no title, not just the first one, so a session
+      // whose first prompt was image-only/whitespace (empty derived
+      // title, skipped) or whose first task failed still picks one up on
+      // a later task.
+      //
+      // "Unset" is canonically null/undefined: an explicitly cleared
+      // title (empty string) is a deliberate user choice and must NOT be
+      // re-armed. The session is re-read immediately before the write and
+      // the title is only set if it is *still* unset, so a rename typed
+      // while this task ran is never clobbered (compare-and-set at the app
+      // layer; full row-locked atomicity is a follow-up). The write is a
+      // trusted system patch (no `provider`) so it bypasses the
+      // collaborator-metadata RBAC gate the status patch above avoids.
+      if (status === TaskStatus.COMPLETED && task.full_prompt) {
+        const autoTitle = deriveTitleFromPrompt(task.full_prompt);
+        if (autoTitle) {
+          try {
+            const fresh = await this.app.service('sessions').get(task.session_id, params);
+            if (fresh.title == null) {
+              await this.app
+                .service('sessions')
+                .patch(
+                  task.session_id,
+                  { title: autoTitle },
+                  { ...params, provider: undefined }
+                );
             }
+          } catch (titleError) {
+            const message = titleError instanceof Error ? titleError.message : String(titleError);
+            console.warn(
+              `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
+            );
           }
         }
       }
 
-      if (!suppressCompletionCallbacks && !isStop) {
+      if (!isStop) {
         await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
       }
 
@@ -604,7 +552,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           }
         }
 
-        if (!suppressCompletionCallbacks && !isStop) {
+        if (!isStop && !isTermination) {
           await this.injectBtwResultMessage(task, session, params);
         }
       }
@@ -658,44 +606,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       !isCompletionSideEffectTaskStatus(currentTask?.status);
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
-
-    // When transitioning to a terminal status, auto-compute duration, completed_at,
-    // and end_timestamp. This ensures ALL code paths (complete, fail, stop handler)
-    // get correct timing data without duplicating logic.
-    if (isAnalyticsTerminalTransition && currentTask) {
-      const completedAt = data.completed_at || new Date().toISOString();
-
-      // Ensure completed_at is always set
-      if (!data.completed_at) {
-        data.completed_at = completedAt;
-      }
-
-      // Compute duration_ms if not explicitly provided (null check, not falsy,
-      // so an explicit 0 is preserved)
-      if (data.duration_ms == null) {
-        const startTime =
-          currentTask.started_at ||
-          currentTask.message_range?.start_timestamp ||
-          currentTask.created_at;
-        if (startTime) {
-          data.duration_ms = Math.max(
-            0,
-            new Date(completedAt).getTime() - new Date(startTime).getTime()
-          );
-        }
-      }
-
-      // Set end_timestamp if not already meaningfully set
-      const endTs = currentTask.message_range?.end_timestamp;
-      const startTs = currentTask.message_range?.start_timestamp;
-      if (currentTask.message_range && (!endTs || endTs === startTs)) {
-        data.message_range = {
-          ...currentTask.message_range,
-          ...data.message_range,
-          end_timestamp: completedAt,
-        };
-      }
-    }
 
     const result = await super.patch(id, data, params);
 

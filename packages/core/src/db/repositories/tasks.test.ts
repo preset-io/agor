@@ -948,6 +948,33 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  dbTest('computes terminal timing at the row-locked mutation boundary', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const startedAt = '2026-07-10T20:00:00.000Z';
+    const completedAt = '2026-07-10T20:00:05.000Z';
+    const created = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        started_at: startedAt,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: startedAt,
+        },
+      })
+    );
+
+    await expect(
+      taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED, completed_at: completedAt })
+    ).resolves.toMatchObject({
+      completed_at: completedAt,
+      duration_ms: 5_000,
+      message_range: { end_timestamp: completedAt },
+    });
+  });
+
   dbTest('round-trips bounded executor health state through JSON data', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
