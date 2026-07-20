@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseCodexAuthJson, readCodexAuthFile } from './codex-auth-file';
+import { parseCodexAuthJson, readCodexAuthFile, writeCodexAuthFile } from './codex-auth-file';
 
 /** Build an unsigned JWT with the given payload — enough for claim mining. */
 function fakeJwt(payload: Record<string, unknown>): string {
@@ -52,6 +52,13 @@ describe('parseCodexAuthJson', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('codex login');
+  });
+
+  it('rejects a whitespace-only refresh token — not a usable credential', () => {
+    const result = parseCodexAuthJson(
+      JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: '   ' } })
+    );
+    expect(result.ok).toBe(false);
   });
 
   it('rejects oversized payloads', () => {
@@ -136,5 +143,16 @@ describe('readCodexAuthFile (daemon-user path)', () => {
     const home = useTmpCodexHome();
     fs.mkdirSync(path.join(home, 'auth.json'));
     expect(readCodexAuthFile(null)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('write round-trips exactly and leaves no staging files behind', () => {
+    const home = useTmpCodexHome();
+    writeCodexAuthFile('{"OPENAI_API_KEY":"sk-first"}\n', null);
+    writeCodexAuthFile('{"OPENAI_API_KEY":"sk-second"}\n', null);
+    expect(readCodexAuthFile(null)).toEqual({
+      ok: true,
+      content: '{"OPENAI_API_KEY":"sk-second"}\n',
+    });
+    expect(fs.readdirSync(home)).toEqual(['auth.json']);
   });
 });

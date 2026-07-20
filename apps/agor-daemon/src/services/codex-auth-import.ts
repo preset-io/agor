@@ -175,19 +175,23 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      // Read-back verification. A transient read failure gets one retry —
-      // the write already succeeded by exit status, so a persistent read
-      // failure here is an environment problem, not bad input. Failing out
-      // leaves the file on disk with the auth method unflipped; that state is
-      // harmless because a re-import cleanly overwrites both.
+      // Read-back verification: the file must contain exactly the bytes just
+      // written — "some valid credential is there" would let a concurrent
+      // import/refresh be mistaken for this one. A transient read failure
+      // gets one retry (the write already succeeded by exit status). Failing
+      // out leaves the file on disk with the auth method unflipped; that
+      // state is harmless because a re-import cleanly overwrites both.
       let readBack = readCodexAuthFile(targetUnixUser);
       if (!readBack.ok && readBack.reason === 'unreadable') {
         readBack = readCodexAuthFile(targetUnixUser);
       }
-      const verified = readBack.ok ? parseCodexAuthJson(readBack.content) : null;
+      const verified =
+        readBack.ok && readBack.content === parsed.normalized
+          ? parseCodexAuthJson(readBack.content)
+          : null;
       if (!verified?.ok) {
         throw new BadRequest(
-          'The Codex credentials file was written but could not be read back for verification — try again.'
+          'The Codex credentials file was written but could not be verified back — try again.'
         );
       }
 

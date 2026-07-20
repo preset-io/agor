@@ -14,11 +14,13 @@
  *   errors.
  * - When a target Unix user is given, all filesystem access happens AS that
  *   user via `sudo -n -u` with content piped over stdin — token bytes never
- *   appear in argv, and ownership/0600 perms are guaranteed by `umask 077`
- *   plus an explicit `chmod` for the overwrite case.
+ *   appear in argv. Writes stage a 0600 temp file and atomically rename it
+ *   into place, so readers never see a torn write and a pre-existing symlink
+ *   is replaced rather than followed.
  */
 
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -119,7 +121,7 @@ export function parseCodexAuthJson(raw: string | undefined | null): ParseCodexAu
       ? (record.tokens as Record<string, unknown>)
       : null;
   const refreshToken = tokens?.refresh_token;
-  const hasChatgptLogin = typeof refreshToken === 'string' && refreshToken.length > 0;
+  const hasChatgptLogin = typeof refreshToken === 'string' && refreshToken.trim().length > 0;
   const apiKey = typeof record.OPENAI_API_KEY === 'string' ? record.OPENAI_API_KEY.trim() : '';
 
   if (!hasChatgptLogin && !apiKey) {
@@ -151,19 +153,21 @@ function daemonCodexHome(): string {
  * the daemon user when `asUser` is null/undefined.
  *
  * The impersonated path pipes content over stdin — token bytes never appear
- * in argv (`/proc/<pid>/cmdline`). `umask 077` covers fresh creation and the
- * explicit `chmod 600` covers overwriting a pre-existing looser file.
+ * in argv (`/proc/<pid>/cmdline`). Both paths stage a 0600 temp file in the
+ * Codex home and atomically rename it into place: a concurrently running
+ * Codex never observes a torn half-write, a mid-stream failure (disk full)
+ * leaves the previous file intact, and rename replaces a pre-existing
+ * symlink itself instead of following it.
  */
 export function writeCodexAuthFile(content: string, asUser?: string | null): void {
   if (asUser) {
     if (!isValidUnixUsername(asUser)) {
       throw new Error(`writeCodexAuthFile: invalid Unix username: ${JSON.stringify(asUser)}`);
     }
-    // `set -eu` so a mid-stream `cat` failure (disk full, quota) aborts the
-    // script with a non-zero exit instead of leaving a truncated file that a
-    // still-running `chmod` would silently bless as success.
+    // `set -eu` so any step failing aborts with a non-zero exit before the
+    // rename can publish a bad file. mktemp creates the staging file 0600.
     const script =
-      'set -eu; umask 077; mkdir -p "$HOME/.codex"; cat > "$HOME/.codex/auth.json"; chmod 600 "$HOME/.codex/auth.json"';
+      'set -eu; umask 077; mkdir -p "$HOME/.codex"; tmp="$(mktemp "$HOME/.codex/.auth.json.XXXXXX")"; cat > "$tmp"; chmod 600 "$tmp"; mv -f -- "$tmp" "$HOME/.codex/auth.json"';
     execFileSync('sudo', ['-n', '-u', asUser, 'bash', '-c', script], {
       input: content,
       stdio: ['pipe', 'ignore', 'pipe'],
@@ -177,9 +181,14 @@ export function writeCodexAuthFile(content: string, asUser?: string | null): voi
   // mkdirSync's mode is masked by the process umask and never applied to a
   // pre-existing directory — chmod explicitly so the containing dir is 0700.
   fs.chmodSync(codexHome, 0o700);
-  const authPath = path.join(codexHome, 'auth.json');
-  fs.writeFileSync(authPath, content, { mode: 0o600 });
-  fs.chmodSync(authPath, 0o600);
+  const tmpPath = path.join(codexHome, `.auth.json.${randomBytes(6).toString('hex')}`);
+  try {
+    fs.writeFileSync(tmpPath, content, { mode: 0o600 });
+    fs.renameSync(tmpPath, path.join(codexHome, 'auth.json'));
+  } catch (err) {
+    fs.rmSync(tmpPath, { force: true });
+    throw err;
+  }
 }
 
 export type ReadCodexAuthResult =

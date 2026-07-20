@@ -526,7 +526,10 @@ describe('Codex ChatGPT login import', () => {
     expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
     // Inline help: where the file lives, how to print it, and the overwrite caveat.
     expect(screen.getByText(/cat ~\/\.codex\/auth\.json/)).toBeInTheDocument();
-    expect(screen.getByText(/replaces any Codex login/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/replaces the Codex login already stored on this server/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/one login for the whole server/i)).toBeInTheDocument();
     // No API-key format validation applies to a pasted file.
     expect(screen.queryByText(/OpenAI keys start with/i)).not.toBeInTheDocument();
   });
