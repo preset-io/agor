@@ -1099,9 +1099,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .reverse()
       .find(
         (task) =>
-          task.status === TaskStatus.STOPPING &&
-          (task as Task & { sdk_failure?: { termination?: string } }).sdk_failure?.termination ===
-            'unverified'
+          task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
       );
     if (unverifiedTask) {
       const expected = shortId(unverifiedTask.task_id);

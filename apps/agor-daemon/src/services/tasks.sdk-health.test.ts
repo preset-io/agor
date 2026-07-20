@@ -127,7 +127,6 @@ describe('TasksService SDK health reports', () => {
       termination_request: {
         cause: 'sdk_health_failure' as const,
         requested_at: '2026-01-01T00:03:01.000Z',
-        final_status: 'failed' as const,
       },
     };
     await expect(

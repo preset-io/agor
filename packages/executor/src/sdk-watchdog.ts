@@ -112,44 +112,52 @@ interface WatchdogState {
   unknownReported: boolean;
 }
 
-export function evaluateSdkWatchdog(
+type WatchdogReason = 'no_first_progress' | 'progress_stalled' | 'unknown_activity';
+
+function inspectSdkWatchdog(
   state: Readonly<WatchdogState>,
   now: number,
   tool: string,
   config: ResolvedSdkWatchdogConfig
-): 'no_first_progress' | 'progress_stalled' | 'unknown_activity' | undefined {
+): { reason?: WatchdogReason; nextCheckAt?: number } {
   if (
     config.mode === 'disabled' ||
     state.startedAt === undefined ||
     state.pausedAt !== undefined ||
     state.toolActive
   ) {
-    return undefined;
+    return {};
   }
   if (state.firstProgressAt === undefined) {
-    const firstExpired = now - state.startedAt >= config.first_progress_timeout_ms;
-    if (
-      firstExpired &&
-      now - (state.lastRawAt ?? state.startedAt) >= config.first_progress_timeout_ms
-    ) {
-      return 'no_first_progress';
+    const firstDeadline = state.startedAt + config.first_progress_timeout_ms;
+    const silenceDeadline = (state.lastRawAt ?? state.startedAt) + config.first_progress_timeout_ms;
+    if (now >= firstDeadline) {
+      if (now >= silenceDeadline) return { reason: 'no_first_progress' };
+      if (!state.unknownReported && state.unknownCount > 0) {
+        return { reason: 'unknown_activity' };
+      }
     }
-    if (firstExpired && !state.unknownReported && state.unknownCount > 0) {
-      return 'unknown_activity';
-    }
-    return undefined;
+    return {
+      nextCheckAt: now < firstDeadline && !state.unknownReported ? firstDeadline : silenceDeadline,
+    };
   }
-  if (
-    tool === 'claude-code' &&
-    config.claude_idle_timeout_ms !== null &&
-    now - (state.idleAnchor ?? state.firstProgressAt) >= config.claude_idle_timeout_ms
-  ) {
-    if (now - (state.lastRawAt ?? state.firstProgressAt) >= config.claude_idle_timeout_ms) {
-      return 'progress_stalled';
+
+  if (tool === 'claude-code' && config.claude_idle_timeout_ms !== null) {
+    const idleDeadline =
+      (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
+    const silenceDeadline =
+      (state.lastRawAt ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
+    if (now >= idleDeadline) {
+      if (now >= silenceDeadline) return { reason: 'progress_stalled' };
+      if (!state.unknownReported && state.unknownCount > 0) {
+        return { reason: 'unknown_activity' };
+      }
     }
-    if (!state.unknownReported && state.unknownCount > 0) return 'unknown_activity';
+    return {
+      nextCheckAt: now < idleDeadline && !state.unknownReported ? idleDeadline : silenceDeadline,
+    };
   }
-  return undefined;
+  return {};
 }
 
 export class SdkWatchdog {
@@ -216,7 +224,7 @@ export class SdkWatchdog {
   private check(): void {
     if (this.decided) return;
     const now = this.now();
-    const reason = evaluateSdkWatchdog(this.state, now, this.options.tool, this.options.config);
+    const { reason } = inspectSdkWatchdog(this.state, now, this.options.tool, this.options.config);
     if (!reason) {
       this.schedule();
       return;
@@ -244,33 +252,16 @@ export class SdkWatchdog {
 
   private schedule(): void {
     if (this.timer) clearTimeout(this.timer);
-    const { state } = this;
-    const { config, tool } = this.options;
-    if (
-      this.decided ||
-      state.pausedAt !== undefined ||
-      state.startedAt === undefined ||
-      state.toolActive
-    ) {
-      return;
-    }
+    if (this.decided) return;
     const now = this.now();
-    let deadline: number | undefined;
-    if (state.firstProgressAt === undefined) {
-      const firstDeadline = state.startedAt + config.first_progress_timeout_ms;
-      const silenceDeadline =
-        (state.lastRawAt ?? state.startedAt) + config.first_progress_timeout_ms;
-      deadline = now < firstDeadline && !state.unknownReported ? firstDeadline : silenceDeadline;
-    } else if (tool === 'claude-code' && config.claude_idle_timeout_ms !== null) {
-      const idleDeadline =
-        (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
-      deadline =
-        now < idleDeadline && !state.unknownReported
-          ? idleDeadline
-          : (state.lastRawAt ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
-    }
-    if (deadline === undefined) return;
-    this.timer = setTimeout(() => this.check(), Math.max(0, deadline - now));
+    const { nextCheckAt } = inspectSdkWatchdog(
+      this.state,
+      now,
+      this.options.tool,
+      this.options.config
+    );
+    if (nextCheckAt === undefined) return;
+    this.timer = setTimeout(() => this.check(), Math.max(0, nextCheckAt - now));
     this.timer.unref?.();
   }
 }

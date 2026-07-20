@@ -60,7 +60,6 @@ describe('TasksService executor heartbeat helpers', () => {
       termination_request: {
         cause: 'user_stop',
         requested_at: '2026-01-01T00:00:01.000Z',
-        final_status: 'stopped',
       },
     };
     const service = Object.create(TasksService.prototype) as TasksService & {
@@ -151,7 +150,6 @@ describe('TasksService executor heartbeat helpers', () => {
       termination_request: {
         cause: 'heartbeat_lost',
         requested_at: '2026-01-01T00:00:04.000Z',
-        final_status: 'failed',
       },
     };
     const { service, sessionsPatch } = completionHarness({
@@ -187,7 +185,6 @@ describe('TasksService executor heartbeat helpers', () => {
       termination_request: {
         cause: 'user_stop',
         requested_at: '2026-01-01T00:00:04.000Z',
-        final_status: 'stopped',
       },
     };
     const { service, sessionsPatch, triggerQueueProcessing } = completionHarness({

@@ -47,7 +47,6 @@ export interface RuntimeTelemetryInput {
 export const SDK_WATCHDOG_FAILURE_REASONS = [
   'no_first_progress',
   'progress_stalled',
-  'stream_disconnected',
   'unknown_activity',
 ] as const;
 
@@ -85,7 +84,6 @@ export type TerminationCause =
 export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
-  final_status: 'stopped' | 'failed';
   /** Failure/stop reason captured with the winning claim. */
   error_message?: string;
 }

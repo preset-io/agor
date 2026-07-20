@@ -48,7 +48,6 @@ const stopping = (cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') 
     termination_request: {
       cause,
       requested_at: '2026-01-01T00:00:01.000Z',
-      final_status: cause === 'user_stop' ? 'stopped' : 'failed',
     },
   });
 

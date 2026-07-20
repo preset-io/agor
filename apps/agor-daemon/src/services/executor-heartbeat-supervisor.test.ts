@@ -10,6 +10,46 @@ import {
   ExecutorHeartbeatSupervisor,
 } from './executor-heartbeat-supervisor';
 
+const now = () => new Date('2026-01-01T00:00:05.000Z');
+const config = {
+  enabled: true,
+  interval_ms: 1000,
+  stale_after_ms: 3000,
+  callback: { command_template: null, timeout_ms: 3000 },
+};
+
+function supervisorFor(input: {
+  active?: unknown[];
+  orphaned?: unknown[];
+  dispatchConnectTimeoutMs?: number;
+}) {
+  const patch = vi.fn().mockResolvedValue(input.orphaned?.[0]);
+  const app = {
+    service: (name: string) => {
+      if (name === 'tasks') {
+        return {
+          getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue(input.active ?? []),
+          getOrphaned: vi.fn().mockResolvedValue(input.orphaned ?? []),
+          patch,
+        };
+      }
+      if (name === 'sessions') {
+        return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
+      }
+      throw new Error(`unknown service ${name}`);
+    },
+  } as any;
+  return {
+    patch,
+    supervisor: new ExecutorHeartbeatSupervisor({
+      app,
+      config,
+      now,
+      dispatchConnectTimeoutMs: input.dispatchConnectTimeoutMs,
+    }),
+  };
+}
+
 describe('ExecutorHeartbeatSupervisor', () => {
   beforeEach(() => requestExecutorTermination.mockClear());
 
@@ -20,32 +60,7 @@ describe('ExecutorHeartbeatSupervisor', () => {
       status: 'running',
       last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
     };
-    const app = {
-      service: (name: string) => {
-        if (name === 'tasks') {
-          return {
-            getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([staleTask]),
-            getOrphaned: vi.fn().mockResolvedValue([]),
-            get: vi.fn().mockResolvedValue(staleTask),
-          };
-        }
-        if (name === 'sessions') {
-          return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
-        }
-        throw new Error(`unknown service ${name}`);
-      },
-    } as any;
-
-    const supervisor = new ExecutorHeartbeatSupervisor({
-      app,
-      config: {
-        enabled: true,
-        interval_ms: 1000,
-        stale_after_ms: 3000,
-        callback: { command_template: null, timeout_ms: 3000 },
-      },
-      now: () => new Date('2026-01-01T00:00:05.000Z'),
-    });
+    const { supervisor } = supervisorFor({ active: [staleTask] });
 
     await supervisor.checkOnce();
 
@@ -69,26 +84,10 @@ describe('ExecutorHeartbeatSupervisor', () => {
       last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
     };
     requestExecutorTermination.mockResolvedValueOnce({ status: 'condition_changed', task });
-    const app = {
-      service: () => ({
-        getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([task]),
-        getOrphaned: vi.fn().mockResolvedValue([]),
-        get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }),
-      }),
-    } as any;
-
-    const supervisor = new ExecutorHeartbeatSupervisor({
-      app,
-      config: {
-        enabled: true,
-        interval_ms: 1000,
-        stale_after_ms: 3000,
-        callback: { command_template: null, timeout_ms: 3000 },
-      },
-      now: () => new Date('2026-01-01T00:00:05.000Z'),
-    });
+    const { supervisor } = supervisorFor({ active: [task] });
 
     await supervisor.checkOnce();
+
     expect(requestExecutorTermination).toHaveBeenCalledOnce();
   });
 
@@ -100,31 +99,10 @@ describe('ExecutorHeartbeatSupervisor', () => {
       executor_mode: 'local',
       created_at: '2026-01-01T00:00:00.000Z',
     };
-    const app = {
-      service: (name: string) => {
-        if (name === 'tasks') {
-          return {
-            getOrphaned: vi.fn().mockResolvedValue([task]),
-            getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([]),
-            get: vi.fn().mockResolvedValue(task),
-          };
-        }
-        return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
-      },
-    } as any;
-    const supervisor = new ExecutorHeartbeatSupervisor({
-      app,
-      config: {
-        enabled: true,
-        interval_ms: 1000,
-        stale_after_ms: 3000,
-        callback: { command_template: null, timeout_ms: 3000 },
-      },
-      dispatchConnectTimeoutMs: 3000,
-      now: () => new Date('2026-01-01T00:00:05.000Z'),
-    });
+    const { supervisor } = supervisorFor({ orphaned: [task], dispatchConnectTimeoutMs: 3000 });
 
     await supervisor.checkOnce();
+
     expect(requestExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: task.task_id,
@@ -143,28 +121,13 @@ describe('ExecutorHeartbeatSupervisor', () => {
       executor_mode: 'templated',
       created_at: '2026-01-01T00:00:00.000Z',
     };
-    const patch = vi.fn().mockResolvedValue(task);
-    const app = {
-      service: () => ({
-        getOrphaned: vi.fn().mockResolvedValue([task]),
-        getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([]),
-        get: vi.fn().mockResolvedValue(task),
-        patch,
-      }),
-    } as any;
-    const supervisor = new ExecutorHeartbeatSupervisor({
-      app,
-      config: {
-        enabled: true,
-        interval_ms: 1000,
-        stale_after_ms: 3000,
-        callback: { command_template: null, timeout_ms: 3000 },
-      },
+    const { supervisor, patch } = supervisorFor({
+      orphaned: [task],
       dispatchConnectTimeoutMs: 3000,
-      now: () => new Date('2026-01-01T00:00:05.000Z'),
     });
 
     await supervisor.checkOnce();
+
     expect(patch).toHaveBeenCalledWith(
       task.task_id,
       expect.objectContaining({ error_message: expect.stringContaining('still waiting') }),

@@ -111,21 +111,6 @@ export interface TerminationSettlementResult {
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   constructor(private db: Database) {}
 
-  /** Acquire the task write lock consistently across database dialects. */
-  private async lockTaskForMutation(txDb: Database, taskId: string): Promise<void> {
-    // PostgreSQL provides a real row lock. SQLite transactions begin deferred,
-    // so acquire the write lock with a no-op row update before reading.
-    if (isSQLiteDatabase(this.db)) {
-      await update(txDb, tasks)
-        .set({ status: sql`${tasks.status}` })
-        .where(eq(tasks.task_id, taskId))
-        .run();
-      return;
-    }
-
-    await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, taskId));
-  }
-
   /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
   private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
     try {
@@ -138,6 +123,26 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       throw error;
     }
+  }
+
+  /** Run a mutation against the latest row under the dialect's write lock. */
+  private async mutateLockedTask<T>(
+    id: string,
+    mutation: (txDb: Database, row: TaskRow, fullId: string) => Promise<T>
+  ): Promise<T> {
+    const fullId = await this.resolveId(id);
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', id);
+          return mutation(txDb, row, fullId);
+        },
+        { sqliteImmediate: true }
+      )
+    );
   }
 
   /**
@@ -472,35 +477,27 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async connectExecutor(id: string): Promise<{ task: Task; transitioned: boolean } | null> {
     try {
-      const fullId = await this.resolveId(id);
-      return await this.runTaskMutation(() =>
-        runDatabaseTransaction(this.db, async (txDb) => {
-          await this.lockTaskForMutation(txDb, fullId);
+      return await this.mutateLockedTask(id, async (txDb, row, fullId) => {
+        if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
+          return { task: this.rowToTask(row), transitioned: false };
+        }
+        if (row.status !== TaskStatus.DISPATCHING) return null;
 
-          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
-          if (!row) throw new EntityNotFoundError('Task', id);
+        const connectedAt = new Date();
+        await update(txDb, tasks)
+          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
+          .where(eq(tasks.task_id, fullId))
+          .run();
 
-          if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
-            return { task: this.rowToTask(row), transitioned: false };
-          }
-          if (row.status !== TaskStatus.DISPATCHING) return null;
-
-          const connectedAt = new Date();
-          await update(txDb, tasks)
-            .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
-            .where(eq(tasks.task_id, fullId))
-            .run();
-
-          return {
-            task: this.rowToTask({
-              ...row,
-              status: TaskStatus.RUNNING,
-              executor_connected_at: connectedAt,
-            }),
-            transitioned: true,
-          };
-        })
-      );
+        return {
+          task: this.rowToTask({
+            ...row,
+            status: TaskStatus.RUNNING,
+            executor_connected_at: connectedAt,
+          }),
+          transitioned: true,
+        };
+      });
     } catch (error) {
       if (error instanceof RepositoryError || error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
@@ -516,185 +513,166 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     pulse?: Omit<ExecutorPulse, 'observed_at'>,
     observedAt = new Date()
   ): Promise<Task | null> {
-    const fullId = await this.resolveId(id);
-    return this.runTaskMutation(() =>
-      runDatabaseTransaction(this.db, async (txDb) => {
-        await this.lockTaskForMutation(txDb, fullId);
-        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!row) throw new EntityNotFoundError('Task', id);
-        if (
-          !row.executor_connected_at ||
-          ![TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
-            row.status
-          )
-        ) {
-          return null;
-        }
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (
+        !row.executor_connected_at ||
+        (row.status !== TaskStatus.RUNNING &&
+          row.status !== TaskStatus.AWAITING_PERMISSION &&
+          row.status !== TaskStatus.AWAITING_INPUT)
+      ) {
+        return null;
+      }
 
-        const previous = row.data.latest_executor_pulse;
-        const latest =
-          pulse && (!previous || pulse.sequence > previous.sequence)
-            ? { ...pulse, observed_at: observedAt.toISOString() }
-            : previous;
-        const data = { ...row.data, latest_executor_pulse: latest };
-        await update(txDb, tasks)
-          .set({ last_executor_heartbeat_at: observedAt, data })
-          .where(eq(tasks.task_id, fullId))
-          .run();
-        return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
-      })
-    );
+      const previous = row.data.latest_executor_pulse;
+      const latest =
+        pulse && (!previous || pulse.sequence > previous.sequence)
+          ? { ...pulse, observed_at: observedAt.toISOString() }
+          : previous;
+      const data = { ...row.data, latest_executor_pulse: latest };
+      await update(txDb, tasks)
+        .set({ last_executor_heartbeat_at: observedAt, data })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+    });
   }
 
   /** Atomically validate and persist ownership of a termination request. */
   async claimTermination(input: TerminationClaimInput): Promise<TerminationClaimResult> {
-    const fullId = await this.resolveId(input.taskId);
-    return this.runTaskMutation(() =>
-      runDatabaseTransaction(this.db, async (txDb) => {
-        await this.lockTaskForMutation(txDb, fullId);
-        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!row) throw new EntityNotFoundError('Task', input.taskId);
-        const current = this.rowToTask(row);
-        if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
 
-        const staleBefore = input.heartbeatStaleBefore
-          ? Date.parse(input.heartbeatStaleBefore)
-          : undefined;
-        const heartbeatAt = current.last_executor_heartbeat_at
-          ? Date.parse(current.last_executor_heartbeat_at)
-          : undefined;
-        const conditionChanged =
-          (input.expectedStatus !== undefined && current.status !== input.expectedStatus) ||
-          (input.expectedHeartbeatAt !== undefined &&
-            current.last_executor_heartbeat_at !== input.expectedHeartbeatAt) ||
-          (staleBefore !== undefined &&
-            (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
-          (input.requireExecutorDisconnected === true && !!current.executor_connected_at);
-        if (conditionChanged) return { outcome: 'condition_changed', task: current };
+      const staleBefore = input.heartbeatStaleBefore
+        ? Date.parse(input.heartbeatStaleBefore)
+        : undefined;
+      const heartbeatAt = current.last_executor_heartbeat_at
+        ? Date.parse(current.last_executor_heartbeat_at)
+        : undefined;
+      const conditionChanged =
+        (input.expectedStatus !== undefined && current.status !== input.expectedStatus) ||
+        (input.expectedHeartbeatAt !== undefined &&
+          current.last_executor_heartbeat_at !== input.expectedHeartbeatAt) ||
+        (staleBefore !== undefined &&
+          (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
+        (input.requireExecutorDisconnected === true && !!current.executor_connected_at);
+      if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
-        const existing = current.termination_request;
-        const cause = input.cause === 'user_stop' || !existing ? input.cause : existing.cause;
-        if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
-          return { outcome: 'unchanged', task: current };
-        }
-        const incomingWins =
-          !existing || input.cause === 'user_stop' || existing.cause === input.cause;
-        const request = {
-          cause,
-          requested_at: existing?.requested_at ?? (input.now ?? new Date()).toISOString(),
-          final_status: cause === 'user_stop' ? ('stopped' as const) : ('failed' as const),
-          error_message:
-            cause === input.cause
-              ? input.errorMessage
-              : (existing?.error_message ?? input.errorMessage),
-        };
-        const sdkFailure = incomingWins
-          ? (input.sdkFailure ?? current.sdk_failure)
-          : current.sdk_failure;
-        const data = {
-          ...row.data,
-          termination_request: request,
-          ...(sdkFailure
-            ? { sdk_failure: { ...sdkFailure, termination: 'requested' as const } }
-            : {}),
-        };
-        await update(txDb, tasks)
-          .set({ status: TaskStatus.STOPPING, data })
-          .where(eq(tasks.task_id, fullId))
-          .run();
-        return {
-          outcome: 'claimed',
-          task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
-        };
-      })
-    );
+      const existing = current.termination_request;
+      const cause = input.cause === 'user_stop' || !existing ? input.cause : existing.cause;
+      if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
+        return { outcome: 'unchanged', task: current };
+      }
+      const incomingWins =
+        !existing || input.cause === 'user_stop' || existing.cause === input.cause;
+      const request = {
+        cause,
+        requested_at: existing?.requested_at ?? (input.now ?? new Date()).toISOString(),
+        error_message:
+          cause === input.cause
+            ? input.errorMessage
+            : (existing?.error_message ?? input.errorMessage),
+      };
+      const sdkFailure = incomingWins
+        ? (input.sdkFailure ?? current.sdk_failure)
+        : current.sdk_failure;
+      const data = {
+        ...row.data,
+        termination_request: request,
+        ...(sdkFailure
+          ? { sdk_failure: { ...sdkFailure, termination: 'requested' as const } }
+          : {}),
+      };
+      await update(txDb, tasks)
+        .set({ status: TaskStatus.STOPPING, data })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return {
+        outcome: 'claimed',
+        task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
+      };
+    });
   }
 
   /** Atomically record containment evidence and, when safe, terminalize the task. */
   async settleTermination(input: TerminationSettlementInput): Promise<TerminationSettlementResult> {
-    const fullId = await this.resolveId(input.taskId);
-    return this.runTaskMutation(() =>
-      runDatabaseTransaction(this.db, async (txDb) => {
-        await this.lockTaskForMutation(txDb, fullId);
-        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!row) throw new EntityNotFoundError('Task', input.taskId);
-        const current = this.rowToTask(row);
-        if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
-        if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
-          return { outcome: 'condition_changed', task: current };
-        }
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+      if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
+        return { outcome: 'condition_changed', task: current };
+      }
 
-        if (input.outcome === 'unverified') {
-          const failure = input.sdkFailure ?? current.sdk_failure;
-          if (!failure || !input.errorMessage) {
-            throw new RepositoryError('unverified settlement requires failure evidence');
-          }
-          const data = {
-            ...row.data,
-            sdk_failure: { ...failure, termination: 'unverified' as const },
-            error_message: input.errorMessage,
-          };
-          await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-          return {
-            outcome: 'unverified',
-            task: this.rowToTask({ ...row, data }),
-          };
-        }
-
-        if (
-          input.outcome === 'forced_unverified' &&
-          current.sdk_failure?.termination !== 'unverified'
-        ) {
-          return { outcome: 'condition_changed', task: current };
-        }
-
-        const finalStatus =
-          input.outcome === 'forced_unverified'
-            ? TaskStatus.FAILED
-            : current.termination_request.cause === 'user_stop'
-              ? TaskStatus.STOPPED
-              : TaskStatus.FAILED;
-        const terminal = withTerminalTiming(
-          current,
-          { status: finalStatus },
-          input.now ?? new Date()
-        );
-        const completedAt = new Date(terminal.completed_at!);
+      if (input.outcome === 'unverified') {
         const failure = input.sdkFailure ?? current.sdk_failure;
+        if (!failure || !input.errorMessage) {
+          throw new RepositoryError('unverified settlement requires failure evidence');
+        }
         const data = {
           ...row.data,
-          duration_ms: terminal.duration_ms,
-          message_range: terminal.message_range ?? current.message_range,
-          ...(failure
-            ? {
-                sdk_failure: {
-                  ...failure,
-                  termination:
-                    input.outcome === 'forced_unverified'
-                      ? ('unverified' as const)
-                      : ('verified' as const),
-                },
-              }
-            : {}),
-          ...(finalStatus === TaskStatus.FAILED
-            ? {
-                error_message:
-                  input.errorMessage ??
-                  current.termination_request.error_message ??
-                  current.error_message,
-              }
-            : {}),
+          sdk_failure: { ...failure, termination: 'unverified' as const },
+          error_message: input.errorMessage,
         };
-        await update(txDb, tasks)
-          .set({ status: finalStatus, completed_at: completedAt, data })
-          .where(eq(tasks.task_id, fullId))
-          .run();
+        await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
         return {
-          outcome: 'transitioned',
-          task: this.rowToTask({ ...row, status: finalStatus, completed_at: completedAt, data }),
+          outcome: 'unverified',
+          task: this.rowToTask({ ...row, data }),
         };
-      })
-    );
+      }
+
+      if (
+        input.outcome === 'forced_unverified' &&
+        current.sdk_failure?.termination !== 'unverified'
+      ) {
+        return { outcome: 'condition_changed', task: current };
+      }
+
+      const finalStatus =
+        input.outcome === 'forced_unverified'
+          ? TaskStatus.FAILED
+          : current.termination_request.cause === 'user_stop'
+            ? TaskStatus.STOPPED
+            : TaskStatus.FAILED;
+      const terminal = withTerminalTiming(
+        current,
+        { status: finalStatus },
+        input.now ?? new Date()
+      );
+      const completedAt = new Date(terminal.completed_at!);
+      const failure = input.sdkFailure ?? current.sdk_failure;
+      const data = {
+        ...row.data,
+        duration_ms: terminal.duration_ms,
+        message_range: terminal.message_range ?? current.message_range,
+        ...(failure
+          ? {
+              sdk_failure: {
+                ...failure,
+                termination:
+                  input.outcome === 'forced_unverified'
+                    ? ('unverified' as const)
+                    : ('verified' as const),
+              },
+            }
+          : {}),
+        ...(finalStatus === TaskStatus.FAILED
+          ? {
+              error_message:
+                input.errorMessage ??
+                current.termination_request.error_message ??
+                current.error_message,
+            }
+          : {}),
+      };
+      await update(txDb, tasks)
+        .set({ status: finalStatus, completed_at: completedAt, data })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return {
+        outcome: 'transitioned',
+        task: this.rowToTask({ ...row, status: finalStatus, completed_at: completedAt, data }),
+      };
+    });
   }
 
   /**
@@ -705,94 +683,72 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async update(id: string, updates: Partial<Task>): Promise<Task> {
     try {
-      const fullId = await this.resolveId(id);
+      return await this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {
+        console.debug(
+          `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
+        );
+        const current = this.rowToTask(currentRow);
 
-      console.debug(
-        `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
-      );
+        // Terminal task status is immutable at the row-locked mutation boundary.
+        // Service-level checks are useful for friendly idempotence, but cannot
+        // make a terminal-vs-resume race safe because their read happens before
+        // this transaction acquires the lock. Metadata-only updates remain
+        // allowed for existing callers.
+        if (
+          isTerminalTaskStatus(current.status) &&
+          updates.status !== undefined &&
+          updates.status !== current.status
+        ) {
+          throw new RepositoryError(
+            `terminal task status cannot be changed from ${current.status}`
+          );
+        }
 
-      // Use transaction to make read-merge-write atomic
-      const mutate = () =>
-        this.db.transaction(async (tx) => {
-          const txDb = txAsDb(tx);
+        // The authenticated executor claim is the only path allowed to cross
+        // this boundary. connectExecutor performs its own guarded SQL update
+        // above; generic service update/patch calls flow through this method.
+        if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
+          throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
+        }
+        if (updates.status === TaskStatus.STOPPING && current.status !== TaskStatus.STOPPING) {
+          throw new RepositoryError('stopping tasks must be claimed through claimTermination');
+        }
+        if (
+          current.status === TaskStatus.STOPPING &&
+          current.termination_request &&
+          updates.status !== undefined &&
+          isTerminalTaskStatus(updates.status)
+        ) {
+          throw new RepositoryError(
+            'termination-owned tasks must be settled through settleTermination'
+          );
+        }
 
-          await this.lockTaskForMutation(txDb, fullId);
+        const merged = {
+          ...deepMerge(current, withTerminalTiming(current, updates)),
+          task_id: current.task_id,
+          session_id: current.session_id,
+          created_by: current.created_by,
+          created_at: current.created_at,
+        };
+        const insertData = this.taskToInsert(merged);
 
-          // STEP 1: Read current task (within transaction)
-          const currentRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        await update(txDb, tasks)
+          .set({
+            status: insertData.status,
+            queue_position: insertData.queue_position,
+            started_at: insertData.started_at,
+            executor_connected_at: insertData.executor_connected_at,
+            completed_at: insertData.completed_at,
+            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+            session_md5: insertData.session_md5,
+            data: insertData.data,
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
 
-          if (!currentRow) {
-            throw new EntityNotFoundError('Task', id);
-          }
-
-          const current = this.rowToTask(currentRow);
-
-          // Terminal task status is immutable at the row-locked mutation boundary.
-          // Service-level checks are useful for friendly idempotence, but cannot
-          // make a terminal-vs-resume race safe because their read happens before
-          // this transaction acquires the lock. Metadata-only updates remain
-          // allowed for existing callers.
-          if (
-            isTerminalTaskStatus(current.status) &&
-            updates.status !== undefined &&
-            updates.status !== current.status
-          ) {
-            throw new RepositoryError(
-              `terminal task status cannot be changed from ${current.status}`
-            );
-          }
-
-          // The authenticated executor claim is the only path allowed to cross
-          // this boundary. connectExecutor performs its own guarded SQL update
-          // above; generic service update/patch calls flow through this method.
-          if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
-            throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
-          }
-          if (updates.status === TaskStatus.STOPPING && current.status !== TaskStatus.STOPPING) {
-            throw new RepositoryError('stopping tasks must be claimed through claimTermination');
-          }
-          if (
-            current.status === TaskStatus.STOPPING &&
-            current.termination_request &&
-            updates.status !== undefined &&
-            isTerminalTaskStatus(updates.status)
-          ) {
-            throw new RepositoryError(
-              'termination-owned tasks must be settled through settleTermination'
-            );
-          }
-
-          // STEP 2: Deep merge updates into current task (in memory)
-          // Preserves nested objects like message_range when doing partial updates.
-          const merged = {
-            ...deepMerge(current, withTerminalTiming(current, updates)),
-            task_id: current.task_id,
-            session_id: current.session_id,
-            created_by: current.created_by,
-            created_at: current.created_at,
-          };
-          const insertData = this.taskToInsert(merged);
-
-          // STEP 3: Write merged task (within same transaction)
-          await update(txDb, tasks)
-            .set({
-              status: insertData.status,
-              queue_position: insertData.queue_position,
-              started_at: insertData.started_at,
-              executor_connected_at: insertData.executor_connected_at,
-              completed_at: insertData.completed_at,
-              last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-              session_md5: insertData.session_md5,
-              data: insertData.data,
-            })
-            .where(eq(tasks.task_id, fullId))
-            .run();
-
-          // Return merged task (no need to re-fetch, we have it in memory)
-          return merged;
-        });
-      const result = await this.runTaskMutation(mutate);
-      return result;
+        return merged;
+      });
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(

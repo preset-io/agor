@@ -993,14 +993,13 @@ describe('TaskRepository.update', () => {
       termination_request: {
         cause: 'sdk_health_failure',
         requested_at: '2026-07-10T20:03:00.000Z',
-        final_status: 'failed',
       },
     });
 
     expect(await taskRepo.findById(created.task_id)).toMatchObject({
       sdk_watchdog_mode: 'enforce',
       sdk_failure: { reason: 'no_first_progress', termination: 'requested' },
-      termination_request: { cause: 'sdk_health_failure', final_status: 'failed' },
+      termination_request: { cause: 'sdk_health_failure' },
     });
   });
 
@@ -1035,7 +1034,7 @@ describe('TaskRepository.update', () => {
       expect([health.outcome, stop.outcome]).toContain('claimed');
       expect(await taskRepo.findById(task.task_id)).toMatchObject({
         status: TaskStatus.STOPPING,
-        termination_request: { cause: 'user_stop', final_status: 'stopped' },
+        termination_request: { cause: 'user_stop' },
       });
 
       const settled = await taskRepo.settleTermination({
