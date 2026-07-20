@@ -104,13 +104,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
     );
 
     if (!isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
-    const [column] = await db.execute(sql`
-      SELECT data_type
+    const columns = await db.execute(sql`
+      SELECT column_name, data_type
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'tasks'
-        AND column_name = 'executor_connected_at'
+        AND column_name IN ('executor_connected_at', 'last_executor_heartbeat_at')
+      ORDER BY column_name
     `);
-    expect(column?.data_type).toBe('timestamp with time zone');
+    expect(columns).toEqual([
+      { column_name: 'executor_connected_at', data_type: 'timestamp with time zone' },
+      { column_name: 'last_executor_heartbeat_at', data_type: 'timestamp with time zone' },
+    ]);
   });
 });

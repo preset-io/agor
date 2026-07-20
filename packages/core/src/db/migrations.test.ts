@@ -15,11 +15,23 @@ describe('Postgres migrations', () => {
   });
 
   it('stores executor connection timestamps as UTC-safe instants', async () => {
-    const migration = await readFile(
-      new URL('../../drizzle/postgres/0064_task_dispatching.sql', import.meta.url),
-      'utf8'
-    );
+    const [connectionMigration, heartbeatMigration] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0064_task_dispatching.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/postgres/0065_executor_heartbeat_timezone.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
 
-    expect(migration).toMatch(/ADD COLUMN "executor_connected_at" timestamp with time zone/i);
+    expect(connectionMigration).toMatch(
+      /ADD COLUMN "executor_connected_at" timestamp with time zone/i
+    );
+    expect(heartbeatMigration).toMatch(
+      /ALTER COLUMN "last_executor_heartbeat_at" TYPE timestamp with time zone/i
+    );
+    expect(heartbeatMigration).toMatch(/AT TIME ZONE 'UTC'/i);
   });
 });
