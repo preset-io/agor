@@ -1454,9 +1454,10 @@ export function OnboardingWizard({
                               Already signed in to Codex on your laptop? Your login lives in{' '}
                               <code>~/.codex/auth.json</code> there. Print it with{' '}
                               <code>cat ~/.codex/auth.json</code> and paste the whole thing below —
-                              this replaces any Codex login already on this server. Prefer a
-                              terminal? Run <code>codex login --device-auth</code> from a branch
-                              terminal instead.
+                              this replaces the Codex login already stored on this server, which in
+                              shared setups is one login for the whole server, not one per person.
+                              Prefer a terminal? Run <code>codex login --device-auth</code> from a
+                              branch terminal instead.
                             </span>
                           }
                         />

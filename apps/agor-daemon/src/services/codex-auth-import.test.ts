@@ -85,7 +85,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  readCodexAuthFileMock.mockReturnValue({ ok: true, content: VALID_AUTH_JSON });
+  // Readback verification is byte-exact against what was written, so the
+  // read mock returns whatever the write mock captured.
+  let written = '';
+  writeCodexAuthFileMock.mockImplementation((content: string) => {
+    written = content;
+  });
+  readCodexAuthFileMock.mockImplementation(() =>
+    written ? { ok: true, content: written } : { ok: false, reason: 'not-found' }
+  );
 });
 
 describe('codex-auth-import', () => {
@@ -154,7 +162,7 @@ describe('codex-auth-import', () => {
     readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
     const { app, usersService } = makeApp();
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
-      /verification/
+      /verified/
     );
     // One retry on a transient-looking read failure, then give up.
     expect(readCodexAuthFileMock).toHaveBeenCalledTimes(2);
@@ -162,13 +170,25 @@ describe('codex-auth-import', () => {
   });
 
   it('retries the readback once and succeeds on a transient read failure', async () => {
-    readCodexAuthFileMock
-      .mockReturnValueOnce({ ok: false, reason: 'unreadable' })
-      .mockReturnValueOnce({ ok: true, content: VALID_AUTH_JSON });
+    // First read fails transiently; the retry falls through to the capture
+    // implementation and returns the written bytes.
+    readCodexAuthFileMock.mockReturnValueOnce({ ok: false, reason: 'unreadable' });
     const { app, usersService } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
     expect(result.status).toBe('authenticated');
     expect(usersService.patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects when the readback bytes differ from what was written', async () => {
+    readCodexAuthFileMock.mockReturnValue({
+      ok: true,
+      content: '{"OPENAI_API_KEY":"sk-someone-elses-import"}\n',
+    });
+    const { app, usersService } = makeApp();
+    await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
+      /verified/
+    );
+    expect(usersService.patch).not.toHaveBeenCalled();
   });
 
   it('maps write failures to a friendly error and logs only the error class', async () => {
