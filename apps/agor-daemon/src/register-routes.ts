@@ -143,6 +143,7 @@ import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
+import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
@@ -287,6 +288,12 @@ export async function authorizeTaskTerminalRoute(input: {
   });
   if (!allowed) throw new Forbidden('Not authorized to update tasks in this session');
   return internalParams;
+}
+
+export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+  return tasks.find(
+    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+  );
 }
 
 /**
@@ -2258,8 +2265,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (body.force_unverified === true) {
           return withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
             const session = await app.service('sessions').get(id, params);
-            const taskId = session.tasks?.[session.tasks.length - 1];
-            if (!taskId) throw new BadRequest('Session has no Task to force-fail.');
+            const task = findUnverifiedTerminationTask(
+              await findActiveTasksForSession(app, session.session_id, params)
+            );
+            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
+            const taskId = task.task_id;
             const userId = params.user?.user_id;
             const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
             const isOwner =
@@ -2270,13 +2280,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (typeof body.confirmation !== 'string') {
               throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
             }
-            const task = await forceFailUnverifiedTask({
+            const failedTask = await forceFailUnverifiedTask({
               app,
               taskId,
               confirmation: body.confirmation,
               params,
             });
-            return { success: true, status: task.status, stoppedTaskId: task.task_id };
+            return {
+              success: true,
+              status: failedTask.status,
+              stoppedTaskId: failedTask.task_id,
+            };
           });
         }
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;

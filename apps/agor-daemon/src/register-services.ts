@@ -44,7 +44,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, ROLES } from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -1008,27 +1008,25 @@ function createExecuteHandler(
         if (spawnContext.mode === 'local') markExecutorProcessExited(sessionId, localExecutorPid);
 
         if (spawnContext.mode === 'templated') {
-          const connected = await app
-            .service('tasks')
-            .get(taskId, params)
-            .then((task) => Boolean(task.executor_connected_at))
-            .catch(() => false);
           const disposition = classifyExecutorExit({
             mode: spawnContext.mode,
             code,
-            connected,
             nonzeroMayHaveDispatched:
               config.execution?.executor_command_nonzero_may_have_dispatched === true,
           });
           if (disposition !== 'authoritative') {
             if (disposition === 'ambiguous') {
-              await (
-                app.service('tasks') as unknown as TasksServiceImpl
-              ).recordExecutorStartupWarning(
-                taskId,
-                `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
-                { ...params, provider: undefined }
-              );
+              try {
+                await (
+                  app.service('tasks') as unknown as TasksServiceImpl
+                ).recordExecutorStartupWarning(
+                  taskId,
+                  `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
+                  { ...params, provider: undefined }
+                );
+              } catch (error) {
+                console.warn(`${logPrefix} Failed to record ambiguous launcher exit:`, error);
+              }
             }
             console.log(
               `${logPrefix} Launcher exit is passive; awaiting remote executor lifecycle`
@@ -1051,6 +1049,14 @@ function createExecuteHandler(
               tool: session.agentic_tool,
               termination: 'requested',
             },
+            // A remote executor may connect after the classification read.
+            // Revalidate at the row-locked claim before stopping it.
+            ...(spawnContext.mode === 'templated'
+              ? {
+                  expectedStatus: TaskStatus.DISPATCHING,
+                  requireExecutorDisconnected: true,
+                }
+              : {}),
           });
         } catch (error) {
           console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);

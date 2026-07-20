@@ -94,7 +94,7 @@ export interface TerminationClaimResult {
 
 export interface TerminationSettlementInput {
   taskId: string;
-  outcome: 'verified_absent' | 'unverified' | 'forced_unverified';
+  outcome: 'verified_absent' | 'unverified' | 'forced_unverified' | 'restart_unverified';
   errorMessage?: string;
   sdkFailure?: SdkFailure;
   now?: Date;
@@ -621,8 +621,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
       const current = this.rowToTask(row);
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
-      if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
+      const restartRelease = input.outcome === 'restart_unverified';
+      if (
+        !restartRelease &&
+        (current.status !== TaskStatus.STOPPING || !current.termination_request)
+      ) {
         return { outcome: 'condition_changed', task: current };
+      }
+
+      if (restartRelease && (!input.sdkFailure || !input.errorMessage)) {
+        throw new RepositoryError('restart settlement requires unverified failure evidence');
       }
 
       if (input.outcome === 'unverified') {
@@ -649,10 +657,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return { outcome: 'condition_changed', task: current };
       }
 
-      const finalStatus =
-        input.outcome === 'forced_unverified'
+      const finalStatus = restartRelease
+        ? TaskStatus.STOPPED
+        : input.outcome === 'forced_unverified'
           ? TaskStatus.FAILED
-          : current.termination_request.cause === 'user_stop'
+          : current.termination_request!.cause === 'user_stop'
             ? TaskStatus.STOPPED
             : TaskStatus.FAILED;
       const terminal = withTerminalTiming(
@@ -671,17 +680,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               sdk_failure: {
                 ...failure,
                 termination:
-                  input.outcome === 'forced_unverified'
+                  input.outcome === 'forced_unverified' || restartRelease
                     ? ('unverified' as const)
                     : ('verified' as const),
               },
             }
           : {}),
-        ...(finalStatus === TaskStatus.FAILED
+        ...(finalStatus === TaskStatus.FAILED || restartRelease
           ? {
               error_message:
                 input.errorMessage ??
-                current.termination_request.error_message ??
+                current.termination_request?.error_message ??
                 current.error_message,
             }
           : {}),

@@ -38,14 +38,10 @@ describe('buildTaskLaunchState', () => {
 
 describe('classifyExecutorExit', () => {
   it.each([
-    [{ mode: 'local', code: 0, connected: true, nonzeroMayHaveDispatched: false }, 'authoritative'],
-    [{ mode: 'templated', code: 0, connected: false, nonzeroMayHaveDispatched: false }, 'passive'],
-    [{ mode: 'templated', code: 9, connected: true, nonzeroMayHaveDispatched: false }, 'passive'],
-    [
-      { mode: 'templated', code: 9, connected: false, nonzeroMayHaveDispatched: false },
-      'authoritative',
-    ],
-    [{ mode: 'templated', code: 9, connected: false, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'local', code: 0, nonzeroMayHaveDispatched: false }, 'authoritative'],
+    [{ mode: 'templated', code: 0, nonzeroMayHaveDispatched: false }, 'passive'],
+    [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: false }, 'authoritative'],
+    [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: true }, 'ambiguous'],
   ] as const)('classifies %# as %s', (input, expected) => {
     expect(classifyExecutorExit(input)).toBe(expected);
   });

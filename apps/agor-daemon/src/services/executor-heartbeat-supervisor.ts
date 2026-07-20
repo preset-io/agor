@@ -49,37 +49,44 @@ export class ExecutorHeartbeatSupervisor {
         (task) => task.status === TaskStatus.DISPATCHING && !task.executor_connected_at
       );
       for (const task of dispatching) {
-        const dispatchedMs = new Date(task.started_at ?? task.created_at).getTime();
-        if (
-          !Number.isFinite(dispatchedMs) ||
-          nowMs - dispatchedMs <= (this.options.dispatchConnectTimeoutMs ?? 5 * 60_000)
-        ) {
-          continue;
-        }
-        if (task.executor_mode === 'templated') {
-          const warning =
-            'Remote executor has not connected within the configured startup window; still waiting.';
-          await tasksService.recordExecutorStartupWarning(task.task_id, warning, {
-            provider: undefined,
+        try {
+          const dispatchedMs = new Date(task.started_at ?? task.created_at).getTime();
+          if (
+            !Number.isFinite(dispatchedMs) ||
+            nowMs - dispatchedMs <= (this.options.dispatchConnectTimeoutMs ?? 5 * 60_000)
+          ) {
+            continue;
+          }
+          if (task.executor_mode === 'templated') {
+            const warning =
+              'Remote executor has not connected within the configured startup window; still waiting.';
+            await tasksService.recordExecutorStartupWarning(task.task_id, warning, {
+              provider: undefined,
+            });
+            continue;
+          }
+          const session = await this.options.app.service('sessions').get(task.session_id);
+          const result = await requestExecutorTermination({
+            app: this.options.app,
+            taskId: task.task_id,
+            cause: 'startup_timeout',
+            errorMessage: 'Local executor did not connect before the startup deadline.',
+            expectedStatus: TaskStatus.DISPATCHING,
+            requireExecutorDisconnected: true,
+            sdkFailure: {
+              reason: 'startup_timeout',
+              detected_at: this.now().toISOString(),
+              tool: session.agentic_tool,
+              termination: 'requested',
+            },
           });
-          continue;
+          if (result.status === 'condition_changed') continue;
+        } catch (error) {
+          console.warn(
+            `[executor-heartbeat] Failed to process dispatching task ${shortId(task.task_id)}:`,
+            error instanceof Error ? error.message : String(error)
+          );
         }
-        const session = await this.options.app.service('sessions').get(task.session_id);
-        const result = await requestExecutorTermination({
-          app: this.options.app,
-          taskId: task.task_id,
-          cause: 'startup_timeout',
-          errorMessage: 'Local executor did not connect before the startup deadline.',
-          expectedStatus: TaskStatus.DISPATCHING,
-          requireExecutorDisconnected: true,
-          sdkFailure: {
-            reason: 'startup_timeout',
-            detected_at: this.now().toISOString(),
-            tool: session.agentic_tool,
-            termination: 'requested',
-          },
-        });
-        if (result.status === 'condition_changed') continue;
       }
 
       if (!this.options.config.enabled) return;

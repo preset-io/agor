@@ -317,9 +317,9 @@ export interface AgorExecutionSettings {
   /**
    * Lightweight heartbeat settings for long-running executor tasks.
    *
-   * The executor patches `tasks.last_executor_heartbeat_at` immediately and
-   * then every `interval_ms` while a task is active. The daemon may mark stale
-   * active tasks failed after `stale_after_ms` without retrying automatically.
+   * The executor reports `tasks.last_executor_heartbeat_at` immediately and
+   * then every `interval_ms` while a task is active. After `stale_after_ms`,
+   * the daemon requests containment and fails the task only after verified absence.
    * Optional callbacks are shell commands that receive a small JSON payload on
    * stdin; keep secrets out of the command argv.
    */

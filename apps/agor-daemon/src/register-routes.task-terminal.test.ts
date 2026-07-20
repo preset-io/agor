@@ -1,6 +1,7 @@
 import { Forbidden } from '@agor/core/feathers';
+import { type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { authorizeTaskTerminalRoute } from './register-routes.js';
+import { authorizeTaskTerminalRoute, findUnverifiedTerminationTask } from './register-routes.js';
 
 function harness(permission: 'view' | 'session' | 'prompt', createdBy = 'user-1') {
   const branch = { branch_id: 'branch-1', others_can: permission };
@@ -55,4 +56,15 @@ describe('task complete/fail route authorization', () => {
     });
     expect(input.tasksService.get).not.toHaveBeenCalled();
   });
+});
+
+it('selects the unverified active task even when newer queued work exists', () => {
+  const stopping = {
+    task_id: 'task-stopping',
+    status: TaskStatus.STOPPING,
+    sdk_failure: { termination: 'unverified' },
+  } as Task;
+  const queued = { task_id: 'task-queued', status: TaskStatus.QUEUED } as Task;
+
+  expect(findUnverifiedTerminationTask([queued, stopping])).toBe(stopping);
 });

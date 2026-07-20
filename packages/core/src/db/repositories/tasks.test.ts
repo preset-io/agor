@@ -1189,6 +1189,43 @@ describe('TaskRepository.update', () => {
     ).toBe('terminal');
   });
 
+  dbTest(
+    'releases a stopping task after restart without claiming verified absence',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+      });
+
+      const result = await taskRepo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'restart_unverified',
+        errorMessage: 'Daemon restarted',
+        sdkFailure: {
+          reason: 'termination_unverified',
+          detected_at: '2026-07-10T20:03:00.000Z',
+          tool: 'codex',
+          termination: 'unverified',
+        },
+      });
+
+      expect(result).toMatchObject({
+        outcome: 'transitioned',
+        task: {
+          status: TaskStatus.STOPPED,
+          error_message: 'Daemon restarted',
+          sdk_failure: { termination: 'unverified' },
+        },
+      });
+    }
+  );
+
   dbTest('reserves termination-owned terminality for settlement', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

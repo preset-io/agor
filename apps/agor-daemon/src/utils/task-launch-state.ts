@@ -6,11 +6,10 @@ export type ExecutorExitDisposition = 'authoritative' | 'passive' | 'ambiguous';
 export function classifyExecutorExit(input: {
   mode: ExecutorMode;
   code: number | null;
-  connected: boolean;
   nonzeroMayHaveDispatched: boolean;
 }): ExecutorExitDisposition {
   if (input.mode === 'local') return 'authoritative';
-  if (input.code === 0 || input.connected) return 'passive';
+  if (input.code === 0) return 'passive';
   return input.nonzeroMayHaveDispatched ? 'ambiguous' : 'authoritative';
 }
 

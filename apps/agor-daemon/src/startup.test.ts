@@ -46,6 +46,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       return task;
     }),
     patch: vi.fn(),
+    settleTermination: vi.fn(),
   };
   const sessionsService = {
     find: vi.fn(async (params: { query?: { status?: string; ready_for_prompt?: boolean } }) => {
@@ -140,17 +141,17 @@ describe('startup tenant database scope', () => {
     });
 
     await cleanupOrphanStatuses(ctx);
-    expect(tasksService.patch).toHaveBeenCalledWith(
-      task.task_id,
+    expect(tasksService.settleTermination).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: TaskStatus.STOPPED,
-        sdk_failure: expect.objectContaining({
+        taskId: task.task_id,
+        outcome: 'restart_unverified',
+        sdkFailure: expect.objectContaining({
           reason: 'termination_unverified',
           termination: 'unverified',
         }),
-        error_message: expect.stringContaining('without verifying executor termination'),
+        errorMessage: expect.stringContaining('without verifying executor termination'),
       }),
-      expect.anything()
+      expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
   });
 

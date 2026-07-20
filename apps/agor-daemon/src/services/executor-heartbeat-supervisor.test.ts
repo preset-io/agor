@@ -22,8 +22,11 @@ function supervisorFor(input: {
   active?: unknown[];
   orphaned?: unknown[];
   dispatchConnectTimeoutMs?: number;
+  warningError?: Error;
 }) {
-  const recordExecutorStartupWarning = vi.fn().mockResolvedValue(input.orphaned?.[0]);
+  const recordExecutorStartupWarning = input.warningError
+    ? vi.fn().mockRejectedValue(input.warningError)
+    : vi.fn().mockResolvedValue(input.orphaned?.[0]);
   const app = {
     service: (name: string) => {
       if (name === 'tasks') {
@@ -134,5 +137,32 @@ describe('ExecutorHeartbeatSupervisor', () => {
       { provider: undefined }
     );
     expect(requestExecutorTermination).not.toHaveBeenCalled();
+  });
+
+  it('keeps checking heartbeats when one dispatch warning fails', async () => {
+    const dispatching = {
+      task_id: '018f0000-0000-7000-8000-000000000021',
+      status: 'dispatching',
+      executor_mode: 'templated',
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    const stale = {
+      task_id: '018f0000-0000-7000-8000-000000000031',
+      session_id: '018f0000-0000-7000-8000-000000000032',
+      status: 'running',
+      last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+    };
+    const { supervisor } = supervisorFor({
+      orphaned: [dispatching],
+      active: [stale],
+      dispatchConnectTimeoutMs: 3000,
+      warningError: new Error('write failed'),
+    });
+
+    await supervisor.checkOnce();
+
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: stale.task_id, cause: 'heartbeat_lost' })
+    );
   });
 });
