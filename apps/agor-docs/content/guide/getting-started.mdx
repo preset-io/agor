@@ -13,6 +13,34 @@ Install Agor, open the UI, and follow the onboarding wizard. Your **first AI tea
 
 <InstallTabs />
 
+## Run in Docker
+
+Want to evaluate Agor without installing Node? The production image runs the daemon (API + UI) in a single container.
+
+**Prereqs:** [Docker](https://docs.docker.com/get-docker/) and Docker Compose (bundled with Docker Desktop; `docker compose` on Linux).
+
+```bash
+git clone https://github.com/preset-io/agor.git
+cd agor
+docker compose -f docker-compose.prod.yml up -d
+```
+
+This builds a container that installs the published `agor-live` npm package — no monorepo build required. Once it's up:
+
+- **UI:** [http://localhost:3030](http://localhost:3030)
+- **Daemon health check:** `curl http://localhost:3030/health`
+
+On first startup Agor bootstraps a superadmin (`admin@agor.live`) and either uses the `AGOR_ADMIN_PASSWORD` env var (if you set one beforehand) or generates a password and writes it inside the container:
+
+```bash
+docker compose -f docker-compose.prod.yml exec agor-prod \
+  cat /home/agor/.agor/admin-credentials
+```
+
+You'll be prompted to change it on first login. For API keys and other credential options (per-user keys, workspace defaults, `claude setup-token`), see [Authentication](/guide/extended-install#authentication).
+
+> This is the fastest path to a running instance. For hot-reload dev environments, multi-branch setups, and PostgreSQL, see `docker/README.md` and the [Development Guide](/guide/development). For Kubernetes-style executor isolation, see [Containerized Execution](/guide/containerized-execution).
+
 ## Follow the onboarding wizard
 
 The first time you open the UI, the **Onboarding Wizard** runs. It picks between cloning the [teammate framework repo](https://github.com/preset-io/agor-teammate) or pointing at one of your own, then walks through **Clone → Board → Branch → API Keys → Launch** and drops you into a live session.
@@ -49,7 +77,7 @@ Agor runs out of the box on SQLite as a single-user instance, but it's designed 
 - **PostgreSQL backend** instead of SQLite, for multi-user / team setups
 - **Multiplayer mode** with branch-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
 - **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
-- **Docker Compose** and source builds
+- **Source builds** for contributor / dev workflows — see [Run in Docker](#run-in-docker) above for the evaluation path via Docker Compose
 - **Custom config / database paths** for non-default install layouts
 
 For any of those, see [Extended Installation](/guide/extended-install). For credential alternatives (`claude setup-token`, `codex login --device-auth`, workspace-wide env vars), see [Authentication](/guide/extended-install#authentication).
