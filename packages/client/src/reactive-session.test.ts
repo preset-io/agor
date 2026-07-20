@@ -3,6 +3,7 @@ import { TaskStatus } from '@agor/core/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
+  attachReactiveSessionApi,
   ReactiveSessionHandle,
   type TaskHydrationMode,
 } from './reactive-session';
@@ -809,5 +810,36 @@ describe('ReactiveSessionHandle stream subscription', () => {
     await vi.waitFor(() => {
       expect(__streamSubscriptionCountForTest(client)).toBe(0);
     });
+  });
+});
+
+describe('session-streams capability announce', () => {
+  // Library stays neutral: attaching the reactive API must not announce (the
+  // announce is UI-private now), so a bare raw-listener consumer keeps the owner
+  // fallback. Fail-on-revert: re-adding an announce into attachReactiveSessionApi
+  // turns this red.
+  it('does not announce from attachReactiveSessionApi alone', async () => {
+    const appHandlers: Record<string, Array<() => void>> = {};
+    const create = vi.fn(async () => ({ session_id: '', subscribed: false }));
+    const client = {
+      io: { connected: false, on: vi.fn(), off: vi.fn() },
+      on: vi.fn((event: string, handler: () => void) => {
+        const handlers = appHandlers[event] ?? [];
+        handlers.push(handler);
+        appHandlers[event] = handlers;
+      }),
+      off: vi.fn(),
+      service: vi.fn((name: string) => {
+        if (name === 'session-streams') return { create };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as AgorClient;
+
+    attachReactiveSessionApi(client);
+
+    // Fire any post-auth listeners; a neutral library registers none.
+    for (const handler of appHandlers.authenticated ?? []) handler();
+    await Promise.resolve();
+    expect(create).not.toHaveBeenCalled();
   });
 });

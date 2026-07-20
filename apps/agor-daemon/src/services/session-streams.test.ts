@@ -1,5 +1,6 @@
 import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
+import { SESSION_STREAMS_AWARE_FLAG } from '../utils/realtime-publish.js';
 import { createSessionStreamsService } from './session-streams.js';
 
 function makeApp(
@@ -45,6 +46,45 @@ describe('session-streams service', () => {
     expect(channel).toHaveBeenCalledWith('session-stream:s1');
     expect(join).toHaveBeenCalledWith(connection);
     expect(result).toEqual({ session_id: 's1', subscribed: true });
+  });
+
+  it('does not mark the connection aware on a real subscribe (room-scoped only)', async () => {
+    const { app } = makeApp(async () => ({ session_id: 's1' }));
+    const service = createSessionStreamsService(app);
+    const conn = { id: 'socket-subscribe' } as Record<string, unknown>;
+
+    await service.create({ session_id: 's1' }, { connection: conn, provider: 'socketio' } as never);
+
+    // The connection-wide aware bit must stay unset: a subscribe covers only
+    // this session's room, so other owned sessions keep the owner fallback.
+    expect(conn[SESSION_STREAMS_AWARE_FLAG]).toBeUndefined();
+  });
+
+  it('capability announce marks the connection aware without joining a room or reading a session', async () => {
+    const { app, join, channel, get } = makeApp(async () => ({ session_id: 's1' }));
+    const service = createSessionStreamsService(app);
+    const conn = { id: 'socket-announce' } as Record<string, unknown>;
+
+    const result = await service.create({ capability: true }, {
+      connection: conn,
+      provider: 'socketio',
+    } as never);
+
+    // Aware flag set, but no session read and no room joined — access-safe.
+    expect(conn[SESSION_STREAMS_AWARE_FLAG]).toBe(true);
+    expect(get).not.toHaveBeenCalled();
+    expect(channel).not.toHaveBeenCalled();
+    expect(join).not.toHaveBeenCalled();
+    expect(result).toEqual({ session_id: '', subscribed: false });
+  });
+
+  it('capability announce still requires a realtime connection', async () => {
+    const { app } = makeApp(async () => ({ session_id: 's1' }));
+    const service = createSessionStreamsService(app);
+
+    await expect(
+      service.create({ capability: true }, { provider: 'rest' } as never)
+    ).rejects.toThrow(/realtime connection/);
   });
 
   it('joins the canonical room id when the caller passes a short id', async () => {

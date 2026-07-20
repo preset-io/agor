@@ -3,7 +3,12 @@ title: FAQ
 description: Frequently asked questions about branches, multi-repo workflows, session forking, spawning, and Agor's multiplayer workflow
 ---
 
+import { FaqSection } from '../components/FaqSection';
+import { Tree } from '../components/Tree';
+
 # FAQ
+
+<FaqSection>
 
 ## What's a branch?
 
@@ -20,21 +25,26 @@ Agor uses **git branches** under the hood (same concept as `git branch` command)
 
 **Best practice**: 1 branch = 1 issue = 1 PR = 1 feature
 
-```
-Branch "auth-feature" (issue #123, PR #456)
-├─ Working directory: ~/.agor/worktrees/myapp/auth-feature
-├─ Git ref: feature/oauth2-auth
-└─ Sessions: All AI sessions working on this feature
+<Tree>
 
-Branch "payment-integration" (issue #124, PR #457)
-├─ Working directory: ~/.agor/worktrees/myapp/payment-integration
-├─ Git ref: feature/stripe-integration
-└─ Sessions: All AI sessions working on this feature
-```
+- Branch `auth-feature` (issue #123, PR #456)
+  - Working directory: `~/.agor/worktrees/myapp/auth-feature`
+  - Git ref: `feature/oauth2-auth`
+  - Sessions: All AI sessions working on this feature
+- Branch `payment-integration` (issue #124, PR #457)
+  - Working directory: `~/.agor/worktrees/myapp/payment-integration`
+  - Git ref: `feature/stripe-integration`
+  - Sessions: All AI sessions working on this feature
+
+</Tree>
 
 Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
 
 **Agor manages the git branches for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
+
+</FaqSection>
+
+<FaqSection>
 
 ## Can Agor work on multiple repos or branches?
 
@@ -56,17 +66,23 @@ The orchestrating agent can do the cross-repo work itself, or it can spawn and c
 
 Agor's strength is the control plane: multiple isolated branches, visible on boards, with agents that can coordinate across them. A single OS working directory is still one branch/workspace, but Agor makes multi-repo work natural through orchestration, branch alignment, and multi-agent visibility.
 
+</FaqSection>
+
+<FaqSection>
+
 ## Session trees? WTF?
 
 **Sessions in Agor can fork and spawn, creating genealogy trees** - this is what makes Agor fundamentally different from linear CLI tools.
 
-```
-Session: "Build authentication system"
-├─ Fork: "Write tests for auth"
-├─ Fork: "Build user profile that uses auth"
-└─ Spawn: "Research OAuth2 best practices"
-   └─ Spawn: "Evaluate PKCE vs implicit flow"
-```
+<Tree>
+
+- Session: "Build authentication system"
+  - Fork: "Write tests for auth"
+  - Fork: "Build user profile that uses auth"
+  - Spawn: "Research OAuth2 best practices"
+    - Spawn: "Evaluate PKCE vs implicit flow"
+
+</Tree>
 
 ### Why this matters:
 
@@ -95,6 +111,10 @@ Most people don't know you can do this! Context engineering is usually about:
 4. Inspect the entire tree to understand how work evolved
 
 **Visual organization**: On boards, you see branches (projects) containing session trees (conversation genealogy). It's like Trello for AI conversations, but with git-style branching.
+
+</FaqSection>
+
+<FaqSection>
 
 ## Why a spatial layout for AI coding sessions?
 
@@ -185,6 +205,10 @@ Figma revolutionized design collaboration with:
 **The spatial layout isn't just "pretty"** - it's a fundamental match for how humans organize complex, multi-threaded work with multiple collaborators.
 
 You wouldn't manage a large codebase without a file tree. Why manage AI sessions without spatial organization?
+
+</FaqSection>
+
+<FaqSection>
 
 ## Zones? Zone "triggers"?
 
@@ -346,6 +370,10 @@ AI: "Reviewing implementation of https://github.com/myorg/repo/issues/123..."
 
 Drag to trigger. Context flows automatically. No manual copy-paste.
 
+</FaqSection>
+
+<FaqSection>
+
 ## What happens when I "fork" a session?
 
 **Forking creates a sibling session with a COPY of the conversation context at that moment** - perfect for parallel work streams that need the same starting knowledge but different focus.
@@ -363,12 +391,14 @@ After forking, the conversations diverge. The fork has its own independent conve
 
 **Parallelize work that needs the same starting context**
 
-```
-Session: "Built user authentication feature" <- snapshot taken here
-├─ Fork A: "Write comprehensive unit tests for auth"
-├─ Fork B: "Build user profile page that uses auth"
-└─ Fork C: "Generate API documentation"
-```
+<Tree>
+
+- Session: "Built user authentication feature" _snapshot taken here_
+  - Fork A: "Write comprehensive unit tests for auth"
+  - Fork B: "Build user profile page that uses auth"
+  - Fork C: "Generate API documentation"
+
+</Tree>
 
 Each fork starts with the full context of how auth works, then builds its own conversation. They work on different files so no conflicts.
 
@@ -385,6 +415,10 @@ Forks **share the branch** (same filesystem) but **copy the context** (snapshot 
 You're not exploring alternative implementations (they'd conflict on disk!) - you're doing parallel work that starts from the same knowledge but different focus.
 
 ---
+
+</FaqSection>
+
+<FaqSection>
 
 ## What happens when I "spawn" a subsession?
 
@@ -437,25 +471,33 @@ Then later, prompt the parent: `"Read /tmp/payment-report.md and integrate the p
 
 **Break down complex work**
 
-```
-Parent: "Build complete e-commerce checkout flow"
-├─ Spawn: "Implement payment gateway integration"
-├─ Spawn: "Build inventory validation service"
-└─ Spawn: "Create order confirmation email templates"
-```
+<Tree>
+
+- Parent: "Build complete e-commerce checkout flow"
+  - Spawn: "Implement payment gateway integration"
+  - Spawn: "Build inventory validation service"
+  - Spawn: "Create order confirmation email templates"
+
+</Tree>
 
 **Delegate to different agents**
 
-```
-Parent (Claude): "Refactor legacy codebase"
-├─ Spawn (Codex): "Write comprehensive unit tests"
-├─ Spawn (Gemini): "Generate API documentation"
-└─ Spawn (Claude): "Extract common utilities"
-```
+<Tree>
+
+- Parent (Claude): "Refactor legacy codebase"
+  - Spawn (Codex): "Write comprehensive unit tests"
+  - Spawn (Gemini): "Generate API documentation"
+  - Spawn (Claude): "Extract common utilities"
+
+</Tree>
 
 Parent orchestrates, children execute focused subsessions with clean context.
 
 ---
+
+</FaqSection>
+
+<FaqSection>
 
 ## Fork vs Spawn: Quick Reference
 
@@ -472,6 +514,10 @@ Parent orchestrates, children execute focused subsessions with clean context.
 | **Reports back?**       | No                                         | No (currently, may add callback)               |
 
 ---
+
+</FaqSection>
+
+<FaqSection>
 
 ## When should I fork a session vs create a new branch?
 
@@ -497,20 +543,25 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 **Example:**
 
-```
-Branch "auth-feature" (issue #123, PR #456)
-└─ Session: "Build OAuth2 authentication"
-   ├─ Fork: "Write unit tests for OAuth2"        <- Same branch
-   ├─ Fork: "Build user profile that uses auth"  <- Same branch
-   └─ Fork: "Document OAuth2 API"                <- Same branch
+<Tree>
 
-Branch "payment-feature" (issue #124, PR #457)  <- Different feature = different branch
-└─ Session: "Build Stripe integration"
-```
+- Branch `auth-feature` (issue #123, PR #456)
+  - Session: "Build OAuth2 authentication"
+    - Fork: "Write unit tests for OAuth2" _same branch_
+    - Fork: "Build user profile that uses auth" _same branch_
+    - Fork: "Document OAuth2 API" _same branch_
+- Branch `payment-feature` (issue #124, PR #457) _different feature = different branch_
+  - Session: "Build Stripe integration"
+
+</Tree>
 
 **Rule of thumb**: If they're working on the same issue/feature and won't conflict on disk, fork the session. If they're different features or would conflict, use a different Agor branch.
 
 ---
+
+</FaqSection>
+
+<FaqSection>
 
 ## Best Practices
 
@@ -528,6 +579,10 @@ Branch "payment-feature" (issue #124, PR #457)  <- Different feature = different
 - Don't nest spawns too deeply (2-3 levels max)
 
 ---
+
+</FaqSection>
+
+<FaqSection>
 
 ## Summary
 
@@ -547,9 +602,13 @@ Example: Build Feature 1 once. Fork 3 times:
 
 All running in parallel, same codebase, each starting from the same understanding.
 
-<a id="open-source-telemetry" />
+</FaqSection>
+
+<FaqSection>
 
 ## What does Agor's open-source telemetry collect?
+
+<a id="open-source-telemetry" />
 
 During `agor init`, Agor explains its open-source telemetry and asks whether to enable ongoing anonymous telemetry. Agor sends one anonymous install result so the maintainers can count installs and whether ongoing telemetry was enabled. To disable all telemetry, including that one-time install result, set `AGOR_TELEMETRY=0` before running Agor.
 
@@ -573,3 +632,5 @@ agor telemetry
 
 `DO_NOT_TRACK=1` and `AGOR_TELEMETRY=0` disable telemetry regardless of config.
 `AGOR_TELEMETRY=1` explicitly enables telemetry and creates an anonymous install ID if one has not been configured yet.
+
+</FaqSection>

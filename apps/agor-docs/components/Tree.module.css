@@ -1,0 +1,85 @@
+.tree {
+  margin: 1.25rem 0;
+  padding: 16px 20px;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 12px;
+  background: rgba(9, 20, 18, 0.5);
+  font-family: var(--font-mono-stack, ui-monospace, monospace);
+  font-size: 0.84rem;
+  line-height: 1.85;
+  overflow-x: auto;
+}
+
+.tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Root rows (branch/session/parent): brighter, small gap between trees. */
+.tree > ul > li {
+  margin-top: 0.55rem;
+  color: var(--agor-ink, #eafff9);
+}
+
+.tree > ul > li:first-child {
+  margin-top: 0;
+}
+
+/* Nested lists indent under their parent row. */
+.tree li ul {
+  margin-left: 3px;
+  padding-left: 17px;
+}
+
+/* Nested rows get the connector glyphs + muted color. */
+.tree li li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--agor-muted, #9fb4ae);
+}
+
+/* Vertical guide (│). Spans the row's full height so it reaches the next
+ * sibling; the last child truncates it into an └ below. */
+.tree li li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(148, 178, 170, 0.38);
+}
+
+/* Horizontal tick (─) into each row. */
+.tree li li::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.92em;
+  width: 12px;
+  border-top: 1px solid rgba(148, 178, 170, 0.38);
+}
+
+/* Last child: stop the vertical at the tick so it reads as └ not ├. */
+.tree li li:last-child::before {
+  bottom: auto;
+  height: 0.92em;
+}
+
+.tree code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(52, 230, 196, 0.08);
+  color: #7fe8df;
+  font-size: 0.95em;
+}
+
+/* Emphasis is used for inline annotations ("same branch"). */
+.tree em {
+  color: #6f928c;
+  font-style: normal;
+}
+
+.tree em::before {
+  content: "← ";
+}

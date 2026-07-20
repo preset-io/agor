@@ -1,7 +1,11 @@
 import type { Application } from '@agor/core/feathers';
 import { BadRequest } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
-import { joinSessionStreamChannel, leaveSessionStreamChannel } from '../utils/realtime-publish.js';
+import {
+  joinSessionStreamChannel,
+  leaveSessionStreamChannel,
+  markConnectionSessionStreamsAware,
+} from '../utils/realtime-publish.js';
 
 /**
  * `session-streams` — a realtime control-plane service that lets a browser
@@ -15,6 +19,9 @@ import { joinSessionStreamChannel, leaveSessionStreamChannel } from '../utils/re
  * session's live text than to its stored messages. Feathers drops connections
  * from channels automatically on disconnect, so unsubscribe on refresh /
  * navigation is best-effort; the socket teardown is the real cleanup.
+ *
+ * `create` also accepts `{ capability: true }`: mark the connection aware,
+ * joining no room and reading no session (see `markConnectionSessionStreamsAware`).
  */
 export interface SessionStreamSubscription {
   session_id: string;
@@ -24,6 +31,8 @@ export interface SessionStreamSubscription {
 interface SubscribeData {
   session_id?: string;
   sessionId?: string;
+  /** Announce awareness without joining a room; needs no access check (only ever removes from the owner fallback, never widens). */
+  capability?: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -61,12 +70,20 @@ export function createSessionStreamsService(app: Application) {
       }
       const sessionId = data?.session_id ?? data?.sessionId;
       if (!sessionId || typeof sessionId !== 'string') {
+        // Capability-only announce: mark aware; joins no room, reads no session.
+        if (data?.capability === true) {
+          markConnectionSessionStreamsAware(connection);
+          return { session_id: '', subscribed: false };
+        }
         throw new BadRequest('session_id is required');
       }
       // Join the CANONICAL room id so short-id / alias callers land in the same
       // room publishers emit to (they carry the full UUID).
       const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
       joinSessionStreamChannel(app, canonicalId, connection);
+      // Do NOT mark the connection aware here: the aware bit is connection-wide,
+      // but a subscribe only covers THIS session's room. The owner fallback still
+      // bridges other owned sessions this connection raw-listens to but never joined.
       return { session_id: canonicalId, subscribed: true };
     },
 

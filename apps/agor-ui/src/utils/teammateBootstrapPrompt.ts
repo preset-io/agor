@@ -27,9 +27,16 @@ export interface TeammateBootstrapPromptContext {
   firstSession: true;
 }
 
+export function buildTeammateOnboardingSessionTitle({
+  displayName,
+  emoji,
+}: Pick<TeammateBootstrapPromptInput, 'displayName' | 'emoji'>): string {
+  return `${emoji ? `${emoji} ` : ''}${displayName} onboarding`;
+}
+
 function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext): string {
   const lines = [
-    '### First boot instructions for Agor AI teammate',
+    '### First-session onboarding instructions for Agor AI teammate',
     '',
     'Context:',
     `- AI teammate: ${context.teammate.displayName} ${context.teammate.emoji}`,
@@ -58,7 +65,7 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   lines.push('');
   lines.push(
-    'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this AI teammate.'
+    "Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
   );
 
   return lines.join('\n');

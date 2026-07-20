@@ -85,6 +85,13 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       throw new BadRequest(formatUnsupportedAgorCodexModelMessage(data.model_config.model));
     }
 
+    if (
+      context.params.provider == null &&
+      (context.params as { _agenticConfigResolved?: boolean })._agenticConfigResolved
+    ) {
+      return context;
+    }
+
     if (hasPermission && hasModel) return context; // nothing to fill
 
     // Identify the user whose defaults to apply. External calls go through

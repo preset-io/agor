@@ -21,6 +21,7 @@ export { resolveProxies } from './proxies-resolver';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './resolved-config-slice';
+export * from './schedule-agentic-tool-config';
 export type {
   AgorGitConfigParametersSettings,
   ResolvedCors,

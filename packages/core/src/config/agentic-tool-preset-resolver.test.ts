@@ -6,11 +6,13 @@ import {
 } from '../db/repositories';
 import { dbTest } from '../db/test-helpers';
 import {
+  isAgenticToolDefaultConfigurationReference,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   type UserID,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '../types';
 import {
+  AgenticConfigurationResolutionError,
   assertInlineAgenticConfigurationAllowed,
   presetConfigurationToSessionPatch,
   resolveAgenticConfigurationReference,
@@ -22,6 +24,18 @@ beforeAll(() => {
 });
 
 describe('agentic tool preset resolution', () => {
+  it('uses one canonical pair of reserved default references', () => {
+    expect(USER_DEFAULT_AGENTIC_CONFIGURATION).toBe('__user_default__');
+    expect(WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION).toBe('__workspace_default__');
+    expect(isAgenticToolDefaultConfigurationReference(USER_DEFAULT_AGENTIC_CONFIGURATION)).toBe(
+      true
+    );
+    expect(
+      isAgenticToolDefaultConfigurationReference(WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
+    ).toBe(true);
+    expect(isAgenticToolDefaultConfigurationReference('workspace-default')).toBe(false);
+  });
+
   dbTest('resolves live configuration and rejects cross-tool references', async ({ db }) => {
     const preset = await new AgenticToolPresetRepository(db).create(
       { tool: 'codex', name: 'Codex governed', configuration: { codexNetworkAccess: false } },
@@ -31,7 +45,7 @@ describe('agentic tool preset resolution', () => {
       preset_id: preset.preset_id,
     });
     await expect(resolveAgenticToolPreset(db, 'claude-code', preset.preset_id)).rejects.toThrow(
-      /belongs to codex/
+      AgenticConfigurationResolutionError
     );
   });
 
@@ -76,6 +90,26 @@ describe('agentic tool preset resolution', () => {
         user.user_id as UserID
       )
     ).resolves.toEqual({ configuration: {} });
+  });
+
+  dbTest('resolves the user default inline configuration', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `preset-user-default-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Configured User',
+      default_agentic_config: {
+        codex: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+      },
+    });
+    await expect(
+      resolveAgenticConfigurationReference(
+        db,
+        'codex',
+        USER_DEFAULT_AGENTIC_CONFIGURATION,
+        user.user_id as UserID
+      )
+    ).resolves.toEqual({
+      configuration: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+    });
   });
 
   dbTest('missing workspace default fails closed when presets are required', async ({ db }) => {

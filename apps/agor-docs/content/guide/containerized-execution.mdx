@@ -3,6 +3,8 @@ title: Containerized Execution
 description: Running Agor executors in Kubernetes, Docker, or other containerized environments with shared storage
 ---
 
+import { ExecutorDiagram } from '../../components/ExecutorDiagram';
+
 # Containerized Execution
 
 This guide covers running Agor's executor component in containerized environments like Kubernetes, enabling scalable and isolated execution of AI coding agents.
@@ -18,37 +20,15 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 
 ### The Executor Model
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Daemon (Orchestration Layer)                               │
-│  - REST/WebSocket API                                       │
-│  - Database (sessions, tasks, branches)                    │
-│  - User authentication                                      │
-│  - Never touches git data directly                          │
-│                                                             │
-│  Spawns executor via:                                       │
-│  - Local: spawn('agor-executor', ['--stdin'])              │
-│  - Remote: template → kubectl run ... | agor-executor      │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          │ JSON payload via stdin
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Executor (Isolation Boundary)                              │
-│  - Receives typed JSON payload                              │
-│  - Connects back to daemon via WebSocket                    │
-│  - Runs agent SDKs (Claude, Gemini, Codex)                 │
-│  - Manages git operations (clone, branch)                 │
-│  - Handles terminal sessions (Zellij)                       │
-│  - Short-lived: exits when command completes                │
-└─────────────────────────────────────────────────────────────┘
-```
+<ExecutorDiagram />
+
+The daemon owns orchestration and delegates all git **mutations** to the executor — it still runs read-only git probes (remote URL, default branch) and credential scrubbing itself. Each executor process handles a single command and exits, except terminal (Zellij) executors, which stay alive until closed.
 
 ### What the Executor Does
 
 | Command               | Purpose                                        |
 | --------------------- | ---------------------------------------------- |
-| `prompt`              | Execute agent SDK (Claude Code, Gemini, Codex) |
+| `prompt`              | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
 | `git.clone`           | Clone repository with Unix group setup         |
 | `git.branch.add`    | Create git branch with permissions           |
 | `git.branch.remove` | Remove branch and cleanup                    |

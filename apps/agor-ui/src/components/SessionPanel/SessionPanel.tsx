@@ -1,4 +1,5 @@
 import type {
+  AgenticToolName,
   AgorClient,
   Branch,
   CodexApprovalPolicy,
@@ -23,13 +24,15 @@ import {
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
+  EditOutlined,
   EllipsisOutlined,
   InboxOutlined,
+  RobotOutlined,
   SearchOutlined,
   SettingOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
+import type { InputRef, MenuProps } from 'antd';
 import {
   Alert,
   App,
@@ -37,7 +40,9 @@ import {
   Button,
   Dropdown,
   Input,
+  Modal,
   Space,
+  Spin,
   Tooltip,
   Typography,
   theme,
@@ -60,6 +65,7 @@ import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
@@ -315,10 +321,73 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
   // Get actions from context
-  const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
-    useAppActions();
+  const {
+    onSendPrompt,
+    onFork,
+    onBtwFork,
+    onOpenSettings,
+    onUpdateSession,
+    onOpenTerminal,
+    onChooseAgenticTool,
+    availableAgents,
+  } = useAppActions();
 
   const { archiveSession } = useSessionActions(client);
+
+  // Click-to-edit session title, inline in the header — see render below.
+  // Draft is seeded from the *explicit* title only (not the description
+  // fallback getSessionDisplayTitle shows when unset), so entering edit mode
+  // never accidentally "sets" a title from the first-prompt fallback text.
+  const [editingTitle, setEditingTitle] = React.useState(false);
+  const [titleHovered, setTitleHovered] = React.useState(false);
+  const [titleDraft, setTitleDraft] = React.useState('');
+  const titleInputRef = React.useRef<InputRef | null>(null);
+  const startEditingTitle = React.useCallback(() => {
+    setTitleDraft(session?.title ?? '');
+    setEditingTitle(true);
+  }, [session?.title]);
+  const saveTitle = React.useCallback(() => {
+    setEditingTitle(false);
+    if (!session) return;
+    const trimmed = titleDraft.trim();
+    if (trimmed !== (session.title ?? '')) {
+      onUpdateSession?.(session.session_id, { title: trimmed });
+    }
+  }, [session, titleDraft, onUpdateSession]);
+  React.useEffect(() => {
+    if (editingTitle) titleInputRef.current?.focus();
+  }, [editingTitle]);
+
+  // "Switch tool" — same underlying chooseAgenticTool action the quick-start
+  // empty-state tiles use, just with `replacingSessionId` set. Only offered
+  // on a session with zero tasks (never prompted yet): tool is a per-session
+  // SDK choice baked into every task, so there's no safe way to change it
+  // once a conversation exists — hide the affordance entirely rather than
+  // let it fail or silently drop history. (See `canSwitchTool` /
+  // `handleSwitchTool` below the early-return, once `session` is narrowed.)
+  const [switchToolOpen, setSwitchToolOpen] = React.useState(false);
+  // The tile the user just clicked, not a bare boolean — mirrors
+  // `PendingToolChoicePanel`'s `choosingTool` so the grid highlights the tile
+  // being switched *to* during the async request, not the session's current
+  // (old) tool.
+  const [switchingTool, setSwitchingTool] = React.useState<string | null>(null);
+
+  // App renders this panel without a session key, so a route/back-forward
+  // change swaps `session` in place instead of remounting. Reset the transient
+  // title-edit and switch-tool UI when the session id changes so a draft title
+  // or an open switch modal from the previous session can't bleed into (and
+  // then act on) the next one.
+  const titleStateSessionId = session?.session_id;
+  const prevTitleStateSessionId = React.useRef(titleStateSessionId);
+  React.useEffect(() => {
+    if (prevTitleStateSessionId.current !== titleStateSessionId) {
+      prevTitleStateSessionId.current = titleStateSessionId;
+      setEditingTitle(false);
+      setTitleDraft('');
+      setSwitchToolOpen(false);
+      setSwitchingTool(null);
+    }
+  }, [titleStateSessionId]);
 
   // Tool capabilities — drives which buttons are shown
   const toolCaps = session?.agentic_tool
@@ -868,6 +937,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const hasBranchActions = !!branch;
+  const canSwitchTool = !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
+  const handleSwitchTool = async (tool: string) => {
+    if (!branch || !onChooseAgenticTool || switchingTool) return;
+    setSwitchingTool(tool);
+    try {
+      await onChooseAgenticTool(branch.branch_id, tool as AgenticToolName, session.session_id);
+      setSwitchToolOpen(false);
+    } finally {
+      setSwitchingTool(null);
+    }
+  };
   const moreMenuItems: MenuProps['items'] = [
     ...(branch
       ? [
@@ -897,6 +977,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             icon: <SettingOutlined />,
             label: 'Session Settings',
             onClick: () => onOpenSettings(session.session_id),
+          },
+        ]
+      : []),
+    ...(canSwitchTool
+      ? [
+          {
+            key: 'switch-tool',
+            icon: <RobotOutlined />,
+            label: 'Switch tool…',
+            onClick: () => setSwitchToolOpen(true),
           },
         ]
       : []),
@@ -1290,9 +1380,66 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <ToolIcon tool={session.agentic_tool} size={40} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
-                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-              </Typography.Text>
+              {editingTitle ? (
+                <Input
+                  ref={titleInputRef}
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={saveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      saveTitle();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setEditingTitle(false);
+                    }
+                  }}
+                  placeholder="Untitled session"
+                  variant="borderless"
+                  style={{ fontSize: 18, fontWeight: 600, padding: 0 }}
+                />
+              ) : (
+                <Tooltip title="Click to rename">
+                  <button
+                    type="button"
+                    onClick={startEditingTitle}
+                    onMouseEnter={() => setTitleHovered(true)}
+                    onMouseLeave={() => setTitleHovered(false)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      maxWidth: '100%',
+                      cursor: 'text',
+                      borderRadius: token.borderRadiusSM,
+                      padding: '2px 6px',
+                      margin: '-2px -6px',
+                      background: titleHovered ? token.colorFillTertiary : 'transparent',
+                      transition: 'background 0.15s',
+                      border: 'none',
+                      font: 'inherit',
+                      color: 'inherit',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
+                      {session.title || session.description
+                        ? getSessionDisplayTitle(session, { includeAgentFallback: false })
+                        : 'Untitled session'}
+                    </Typography.Text>
+                    <EditOutlined
+                      style={{
+                        fontSize: 12,
+                        color: token.colorTextTertiary,
+                        opacity: titleHovered ? 1 : 0,
+                        transition: 'opacity 0.15s',
+                        flexShrink: 0,
+                      }}
+                    />
+                  </button>
+                </Tooltip>
+              )}
               <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
               {session.created_by && (
                 <div style={{ marginTop: token.sizeUnit }}>
@@ -1523,6 +1670,44 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           userById={userById}
         />
+
+        {/* Switch tool — same tile picker as the quick-start empty state,
+            just replacing this (never-prompted) session instead of creating
+            the first one. Only reachable via moreMenuItems when canSwitchTool. */}
+        <Modal
+          title="Switch tool"
+          open={switchToolOpen}
+          onCancel={() => setSwitchToolOpen(false)}
+          footer={null}
+        >
+          <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+            Choose a different tool for this session. Since nothing has been sent yet, this replaces
+            the session in place.
+          </Typography.Paragraph>
+          <div style={{ position: 'relative' }}>
+            <AgentSelectionGrid
+              agents={availableAgents ?? []}
+              selectedAgentId={switchingTool}
+              onSelect={handleSwitchTool}
+              columns={2}
+            />
+            {switchingTool && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: token.colorBgElevated,
+                  opacity: 0.7,
+                }}
+              >
+                <Spin size="small" />
+              </div>
+            )}
+          </div>
+        </Modal>
       </div>
     </div>
   );

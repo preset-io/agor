@@ -17,6 +17,7 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   client: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
   fieldName?: string;
+  defaultResolution?: 'save' | 'schedule-run';
 }
 
 /** Tool-scoped preset-or-inline picker shared by every runtime configuration surface. */
@@ -25,10 +26,13 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   client,
   mcpServerById,
   fieldName = 'agenticToolPresetId',
+  defaultResolution = 'save',
   ...formProps
 }) => {
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
+  const isUserDefault = selected === USER_DEFAULT_AGENTIC_CONFIGURATION;
+  const isWorkspaceDefault = selected === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
   const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
   const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(canonicalTool));
   const inlineAllowed = settings?.inline_configuration_allowed !== false;
@@ -112,13 +116,21 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
           type="info"
           showIcon
           title={
-            selected === USER_DEFAULT_AGENTIC_CONFIGURATION
+            isUserDefault
               ? 'Using your default'
-              : selected === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+              : isWorkspaceDefault
                 ? 'Using the workspace default'
                 : 'Managed by preset'
           }
-          description="The concrete preset or inline configuration will be resolved when this is saved."
+          description={
+            defaultResolution === 'schedule-run'
+              ? isUserDefault
+                ? "Resolved from the schedule creator's current default each time this schedule runs."
+                : isWorkspaceDefault
+                  ? 'Resolved from the current workspace default each time this schedule runs.'
+                  : 'The latest version of this preset is used each time this schedule runs.'
+              : 'The concrete preset or inline configuration will be resolved when this is saved.'
+          }
         />
       )}
       <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={formProps.showHelpText} />

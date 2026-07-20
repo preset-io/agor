@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateBootstrapPromptContext,
+  buildTeammateOnboardingSessionTitle,
 } from './teammateBootstrapPrompt';
 
 describe('buildTeammateBootstrapPrompt', () => {
+  it('uses onboarding terminology for the visible first-session title', () => {
+    expect(buildTeammateOnboardingSessionTitle({ displayName: 'Rusty', emoji: '🤖' })).toBe(
+      '🤖 Rusty onboarding'
+    );
+    expect(buildTeammateOnboardingSessionTitle({ displayName: 'Rusty' })).toBe('Rusty onboarding');
+  });
+
   it('formats teammate identity params without browser-side Handlebars rendering', () => {
     const prompt = buildTeammateBootstrapPrompt({
       displayName: 'PR Reviewer',
@@ -14,12 +22,14 @@ describe('buildTeammateBootstrapPrompt', () => {
       userEmail: 'max@example.com',
     });
 
-    expect(prompt).toContain('### First boot instructions for Agor AI teammate');
+    expect(prompt).toContain('### First-session onboarding instructions for Agor AI teammate');
     expect(prompt).toContain('- AI teammate: PR Reviewer 🧐');
     expect(prompt).toContain('- AI teammate description: Reviews pull requests');
     expect(prompt).toContain('- User: Max <max@example.com>');
-    expect(prompt).toContain('- User: Max <max@example.com>\n\nRead BOOTSTRAP.md');
-    expect(prompt).toContain('ask only the next useful questions');
+    expect(prompt).toContain(
+      '- User: Max <max@example.com>\n\nRead ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md'
+    );
+    expect(prompt).toContain('ask only the next useful question');
     expect(prompt).not.toContain("don't re-ask");
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);
   });

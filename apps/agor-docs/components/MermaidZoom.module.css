@@ -1,0 +1,107 @@
+/* Affordance on inline mermaid diagrams. */
+.host {
+  position: relative;
+  cursor: zoom-in;
+  transition: outline-color 140ms ease;
+  outline: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.host:hover {
+  outline-color: rgba(52, 230, 196, 0.4);
+}
+
+.host::after {
+  content: "⤢ click to enlarge";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(8, 18, 16, 0.85);
+  color: #7fe8df;
+  font-size: 11px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.host:hover::after {
+  opacity: 1;
+}
+
+/* Lightbox. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  background: rgba(4, 10, 9, 0.82);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  animation: mzFade 180ms ease both;
+}
+
+@keyframes mzFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.viewport {
+  flex: 1;
+  overflow: auto;
+  cursor: grab;
+  padding: 4vh 4vw;
+}
+
+.viewport:active {
+  cursor: grabbing;
+}
+
+.stage {
+  width: max-content;
+  margin: auto;
+  transform-origin: center center;
+}
+
+/* Enlarge the cloned SVG well past its inline size as the zoom baseline. */
+.stage svg {
+  width: min(1600px, 88vw);
+  height: auto;
+}
+
+.toolbar {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+}
+
+.toolbar button {
+  min-width: 40px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(52, 230, 196, 0.3);
+  border-radius: 8px;
+  background: rgba(8, 18, 16, 0.9);
+  color: #cfe0db;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  border-color: rgba(52, 230, 196, 0.6);
+  color: #34e6c4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop {
+    animation-duration: 1ms;
+  }
+}

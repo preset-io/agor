@@ -32,6 +32,25 @@ export type PatchAgenticToolPreset = Partial<
 
 export const USER_DEFAULT_AGENTIC_CONFIGURATION = '__user_default__';
 export const WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION = '__workspace_default__';
+export type AgenticToolDefaultConfigurationReference =
+  | typeof USER_DEFAULT_AGENTIC_CONFIGURATION
+  | typeof WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+
+export function normalizeAgenticToolDefaultConfigurationReference(
+  reference: string
+): AgenticToolDefaultConfigurationReference | undefined {
+  if (reference === USER_DEFAULT_AGENTIC_CONFIGURATION) return USER_DEFAULT_AGENTIC_CONFIGURATION;
+  if (reference === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION) {
+    return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+  }
+  return undefined;
+}
+
+export function isAgenticToolDefaultConfigurationReference(
+  reference: string
+): reference is AgenticToolDefaultConfigurationReference {
+  return normalizeAgenticToolDefaultConfigurationReference(reference) !== undefined;
+}
 
 export type UserAgenticDefaultSelection =
   | { source: 'workspace_default' }

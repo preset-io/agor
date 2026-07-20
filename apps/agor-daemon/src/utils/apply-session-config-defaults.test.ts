@@ -24,6 +24,7 @@ function makeContext(opts: {
   data?: Record<string, unknown>;
   users?: Record<string, FakeUser | null>;
   user?: { user_id: string };
+  agenticConfigResolved?: boolean;
 }): HookContext {
   const usersService = {
     get: vi.fn(async (id: string) => {
@@ -33,7 +34,11 @@ function makeContext(opts: {
     }),
   };
   return {
-    params: { provider: opts.provider, user: opts.user },
+    params: {
+      provider: opts.provider,
+      user: opts.user,
+      _agenticConfigResolved: opts.agenticConfigResolved,
+    },
     data: opts.data,
     app: { service: vi.fn(() => usersService) },
   } as unknown as HookContext;
@@ -104,6 +109,52 @@ describe('applySessionConfigDefaults', () => {
     });
 
     await expect(hook(ctx)).rejects.toThrow('gpt-5-codex');
+  });
+
+  it('does not reapply user defaults after an internal caller fully resolves configuration', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+      },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            codex: { modelConfig: { model: 'stale-user-model' } },
+          },
+        },
+      },
+      agenticConfigResolved: true,
+    });
+
+    await hook(ctx);
+
+    expect((ctx.data as { model_config?: unknown }).model_config).toBeUndefined();
+    expect(ctx.app.service).not.toHaveBeenCalled();
+  });
+
+  it('ignores the internal resolved marker on external requests', async () => {
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: { agentic_tool: 'codex', created_by: ALICE },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            codex: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+          },
+        },
+      },
+      agenticConfigResolved: true,
+    });
+
+    await applySessionConfigDefaults({ warnOnExternalDefaultFill: false })(ctx);
+
+    expect((ctx.data as { model_config: { model: string } }).model_config.model).toBe('gpt-5.4');
   });
 
   it("fills missing model_config from the user's default", async () => {

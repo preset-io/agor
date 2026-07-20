@@ -23,7 +23,15 @@ export interface ResolvedAgenticConfigurationReference {
   configuration?: DefaultAgenticToolConfig;
 }
 
-/** Resolve reserved default references at write time; callers persist only the concrete result. */
+/** Expected user-facing failure while selecting or resolving an agentic configuration source. */
+export class AgenticConfigurationResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgenticConfigurationResolutionError';
+  }
+}
+
+/** Resolve canonical default or preset references at the caller-selected materialization boundary. */
 export async function resolveAgenticConfigurationReference(
   db: Database,
   tool: AgenticToolName,
@@ -44,9 +52,13 @@ export async function resolveAgenticConfigurationReference(
   if (reference !== USER_DEFAULT_AGENTIC_CONFIGURATION) {
     return { preset: await resolveAgenticToolPreset(db, tool, reference) };
   }
-  if (!userId) throw new Error('Authenticated user required to resolve the user default');
+  if (!userId) {
+    throw new AgenticConfigurationResolutionError(
+      'Authenticated user required to resolve the user default'
+    );
+  }
   const user = await new UsersRepository(db).findById(userId);
-  if (!user) throw new Error(`User not found: ${userId}`);
+  if (!user) throw new AgenticConfigurationResolutionError(`User not found: ${userId}`);
   const selection =
     user.default_agentic_selection?.[tool] ??
     user.default_agentic_selection?.[canonical] ??
@@ -77,10 +89,14 @@ export async function resolveAgenticToolPreset(
   presetId: AgenticToolPresetID | string
 ): Promise<AgenticToolPreset> {
   const preset = await new AgenticToolPresetRepository(db).findById(presetId);
-  if (!preset) throw new Error(`Agentic tool preset not found: ${presetId}`);
+  if (!preset) {
+    throw new AgenticConfigurationResolutionError(`Agentic tool preset not found: ${presetId}`);
+  }
   const canonical = canonicalTenantAgenticTool(tool);
   if (preset.tool !== canonical) {
-    throw new Error(`Preset '${preset.name}' belongs to ${preset.tool}, not ${canonical}`);
+    throw new AgenticConfigurationResolutionError(
+      `Preset '${preset.name}' belongs to ${preset.tool}, not ${canonical}`
+    );
   }
   return preset;
 }
@@ -93,7 +109,9 @@ export async function assertInlineAgenticConfigurationAllowed(
     canonicalTenantAgenticTool(tool)
   );
   if (settings.inline_configuration_allowed === false) {
-    throw new Error(`${tool} requires an administrator-managed preset in this workspace`);
+    throw new AgenticConfigurationResolutionError(
+      `${tool} requires an administrator-managed preset in this workspace`
+    );
   }
 }
 

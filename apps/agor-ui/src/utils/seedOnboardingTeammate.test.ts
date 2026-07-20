@@ -40,7 +40,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
 describe('seedOnboardingTeammate', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates a teammate branch + persona-primed bootstrap session when the framework repo is present', async () => {
+  it('creates a teammate branch + persona-primed onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -62,20 +62,26 @@ describe('seedOnboardingTeammate', () => {
       expect.objectContaining({ onCreateBranch, onUpdateBranch })
     );
 
-    // Bootstrap session is started for the created branch.
+    // Onboarding session is started for the created branch.
     expect(startTeammateBootstrapSessionMock).toHaveBeenCalledTimes(1);
     const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
     expect(sessionArg).toEqual(
       expect.objectContaining({ branchId: 'branch-1', boardId: 'board-1', onCreateSession })
     );
-    // Agent choice + persona are threaded through to the bootstrap prompt.
+    // Agent choice + persona are threaded through to the onboarding prompt.
     expect(sessionArg.sessionConfig).toEqual(
-      expect.objectContaining({ branch_id: 'branch-1', agent: 'claude-code' })
+      expect.objectContaining({
+        branch_id: 'branch-1',
+        agent: 'claude-code',
+        title: '🤖 Rusty onboarding',
+      })
     );
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
     expect(initialPrompt).toContain('developer');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
+    expect(initialPrompt).toContain('Read ONBOARDING.md');
+    expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
     expect(result).toEqual({ sessionId: 'session-1' });
     expect(onWarn).not.toHaveBeenCalled();

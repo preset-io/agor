@@ -1,6 +1,9 @@
 import type { AgenticToolName, AgorClient, Repo } from '@agor-live/client';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
-import { buildTeammateBootstrapPrompt } from './teammateBootstrapPrompt';
+import {
+  buildTeammateBootstrapPrompt,
+  buildTeammateOnboardingSessionTitle,
+} from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
@@ -12,7 +15,7 @@ export interface SeedOnboardingTeammateInput {
   teammateEmoji?: string;
   /** Agent chosen in the LLM step; defaults to claude-code. */
   agent?: AgenticToolName | null;
-  /** Persona-tailored MCP integration names to suggest in the bootstrap prompt. */
+  /** Persona-tailored MCP integration names to suggest in the onboarding prompt. */
   suggestedIntegrations?: string[];
   user?: { name?: string | null; email?: string | null; persona?: string | null } | null;
   client: AgorClient | null;
@@ -26,13 +29,13 @@ export interface SeedOnboardingTeammateInput {
 
 /**
  * Seeds the user's first AI teammate at the end of onboarding: a branch on the
- * framework repo plus a persona-primed bootstrap session, reusing the board the
+ * framework repo plus a persona-primed onboarding session, reusing the board the
  * wizard already created.
  *
  * Best-effort by contract: if the framework repo isn't ready yet, or branch /
  * session creation throws, it surfaces a non-fatal warning and resolves without
  * a session so the caller can still finish onboarding on the board. Returns the
- * bootstrap session id when one was created.
+ * onboarding session id when one was created.
  */
 export async function seedOnboardingTeammate(
   input: SeedOnboardingTeammateInput
@@ -79,7 +82,10 @@ export async function seedOnboardingTeammate(
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent ?? 'claude-code',
-        title: `${input.teammateEmoji ? `${input.teammateEmoji} ` : ''}${teammateName} bootstrap`,
+        title: buildTeammateOnboardingSessionTitle({
+          displayName: teammateName,
+          emoji: input.teammateEmoji,
+        }),
         initialPrompt: buildTeammateBootstrapPrompt({
           displayName: teammateName,
           emoji: input.teammateEmoji,

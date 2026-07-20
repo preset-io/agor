@@ -1,6 +1,13 @@
-import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  PermissionMode,
+  PermissionScope,
+  Session,
+  SpawnConfig,
+} from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
+import type { AgenticToolOption } from '../components/AgentSelectionGrid/AgentSelectionGrid';
 import type { BranchModalTab } from '../components/BranchModal/BranchModal';
 
 /**
@@ -41,6 +48,23 @@ export interface AppActionsContextValue {
   onSessionClick?: (sessionId: string) => void;
   onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
+
+  /**
+   * Single mechanism behind both tool-choice entry points: the quick-start
+   * empty-state tiles (no `replacingSessionId` — nothing to replace yet)
+   * and the in-drawer "Switch tool" affordance (`replacingSessionId` set to
+   * the current, never-prompted session, which gets silently swapped out).
+   * Creates a session with `tool`, navigates to it, and resolves the new
+   * session id (or `null` on failure). Does NOT remember the choice as a
+   * default — every "Add session" always shows the tile picker.
+   */
+  onChooseAgenticTool?: (
+    branchId: string,
+    tool: AgenticToolName,
+    replacingSessionId?: string
+  ) => Promise<string | null>;
+  /** Tools available for the quick-start tile picker / tool switcher. */
+  availableAgents?: AgenticToolOption[];
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

@@ -25,7 +25,11 @@
  */
 
 import type { AgenticToolName, AgorClient, BranchID, MCPServer, Schedule } from '@agor-live/client';
-import { humanizeCron } from '@agor-live/client';
+import {
+  humanizeCron,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -167,7 +171,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       timezone_mode: schedule?.timezone_mode ?? 'local',
       timezone: schedule?.timezone ?? detectBrowserTz(),
       agenticTool: tool,
-      agenticToolPresetId: schedule?.agentic_tool_config?.preset_id ?? INLINE_AGENTIC_CONFIGURATION,
+      agenticToolPresetId:
+        schedule?.agentic_tool_config?.configuration_reference ??
+        schedule?.agentic_tool_config?.preset_id ??
+        INLINE_AGENTIC_CONFIGURATION,
       enabled: schedule?.enabled ?? true,
       retention: schedule?.retention ?? 5,
       allow_concurrent_runs: schedule?.allow_concurrent_runs ?? false,
@@ -240,7 +247,16 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
             ? {
                 agentic_tool: agentTool,
-                preset_id: all.agenticToolPresetId as Schedule['agentic_tool_config']['preset_id'],
+                ...(all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION ||
+                all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+                  ? {
+                      configuration_reference:
+                        all.agenticToolPresetId as Schedule['agentic_tool_config']['configuration_reference'],
+                    }
+                  : {
+                      preset_id:
+                        all.agenticToolPresetId as Schedule['agentic_tool_config']['preset_id'],
+                    }),
               }
             : buildScheduleConfigFromFormValues(
                 agentTool,
@@ -401,6 +417,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           tool={agentTool}
           mcpServerById={mcpServerById}
           client={client}
+          defaultResolution="schedule-run"
         />
 
         <Collapse

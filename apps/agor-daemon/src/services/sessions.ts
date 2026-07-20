@@ -22,10 +22,17 @@ import {
   SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  TaskRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+} from '@agor/core/feathers';
 import {
   formatModelToolMismatchWarning,
   formatUnsupportedAgorCodexModelMessage,
@@ -108,6 +115,8 @@ export type SessionParams = QueryParams<{
   board_id?: string;
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
+  /** Marks a `remove` as the delete half of a "switch tool" swap (see `remove`). */
+  _swapReplace?: boolean;
 }> &
   AuthenticatedParams &
   InternalEnrichmentParams & {
@@ -117,6 +126,8 @@ export type SessionParams = QueryParams<{
     _agorSqlSessionAccessUserId?: UUID;
     /** Internal task-start reconciliation of a live preset. */
     _applyingAgenticToolPreset?: boolean;
+    /** Internal caller already resolved permission/model fallbacks and must not inherit user defaults. */
+    _agenticConfigResolved?: boolean;
   };
 
 /**
@@ -196,6 +207,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
+  private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
 
   private assertSupportedModelConfig(
@@ -234,6 +246,36 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
     this.usersRepo = new UsersRepository(db);
+    this.taskRepo = new TaskRepository(db);
+  }
+
+  /**
+   * `agentic_tool` picks the SDK a session's tasks are executed with — it
+   * can't change mid-session once a task exists (the messages/tasks already
+   * on the session were produced by a specific tool's SDK). The UI only
+   * offers "Switch tool" while `session.tasks.length === 0`, but that's a
+   * client-side convenience, not a security boundary: any other caller of
+   * `sessions.patch` (a stale tab, the MCP session-update tool, CLI) could
+   * otherwise desync `agentic_tool` from the tool that actually produced a
+   * session's existing tasks/messages. Enforce it here so the constraint
+   * holds regardless of caller.
+   */
+  private async assertAgenticToolMutable(sessionId: string, nextTool: unknown): Promise<void> {
+    if (nextTool === undefined) return;
+
+    const existing = await this.sessionRepo.findById(sessionId);
+    if (!existing || existing.agentic_tool === nextTool) return;
+
+    const taskCount = await this.taskRepo.countBySession(sessionId);
+    if (taskCount > 0) {
+      // Conflict (409), not Forbidden (403): nothing about the caller's identity
+      // is at issue — the session's *state* forbids the change. Matches the
+      // sibling `_swapReplace` guard in `remove`.
+      throw new Conflict(
+        `Cannot change agentic_tool on session ${sessionId}: it already has ${taskCount} task(s). ` +
+          "The tool that produced a session's existing tasks/messages cannot be changed after the fact."
+      );
+    }
   }
 
   async create(data: Partial<Session>, params?: SessionParams): Promise<Session | Session[]> {
@@ -1086,6 +1128,29 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       return results;
     }
 
+    // "Switch tool" (`chooseAgenticTool` in the UI) removes the session it's
+    // replacing as an implementation detail of swapping — never a user-visible
+    // delete. It's only offered on a session with zero tasks at the moment the
+    // swap is *initiated*, but on a multiplayer canvas a task can land on that
+    // same session (another tab, a collaborator, an MCP `agor_sessions_prompt`
+    // call) before the swap *completes*. Callers performing that specific swap
+    // mark the request via `query._swapReplace`; a normal user-intentional
+    // delete of a session with history is unaffected and still allowed.
+    //
+    // The guard lives here at the top level (not in `removeOne`) so it only
+    // gates the replaced session itself. The cascade into children runs through
+    // `removeOne`, which never re-evaluates the marker — a child that has gained
+    // a task can't abort a legitimate cascade partway through.
+    if ((params?.query as { _swapReplace?: boolean } | undefined)?._swapReplace) {
+      const taskCount = await this.taskRepo.countBySession(String(id));
+      if (taskCount > 0) {
+        throw new Conflict(
+          `Cannot complete tool switch: session ${id} has gained ${taskCount} task(s) since the switch ` +
+            'was initiated. Refresh and try again — the in-flight work has not been touched.'
+        );
+      }
+    }
+
     return this.removeOne(String(id), params, false);
   }
 
@@ -1137,6 +1202,13 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
     if (data.agentic_tool && !(await isTenantAgenticToolEnabled(data.agentic_tool, this.db))) {
       throw new BadRequest(`${data.agentic_tool} is disabled for this workspace`);
+    }
+    // `agentic_tool` is immutable once a session has tasks. Multi-session and
+    // array patches that touch it are already rejected above, so the single-id
+    // path is the only one that can reach the actual mutation — enforce the
+    // guard there, matching the exact target the patch will modify.
+    if (data.agentic_tool !== undefined && id !== null && !Array.isArray(id)) {
+      await this.assertAgenticToolMutable(String(id), data.agentic_tool);
     }
     if (id && !Array.isArray(id) && !params?._applyingAgenticToolPreset) {
       const current = await this.get(String(id), params);

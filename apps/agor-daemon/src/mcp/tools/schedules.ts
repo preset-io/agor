@@ -4,7 +4,11 @@
  * design doc.
  */
 
-import type { Schedule } from '@agor/core/types';
+import {
+  type Schedule,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
@@ -16,6 +20,7 @@ import {
 import {
   mcpLimit,
   mcpOptionalId,
+  mcpOptionalNonEmptyString,
   mcpOptionalNonNegativeInt,
   mcpOptionalString,
   mcpRequiredId,
@@ -29,6 +34,14 @@ const agenticToolConfigSchema = z
     agentic_tool: z
       .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
       .describe('Agent to spawn for runs of this schedule.'),
+    preset_id: mcpOptionalNonEmptyString(
+      'agentic_tool_config.preset_id',
+      'Concrete preset UUID. Reserved default references sent by older clients are also accepted.'
+    ),
+    configuration_reference: z
+      .enum([USER_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION])
+      .optional()
+      .describe('Symbolic user or workspace default to resolve each time the schedule runs.'),
     permission_mode: mcpOptionalString('permission_mode', "Permission mode (e.g., 'auto', 'ask')."),
     model_config: z
       .object({
@@ -48,6 +61,21 @@ const agenticToolConfigSchema = z
       .array(mcpRequiredString('context_files[]', 'Context file path'))
       .optional()
       .describe('Additional context files to load.'),
+  })
+  .superRefine((config, ctx) => {
+    const hasPreset = config.preset_id !== undefined;
+    const hasReference = config.configuration_reference !== undefined;
+    const hasInline =
+      config.permission_mode !== undefined ||
+      config.model_config !== undefined ||
+      config.context_files !== undefined;
+    if ((hasPreset && hasReference) || ((hasPreset || hasReference) && hasInline)) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'agentic_tool_config must use exactly one source: preset_id, configuration_reference, or inline fields.',
+      });
+    }
   })
   .describe(
     'Agentic-tool configuration. MCP capability selection is configured separately on the schedule.'
@@ -209,9 +237,17 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     async (args) => {
       const { scheduleId: rawId, ...updates } = args;
       const scheduleId = await resolveScheduleId(ctx, rawId);
+      const payload = {
+        ...updates,
+        ...(updates.agentic_tool_config
+          ? {
+              agentic_tool_config: updates.agentic_tool_config as Schedule['agentic_tool_config'],
+            }
+          : {}),
+      } as Partial<Schedule>;
       const updated = await ctx.app
         .service('schedules')
-        .patch(scheduleId, updates, ctx.baseServiceParams);
+        .patch(scheduleId, payload, ctx.baseServiceParams);
       return textResult(updated);
     }
   );

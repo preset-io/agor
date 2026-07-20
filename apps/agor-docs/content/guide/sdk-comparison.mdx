@@ -3,11 +3,15 @@ title: SDK Feature Comparison
 description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations including streaming, tool approval, and SDK differences.
 ---
 
+import { ScrollTable } from '../../components/ScrollTable';
+
 # SDK Feature Comparison
 
 Agor integrates with multiple AI coding agents. Each SDK has different capabilities based on their native features and API design.
 
 ## Feature Matrix
+
+<ScrollTable>
 
 | Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | OpenCode                  | Notes                                                                                       |
 | --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
@@ -22,6 +26,8 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history            |
 | **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ✅ Via step-finish        | OpenCode provides token counts and cost via `step-finish` message parts                     |
 | **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                                 |
+
+</ScrollTable>
 
 **Legend:**
 
