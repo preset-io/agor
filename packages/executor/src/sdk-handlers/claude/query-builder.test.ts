@@ -2,6 +2,9 @@ import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn().mockReturnValue('/usr/bin/claude\n'),
+}));
 vi.mock('@agor/core', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
   // shortId is used in log lines inside query-builder; passthrough mock.
