@@ -1506,6 +1506,13 @@ export function OnboardingWizard({
             const isVerified = llmAuthVerified[option.agent];
             const effectiveHasKey = hasKey && isVerified === true;
             const keyBroken = hasKey && isVerified === false;
+            // Codex "connected" may mean a subscription login (auth.json on
+            // the server), not a stored key — a failed probe then means the
+            // login file is gone, and API-key wording would mislead.
+            const subscriptionBroken =
+              keyBroken &&
+              option.agent === 'codex' &&
+              user?.agentic_auth_methods?.codex === 'subscription';
             const methodOptions = AUTH_METHOD_OPTIONS[option.agent];
             return (
               <div
@@ -1593,7 +1600,7 @@ export function OnboardingWizard({
                           color="error"
                           style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                         >
-                          Key not working
+                          {subscriptionBroken ? 'Login not found' : 'Key not working'}
                         </Tag>
                       )}
                     </div>
@@ -1675,7 +1682,11 @@ export function OnboardingWizard({
                     {keyBroken && (
                       <Alert
                         type="warning"
-                        message="Key stored but not working - enter a new one."
+                        message={
+                          subscriptionBroken
+                            ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
+                            : 'Key stored but not working - enter a new one.'
+                        }
                         showIcon
                         style={{ marginTop: 12, marginBottom: 8, fontSize: 12 }}
                       />

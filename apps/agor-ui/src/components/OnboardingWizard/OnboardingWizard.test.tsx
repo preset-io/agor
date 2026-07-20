@@ -595,6 +595,29 @@ describe('Codex ChatGPT login import', () => {
       screen.queryByText(/This file has no ChatGPT login tokens and no API key\./)
     ).not.toBeInTheDocument();
   });
+
+  it('describes a broken ChatGPT login in subscription terms, not API-key terms', async () => {
+    // Stored method is subscription but the server-side auth.json is gone
+    // (wipe / `codex logout`) — the probe reports unauthenticated.
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unauthenticated' as const,
+      authenticated: false,
+    }));
+    renderWizard({
+      initialStep: 'llm',
+      user: makeUser({ agentic_auth_methods: { codex: 'subscription' } } as never),
+      onCheckAuth,
+    });
+
+    expect(await screen.findByText('Login not found')).toBeInTheDocument();
+    expect(screen.queryByText('Key not working')).not.toBeInTheDocument();
+
+    clickButton('GPT');
+    expect(
+      await screen.findByText(/Codex login no longer found on this server/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Key stored but not working/)).not.toBeInTheDocument();
+  });
 });
 
 describe('Codex ChatGPT device sign-in', () => {
