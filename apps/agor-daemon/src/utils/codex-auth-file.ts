@@ -166,8 +166,11 @@ export function writeCodexAuthFile(content: string, asUser?: string | null): voi
     }
     // `set -eu` so any step failing aborts with a non-zero exit before the
     // rename can publish a bad file. mktemp creates the staging file 0600.
+    // The EXIT trap removes an orphaned staging file on any failure so
+    // aborted writes never accumulate token fragments; after a successful
+    // rename the path is gone and the trap's rm is a no-op.
     const script =
-      'set -eu; umask 077; mkdir -p "$HOME/.codex"; tmp="$(mktemp "$HOME/.codex/.auth.json.XXXXXX")"; cat > "$tmp"; chmod 600 "$tmp"; mv -f -- "$tmp" "$HOME/.codex/auth.json"';
+      'set -eu; umask 077; mkdir -p "$HOME/.codex"; tmp="$(mktemp "$HOME/.codex/.auth.json.XXXXXX")"; trap \'rm -f -- "$tmp"\' EXIT; cat > "$tmp"; chmod 600 "$tmp"; mv -f -- "$tmp" "$HOME/.codex/auth.json"';
     execFileSync('sudo', ['-n', '-u', asUser, 'bash', '-c', script], {
       input: content,
       stdio: ['pipe', 'ignore', 'pipe'],
