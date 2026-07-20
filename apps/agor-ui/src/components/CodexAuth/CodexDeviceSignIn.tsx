@@ -110,15 +110,18 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
 
   // On mount (and on client swap), adopt a still-live attempt (user toggled
   // away and back) instead of burning a fresh code; otherwise request one.
-  // The cancellation guard makes this StrictMode-safe — a superseded run
-  // never fires its requestCode/setStatus continuation.
+  // Continuations are guarded by both `cancelled` (StrictMode / normal cleanup)
+  // and the service ref: React runs the client-swap layout reset before this
+  // effect's cleanup, so a stale find() resolving in that window must not
+  // restore the previous client's code — matching requestCode's own guard.
   useEffect(() => {
     if (!deviceService) return;
     let cancelled = false;
+    const stillCurrent = () => !cancelled && latestServiceRef.current === deviceService;
     void (async () => {
       try {
         const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (cancelled) return;
+        if (!stillCurrent()) return;
         if (existing.phase === 'pending' || existing.phase === 'success') {
           setStatus(existing);
           return;
@@ -126,7 +129,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       } catch {
         // No adoptable attempt — fall through to a fresh request.
       }
-      if (!cancelled && autoStart) await requestCode();
+      if (stillCurrent() && autoStart) await requestCode();
     })();
     return () => {
       cancelled = true;
@@ -145,7 +148,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     const tick = async () => {
       try {
         const next = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (cancelled) return;
+        if (cancelled || latestServiceRef.current !== deviceService) return;
         setStatus((prev) =>
           prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
             ? prev

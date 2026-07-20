@@ -5,7 +5,7 @@ import type {
   AuthCheckResult,
 } from '@agor-live/client';
 import { Alert, Button, Segmented, Space, Typography, theme } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
 import { CodexImportAuthJson } from './CodexImportAuthJson';
@@ -79,6 +79,24 @@ export function CodexAuthSettings({
   // mid-recheck): only the latest request commits its verdict or clears the
   // spinner, so an older response can't land last and mislabel the banner.
   const probeGenRef = useRef(0);
+  // Bump the generation synchronously when the client changes (and on unmount),
+  // before any in-flight probe can resolve. Without this an old client's probe
+  // still owns the current generation in the window before the next probe
+  // starts — and if the replacement client is null, runProbe returns before
+  // incrementing, so the stale request would never be invalidated. Clear the
+  // prior verdict so one identity's status is never shown for another.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client is the change trigger; the body invalidates rather than reading it.
+  useLayoutEffect(() => {
+    probeGenRef.current++;
+    setProbe(null);
+    setProbing(false);
+  }, [client]);
+  useEffect(
+    () => () => {
+      probeGenRef.current++;
+    },
+    []
+  );
   const runProbe = useCallback(async () => {
     if (!client) return;
     const gen = ++probeGenRef.current;

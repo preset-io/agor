@@ -1,6 +1,6 @@
 import type { AgorClient, CodexAuthImportResult } from '@agor-live/client';
 import { Alert, Button, Input, Space, Typography, theme } from 'antd';
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -34,42 +34,54 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // A client/identity swap must never carry a pasted secret across it: drop the
-  // paste value (and any error) the instant the client changes, and track the
-  // live client so an in-flight import can't apply its result to a replacement.
-  const latestClientRef = useRef(client);
+  // A client/identity swap (or unmount) must never carry a pasted secret across
+  // it, nor let an import in flight against the old client apply to — or lock —
+  // the replacement. A generation bumped synchronously on client change (before
+  // the old request can resolve) invalidates any in-flight submit; the swap also
+  // drops the paste value and releases the submit lock so the new identity can
+  // import right away. The unmount bump prevents a settled request from calling
+  // setState after teardown.
+  const submitGenRef = useRef(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client is the change trigger; the body invalidates/clears rather than reading it.
   useLayoutEffect(() => {
-    latestClientRef.current = client;
+    submitGenRef.current++;
     setAuthJson('');
     setError(null);
+    setSubmitting(false);
   }, [client]);
+  useEffect(
+    () => () => {
+      submitGenRef.current++;
+    },
+    []
+  );
 
   const handleImport = useCallback(async () => {
-    const submittingClient = client;
-    if (!submittingClient || !authJson.trim() || submitting) return;
+    if (!client || !authJson.trim() || submitting) return;
+    const gen = ++submitGenRef.current;
     setSubmitting(true);
     setError(null);
     try {
-      const result = (await submittingClient
+      const result = (await client
         .service('codex-auth/import')
         .create({ authJson })) as CodexAuthImportResult;
-      // The client was swapped out mid-flight — this result belongs to the old
-      // identity; drop it rather than clearing the new client's pane or firing
-      // onImported as though it applied here.
-      if (latestClientRef.current !== submittingClient) return;
+      // Superseded by a client swap or unmount mid-flight — this result belongs
+      // to the old identity; drop it rather than clearing the replacement's pane
+      // or firing onImported as though it applied here.
+      if (submitGenRef.current !== gen) return;
       // Drop the pasted token material as soon as the daemon has it — nothing
       // here needs it after a successful import.
       setAuthJson('');
       onImported(result);
     } catch (err) {
-      if (latestClientRef.current !== submittingClient) return;
+      if (submitGenRef.current !== gen) return;
       setError(
         err instanceof Error && err.message
           ? err.message
           : 'Could not import the Codex login — try again.'
       );
     } finally {
-      if (latestClientRef.current === submittingClient) setSubmitting(false);
+      if (submitGenRef.current === gen) setSubmitting(false);
     }
   }, [authJson, client, onImported, submitting]);
 
