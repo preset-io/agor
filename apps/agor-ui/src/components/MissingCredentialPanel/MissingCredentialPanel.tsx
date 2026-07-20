@@ -22,6 +22,31 @@ const NATIVE_AUTH_HINT: Partial<Record<AgenticToolName, string>> = {
     'Already signed in with ChatGPT on this machine? Codex can use that instead of an API key.',
 };
 
+const pendingAuthChecks = new WeakMap<
+  AgorClient,
+  Map<AgenticToolName, Promise<AuthCheckResult | null>>
+>();
+
+function checkAuth(client: AgorClient, tool: AgenticToolName): Promise<AuthCheckResult | null> {
+  let checksByTool = pendingAuthChecks.get(client);
+  if (!checksByTool) {
+    checksByTool = new Map();
+    pendingAuthChecks.set(client, checksByTool);
+  }
+
+  const existing = checksByTool.get(tool);
+  if (existing) return existing;
+
+  const request = Promise.resolve(client.service('check-auth').create({ tool }))
+    .then((result) => result as AuthCheckResult)
+    .catch(() => null);
+  checksByTool.set(tool, request);
+  void request.finally(() => {
+    if (checksByTool?.get(tool) === request) checksByTool.delete(tool);
+  });
+  return request;
+}
+
 export interface MissingCredentialPanelProps {
   tool: AgenticToolName;
   client?: AgorClient | null;
@@ -46,14 +71,9 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
       return;
     }
     setChecking(true);
-    client
-      .service('check-auth')
-      .create({ tool })
+    checkAuth(client, tool)
       .then((result) => {
-        if (!cancelled) setAuthResult(result as AuthCheckResult);
-      })
-      .catch(() => {
-        if (!cancelled) setAuthResult(null);
+        if (!cancelled) setAuthResult(result);
       })
       .finally(() => {
         if (!cancelled) setChecking(false);
@@ -85,7 +105,7 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
   }
 
   // Current viewer already has a working credential — no CTA needed.
-  if (authResult?.authenticated) {
+  if (authResult?.status === 'authenticated') {
     return (
       <SystemMessage
         content={
@@ -95,6 +115,28 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
               This run needed a connected {displayName} account. Your account is already connected —
               sending a new message should work.
             </Text>
+          </Space>
+        }
+      />
+    );
+  }
+
+  if (authResult?.status !== 'unauthenticated') {
+    return (
+      <SystemMessage
+        content={
+          <Space orientation="vertical" size="small">
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              Agor couldn't verify your {displayName} connection. Try sending a new message. If it
+              still fails, check the connection in Settings.
+            </Text>
+            <Button
+              size="small"
+              onClick={() => onOpenAgenticToolSettings?.(tool)}
+              disabled={!onOpenAgenticToolSettings}
+            >
+              Check {displayName} settings
+            </Button>
           </Space>
         }
       />

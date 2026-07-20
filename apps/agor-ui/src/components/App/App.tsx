@@ -1860,6 +1860,7 @@ export const App: React.FC<AppProps> = ({
           onUpdate={onUpdateUser}
           onRestartOnboarding={async () => {
             setUserSettingsOpen(false);
+            setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
             await onRestartOnboarding?.();
           }}

@@ -797,17 +797,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
-        // Detect "no credential resolved for this session's provider" task
-        // failures structurally (reusing resolveApiKey's resolution order),
-        // never by matching the raw stderr-passthrough error text. Drives
-        // the Connect-AI empty state instead of a raw "/login" message.
+        // Detect "no credential resolved for this session's provider"
+        // structurally, never by matching raw provider error text. Drives the
+        // Connect-AI empty state instead of a raw "/login" message.
         classifyMissingCredentialFailure(
           db,
           taskRepository,
           sessionsRepository,
-          AGENTIC_TOOL_DISPLAY_NAMES,
-          // Lazy dynamic import keeps the Claude SDK out of this module's static graph.
-          (tool) => import('./services/native-auth-probe.js').then((m) => m.checkNativeAuth(tool))
+          AGENTIC_TOOL_DISPLAY_NAMES
         ),
       ],
       patch: [

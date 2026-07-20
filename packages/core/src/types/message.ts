@@ -283,6 +283,9 @@ export interface Message {
      * `classifyMissingCredentialFailure` can find it without type/role guessing. */
     is_task_failure?: boolean;
 
+    /** Set only when the executor's scoped credential preflight fails. */
+    is_missing_credential_failure?: boolean;
+
     /** Marks the synthesized message from a zero-turn success (no real model call). */
     is_zero_turn_result?: boolean;
 

@@ -43,6 +43,11 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   return null;
 }
 
+/** Whether this request carries a validated executor-session scope. */
+export function hasExecutorRuntimeScope(context: HookContext): boolean {
+  return scopedPayload(context) !== null;
+}
+
 function expectClaim(claim: string | undefined, label: string): string {
   if (!claim) {
     throw new Forbidden(`Executor token is missing ${label} scope`);
