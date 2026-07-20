@@ -1,5 +1,6 @@
 import { ExperimentOutlined } from '@ant-design/icons';
 import { Card, Flex, Space, Tooltip, Typography, theme } from 'antd';
+import { useState } from 'react';
 import type { AgenticToolOption } from '../../types';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
@@ -23,6 +24,9 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
   size = 'default',
 }) => {
   const { token } = theme.useToken();
+  // While the beta icon (which has its own tooltip) is hovered, force the
+  // card-level description tooltip closed so the two don't stack.
+  const [betaHovered, setBetaHovered] = useState(false);
 
   const cardStyle: React.CSSProperties = {
     borderColor: selected ? token.colorPrimary : undefined,
@@ -32,7 +36,7 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
 
   if (size === 'small') {
     return (
-      <Tooltip title={agent.description}>
+      <Tooltip title={agent.description} open={betaHovered ? false : undefined}>
         <Card
           hoverable
           onClick={onClick}
@@ -51,12 +55,21 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
               {agent.name}
             </Typography.Text>
             {agent.beta && (
-              <Tooltip title="In beta — this agent integration is still stabilizing">
-                <ExperimentOutlined
-                  aria-label="Beta"
-                  style={{ color: token.colorWarning, fontSize: token.fontSizeSM }}
-                />
-              </Tooltip>
+              // Hovering the beta icon suppresses the card's general tooltip so
+              // the two don't render stacked. Handlers live on this outer span
+              // (not the Tooltip child) so antd's trigger cloning can't drop them.
+              <span
+                onMouseEnter={() => setBetaHovered(true)}
+                onMouseLeave={() => setBetaHovered(false)}
+                style={{ display: 'inline-flex' }}
+              >
+                <Tooltip title="In beta — this agent integration is still stabilizing">
+                  <ExperimentOutlined
+                    aria-label="Beta"
+                    style={{ color: token.colorWarning, fontSize: token.fontSizeSM }}
+                  />
+                </Tooltip>
+              </span>
             )}
           </Flex>
         </Card>

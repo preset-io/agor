@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from './AgentSelectionCard';
@@ -29,5 +29,22 @@ describe('AgentSelectionCard beta badge', () => {
   it('default variant keeps the "BETA" text tag (unchanged)', () => {
     render(<AgentSelectionCard agent={betaAgent} />);
     expect(screen.getByText('BETA')).toBeInTheDocument();
+  });
+
+  it('suppresses the card tooltip while the beta icon is hovered', {
+    timeout: 10_000,
+  }, async () => {
+    render(<AgentSelectionCard agent={betaAgent} size="small" />);
+    const card = screen.getByText('OpenCode').closest('.ant-card') as HTMLElement;
+
+    // Hovering the tile body shows the general description tooltip.
+    fireEvent.mouseEnter(card);
+    expect(await screen.findByText('Open-source terminal AI')).toBeInTheDocument();
+
+    // Hovering the beta icon suppresses the general tooltip (no stacking): the
+    // card tooltip is driven to open=false, so antd marks it hidden.
+    const generalTip = screen.getByText('Open-source terminal AI').closest('.ant-tooltip');
+    fireEvent.mouseEnter(screen.getByLabelText('Beta').parentElement as HTMLElement);
+    await waitFor(() => expect(generalTip).toHaveClass('ant-tooltip-hidden'));
   });
 });
