@@ -1298,11 +1298,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       termination: action === 'enforced' ? 'requested' : 'not_requested',
     };
     if (action === 'would_fire') {
-      return (await this.patch(
-        data.task_id,
-        { sdk_failure: failure },
-        { ...params, provider: undefined }
-      )) as Task;
+      const observed = await this.taskRepo.recordSdkHealthObservation(data.task_id, failure);
+      if (!observed) throw new Conflict(`Task ${shortId(data.task_id)} is no longer active`);
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: observed,
+        id: observed.task_id,
+        params,
+      });
+      return observed;
     }
 
     return beginExecutorTermination({

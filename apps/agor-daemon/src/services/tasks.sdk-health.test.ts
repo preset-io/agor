@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { type SdkFailure, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const beginExecutorTermination = vi.hoisted(() => vi.fn());
@@ -15,18 +15,24 @@ const task = {
   sdk_watchdog_mode: 'observe' as const,
 };
 
-function serviceFor(current = task) {
+function serviceFor(current = task, observationAccepted = true) {
   const service = Object.create(TasksService.prototype) as TasksService & {
     app: unknown;
     get: ReturnType<typeof vi.fn>;
-    patch: ReturnType<typeof vi.fn>;
   };
   service.get = vi.fn().mockResolvedValue(current);
-  service.patch = vi.fn(async (_id, patch) => ({ ...current, ...patch }));
+  Object.defineProperty(service, 'taskRepo', {
+    value: {
+      recordSdkHealthObservation: vi.fn(async (_id: string, failure: SdkFailure) =>
+        observationAccepted ? { ...current, sdk_failure: failure } : null
+      ),
+    },
+  });
   service.app = {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
       if (name === 'sessions') return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
+      if (name === 'tasks') return { emit: vi.fn() };
       throw new Error(`unexpected service ${name}`);
     },
   };
@@ -54,6 +60,17 @@ describe('TasksService SDK health reports', () => {
         termination: 'not_requested',
       },
     });
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
+  });
+
+  it('does not attach observe-only evidence after normal completion wins', async () => {
+    await expect(
+      serviceFor(task, false).reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'no_first_progress',
+        watchdog_action: 'would_fire',
+      })
+    ).rejects.toThrow('no longer active');
     expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
 

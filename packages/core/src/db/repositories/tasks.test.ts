@@ -932,6 +932,38 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
   });
 });
 
+describe('TaskRepository.recordSdkHealthObservation', () => {
+  dbTest('serializes observe-only evidence with normal completion', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-01-01T00:00:01.000Z',
+      })
+    );
+    const failure = {
+      reason: 'no_first_progress' as const,
+      detected_at: '2026-01-01T00:03:01.000Z',
+      tool: 'codex' as const,
+      watchdog_action: 'would_fire' as const,
+      termination: 'not_requested' as const,
+    };
+
+    const [, observed] = await Promise.all([
+      taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED }),
+      taskRepo.recordSdkHealthObservation(task.task_id, failure),
+    ]);
+    const completed = await taskRepo.findById(task.task_id);
+
+    expect(completed).toMatchObject({ status: TaskStatus.COMPLETED });
+    expect(completed?.sdk_failure).toEqual(observed?.sdk_failure);
+    expect(await taskRepo.recordSdkHealthObservation(task.task_id, failure)).toBeNull();
+    expect((await taskRepo.findById(task.task_id))?.sdk_failure).toEqual(completed?.sdk_failure);
+  });
+});
+
 // ============================================================================
 // Update
 // ============================================================================

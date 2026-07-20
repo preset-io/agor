@@ -39,6 +39,15 @@ import {
 import { visibleSessionReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 
+function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
+  return (
+    !!row.executor_connected_at &&
+    (row.status === TaskStatus.RUNNING ||
+      row.status === TaskStatus.AWAITING_PERMISSION ||
+      row.status === TaskStatus.AWAITING_INPUT)
+  );
+}
+
 function isSQLiteBusyError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error.message.includes('SQLITE_BUSY') || error.message.includes('database is locked')) {
@@ -536,14 +545,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     observedAt = new Date()
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
-      if (
-        !row.executor_connected_at ||
-        (row.status !== TaskStatus.RUNNING &&
-          row.status !== TaskStatus.AWAITING_PERMISSION &&
-          row.status !== TaskStatus.AWAITING_INPUT)
-      ) {
-        return null;
-      }
+      if (!executorOwnsTask(row)) return null;
 
       const previous = row.data.latest_executor_pulse;
       const latest =
@@ -556,6 +558,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .where(eq(tasks.task_id, fullId))
         .run();
       return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+    });
+  }
+
+  /** Record observe-only SDK health evidence only while the executor still owns the task. */
+  async recordSdkHealthObservation(id: string, failure: SdkFailure): Promise<Task | null> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (!executorOwnsTask(row)) return null;
+
+      const data = { ...row.data, sdk_failure: failure };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
     });
   }
 

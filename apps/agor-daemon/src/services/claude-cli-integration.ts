@@ -676,8 +676,8 @@ export function setPendingCliTask(
  *     task with status=RUNNING (terminal-direct path). Stamp every subsequent
  *     message for this session with that task_id.
  *   - On `assistant_message` / `tool_result`: tag with the active task_id.
- *   - On `turn_end` (assistant `stop_reason === 'end_turn'`): patch the task
- *     to COMPLETED + final `message_range`, patch the session back to IDLE.
+ *   - On `turn_end` (assistant `stop_reason === 'end_turn'`): close the task
+ *     through TasksService, which owns the resulting session projection.
  *
  * Index allocation: per-session in-memory counter primed from `countMessages`
  * on first use. Cross-restart correctness comes from the persisted
@@ -1007,14 +1007,6 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         }
         const tasks = app.service('tasks') as unknown as TasksServiceImpl;
         const currentTask = await tasks.get(active.taskId, { provider: undefined });
-        const stoppingForUser =
-          currentTask.status === TaskStatus.STOPPING &&
-          currentTask.termination_request?.cause === 'user_stop';
-        activeCliTurn.delete(sessionId);
-        // Clear the persisted snapshot so a daemon restart after this
-        // point doesn't try to rehydrate a turn that has already closed.
-        void clearActiveTurnSnapshot(app, sessionId as SessionID);
-        stopTaskWatchdog(sessionId);
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
         const endedAtMs = Date.parse(ts) || Date.now();
         const durationMs = Math.max(0, endedAtMs - active.startedAtMs);
@@ -1122,10 +1114,9 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             (lastTurn.usage.cache_read_input_tokens ?? 0)
           : undefined;
 
-        // Persist the full message range and analytics before terminality.
-        // A user-stopped CLI turn is settled through the same row-locked
-        // termination boundary as executor-backed work; normal turns complete
-        // through the existing task patch path.
+        // Normal completion and Stop race at the row-locked task boundary.
+        // If Stop wins, retain the turn result and settle its durable request;
+        // never release the session from a pre-transition read.
         try {
           const taskResult = {
             message_range: {
@@ -1143,7 +1134,13 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             normalized_sdk_response: normalizedSdkResponse,
             computed_context_window: computedContextWindow,
           };
-          if (stoppingForUser) {
+          try {
+            await tasks.patch(
+              active.taskId,
+              { ...taskResult, status: TaskStatus.COMPLETED, completed_at: ts },
+              { provider: undefined }
+            );
+          } catch (completionError) {
             await tasks.patch(active.taskId, taskResult, { provider: undefined });
             const stopRouteWaiting = cliStopWaiters.has(sessionId as SessionID);
             const settlement = await tasks.settleTermination(
@@ -1153,13 +1150,10 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
                 suppressTerminalQueueProcessing: stopRouteWaiting,
               } as Params
             );
+            if (settlement.outcome === 'condition_changed' || settlement.outcome === 'unverified') {
+              throw completionError;
+            }
             resolveCliStopWaiter(sessionId as SessionID, settlement.task);
-          } else {
-            await tasks.patch(
-              active.taskId,
-              { ...taskResult, status: TaskStatus.COMPLETED, completed_at: ts },
-              { provider: undefined }
-            );
           }
         } catch (err) {
           console.warn('[claude-cli-watcher.sink] task close failed', {
@@ -1167,25 +1161,30 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             taskId: active.taskId,
             err: err instanceof Error ? err.message : String(err),
           });
+          throw err;
         }
+        activeCliTurn.delete(sessionId);
+        // Clear recovery state only after terminality is durable. If closing
+        // failed, the watcher retries this same turn_end with the turn intact.
+        void clearActiveTurnSnapshot(app, sessionId as SessionID);
+        stopTaskWatchdog(sessionId);
         // Mirror the latest context-usage snapshot up onto the session
         // row so the branch pill's "X% of context" pill shows the
         // right number across reload boundaries.
-        try {
-          const patch: Partial<Session> = stoppingForUser
-            ? {}
-            : { status: SessionStatus.IDLE, ready_for_prompt: true };
-          if (computedContextWindow !== undefined) {
-            patch.current_context_usage = computedContextWindow;
-            patch.context_window_limit = normalizedSdkResponse.contextWindowLimit;
-            patch.last_context_update_at = ts;
+        if (computedContextWindow !== undefined) {
+          try {
+            const patch: Partial<Session> = {
+              current_context_usage: computedContextWindow,
+              context_window_limit: normalizedSdkResponse.contextWindowLimit,
+              last_context_update_at: ts,
+            };
+            await app.service('sessions').patch(sessionId, patch);
+          } catch (err) {
+            console.warn('[claude-cli-watcher.sink] session context patch failed', {
+              sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
           }
-          await app.service('sessions').patch(sessionId, patch);
-        } catch (err) {
-          console.warn('[claude-cli-watcher.sink] session IDLE patch failed', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
         }
         return;
       }
