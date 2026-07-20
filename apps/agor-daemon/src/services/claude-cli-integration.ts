@@ -1166,7 +1166,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         activeCliTurn.delete(sessionId);
         // Clear recovery state only after terminality is durable. If closing
         // failed, the watcher retries this same turn_end with the turn intact.
-        void clearActiveTurnSnapshot(app, sessionId as SessionID);
+        await clearActiveTurnSnapshot(app, sessionId as SessionID);
         stopTaskWatchdog(sessionId);
         // Mirror the latest context-usage snapshot up onto the session
         // row so the branch pill's "X% of context" pill shows the

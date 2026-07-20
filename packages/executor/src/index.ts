@@ -292,9 +292,8 @@ export class AgorExecutor {
       this.watchdog?.stop();
       this.watchdog = null;
 
-      // The daemon's stop route already patches the task to STOPPED before
-      // sending the signal — this fallback only fires if we received an
-      // out-of-band signal and the task is still active.
+      // The daemon's termination coordinator owns STOPPING → terminal. This
+      // fallback only fires for an out-of-band signal while the task is active.
       await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
 
       process.exit(0);

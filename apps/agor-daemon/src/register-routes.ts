@@ -1335,7 +1335,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${shortId(taskId)}, ${promptForExecutor.length} chars)`
           );
           // Task lifecycle is now owned by the watcher's sink: it closes
-          // the task and patches the session back to IDLE on `turn_end`.
+          // the task through TasksService on `turn_end`.
           // We deliberately do NOT pre-complete here.
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
