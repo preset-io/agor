@@ -45,13 +45,14 @@ const checks = [
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
-      'apps/agor-daemon/src/services/claude-cli-integration.ts': 2,
+      // Claude CLI launch and Stop target only the owning user's terminal room.
+      'apps/agor-daemon/src/services/claude-cli-integration.ts': 4,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream join, the existence-gated room lookup
       // (existingChannel — used by publish + leave paths so they never
       // materialize a room), and leave-all all live here on purpose.
       'apps/agor-daemon/src/utils/realtime-publish.ts': 7,
-      'apps/agor-daemon/src/setup/socketio.ts': 18,
+      'apps/agor-daemon/src/setup/socketio.ts': 17,
     },
   },
 
@@ -138,7 +139,7 @@ const checks = [
     baseline: {
       'packages/core/src/db/database-wrapper.ts': 1,
       'packages/core/src/db/tenant-scope.ts': 1,
-      'packages/core/src/db/repositories/tasks.ts': 2,
+      'packages/core/src/db/repositories/tasks.ts': 1,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,
