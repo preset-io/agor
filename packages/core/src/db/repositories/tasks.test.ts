@@ -706,6 +706,24 @@ describe('TaskRepository.findByStatus', () => {
 // Executor connection
 // ============================================================================
 
+const startupWarning = 'Remote executor is still starting.';
+
+async function createExecutorDispatch(
+  db: Database,
+  executorMode: 'local' | 'templated' = 'templated'
+) {
+  const taskRepo = new TaskRepository(db);
+  const sessionId = await createSessionWithDeps(db);
+  const task = await taskRepo.create(
+    createTaskData({
+      session_id: sessionId,
+      status: TaskStatus.DISPATCHING,
+      executor_mode: executorMode,
+    })
+  );
+  return { taskRepo, task };
+}
+
 describe('TaskRepository.connectExecutor', () => {
   dbTest(
     'atomically transitions dispatching to running with a server timestamp',
@@ -767,6 +785,51 @@ describe('TaskRepository.connectExecutor', () => {
     expect(claims.map((claim) => claim?.transitioned).sort()).toEqual([false, true]);
     expect(new Set(claims.map((claim) => claim?.task.executor_connected_at)).size).toBe(1);
     expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.RUNNING);
+  });
+
+  dbTest('clears a templated startup warning when the executor connects', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toMatchObject(
+      { error_message: startupWarning }
+    );
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+
+    const connection = await taskRepo.connectExecutor(task.task_id);
+    expect(connection).toMatchObject({
+      transitioned: true,
+      task: { status: TaskStatus.RUNNING },
+    });
+    expect(connection?.task.error_message).toBeUndefined();
+  });
+
+  dbTest('rejects a stale startup warning after connection wins', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    await taskRepo.connectExecutor(task.task_id);
+
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+    const connected = await taskRepo.findById(task.task_id);
+    expect(connected?.status).toBe(TaskStatus.RUNNING);
+    expect(connected?.error_message).toBeUndefined();
+  });
+
+  dbTest('serializes a concurrent startup warning and connection', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    await Promise.all([
+      taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning),
+      taskRepo.connectExecutor(task.task_id),
+    ]);
+
+    const connected = await taskRepo.findById(task.task_id);
+    expect(connected?.status).toBe(TaskStatus.RUNNING);
+    expect(connected?.error_message).toBeUndefined();
+  });
+
+  dbTest('rejects startup warnings for local executors', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db, 'local');
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
   });
 
   dbTest('does not accept a timestamp-less running row as a prior claim', async ({ db }) => {

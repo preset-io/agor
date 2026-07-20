@@ -484,8 +484,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         if (row.status !== TaskStatus.DISPATCHING) return null;
 
         const connectedAt = new Date();
+        // Successful connection resolves any nonterminal startup diagnostic.
+        const data = { ...row.data };
+        delete data.error_message;
         await update(txDb, tasks)
-          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
+          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt, data })
           .where(eq(tasks.task_id, fullId))
           .run();
 
@@ -494,6 +497,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             ...row,
             status: TaskStatus.RUNNING,
             executor_connected_at: connectedAt,
+            data,
           }),
           transitioned: true,
         };
@@ -505,6 +509,24 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /** Record a nonterminal warning only while a templated executor is still pending. */
+  async recordExecutorStartupWarning(id: string, warning: string): Promise<Task | null> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (
+        row.status !== TaskStatus.DISPATCHING ||
+        row.executor_connected_at ||
+        row.data.executor_mode !== 'templated'
+      ) {
+        return null;
+      }
+      if (row.data.error_message === warning) return null;
+
+      const data = { ...row.data, error_message: warning };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
   }
 
   /** Atomically stamp heartbeat time and advance the latest pulse fact. */

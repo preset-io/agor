@@ -41,6 +41,27 @@ describe('TasksService executor connection', () => {
     );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
+
+  it('publishes a startup warning only when the repository changes it', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      status: TaskStatus.DISPATCHING,
+      error_message: 'still waiting',
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const emit = vi.fn();
+    const recordExecutorStartupWarning = vi
+      .fn()
+      .mockResolvedValueOnce(task)
+      .mockResolvedValueOnce(null);
+    Reflect.set(service, 'taskRepo', { recordExecutorStartupWarning });
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
+
+    await service.recordExecutorStartupWarning(task.task_id, task.error_message!);
+    await service.recordExecutorStartupWarning(task.task_id, task.error_message!);
+
+    expect(emit).toHaveBeenCalledOnce();
+  });
 });
 
 describe('TasksService runtime telemetry', () => {

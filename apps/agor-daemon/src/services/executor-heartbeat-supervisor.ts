@@ -59,11 +59,9 @@ export class ExecutorHeartbeatSupervisor {
         if (task.executor_mode === 'templated') {
           const warning =
             'Remote executor has not connected within the configured startup window; still waiting.';
-          if (task.error_message !== warning) {
-            await this.options.app
-              .service('tasks')
-              .patch(task.task_id, { error_message: warning }, { provider: undefined });
-          }
+          await tasksService.recordExecutorStartupWarning(task.task_id, warning, {
+            provider: undefined,
+          });
           continue;
         }
         const session = await this.options.app.service('sessions').get(task.session_id);

@@ -51,6 +51,7 @@ import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
   SessionsServiceImpl,
+  TasksServiceImpl,
 } from './declarations.js';
 import {
   getTrackedExecutor,
@@ -1021,11 +1022,11 @@ function createExecuteHandler(
           });
           if (disposition !== 'authoritative') {
             if (disposition === 'ambiguous') {
-              await app.service('tasks').patch(
+              await (
+                app.service('tasks') as unknown as TasksServiceImpl
+              ).recordExecutorStartupWarning(
                 taskId,
-                {
-                  error_message: `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
-                },
+                `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
                 { ...params, provider: undefined }
               );
             }

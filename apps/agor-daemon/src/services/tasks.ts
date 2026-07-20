@@ -1184,6 +1184,24 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return connection.task;
   }
 
+  async recordExecutorStartupWarning(
+    taskId: string,
+    warning: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.recordExecutorStartupWarning(taskId, warning);
+    if (task) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    }
+    return task;
+  }
+
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;

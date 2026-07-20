@@ -23,14 +23,14 @@ function supervisorFor(input: {
   orphaned?: unknown[];
   dispatchConnectTimeoutMs?: number;
 }) {
-  const patch = vi.fn().mockResolvedValue(input.orphaned?.[0]);
+  const recordExecutorStartupWarning = vi.fn().mockResolvedValue(input.orphaned?.[0]);
   const app = {
     service: (name: string) => {
       if (name === 'tasks') {
         return {
           getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue(input.active ?? []),
           getOrphaned: vi.fn().mockResolvedValue(input.orphaned ?? []),
-          patch,
+          recordExecutorStartupWarning,
         };
       }
       if (name === 'sessions') {
@@ -40,7 +40,7 @@ function supervisorFor(input: {
     },
   } as any;
   return {
-    patch,
+    recordExecutorStartupWarning,
     supervisor: new ExecutorHeartbeatSupervisor({
       app,
       config,
@@ -121,16 +121,16 @@ describe('ExecutorHeartbeatSupervisor', () => {
       executor_mode: 'templated',
       created_at: '2026-01-01T00:00:00.000Z',
     };
-    const { supervisor, patch } = supervisorFor({
+    const { supervisor, recordExecutorStartupWarning } = supervisorFor({
       orphaned: [task],
       dispatchConnectTimeoutMs: 3000,
     });
 
     await supervisor.checkOnce();
 
-    expect(patch).toHaveBeenCalledWith(
+    expect(recordExecutorStartupWarning).toHaveBeenCalledWith(
       task.task_id,
-      expect.objectContaining({ error_message: expect.stringContaining('still waiting') }),
+      expect.stringContaining('still waiting'),
       { provider: undefined }
     );
     expect(requestExecutorTermination).not.toHaveBeenCalled();
