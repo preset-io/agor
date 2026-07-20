@@ -30,12 +30,14 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       touchDb();
       return fixtures.orphanedTasks ?? [];
     }),
-    find: vi.fn(async (params: { query?: { status?: string } }) => {
+    find: vi.fn(async (params: { query?: { status?: string; $skip?: number } }) => {
       touchDb();
       if (params?.query?.status === TaskStatus.QUEUED) {
-        return { data: fixtures.queuedTasks ?? [] };
+        const matches = fixtures.queuedTasks ?? [];
+        const skip = params.query.$skip ?? 0;
+        return { data: matches.slice(skip, skip + 1000), total: matches.length };
       }
-      return { data: [] };
+      return { data: [], total: 0 };
     }),
     get: vi.fn(async (id: string) => {
       touchDb();
@@ -49,16 +51,22 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     settleTermination: vi.fn(),
   };
   const sessionsService = {
-    find: vi.fn(async (params: { query?: { status?: string; ready_for_prompt?: boolean } }) => {
-      touchDb();
-      if (
-        params?.query?.status === SessionStatus.IDLE &&
-        params?.query?.ready_for_prompt === false
-      ) {
-        return { data: fixtures.idleNotReadySessions ?? [] };
+    find: vi.fn(
+      async (params: {
+        query?: { status?: string; ready_for_prompt?: boolean; $skip?: number };
+      }) => {
+        touchDb();
+        if (
+          params?.query?.status === SessionStatus.IDLE &&
+          params?.query?.ready_for_prompt === false
+        ) {
+          const matches = fixtures.idleNotReadySessions ?? [];
+          const skip = params.query.$skip ?? 0;
+          return { data: matches.slice(skip, skip + 1000), total: matches.length };
+        }
+        return { data: [], total: 0 };
       }
-      return { data: [] };
-    }),
+    ),
     get: vi.fn(async (id: string) => {
       touchDb();
       const session = fixtures.sessionsById?.[id];
@@ -162,6 +170,20 @@ describe('startup tenant database scope', () => {
       MissingTenantDatabaseScopeError
     );
     expect(baseDb.marker).not.toHaveBeenCalled();
+  });
+
+  it('cleans every queued task when recovery spans multiple pages', async () => {
+    const queuedTasks = Array.from({ length: 1001 }, (_, index) =>
+      makeTask({ task_id: `queued-${index}`, status: TaskStatus.QUEUED })
+    );
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({ queuedTasks });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(tasksService.patch).toHaveBeenCalledTimes(queuedTasks.length);
+    expect(tasksService.find).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ $skip: 1000 }) })
+    );
   });
 });
 

@@ -145,6 +145,19 @@ interface OrphanCleanupResult {
   sessionsResetFromOrphanedTasks: number;
 }
 
+async function collectAllPages<T>(
+  fetchPage: (skip: number) => Promise<T[] | Paginated<T>>
+): Promise<T[]> {
+  const rows: T[] = [];
+  while (true) {
+    const result = await fetchPage(rows.length);
+    const page = Array.isArray(result) ? result : result.data;
+    rows.push(...page);
+    const total = Array.isArray(result) ? rows.length : result.total;
+    if (page.length === 0 || rows.length >= total) return rows;
+  }
+}
+
 export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
   return runStartupTenantDatabaseScope(ctx, () => cleanupOrphanStatusesInTenantScope(ctx));
 }
@@ -199,11 +212,13 @@ async function cleanupOrphanStatusesInTenantScope(
   // which invalidates the ordering premise of anything waiting behind them — a queued prompt
   // typically depends on whatever was running first. Wiping here prevents the session after-patch
   // hook (triggered below) from draining queued tasks that should be discarded.
-  const queuedResult = (await tasksService.find({
-    query: { status: TaskStatus.QUEUED, $limit: 1000 },
-    ...startupParams,
-  })) as unknown as Paginated<Task>;
-  const queuedTasks = queuedResult.data;
+  const queuedTasks = await collectAllPages<Task>(
+    (skip) =>
+      tasksService.find({
+        query: { status: TaskStatus.QUEUED, $limit: 1000, $skip: skip },
+        ...startupParams,
+      }) as Promise<Task[] | Paginated<Task>>
+  );
 
   if (queuedTasks.length > 0) {
     for (const task of queuedTasks) {
@@ -226,11 +241,15 @@ async function cleanupOrphanStatusesInTenantScope(
     SessionStatus.AWAITING_INPUT,
     SessionStatus.TIMED_OUT,
   ]) {
-    const result = (await sessionsService.find({
-      query: { status, $limit: 1000 },
-      ...startupParams,
-    })) as unknown as Paginated<Session>;
-    orphanedSessions.push(...result.data);
+    orphanedSessions.push(
+      ...(await collectAllPages<Session>(
+        (skip) =>
+          sessionsService.find({
+            query: { status, $limit: 1000, $skip: skip },
+            ...startupParams,
+          }) as Promise<Session[] | Paginated<Session>>
+      ))
+    );
   }
 
   if (orphanedSessions.length > 0) {
@@ -299,13 +318,16 @@ async function cleanupOrphanStatusesInTenantScope(
     ...queuedTasks.map((t: Task) => t.task_id as string),
   ]);
 
-  const idleNotReadyResult = (await sessionsService.find({
-    query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000 },
-    ...startupParams,
-  })) as unknown as Paginated<Session>;
+  const idleNotReadySessions = await collectAllPages<Session>(
+    (skip) =>
+      sessionsService.find({
+        query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000, $skip: skip },
+        ...startupParams,
+      }) as Promise<Session[] | Paginated<Session>>
+  );
 
   const stuckIdleSessions: Session[] = [];
-  for (const session of idleNotReadyResult.data) {
+  for (const session of idleNotReadySessions) {
     // Sessions maintain an ordered task-ID list; the last entry is the most
     // recent task (same convention as injectRestartNotices below).
     const latestTaskId = session.tasks?.at(-1);

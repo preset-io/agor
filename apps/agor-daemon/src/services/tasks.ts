@@ -506,33 +506,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         return false;
       }
 
-      // Keep the terminal status/ready update a pure prompt-flow patch
-      // with the caller's original params. Folding a server-generated
-      // `title` in here would make it a mixed metadata patch, which the
-      // sessions RBAC hook gates behind `all` permission — a non-owner
-      // collaborator's first completed task would then fail the whole
-      // patch and leave the session stuck running/not-ready. The title is
-      // written separately below and is allowed to fail independently.
       await this.projectTerminalSession(task, status, params);
       console.log(
         `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
       );
 
-      // Auto-title: cheap heuristic, no LLM call — see
-      // `deriveTitleFromPrompt`. Fires on any completed task while the
-      // session still has no title, not just the first one, so a session
-      // whose first prompt was image-only/whitespace (empty derived
-      // title, skipped) or whose first task failed still picks one up on
-      // a later task.
-      //
-      // "Unset" is canonically null/undefined: an explicitly cleared
-      // title (empty string) is a deliberate user choice and must NOT be
-      // re-armed. The session is re-read immediately before the write and
-      // the title is only set if it is *still* unset, so a rename typed
-      // while this task ran is never clobbered (compare-and-set at the app
-      // layer; full row-locked atomicity is a follow-up). The write is a
-      // trusted system patch (no `provider`) so it bypasses the
-      // collaborator-metadata RBAC gate the status patch above avoids.
+      // Keep the prompt-flow patch above separate from this trusted metadata
+      // patch so collaborators do not need title-edit permission to complete a task.
       if (status === TaskStatus.COMPLETED && task.full_prompt) {
         const autoTitle = deriveTitleFromPrompt(task.full_prompt);
         if (autoTitle) {
@@ -541,16 +521,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             if (fresh.title == null) {
               await this.app
                 .service('sessions')
-                .patch(
-                  task.session_id,
-                  { title: autoTitle },
-                  { ...params, provider: undefined }
-                );
+                .patch(task.session_id, { title: autoTitle }, { ...params, provider: undefined });
             }
-          } catch (titleError) {
-            const message = titleError instanceof Error ? titleError.message : String(titleError);
+          } catch (error) {
             console.warn(
-              `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
+              `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}:`,
+              error instanceof Error ? error.message : String(error)
             );
           }
         }

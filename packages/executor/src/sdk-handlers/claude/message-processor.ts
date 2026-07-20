@@ -197,7 +197,7 @@ interface ProcessorState {
   resolvedModel?: string;
   enableTokenStreaming: boolean;
   minChunkSize: number;
-  // Track current content blocks for tool_complete events
+  // Track current content blocks for streaming lifecycle events
   contentBlockStack: Array<{
     index: number;
     type: 'text' | 'thinking';
@@ -526,13 +526,7 @@ export class SDKMessageProcessor {
       // Find the block that just completed
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
-      if (completedBlock?.type === 'tool_use') {
-        events.push({
-          type: 'tool_complete',
-          toolUseId: completedBlock.toolUseId!,
-          agentSessionId: this.state.capturedAgentSessionId,
-        });
-      } else if (completedBlock?.type === 'thinking') {
+      if (completedBlock?.type === 'thinking') {
         events.push({
           type: 'thinking_complete',
           agentSessionId: this.state.capturedAgentSessionId,

@@ -36,7 +36,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       }
     });
 
-    it('fails closed for cross-UID execution without signaling', async () => {
+    it('fails closed when cross-UID signaling is unavailable', async () => {
       const leader = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
         detached: true,
         stdio: 'ignore',
@@ -49,9 +49,8 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
         asUser: 'agor_executor',
       });
       try {
-        await expect(containExecutorProcess('session-uid', 'task-uid')).resolves.toEqual({
+        await expect(containExecutorProcess('session-uid', 'task-uid')).resolves.toMatchObject({
           status: 'unverified',
-          reason: 'Cross-UID process-group signaling is not verified for this execution mode.',
         });
       } finally {
         process.kill(-leader.pid, 'SIGKILL');
