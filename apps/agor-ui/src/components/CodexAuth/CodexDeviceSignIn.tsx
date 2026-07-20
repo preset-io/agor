@@ -74,10 +74,17 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   // here matters because a stale request's guarded finally deliberately
   // won't clear it, and a replacement that ADOPTS an attempt never calls
   // requestCode — without the reset the spinner would cover a live code.
+  // Reset status/countdown too: a client/identity swap must not leave the
+  // previous client's pending code (and its polling loop) on screen — the
+  // adopt-or-request effect below then decides what THIS service should show.
+  // Without this, an autoStart=false surface that doesn't re-request would
+  // keep displaying and polling the old code against the new service.
   const latestServiceRef = useRef(deviceService);
   useLayoutEffect(() => {
     latestServiceRef.current = deviceService;
     setStarting(false);
+    setStatus({ phase: 'idle' });
+    setRemainingMs(null);
   }, [deviceService]);
 
   const requestCode = useCallback(async () => {

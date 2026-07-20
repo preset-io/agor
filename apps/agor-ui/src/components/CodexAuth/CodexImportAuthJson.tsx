@@ -1,6 +1,6 @@
 import type { AgorClient, CodexAuthImportResult } from '@agor-live/client';
 import { Alert, Button, Input, Space, Typography, theme } from 'antd';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -34,26 +34,42 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A client/identity swap must never carry a pasted secret across it: drop the
+  // paste value (and any error) the instant the client changes, and track the
+  // live client so an in-flight import can't apply its result to a replacement.
+  const latestClientRef = useRef(client);
+  useLayoutEffect(() => {
+    latestClientRef.current = client;
+    setAuthJson('');
+    setError(null);
+  }, [client]);
+
   const handleImport = useCallback(async () => {
-    if (!client || !authJson.trim() || submitting) return;
+    const submittingClient = client;
+    if (!submittingClient || !authJson.trim() || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = (await client
+      const result = (await submittingClient
         .service('codex-auth/import')
         .create({ authJson })) as CodexAuthImportResult;
+      // The client was swapped out mid-flight — this result belongs to the old
+      // identity; drop it rather than clearing the new client's pane or firing
+      // onImported as though it applied here.
+      if (latestClientRef.current !== submittingClient) return;
       // Drop the pasted token material as soon as the daemon has it — nothing
       // here needs it after a successful import.
       setAuthJson('');
       onImported(result);
     } catch (err) {
+      if (latestClientRef.current !== submittingClient) return;
       setError(
         err instanceof Error && err.message
           ? err.message
           : 'Could not import the Codex login — try again.'
       );
     } finally {
-      setSubmitting(false);
+      if (latestClientRef.current === submittingClient) setSubmitting(false);
     }
   }, [authJson, client, onImported, submitting]);
 

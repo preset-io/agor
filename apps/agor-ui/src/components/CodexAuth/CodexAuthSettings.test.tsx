@@ -189,6 +189,26 @@ describe('CodexAuthSettings', () => {
     expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
   });
 
+  it('does not deactivate a working API key when merely opening a subscription sign-in view', async () => {
+    // Selecting "Sign in with ChatGPT" / "Import login file" is a local view
+    // choice — the daemon flips the method to subscription only on success.
+    // Persisting it here would break a still-working API-key configuration.
+    const onAuthMethodChange = vi.fn();
+    render(<Harness initialMethod="api_key" onAuthMethodChange={onAuthMethodChange} />);
+
+    clickText('Sign in with ChatGPT');
+    expect(await screen.findByText(/Sign in with your ChatGPT account/i)).toBeInTheDocument();
+    expect(onAuthMethodChange).not.toHaveBeenCalled();
+
+    clickText('Import login file');
+    expect(await screen.findByLabelText('Codex auth.json contents')).toBeInTheDocument();
+    expect(onAuthMethodChange).not.toHaveBeenCalled();
+
+    // Deliberately choosing the API-key method is the only selection that persists.
+    clickText('API key');
+    expect(onAuthMethodChange).not.toHaveBeenCalled(); // already api_key — no redundant write
+  });
+
   it('imports a pasted login file and re-probes the connection', async () => {
     const importCreate = vi.fn(async () => ({ status: 'authenticated', authMode: 'chatgpt' }));
     const checkAuth = vi

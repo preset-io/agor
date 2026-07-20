@@ -5,7 +5,7 @@ import type {
   AuthCheckResult,
 } from '@agor-live/client';
 import { Alert, Button, Segmented, Space, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
 import { CodexImportAuthJson } from './CodexImportAuthJson';
@@ -75,18 +75,23 @@ export function CodexAuthSettings({
   // A transport failure is NOT proof of a missing login — leave the prior
   // verdict untouched on error so the pane never flashes a false "not
   // connected" state (mirrors App.handleCheckAuth's fail-safe contract).
+  // A monotonic generation guards against overlapping probes (a method switch
+  // mid-recheck): only the latest request commits its verdict or clears the
+  // spinner, so an older response can't land last and mislabel the banner.
+  const probeGenRef = useRef(0);
   const runProbe = useCallback(async () => {
     if (!client) return;
+    const gen = ++probeGenRef.current;
     setProbing(true);
     try {
       const result = (await client
         .service('check-auth')
         .create({ tool: 'codex' })) as AuthCheckResult;
-      setProbe(result);
+      if (probeGenRef.current === gen) setProbe(result);
     } catch {
       // Unknown — keep the last verdict.
     } finally {
-      setProbing(false);
+      if (probeGenRef.current === gen) setProbing(false);
     }
   }, [client]);
 
@@ -98,11 +103,9 @@ export function CodexAuthSettings({
     void runProbe();
   }, [runProbe, authMethod]);
 
-  const handleVerified = useCallback(() => {
-    void runProbe();
-  }, [runProbe]);
-
-  const handleImported = useCallback(() => {
+  // Device sign-in and login-file import both persist `subscription` daemon-side
+  // as part of the flow, so here we only re-probe to refresh the banner.
+  const handleAuthenticated = useCallback(() => {
     void runProbe();
   }, [runProbe]);
 
@@ -121,8 +124,12 @@ export function CodexAuthSettings({
   const handleSelect = useCallback(
     (next: CodexMethodView) => {
       setView(next);
-      const nextMethod: AgenticAuthMethod = next === 'api_key' ? 'api_key' : 'subscription';
-      if (nextMethod !== authMethod) void onAuthMethodChange(nextMethod);
+      // "Sign in with ChatGPT" and "Import login file" are local views only —
+      // the daemon device/import flows persist `subscription` themselves once
+      // they succeed. Persisting it on mere selection would deactivate a working
+      // API key before any ChatGPT login exists (surfacing a false "Login not
+      // found"). Only deliberately choosing the API-key method flips it back.
+      if (next === 'api_key' && authMethod !== 'api_key') void onAuthMethodChange('api_key');
     },
     [authMethod, onAuthMethodChange]
   );
@@ -225,13 +232,15 @@ export function CodexAuthSettings({
           </Text>
           <CodexDeviceSignIn
             client={client}
-            onVerified={handleVerified}
+            onVerified={handleAuthenticated}
             onUseFallback={handleFallback}
             autoStart={false}
           />
         </div>
       )}
-      {view === 'import' && <CodexImportAuthJson client={client} onImported={handleImported} />}
+      {view === 'import' && (
+        <CodexImportAuthJson client={client} onImported={handleAuthenticated} />
+      )}
     </Space>
   );
 }
