@@ -526,16 +526,17 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     }
   }, [deviceService]);
 
-  // On mount, adopt a still-live attempt (user toggled away and back) instead
-  // of burning a fresh code; otherwise request one. Keyed by service identity
-  // so a client swap mid-flow re-bootstraps against the new connection.
-  const bootstrappedForRef = useRef<unknown>(null);
+  // On mount (and on client swap), adopt a still-live attempt (user toggled
+  // away and back) instead of burning a fresh code; otherwise request one.
+  // The cancellation guard makes this StrictMode-safe — a superseded run
+  // never fires its requestCode/setStatus continuation.
   useEffect(() => {
-    if (!deviceService || bootstrappedForRef.current === deviceService) return;
-    bootstrappedForRef.current = deviceService;
+    if (!deviceService) return;
+    let cancelled = false;
     void (async () => {
       try {
         const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
+        if (cancelled) return;
         if (existing.phase === 'pending' || existing.phase === 'success') {
           setStatus(existing);
           return;
@@ -543,17 +544,26 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       } catch {
         // No adoptable attempt — fall through to a fresh request.
       }
-      await requestCode();
+      if (!cancelled) await requestCode();
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [deviceService, requestCode]);
 
-  // Poll while pending; terminal phases stop the loop. Identity-preserving
-  // setState keeps unchanged polls from re-rendering even this pane.
+  // Poll while pending; terminal phases stop the loop. A self-scheduling
+  // timeout (next poll armed only after the previous response lands) keeps
+  // slow responses from overlapping and regressing a terminal phase with an
+  // out-of-order pending. Identity-preserving setState keeps unchanged polls
+  // from re-rendering even this pane.
   useEffect(() => {
     if (status.phase !== 'pending' || !deviceService) return;
-    const id = setInterval(async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
       try {
         const next = (await deviceService.find()) as CodexDeviceAuthStatus;
+        if (cancelled) return;
         setStatus((prev) =>
           prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
             ? prev
@@ -562,8 +572,13 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       } catch {
         // Transient — keep polling until the code expires.
       }
-    }, DEVICE_STATUS_POLL_MS);
-    return () => clearInterval(id);
+      if (!cancelled) timer = setTimeout(tick, DEVICE_STATUS_POLL_MS);
+    };
+    timer = setTimeout(tick, DEVICE_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [status.phase, deviceService]);
 
   // 1s countdown while a code is live.

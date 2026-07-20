@@ -174,7 +174,7 @@ async function exchangeCodeForTokens(approved: ApprovedCode): Promise<ExchangedT
       code_verifier: approved.codeVerifier,
     }).toString(),
   });
-  if (!res.ok) throw new Error(`token exchange failed with status ${res.status}`);
+  if (!res.ok) throw providerStatusError('token exchange', res.status);
 
   const body = (await res.json()) as Record<string, unknown>;
   const { id_token, access_token, refresh_token } = body;
@@ -183,9 +183,26 @@ async function exchangeCodeForTokens(approved: ApprovedCode): Promise<ExchangedT
     typeof access_token !== 'string' ||
     typeof refresh_token !== 'string'
   ) {
-    throw new Error('token exchange response missing expected fields');
+    throw new DeviceAuthProviderError(
+      'terminal',
+      'token exchange response missing expected fields'
+    );
   }
   return { idToken: id_token, accessToken: access_token, refreshToken: refresh_token };
+}
+
+/**
+ * The exchange runs once, AFTER the user already approved — a provider blip
+ * here would otherwise force a whole new code+approval round-trip. One retry
+ * on a transient failure mirrors the poll loop's own policy.
+ */
+async function exchangeWithOneRetry(approved: ApprovedCode): Promise<ExchangedTokens> {
+  try {
+    return await exchangeCodeForTokens(approved);
+  } catch (err) {
+    if (err instanceof DeviceAuthProviderError && err.disposition === 'terminal') throw err;
+    return exchangeCodeForTokens(approved);
+  }
 }
 
 /** Codex-format auth.json content for a fresh ChatGPT login. */
@@ -206,6 +223,7 @@ export function buildDeviceAuthJson(tokens: ExchangedTokens): string {
 }
 
 interface DeviceAuthAttempt {
+  key: string;
   userId: UserID;
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
@@ -304,8 +322,11 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     }
 
     try {
-      const tokens = await exchangeCodeForTokens(approved);
-      if (attempt.cancelled) return;
+      const tokens = await exchangeWithOneRetry(approved);
+      // Ownership check in addition to the cancelled flag: a replacement
+      // attempt registered during the exchange must not have its freshly
+      // written credential clobbered by this older one.
+      if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
       const summary = await runWithTenantDatabaseScope(db, attempt.tenantId, () =>
         persistVerifiedCodexAuth({
           app,
@@ -402,6 +423,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       cancelAttempt(key);
       pruneFinishedAttempts();
       const attempt: DeviceAuthAttempt = {
+        key,
         userId,
         tenantId,
         authUser,

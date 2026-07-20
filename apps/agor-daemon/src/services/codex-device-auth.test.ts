@@ -201,6 +201,35 @@ describe('codex-device-auth', () => {
     expect(fetchMock.mock.calls.length).toBe(3); // usercode + two polls
   });
 
+  it('retries the post-approval token exchange once on a provider 5xx', async () => {
+    const { app, usersService } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          authorization_code: 'authz-1',
+          code_challenge: 'chal',
+          code_verifier: 'verif',
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse(502, {}))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          id_token: ID_TOKEN,
+          access_token: 'access-tok',
+          refresh_token: 'refresh-tok',
+        })
+      );
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.advanceTimersByTimeAsync(2100);
+
+    const status = await withTenant(() => service.find(AUTH_PARAMS));
+    expect(status.phase).toBe('success');
+    expect(usersService.patch).toHaveBeenCalledTimes(1);
+  });
+
   it('a non-pending 4xx during polling is terminal', async () => {
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB);
