@@ -90,13 +90,13 @@ export function CodexAuthSettings({
     probeGenRef.current++;
     setProbe(null);
     setProbing(false);
-  }, [client]);
-  useEffect(
-    () => () => {
+    // Invalidate on unmount from the layout cleanup (synchronous, during the
+    // commit) — a passive cleanup can be deferred past unmount, letting a
+    // settled probe commit its verdict/spinner after teardown.
+    return () => {
       probeGenRef.current++;
-    },
-    []
-  );
+    };
+  }, [client]);
   const runProbe = useCallback(async () => {
     if (!client) return;
     const gen = ++probeGenRef.current;

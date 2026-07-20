@@ -1,6 +1,6 @@
 import type { AgorClient, CodexAuthImportResult } from '@agor-live/client';
 import { Alert, Button, Input, Space, Typography, theme } from 'antd';
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -42,19 +42,22 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   // import right away. The unmount bump prevents a settled request from calling
   // setState after teardown.
   const submitGenRef = useRef(0);
+  // Invalidate any in-flight submit synchronously whenever the client changes
+  // OR the pane unmounts. A layout effect (setup + cleanup) runs during the
+  // commit phase, before a settled request's continuation could — a passive
+  // cleanup can be deferred past unmount, letting a stale success still fire
+  // onImported/setState after teardown. Setup also drops the pasted secret and
+  // releases the submit lock so the replacement identity can import at once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: client is the change trigger; the body invalidates/clears rather than reading it.
   useLayoutEffect(() => {
     submitGenRef.current++;
     setAuthJson('');
     setError(null);
     setSubmitting(false);
-  }, [client]);
-  useEffect(
-    () => () => {
+    return () => {
       submitGenRef.current++;
-    },
-    []
-  );
+    };
+  }, [client]);
 
   const handleImport = useCallback(async () => {
     if (!client || !authJson.trim() || submitting) return;
