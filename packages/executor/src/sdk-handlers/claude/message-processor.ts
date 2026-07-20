@@ -200,9 +200,7 @@ interface ProcessorState {
   // Track current content blocks for tool_complete events
   contentBlockStack: Array<{
     index: number;
-    type: 'text' | 'tool_use' | 'thinking';
-    toolUseId?: string;
-    toolName?: string;
+    type: 'text' | 'thinking';
   }>;
   // Text chunk accumulation buffer
   textChunkBuffer: string;
@@ -370,8 +368,20 @@ export class SDKMessageProcessor {
         `🔧 SDK user message with ${toolResults.length} tool result(s) (✅ ${successCount}, ❌ ${errorCount})`
       );
 
-      // Yield event to save tool results to database
+      // A tool is complete when Claude reports its result, not when the
+      // preceding tool-use content block finishes streaming.
       return [
+        ...toolResults.flatMap((result) =>
+          result.tool_use_id
+            ? [
+                {
+                  type: 'tool_complete' as const,
+                  toolUseId: result.tool_use_id,
+                  agentSessionId: this.state.capturedAgentSessionId,
+                },
+              ]
+            : []
+        ),
         {
           type: 'complete',
           role: MessageRole.USER,
@@ -447,14 +457,6 @@ export class SDKMessageProcessor {
       if (block?.type === 'tool_use') {
         const toolName = block.name as string;
         const toolId = block.id as string;
-
-        // Track this tool use block
-        this.state.contentBlockStack.push({
-          index: blockIndex,
-          type: 'tool_use',
-          toolUseId: toolId,
-          toolName: toolName,
-        });
 
         events.push({
           type: 'tool_start',
