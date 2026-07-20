@@ -362,10 +362,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const data = aliasOptions.find((o) => o.value === optionValue);
     return (
       <Flex justify="space-between" align="start" gap={12} style={{ minWidth: 300 }}>
-        <div style={{ lineHeight: 1.3 }}>
+        {/* whiteSpace:normal + flex:1/minWidth:0 lets descriptions wrap to
+            multiple lines instead of antd's default option ellipsis. */}
+        <div style={{ lineHeight: 1.3, whiteSpace: 'normal', flex: 1, minWidth: 0 }}>
           <div>{data?.label ?? optionValue}</div>
           {data?.description && (
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
               {data.description}
             </Typography.Text>
           )}

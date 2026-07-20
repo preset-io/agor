@@ -357,7 +357,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             title="Model"
             editable={inlineAllowed}
             managedNote={managedNote}
-            minWidth={360}
+            minWidth={440}
             testid="model-chip"
             renderContent={() => (
               <ModelSelector

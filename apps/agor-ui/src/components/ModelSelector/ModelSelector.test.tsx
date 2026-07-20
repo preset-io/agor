@@ -43,4 +43,19 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.click(screen.getByText('Pin a specific version…'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ mode: 'exact' }));
   });
+
+  it('wraps option descriptions instead of truncating them', () => {
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    // A long model description renders in full and is allowed to wrap.
+    expect(screen.getByText(/Frontier model for complex reasoning/)).toHaveStyle({
+      whiteSpace: 'normal',
+    });
+  });
 });

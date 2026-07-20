@@ -100,9 +100,9 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
           return (
             <Space size={6} align="start">
               <BulbOutlined style={{ marginTop: 3 }} />
-              <div style={{ lineHeight: 1.3 }}>
+              <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
                 <div>{opt?.label}</div>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
                   {opt?.description}
                 </Typography.Text>
               </div>

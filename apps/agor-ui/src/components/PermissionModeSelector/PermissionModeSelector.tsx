@@ -438,11 +438,13 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
             >
               <Space size={6} align="start">
                 <span style={{ color }}>{modeData.icon}</span>
-                <div style={{ lineHeight: 1.3 }}>
+                {/* whiteSpace:normal lets the two-part description wrap instead
+                    of truncating with antd's default option ellipsis. */}
+                <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
                   <div style={{ color: modeData.tone === 'warning' ? color : undefined }}>
                     {modeData.label}
                   </div>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
                     {modeData.description}
                   </Typography.Text>
                 </div>
