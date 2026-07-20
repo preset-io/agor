@@ -348,16 +348,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
 
-        {/* Session Title */}
-        <Form.Item
-          name="title"
-          label="Title"
-          tooltip="Auto-generated from your first prompt when left blank."
-        >
-          <Input placeholder="e.g., Add authentication system" />
-        </Form.Item>
-
-        {/* Configuration — source Select + resolved chips, drawer-style directly above the prompt */}
+        {/* Configuration — source Select + resolved chips */}
         <AgenticConfigChipRow
           tool={(selectedAgent as AgenticToolName) || 'claude-code'}
           mcpServerById={mcpServerById}
@@ -366,6 +357,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           enableSaveAsDefault
           onConfigValidityChange={handleConfigValidity}
         />
+
+        {/* Session Title */}
+        <Form.Item
+          name="title"
+          label="Title"
+          tooltip="Auto-generated from your first prompt when left blank."
+        >
+          <Input placeholder="e.g., Add authentication system" />
+        </Form.Item>
 
         {/* Initial Prompt */}
         <Form.Item

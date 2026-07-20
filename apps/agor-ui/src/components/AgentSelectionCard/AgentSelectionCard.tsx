@@ -1,3 +1,4 @@
+import { ExperimentOutlined } from '@ant-design/icons';
 import { Card, Flex, Space, Tooltip, Typography, theme } from 'antd';
 import type { AgenticToolOption } from '../../types';
 import { Tag } from '../Tag';
@@ -40,8 +41,8 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
         >
           <Flex align="center" gap={token.marginXS} style={{ width: '100%' }}>
             <ToolIcon tool={agent.id} size={token.sizeMD} />
-            {/* flex:1 + minWidth:0 lets long names ellipsize so the BETA tag can't
-                push the tile past its grid track. */}
+            {/* flex:1 + minWidth:0 lets the name take all remaining width; the
+                icon-only beta badge sits outside it so names never truncate. */}
             <Typography.Text
               strong
               ellipsis
@@ -50,9 +51,12 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
               {agent.name}
             </Typography.Text>
             {agent.beta && (
-              <Tag color="warning" style={{ marginInlineEnd: 0 }}>
-                BETA
-              </Tag>
+              <Tooltip title="In beta — this agent integration is still stabilizing">
+                <ExperimentOutlined
+                  aria-label="Beta"
+                  style={{ color: token.colorWarning, fontSize: token.fontSizeSM }}
+                />
+              </Tooltip>
             )}
           </Flex>
         </Card>

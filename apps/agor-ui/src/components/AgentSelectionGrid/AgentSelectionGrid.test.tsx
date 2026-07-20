@@ -4,10 +4,11 @@
  * variant keeps its fixed-column layout unchanged.
  */
 
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionGrid } from './AgentSelectionGrid';
+import { AVAILABLE_AGENTS } from './availableAgents';
 
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
@@ -48,5 +49,25 @@ describe('AgentSelectionGrid tile layout', () => {
     );
     expect(gridEl(container).style.gridTemplateColumns).toBe('repeat(3, 1fr)');
     expect(gridEl(container).style.gridTemplateColumns).not.toContain('auto-fit');
+  });
+
+  it('renders every agent name in full in the small variant (no text BETA pill)', () => {
+    render(
+      <AgentSelectionGrid
+        agents={AVAILABLE_AGENTS}
+        selectedAgentId="claude-code"
+        onSelect={vi.fn()}
+        size="small"
+      />
+    );
+    // All 7 names present verbatim (truncation is CSS-only; nothing is dropped).
+    for (const agent of AVAILABLE_AGENTS) {
+      expect(screen.getByText(agent.name)).toBeInTheDocument();
+    }
+    // Beta agents show the icon badge, not a width-eating "BETA" text pill.
+    expect(screen.queryByText('BETA')).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText('Beta').length).toBe(
+      AVAILABLE_AGENTS.filter((agent) => agent.beta).length
+    );
   });
 });

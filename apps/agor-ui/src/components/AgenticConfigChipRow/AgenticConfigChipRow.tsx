@@ -325,7 +325,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   );
 
   return (
-    <div style={{ marginBottom: token.marginSM }}>
+    <div style={{ marginBottom: token.marginLG }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
       {['agenticToolPresetId', 'modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map(
         (name) => (
