@@ -508,12 +508,24 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     [client]
   );
 
+  // Tracks the service the pane currently talks to, so an in-flight
+  // requestCode issued against a swapped-out client can't land its state
+  // updates over the replacement's. Synced via effect (before the others,
+  // which run in declaration order) rather than mutated during render.
+  const latestServiceRef = useRef(deviceService);
+  useEffect(() => {
+    latestServiceRef.current = deviceService;
+  }, [deviceService]);
+
   const requestCode = useCallback(async () => {
     if (!deviceService) return;
     setStarting(true);
     try {
-      setStatus((await deviceService.create({})) as CodexDeviceAuthStatus);
+      const next = (await deviceService.create({})) as CodexDeviceAuthStatus;
+      if (latestServiceRef.current !== deviceService) return;
+      setStatus(next);
     } catch (err) {
+      if (latestServiceRef.current !== deviceService) return;
       setStatus({
         phase: 'error',
         hint:
@@ -522,7 +534,7 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
             : 'Could not start the ChatGPT sign-in — try again.',
       });
     } finally {
-      setStarting(false);
+      if (latestServiceRef.current === deviceService) setStarting(false);
     }
   }, [deviceService]);
 
