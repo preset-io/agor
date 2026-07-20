@@ -1313,7 +1313,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: { report?: Task['report'] },
     params?: TaskParams
   ): Promise<Task> {
-    // duration_ms and end_timestamp are auto-computed by patch() hook
+    // Terminal timing is computed atomically by TaskRepository.update().
     const completedTask = (await this.patch(
       id,
       {
@@ -1350,7 +1350,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Custom method: Fail a task
    */
   async fail(id: string, _data: { error?: string }, params?: TaskParams): Promise<Task> {
-    // duration_ms and end_timestamp are auto-computed by patch() hook
+    // Terminal timing is computed atomically by TaskRepository.update().
     return this.patch(
       id,
       {
