@@ -545,7 +545,8 @@ describe('Codex ChatGPT login import', () => {
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: pasted },
     });
-    clickButton(/^connect →/i);
+    // The import pane owns its own submit; success self-advances the wizard.
+    clickButton('Import login');
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
     expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
@@ -562,7 +563,7 @@ describe('Codex ChatGPT login import', () => {
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"tokens":{}}' },
     });
-    clickButton(/^connect →/i);
+    clickButton('Import login');
 
     expect(
       await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
@@ -582,7 +583,7 @@ describe('Codex ChatGPT login import', () => {
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"a":1}' },
     });
-    clickButton(/^connect →/i);
+    clickButton('Import login');
     expect(
       await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
     ).toBeInTheDocument();
