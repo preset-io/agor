@@ -24,7 +24,16 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
@@ -510,11 +519,15 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
 
   // Tracks the service the pane currently talks to, so an in-flight
   // requestCode issued against a swapped-out client can't land its state
-  // updates over the replacement's. Synced via effect (before the others,
-  // which run in declaration order) rather than mutated during render.
+  // updates over the replacement's. A layout effect syncs the identity
+  // before paint and before the passive effects below; resetting `starting`
+  // here matters because a stale request's guarded finally deliberately
+  // won't clear it, and a replacement that ADOPTS an attempt never calls
+  // requestCode — without the reset the spinner would cover a live code.
   const latestServiceRef = useRef(deviceService);
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestServiceRef.current = deviceService;
+    setStarting(false);
   }, [deviceService]);
 
   const requestCode = useCallback(async () => {
