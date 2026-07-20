@@ -61,11 +61,11 @@ import { Tabs } from 'nextra/components';
     git clone https://github.com/preset-io/agor.git
     cd agor
 
-    # Set an admin password before first boot — Compose auto-loads .env.
-    # See docker/.env.prod.example for the full list of options.
-    echo "AGOR_ADMIN_PASSWORD=<a-long-random-password>" > .env
+    # Set an admin password before first boot.
+    # Start from docker/.env.prod.example for the full list of options.
+    echo "AGOR_ADMIN_PASSWORD=replace-with-a-long-random-password" > .env.prod
 
-    docker compose -f docker-compose.prod.yml up -d
+    docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
     ```
 
     Open [http://localhost:3030](http://localhost:3030) and log in as `admin@agor.live` (health check: `curl http://localhost:3030/health`).
