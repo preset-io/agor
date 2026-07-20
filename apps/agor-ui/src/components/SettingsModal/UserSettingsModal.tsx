@@ -52,7 +52,6 @@ import {
   getClearedFormValues,
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
-import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
@@ -220,7 +219,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
         useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
-        defaultAgenticTool: userData.preferences?.default_agentic_tool,
         must_change_password: userData.must_change_password ?? false,
       });
     },
@@ -448,11 +446,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         nextPreferences.use_slack_avatar = false;
       } else {
         delete nextPreferences.use_slack_avatar;
-      }
-      if (values.defaultAgenticTool) {
-        nextPreferences.default_agentic_tool = values.defaultAgenticTool;
-      } else {
-        delete nextPreferences.default_agentic_tool;
       }
 
       const updates: UpdateUserInput = {
@@ -874,26 +867,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 tooltip="When enabled, Agor shows your Slack-synced profile image. Turn this off to keep using your emoji tile."
               >
                 <Switch />
-              </Form.Item>
-
-              <Form.Item
-                label="Default agentic tool"
-                name="defaultAgenticTool"
-                tooltip="Clicking “Add session” creates a session with this tool immediately, no picker. Leave unset to pick a tool each time."
-              >
-                <Select
-                  allowClear
-                  placeholder="No default — show a picker each time"
-                  options={AVAILABLE_AGENTS.map((agent) => ({
-                    value: agent.id,
-                    label: (
-                      <Space size={8}>
-                        <ToolIcon tool={agent.id} size={16} />
-                        <span>{agent.name}</span>
-                      </Space>
-                    ),
-                  }))}
-                />
               </Form.Item>
 
               <Form.Item

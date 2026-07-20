@@ -109,51 +109,17 @@ function renderShell(user: User, onCreateSession = vi.fn(async () => 'new-sessio
   return { onCreateSession };
 }
 
-describe('App quick-start — default_agentic_tool preference', () => {
+describe('App quick-start — always shows the tool picker', () => {
   beforeEach(() => {
     seedStore();
   });
 
-  it('skips the picker and creates immediately when a valid default is set', async () => {
-    const user = {
-      user_id: 'u1',
-      name: 'User',
-      email: 'u@example.test',
-      preferences: { default_agentic_tool: 'codex' },
-    } as unknown as User;
-    const { onCreateSession } = renderShell(user);
-
-    fireEvent.click(await screen.findByTestId('quick-start'));
-
-    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
-    expect(onCreateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ branch_id: 'wt-1', agent: 'codex' }),
-      BOARD_ID
-    );
-    expect(screen.queryByTestId('tool-picker')).not.toBeInTheDocument();
-  });
-
-  it('shows the picker (no immediate create) when no default is set', async () => {
+  it('opens the tile picker without creating a session', async () => {
     const user = {
       user_id: 'u1',
       name: 'User',
       email: 'u@example.test',
       preferences: {},
-    } as unknown as User;
-    const { onCreateSession } = renderShell(user);
-
-    fireEvent.click(await screen.findByTestId('quick-start'));
-
-    await waitFor(() => expect(screen.getByTestId('tool-picker')).toBeInTheDocument());
-    expect(onCreateSession).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the picker when the stored default is no longer available', async () => {
-    const user = {
-      user_id: 'u1',
-      name: 'User',
-      email: 'u@example.test',
-      preferences: { default_agentic_tool: 'gemini' },
     } as unknown as User;
     const { onCreateSession } = renderShell(user);
 

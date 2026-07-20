@@ -401,13 +401,6 @@ export interface UserPreferences {
   mainBoardId?: string;
   /** Whether to render Slack-synced avatar_url when available. Undefined defaults to true. */
   use_slack_avatar?: boolean;
-  /**
-   * Primary agentic tool for quick-start session creation. When set (in
-   * Settings) and still available, "Add session" skips the tile picker and
-   * creates a session with this tool immediately. Unset — or set to a tool
-   * that's no longer available — means quick-start falls back to the picker.
-   */
-  default_agentic_tool?: AgenticToolName;
   // Future preferences can be added here
   [key: string]: unknown;
 }

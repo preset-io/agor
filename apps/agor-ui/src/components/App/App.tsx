@@ -903,10 +903,8 @@ export const App: React.FC<AppProps> = ({
     [user, onCreateSession, currentBoardId, client, navigation, showError]
   );
 
-  // Default "Add session" entry point. If the user has set an explicit
-  // "Default agentic tool" preference and it's still available, honor it:
-  // create the session immediately with no picker. Otherwise fall back to the
-  // tool-choice empty state (the tile picker).
+  // Default "Add session" entry point. Always opens the tool-choice empty
+  // state (the tile picker) — a session's tool is always an explicit choice.
   //
   // The render ternary (`effectiveSelectedSessionId ? <SessionPanel/> :
   // pendingToolChoiceBranchId ? <PendingToolChoicePanel/> : ...`) lets an
@@ -919,25 +917,12 @@ export const App: React.FC<AppProps> = ({
   // session, which is what lets the ternary fall through to the picker.
   const handleQuickStartSession = useCallback(
     (branchId: string) => {
-      const preferred = user?.preferences?.default_agentic_tool;
-      const preferredIsAvailable =
-        !!preferred && availableAgents.some((agent) => agent.id === preferred);
-      if (preferred && preferredIsAvailable) {
-        void chooseAgenticTool(branchId, preferred);
-        return;
-      }
       if (effectiveSelectedSessionId) {
         navigation.goToBranch(branchId);
       }
       setPendingToolChoiceBranchId(branchId);
     },
-    [
-      user?.preferences?.default_agentic_tool,
-      availableAgents,
-      chooseAgenticTool,
-      effectiveSelectedSessionId,
-      navigation,
-    ]
+    [effectiveSelectedSessionId, navigation]
   );
 
   const handleCreateBranch = async (config: BranchTabConfig) => {
