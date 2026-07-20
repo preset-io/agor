@@ -23,7 +23,7 @@
 
 import type { AgenticToolName, Branch } from '@agor-live/client';
 import { CloseOutlined, RobotOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
-import { Button, Input, Spin, Typography, theme } from 'antd';
+import { Button, Flex, Input, Spin, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import {
@@ -61,47 +61,44 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
   };
 
   return (
-    <div
+    <Flex
+      vertical
       style={{
         width: '100%',
         height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
         background: token.colorBgElevated,
         borderLeft: `1px solid ${token.colorBorder}`,
       }}
     >
       {/* Header — mirrors SessionPanel's header chrome */}
-      <div
+      <Flex
+        justify="space-between"
+        align="center"
         style={{
           flexShrink: 0,
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           background: token.colorBgContainer,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
         }}
       >
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: 0 }}>
+        <Flex align="center" gap={12} style={{ minWidth: 0 }}>
           <RobotOutlined style={{ fontSize: 28, color: token.colorTextTertiary, flexShrink: 0 }} />
           <Typography.Text strong style={{ fontSize: 18 }}>
             {branch ? `Untitled session — ${branch.name}` : 'Untitled session'}
           </Typography.Text>
-        </div>
+        </Flex>
         <Button type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="Close panel" />
-      </div>
+      </Flex>
 
       {/* Body — tile picker, one per available agentic tool */}
-      <div
+      <Flex
+        vertical
+        align="center"
+        justify="center"
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
           padding: token.sizeUnit * 6,
         }}
       >
@@ -110,7 +107,10 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
             Choose which AI tool this session should use.
           </Typography.Text>
 
-          <div style={{ marginTop: token.marginSM, textAlign: 'left', position: 'relative' }}>
+          <Flex
+            vertical
+            style={{ marginTop: token.marginSM, textAlign: 'left', position: 'relative' }}
+          >
             <AgentSelectionGrid
               agents={availableAgents}
               selectedAgentId={choosingTool}
@@ -118,21 +118,20 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
               columns={2}
             />
             {choosingTool && (
-              <div
+              <Flex
+                align="center"
+                justify="center"
                 style={{
                   position: 'absolute',
                   inset: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
                   background: token.colorBgElevated,
                   opacity: 0.7,
                 }}
               >
                 <Spin size="small" />
-              </div>
+              </Flex>
             )}
-          </div>
+          </Flex>
 
           {onAdvancedSetup && (
             <Button
@@ -158,10 +157,11 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
             </Button>
           )}
         </div>
-      </div>
+      </Flex>
 
       {/* Footer — same position/shape as SessionFooter, inert until a tile is picked */}
-      <div
+      <Flex
+        vertical
         style={{
           flexShrink: 0,
           background: token.colorBgContainer,
@@ -174,11 +174,10 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
           placeholder="Pick a tool above to start typing…"
           autoSize={{ minRows: 2, maxRows: 2 }}
         />
-        <div
+        <Flex
+          align="center"
+          gap={token.sizeUnit}
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: token.sizeUnit,
             marginTop: token.sizeUnit * 2,
           }}
         >
@@ -189,8 +188,8 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
           <Button size="small" type="primary" icon={<SendOutlined />} disabled>
             Send
           </Button>
-        </div>
-      </div>
-    </div>
+        </Flex>
+      </Flex>
+    </Flex>
   );
 };
