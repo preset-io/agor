@@ -59,6 +59,10 @@ function renderAt(pathname: string, options: UseUrlStateOptions) {
             element={<HookHost options={opts} pathRef={pathRef} />}
           />
           <Route path="/b/:boardParam/" element={<HookHost options={opts} pathRef={pathRef} />} />
+          <Route
+            path="/w/:branchShortId/"
+            element={<HookHost options={opts} pathRef={pathRef} />}
+          />
           <Route path="/*" element={<HookHost options={opts} pathRef={pathRef} />} />
         </Routes>
       </CanvasNavigationProvider>
@@ -182,5 +186,51 @@ describe('useUrlState — deferred session resolution', () => {
 
     expect(onSessionChange).toHaveBeenCalledWith(SESSION_ID);
     expect(onBoardChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('useUrlState — navigating away from a session clears selection', () => {
+  // Covers the mechanism `App.tsx`'s handleQuickStartSession relies on:
+  // clicking "Add session" while a different session is open calls
+  // `navigation.goToBranch(branchId)` specifically so the URL stops
+  // pointing at a session — this is what lets `selectedSessionId` (and
+  // therefore the render ternary that prefers an open SessionPanel over
+  // the tile picker) actually clear. Without this, "Add session" was a
+  // silent no-op whenever a session was already open.
+  it('fires onSessionChange(null) when the URL moves from a session to a branch', () => {
+    const onSessionChange = vi.fn();
+    const onBoardChange = vi.fn();
+    const branch = { branch_id: BRANCH_ID, board_id: BOARD_ID } as Branch;
+
+    // Landing directly on a branch URL while app state still thinks a
+    // session is selected (from before the navigation) mirrors what a
+    // fresh render sees the instant goToBranch's history push commits.
+    renderAt(`/w/${BRANCH_ID}/`, {
+      ...baseOptions({
+        currentSessionId: SESSION_ID,
+        branchById: new Map([[branch.branch_id, branch]]),
+        onSessionChange,
+        onBoardChange,
+      }),
+    });
+
+    expect(onSessionChange).toHaveBeenCalledWith(null);
+  });
+
+  it('does not fire onSessionChange when no session was selected to begin with', () => {
+    const onSessionChange = vi.fn();
+    const onBoardChange = vi.fn();
+    const branch = { branch_id: BRANCH_ID, board_id: BOARD_ID } as Branch;
+
+    renderAt(`/w/${BRANCH_ID}/`, {
+      ...baseOptions({
+        currentSessionId: null,
+        branchById: new Map([[branch.branch_id, branch]]),
+        onSessionChange,
+        onBoardChange,
+      }),
+    });
+
+    expect(onSessionChange).not.toHaveBeenCalled();
   });
 });

@@ -106,7 +106,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
         style={{
           display: 'grid',
           gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gap: 8,
+          gap: 6,
           marginTop: 8,
         }}
       >

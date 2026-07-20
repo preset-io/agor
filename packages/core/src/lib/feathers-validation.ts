@@ -113,6 +113,11 @@ export const sessionQuerySchema = createQuerySchema(
     archived: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),
+    // Marks a `remove` as the delete half of a "switch tool" swap so the
+    // service can refuse it if a task landed on the session mid-swap. Declared
+    // here so the query validator (`removeAdditional: 'all'`) doesn't strip it
+    // before the service's guard sees it.
+    _swapReplace: Type.Optional(CommonSchemas.boolean),
   })
 );
 
