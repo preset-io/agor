@@ -261,32 +261,16 @@ export interface RegisterRoutesContext {
 export async function authorizeTaskTerminalRoute(input: {
   id: string;
   params: RouteParams;
-  branchRbacEnabled: boolean;
-  allowSuperadmin: boolean;
   tasksService: Pick<TasksServiceImpl, 'get'>;
-  sessionsService: Pick<SessionsServiceImpl, 'get'>;
-  branchRepository: Pick<BranchRepository, 'findById' | 'isOwner' | 'resolveUserPermission'>;
 }): Promise<RouteParams> {
   const internalParams = { ...input.params, provider: undefined };
-  if (!input.branchRbacEnabled) return internalParams;
-  const task = await input.tasksService.get(input.id, internalParams);
-  const session = await input.sessionsService.get(task.session_id, internalParams);
   const userId = input.params.user?.user_id as UUID | undefined;
   if (!userId) throw new NotAuthenticated('Authentication required to update tasks');
-  const branch = await input.branchRepository.findById(session.branch_id);
-  if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
-  const isOwner = await input.branchRepository.isOwner(branch.branch_id, userId);
-  const branchPermission = await input.branchRepository.resolveUserPermission(branch, userId);
-  const { allowed } = resolveSessionPromptAccess({
-    branch,
-    session,
-    userId,
-    isOwner,
-    userRole: input.params.user?.role,
-    allowSuperadmin: input.allowSuperadmin,
-    branchPermission,
-  });
-  if (!allowed) throw new Forbidden('Not authorized to update tasks in this session');
+  const task = await input.tasksService.get(input.id, internalParams);
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  if (task.created_by !== userId && !isAdmin) {
+    throw new Forbidden('Only the task creator or an admin can update this task');
+  }
   return internalParams;
 }
 
@@ -2758,11 +2742,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const internalParams = await authorizeTaskTerminalRoute({
           id,
           params,
-          branchRbacEnabled,
-          allowSuperadmin: superadminOpts.allowSuperadmin,
           tasksService,
-          sessionsService,
-          branchRepository,
         });
         return tasksService.complete(id, data, internalParams);
       },
@@ -2783,11 +2763,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const internalParams = await authorizeTaskTerminalRoute({
           id,
           params,
-          branchRbacEnabled,
-          allowSuperadmin: superadminOpts.allowSuperadmin,
           tasksService,
-          sessionsService,
-          branchRepository,
         });
         return tasksService.fail(id, data, internalParams);
       },
