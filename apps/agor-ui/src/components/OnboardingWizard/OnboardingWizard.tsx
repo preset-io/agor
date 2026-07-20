@@ -65,7 +65,7 @@ const AUTH_METHOD_OPTIONS: Partial<
   codex: [
     { label: 'API key', value: 'api-key' },
     { label: 'Sign in with ChatGPT', value: 'codex-device-auth' },
-    { label: 'Import login', value: 'codex-auth-json' },
+    { label: 'Import auth.json', value: 'codex-auth-json' },
   ],
 };
 
@@ -1780,13 +1780,13 @@ export function OnboardingWizard({
                           style={{ marginBottom: 10, fontSize: 12 }}
                           message={
                             <span>
-                              Already signed in to Codex on your laptop? Your login lives in{' '}
-                              <code>~/.codex/auth.json</code> there. Print it with{' '}
+                              Already use Codex on your own machine? Its credential file lives there
+                              at <code>~/.codex/auth.json</code>. On that machine, print it with{' '}
                               <code>cat ~/.codex/auth.json</code> and paste the whole thing below —
                               this replaces the Codex login already stored on this server, which in
                               shared setups is one login for the whole server, not one per person.
-                              Prefer a terminal? Run <code>codex login --device-auth</code> from a
-                              branch terminal instead.
+                              Or skip the copy-paste entirely: open a branch terminal on this server
+                              and run <code>codex login --device-auth</code>.
                             </span>
                           }
                         />

@@ -521,9 +521,9 @@ describe('Codex ChatGPT login import', () => {
 
     clickButton('GPT');
     expect(screen.getByText('Sign in with ChatGPT')).toBeInTheDocument();
-    expect(screen.getByText('Import login')).toBeInTheDocument();
+    expect(screen.getByText('Import auth.json')).toBeInTheDocument();
 
-    clickButton('Import login');
+    clickButton('Import auth.json');
     expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
     // Inline help: where the file lives, how to print it, and the overwrite caveat.
     expect(screen.getByText(/cat ~\/\.codex\/auth\.json/)).toBeInTheDocument();
@@ -540,7 +540,7 @@ describe('Codex ChatGPT login import', () => {
     const { importCreate } = renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('Import login');
+    clickButton('Import auth.json');
     const pasted = JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: 'r' } });
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: pasted },
@@ -558,7 +558,7 @@ describe('Codex ChatGPT login import', () => {
     renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('Import login');
+    clickButton('Import auth.json');
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"tokens":{}}' },
     });
@@ -578,7 +578,7 @@ describe('Codex ChatGPT login import', () => {
     renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('Import login');
+    clickButton('Import auth.json');
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"a":1}' },
     });
