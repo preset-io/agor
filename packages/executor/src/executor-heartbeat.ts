@@ -16,6 +16,24 @@ export interface ExecutorHeartbeatHandle {
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
+/**
+ * Emit a periodic liveness heartbeat for a running task.
+ *
+ * Design notes on starvation (see issue #1809):
+ * - The heartbeat runs on its own `setInterval`, independent of the tool's
+ *   async work. Tool execution (git/build/test, SDK streaming) is asynchronous
+ *   subprocess/socket I/O, so it yields the event loop and the timer keeps
+ *   firing on schedule.
+ * - The `inFlight` guard only skips *overlapping* emits (e.g. a slow patch); it
+ *   never blocks the timer itself, so a slow write cannot stall future ticks.
+ * - A pathological CPU-bound *synchronous* tool call could still delay any
+ *   main-thread timer in Node. That is why the daemon no longer treats a late
+ *   heartbeat as proof of death: before failing a task it probes the executor
+ *   OS process directly (`process.kill(pid, 0)`), which cannot be starved by
+ *   anything happening inside the executor's event loop. The emitted heartbeat
+ *   is a fast-path liveness refresh; the process probe is the authoritative,
+ *   unblockable signal.
+ */
 export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): ExecutorHeartbeatHandle {
   const enabled = options.enabled ?? true;
   if (!enabled) {
