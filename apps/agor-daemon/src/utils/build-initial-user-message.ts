@@ -23,7 +23,16 @@
  */
 
 import { generateId } from '@agor/core/db';
-import type { ContentBlock, Message, MessageType, SessionID, TaskID, UUID } from '@agor/core/types';
+import type {
+  ContentBlock,
+  Message,
+  MessageType,
+  SessionID,
+  TaskAttachment,
+  TaskID,
+  UrlImageContentBlock,
+  UUID,
+} from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
 const CONTENT_PREVIEW_MAX_CHARS = 200;
@@ -38,6 +47,8 @@ export interface BuildInitialUserMessageInput {
   timestamp: string;
   /** Raw prompt content. String for textarea/CLI; array for callbacks. */
   content: string | ContentBlock[];
+  /** Persisted web-composer images displayed alongside the exact prompt text. */
+  attachments?: TaskAttachment[];
   /**
    * `'user'` for normal prompts, `'system'` for the Agor-callback
    * variant. The role is always `'user'` regardless.
@@ -52,6 +63,18 @@ export function buildInitialUserMessage(input: BuildInitialUserMessageInput): Me
     typeof input.content === 'string'
       ? input.content.slice(0, CONTENT_PREVIEW_MAX_CHARS)
       : safeStringify(input.content).slice(0, CONTENT_PREVIEW_MAX_CHARS);
+  const content: string | ContentBlock[] =
+    typeof input.content === 'string' && input.attachments?.length && input.taskId
+      ? [
+          { type: 'text', text: input.content },
+          ...input.attachments.map<UrlImageContentBlock>((attachment, index) => ({
+            type: 'image',
+            filename: attachment.filename,
+            media_type: attachment.mime_type,
+            url: `/sessions/${input.sessionId}/tasks/${input.taskId}/images/${index}`,
+          })),
+        ]
+      : input.content;
   return {
     message_id: generateId() as UUID as Message['message_id'],
     session_id: input.sessionId,
@@ -61,7 +84,7 @@ export function buildInitialUserMessage(input: BuildInitialUserMessageInput): Me
     index: input.index,
     timestamp: input.timestamp,
     content_preview: preview,
-    content: input.content,
+    content,
     metadata: input.metadata,
   };
 }

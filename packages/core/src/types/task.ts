@@ -3,6 +3,13 @@ import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
+/** Image uploaded by the web composer and associated with a persisted task. */
+export interface TaskAttachment {
+  filename: string;
+  path: string;
+  mime_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+}
+
 export const TaskStatus = {
   QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
@@ -65,6 +72,8 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /** Web-composer images that may be previewed from this task's user turn. */
+  attachments?: TaskAttachment[];
 }
 
 /**

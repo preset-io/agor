@@ -7,6 +7,8 @@ export interface UploadedFile {
   path: string;
   size: number;
   mimeType: string;
+  /** Signed capability used once to associate a composer image with a task. */
+  previewToken?: string;
 }
 
 export interface UploadFilesToSessionOptions {

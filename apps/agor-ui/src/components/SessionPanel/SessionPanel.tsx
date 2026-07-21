@@ -1059,11 +1059,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         : value;
       const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
       if (!promptToSend.trim()) return;
+      const attachmentTokens = uploadedFiles.flatMap((file) =>
+        file.previewToken ? [file.previewToken] : []
+      );
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
       // session state and reports it back via `task.status`. The 'queued'
       // WebSocket event populates the queue panel for queued prompts.
-      const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+      const sendResult =
+        attachmentTokens.length > 0
+          ? await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, attachmentTokens)
+          : await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
       if (composerStillOwnsSend) {

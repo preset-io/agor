@@ -101,6 +101,7 @@ export interface SessionPromptRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
   messageSource?: 'gateway' | 'agor';
+  attachmentTokens?: string[];
 }
 
 export interface QueuedSessionPromptResult {

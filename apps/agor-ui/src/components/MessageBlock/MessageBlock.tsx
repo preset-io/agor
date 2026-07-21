@@ -18,6 +18,7 @@ import {
   PermissionScope,
   PermissionStatus,
   shortId,
+  type UrlImageContentBlock,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -50,6 +51,8 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
+import { AuthenticatedMessageImage } from './AuthenticatedMessageImage';
+import { hidePreviewedImageAttachments } from './imageAttachmentPresentation';
 import { WidgetBlock } from './WidgetBlock';
 
 interface ToolUseBlock {
@@ -76,6 +79,12 @@ interface ThinkingContentBlock {
   type: 'thinking';
   text: string;
   signature?: string;
+}
+
+function isUrlImageContentBlock(block: CoreContentBlock): block is UrlImageContentBlock {
+  return (
+    block.type === 'image' && typeof block.url === 'string' && block.url.startsWith('/sessions/')
+  );
 }
 
 interface MessageBlockProps {
@@ -519,11 +528,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     textBeforeTools: string[];
     toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[];
     textAfterTools: string[];
+    imageBlocks: UrlImageContentBlock[];
   } => {
     const thinkingBlocks: string[] = [];
     const textBeforeTools: string[] = [];
     const textAfterTools: string[] = [];
     const toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[] = [];
+    const imageBlocks: UrlImageContentBlock[] = [];
 
     // Handle string content
     if (typeof message.content === 'string') {
@@ -534,6 +545,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         textBeforeTools: [content],
         toolBlocks: [],
         textAfterTools: [],
+        imageBlocks: [],
       };
     }
 
@@ -561,6 +573,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           } else {
             textBeforeTools.push(text);
           }
+        } else if (isUrlImageContentBlock(block)) {
+          imageBlocks.push(block);
         } else if (block.type === 'tool_use') {
           const toolUse = block as unknown as ToolUseBlock;
 
@@ -610,10 +624,21 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       }
     }
 
-    return { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools };
+    return {
+      thinkingBlocks,
+      textBeforeTools: textBeforeTools.map((text) =>
+        hidePreviewedImageAttachments(text, imageBlocks)
+      ),
+      toolBlocks,
+      textAfterTools: textAfterTools.map((text) =>
+        hidePreviewedImageAttachments(text, imageBlocks)
+      ),
+      imageBlocks,
+    };
   };
 
-  const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
+  const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools, imageBlocks } =
+    getContentBlocks();
 
   // Also check for streaming thinking content
   const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
@@ -625,8 +650,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
+  const hasImages = imageBlocks.length > 0;
 
-  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
+  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasImages) {
     return null;
   }
 
@@ -648,7 +674,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Text before tools (if any) - rare but possible */}
-      {hasTextBefore &&
+      {(hasTextBefore || hasImages) &&
         (() => {
           const avatar = isUser ? (
             <UserIdentityAvatar user={currentUser} />
@@ -708,6 +734,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           </div>
                         );
                       })}
+                      {imageBlocks.map((image) => (
+                        <AuthenticatedMessageImage key={image.url} image={image} />
+                      ))}
                     </div>
                   </CopyableContent>
                 }

@@ -60,6 +60,14 @@ export interface ContentBlock {
   [key: string]: unknown; // Additional type-specific fields
 }
 
+/** Image content whose bytes are retrieved from an authenticated URL. */
+export interface UrlImageContentBlock extends ContentBlock {
+  type: 'image';
+  url: string;
+  filename?: string;
+  media_type?: string;
+}
+
 /**
  * A single hunk from a structuredPatch diff computation.
  * Used by executor diff enrichment and the UI diff viewer.

@@ -19,12 +19,16 @@ import multer from 'multer';
  *
  * If you need to add a new type, prefer the most specific MIME possible.
  */
-export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
+export const PREVIEW_IMAGE_MIME_TYPES = new Set([
   // Images
   'image/png',
   'image/jpeg',
   'image/gif',
   'image/webp',
+]);
+
+export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
+  ...PREVIEW_IMAGE_MIME_TYPES,
   // NOTE: image/svg+xml is intentionally NOT allowed — SVGs can carry script.
   // Text / docs
   'text/plain',

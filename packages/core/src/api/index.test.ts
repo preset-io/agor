@@ -640,6 +640,7 @@ describe('createClient', () => {
       const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
         permissionMode: 'auto',
         stream: true,
+        attachmentTokens: ['signed-image-token'],
       });
 
       expect(createMock).toHaveBeenCalledWith(
@@ -647,6 +648,7 @@ describe('createClient', () => {
           prompt: 'Fix failing tests',
           permissionMode: 'auto',
           stream: true,
+          attachmentTokens: ['signed-image-token'],
         },
         undefined
       );

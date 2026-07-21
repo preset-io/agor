@@ -21,7 +21,8 @@ export interface AppActionsContextValue {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    attachmentTokens?: string[]
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;

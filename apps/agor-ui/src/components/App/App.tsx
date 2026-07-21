@@ -172,7 +172,8 @@ export interface AppProps {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    attachmentTokens?: string[]
   ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;

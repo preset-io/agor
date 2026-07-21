@@ -135,6 +135,12 @@ import {
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
+  createSessionImageHandler,
+  signComposerImageAttachment,
+  stripUntrustedAttachments,
+  verifyComposerImageAttachmentTokens,
+} from './utils/session-images.js';
+import {
   deferWithSessionQueueTenantScope,
   runWithSessionQueueTenantScope,
 } from './utils/session-queue-tenant-scope.js';
@@ -153,6 +159,8 @@ import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
+  getUploadDirectory,
+  PREVIEW_IMAGE_MIME_TYPES,
 } from './utils/upload.js';
 import { resolveWidget } from './widgets/submissions.js';
 
@@ -1171,6 +1179,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           index: messageStartIndex,
           timestamp: startTimestamp,
           content: task.full_prompt,
+          attachments: task.metadata?.attachments,
           // Callback messages are typed `system` so the UI shows the special
           // Agor-callback styling. Normal prompts stay `user`.
           type: isCallback ? 'system' : 'user',
@@ -1421,11 +1430,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           /**
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
-           * traceability fields like `system_authored` / `widget_id`.
-           * External callers receive no validation on this field — it's
-           * trusted because the route is RBAC-gated.
+           * traceability fields. Caller-authored attachments are stripped.
            */
           metadata?: Partial<import('@agor/core/types').TaskMetadata>;
+          /** Signed image-upload capabilities returned by the web upload route. */
+          attachmentTokens?: string[];
         },
         params: RouteParams
       ) {
@@ -1512,6 +1521,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
         const createdBy = params.user.user_id;
+        if (
+          data.attachmentTokens !== undefined &&
+          (!Array.isArray(data.attachmentTokens) ||
+            data.attachmentTokens.length > 10 ||
+            data.attachmentTokens.some((token) => typeof token !== 'string'))
+        ) {
+          throw new BadRequest('Invalid image attachment');
+        }
+        let attachments: import('@agor/core/types').TaskAttachment[] = [];
+        try {
+          attachments = verifyComposerImageAttachmentTokens(
+            data.attachmentTokens ?? [],
+            createdBy,
+            jwtSecret
+          );
+        } catch {
+          throw new BadRequest('Invalid image attachment');
+        }
+        // Association can only come from signed upload tokens; never accept
+        // caller-authored task metadata paths.
+        const extraMetadata = stripUntrustedAttachments(data.metadata);
 
         return await withSessionTurnLock(
           sessionTurnLocks,
@@ -1543,7 +1573,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 metadata: {
                   ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
                   ...(messageSource ? { source: messageSource } : {}),
-                  ...(data.metadata ?? {}),
+                  ...extraMetadata,
+                  ...(attachments.length > 0 ? { attachments } : {}),
                 },
               });
 
@@ -1585,7 +1616,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // stays in lockstep.
             const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
               ...(messageSource ? { source: messageSource } : {}),
-              ...(data.metadata ?? {}),
+              ...extraMetadata,
+              ...(attachments.length > 0 ? { attachments } : {}),
             };
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
@@ -2021,6 +2053,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
 
       const params = req.feathers as AuthenticatedParams;
+      const uploaderId = params.user?.user_id;
+      if (!uploaderId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       if (DEBUG_UPLOAD) {
         console.log(`   Auth params:`, {
           hasUser: !!params?.user,
@@ -2039,6 +2075,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         path: f.path,
         size: f.size,
         mimeType: f.mimetype,
+        ...(PREVIEW_IMAGE_MIME_TYPES.has(f.mimetype)
+          ? {
+              previewToken: signComposerImageAttachment(
+                {
+                  filename: f.filename,
+                  path: f.path,
+                  mime_type: f.mimetype as import('@agor/core/types').TaskAttachment['mime_type'],
+                },
+                uploaderId,
+                jwtSecret
+              ),
+            }
+          : {}),
       }));
 
       if (DEBUG_UPLOAD) {
@@ -2101,7 +2150,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
+  const bearerAuthMiddleware: any = async (req: any, res: any, next: any) => {
     try {
       if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
 
@@ -2161,7 +2210,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   (app as any).post(
     '/sessions/:sessionId/upload',
     uploadLogger,
-    uploadAuthMiddleware,
+    bearerAuthMiddleware,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
@@ -2205,6 +2254,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
+  );
+
+  // Bearer-only image retrieval. The hooked sessions service owns view
+  // authorization; persisted task metadata owns the session/image association.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).get(
+    '/sessions/:sessionId/tasks/:taskId/images/:imageIndex',
+    bearerAuthMiddleware,
+    createSessionImageHandler({
+      uploadDirectory: getUploadDirectory(),
+      getSession: (sessionId, params) => app.service('sessions').get(sessionId, params),
+      getTask: (taskId, params) =>
+        runWithTenantDatabaseScope(db, params.tenant?.tenant_id, () =>
+          new TaskRepository(db).findById(taskId)
+        ),
+    })
   );
 
   // ============================================================================

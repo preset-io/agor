@@ -1000,7 +1000,12 @@ function AppContent() {
               uploaded.files.map((file) => file.path)
             );
             if (finalPrompt.trim()) {
-              await handleSendPrompt(session.session_id, finalPrompt, config.permissionMode);
+              await handleSendPrompt(
+                session.session_id,
+                finalPrompt,
+                config.permissionMode,
+                uploaded.files.flatMap((file) => (file.previewToken ? [file.previewToken] : []))
+              );
             }
           } catch (error) {
             // Never silently drop the user's words: surface the upload failure
@@ -1120,7 +1125,8 @@ function AppContent() {
   const handleSendPrompt = async (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    attachmentTokens?: string[]
   ): Promise<boolean> => {
     if (!client) return false;
 
@@ -1128,6 +1134,7 @@ function AppContent() {
       await client.sessions.prompt(sessionId, prompt, {
         permissionMode,
         messageSource: 'agor',
+        ...(attachmentTokens?.length ? { attachmentTokens } : {}),
       });
 
       // Clear the draft after sending
