@@ -279,8 +279,11 @@ export interface Message {
      */
     widget_id?: MessageID;
 
-    /** Marks the system message the executor emits on task failure, so
-     * `classifyMissingCredentialFailure` can find it without type/role guessing. */
+    /** Generic structural marker set by the executor on the message it emits
+     * for any task failure (i.e. the SDK call threw). Lets downstream consumers
+     * identify a failure message without type/role guessing. Note the
+     * credential-classification hook itself keys off the more specific
+     * `is_missing_credential_failure` / `is_zero_turn_result` flags, not this one. */
     is_task_failure?: boolean;
 
     /** Set only when the executor's scoped credential preflight fails. */
