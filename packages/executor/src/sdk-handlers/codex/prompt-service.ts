@@ -33,11 +33,8 @@ import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
-import { isGatewaySession } from '@agor/core/types';
-import {
-  getDefaultCodexPermissionConfig,
-  mapToCodexPermissionConfig,
-} from '@agor/core/utils/permission-mode-mapper';
+import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
+import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -1004,13 +1001,12 @@ export class CodexPromptService {
     // The daemon resolver (`resolvePermissionConfig`) always emits a full
     // codex sub-config for new sessions, so this fallback only fires for
     // legacy sessions in the DB with a partial / missing `permission_config`.
-    // Derive partial-field fallbacks from the effective mode when available;
-    // only sessions without a recorded mode use the system default.
+    // Derive partial-field fallbacks from the effective mode;
+    // mode-less legacy sessions use the same canonical system default.
     const codexConfig = session.permission_config?.codex;
-    const effectivePermissionMode = permissionMode ?? session.permission_config?.mode;
-    const defaults = effectivePermissionMode
-      ? mapToCodexPermissionConfig(effectivePermissionMode)
-      : getDefaultCodexPermissionConfig();
+    const effectivePermissionMode =
+      permissionMode ?? session.permission_config?.mode ?? getDefaultPermissionMode('codex');
+    const defaults = mapToCodexPermissionConfig(effectivePermissionMode);
     // workspace-write uses bwrap not available in pods; override with danger-full-access for k8s.
     const sandboxModeEnvOverride = process.env.AGOR_CODEX_SANDBOX_MODE as
       | CodexSandboxMode

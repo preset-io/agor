@@ -324,8 +324,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
 
   it.each([
     {
-      name: 'allow-all',
-      permissionMode: 'allow-all',
+      name: 'persisted allow-all',
+      persistedPermissionMode: 'allow-all',
       codexPermissions: {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'never',
@@ -338,8 +338,44 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       },
     },
     {
+      name: 'prompt allow-all overriding persisted auto',
+      persistedPermissionMode: 'auto',
+      promptPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'prompt auto overriding persisted allow-all',
+      persistedPermissionMode: 'allow-all',
+      promptPermissionMode: 'auto',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'mode-less legacy session using the Codex system default',
+      persistedPermissionMode: undefined,
+      codexPermissions: {},
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
       name: 'allow-all with the k8s sandbox override',
-      permissionMode: 'allow-all',
+      persistedPermissionMode: 'allow-all',
       codexPermissions: {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'never',
@@ -353,8 +389,19 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       },
     },
     {
+      name: 'allow-all with a read-only sandbox environment override',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      sandboxModeEnvOverride: 'read-only',
+      expectedApps: undefined,
+    },
+    {
       name: 'allow-all with network disabled',
-      permissionMode: 'allow-all',
+      persistedPermissionMode: 'allow-all',
       codexPermissions: {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'never',
@@ -364,7 +411,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     },
     {
       name: 'allow-all with approval required',
-      permissionMode: 'allow-all',
+      persistedPermissionMode: 'allow-all',
       codexPermissions: {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'on-request',
@@ -373,8 +420,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
     {
-      name: 'allow-all with a read-only sandbox',
-      permissionMode: 'allow-all',
+      name: 'allow-all with a configured read-only sandbox',
+      persistedPermissionMode: 'allow-all',
       codexPermissions: {
         sandboxMode: 'read-only',
         approvalPolicy: 'never',
@@ -383,8 +430,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
     {
-      name: 'auto mode with never approval',
-      permissionMode: 'auto',
+      name: 'persisted auto mode with never approval',
+      persistedPermissionMode: 'auto',
       codexPermissions: {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'never',
@@ -393,7 +440,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
   ])('builds session config for $name permissions and uses the configured accessor', async ({
-    permissionMode,
+    persistedPermissionMode,
+    promptPermissionMode,
     codexPermissions,
     sandboxModeEnvOverride,
     expectedApps,
@@ -431,7 +479,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
-      permission_config: { mode: permissionMode, codex: codexPermissions },
+      permission_config: {
+        ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
+        codex: codexPermissions,
+      },
       model_config: {},
       mcp_token: 'test-token',
     });
@@ -453,7 +504,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       'session-flow' as any,
       'review',
       undefined,
-      permissionMode as PermissionMode
+      promptPermissionMode as PermissionMode | undefined
     )) {
       emitted.push(event as Record<string, unknown>);
     }
