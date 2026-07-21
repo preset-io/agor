@@ -9,6 +9,7 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  canonicalTenantAgenticTool,
   DEFAULT_CLAUDE_MODEL,
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
@@ -170,7 +171,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (selectedAgent) {
       const tool = selectedAgent as AgenticToolName;
-      const agentDefaults = currentUser?.default_agentic_config?.[tool];
+      // Defaults are stored under the canonical key (claude-code-cli → claude-code).
+      const agentDefaults = currentUser?.default_agentic_config?.[canonicalTenantAgenticTool(tool)];
       const baseValues = getFormValuesFromConfig(tool, agentDefaults);
 
       // MCP inheritance: branch config > user defaults
@@ -194,7 +196,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       setIsCreating(true);
 
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
-      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+      const agentDefaults =
+        currentUser?.default_agentic_config?.[
+          canonicalTenantAgenticTool(selectedAgent as AgenticToolName)
+        ];
 
       // MCP fallback must respect branch > user defaults (same as open-reset effect)
       const branchMcpIds = branch?.mcp_server_ids;
