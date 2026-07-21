@@ -17,6 +17,7 @@ import {
   type StoredEnvVar,
   validateEnvVar,
 } from '@agor/core/config';
+import { normalizeCredential } from '@agor/core/credentials';
 import {
   and,
   compare,
@@ -184,7 +185,10 @@ function applyAgenticToolsPatch(
         delete bucket[field];
       } else {
         try {
-          bucket[field] = encryptApiKey(value);
+          // At-rest normalization backstop: repair terminal-paste artifacts
+          // (edge/zero-width/quote/internal whitespace) regardless of client.
+          const normalized = normalizeCredential(field, value).value;
+          bucket[field] = encryptApiKey(normalized);
           console.log(`🔐 Encrypted user agentic_tools.${tool}.${field}`);
         } catch (err) {
           console.error(`Failed to encrypt agentic_tools.${tool}.${field}:`, err);
@@ -517,12 +521,19 @@ export class UsersService {
       const nextEnvVars: Record<string, StoredEnvVar> = { ...normalizedExisting };
 
       if (data.env_vars) {
-        for (const [key, value] of Object.entries(data.env_vars)) {
+        for (const [key, rawValue] of Object.entries(data.env_vars)) {
           // Validate variable name
           if (!isEnvVarAllowed(key)) {
             const reason = getEnvVarBlockReason(key);
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
+
+          // Normalize credential-shaped values at rest (terminal-paste repair)
+          // before any format check, so a stray space is fixed, not rejected.
+          const value =
+            rawValue === null || rawValue === undefined
+              ? rawValue
+              : normalizeCredential(key, rawValue).value;
 
           // Git tokens are embedded into a git-credentials file and a clone URL
           // at runtime. Reject at ingest anything that doesn't match the
