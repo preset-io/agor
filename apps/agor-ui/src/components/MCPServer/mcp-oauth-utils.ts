@@ -1,3 +1,4 @@
+import { normalizeCredential } from '@agor/core/credentials';
 import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
@@ -52,7 +53,10 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
 
   // Only include client secret if it's provided
   if (values.oauth_client_secret && typeof values.oauth_client_secret === 'string') {
-    config.oauth_client_secret = values.oauth_client_secret;
+    config.oauth_client_secret = normalizeMcpSecret(
+      'oauth_client_secret',
+      values.oauth_client_secret
+    );
   }
 
   // Only include scope if it's provided
@@ -156,17 +160,31 @@ export interface BuiltAuth {
  * so callers can do `payload.auth = buildAuthFromValues(values)` without
  * an outer if/else.
  */
+/**
+ * Normalize an MCP secret. These fields accept `{{ user.env.VAR }}` templates
+ * whose internal whitespace is meaningful, so templates are left untouched and
+ * raw values get only edge / zero-width / smart-quote cleanup (the unregistered
+ * field name resolves to the generic normalization path — no internal collapse).
+ */
+function normalizeMcpSecret(field: string, value: string): string {
+  if (isTemplateValue(value)) return value;
+  return normalizeCredential(field, value).value;
+}
+
 export function buildAuthFromValues(values: Record<string, unknown>): BuiltAuth | undefined {
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
 
   const auth: BuiltAuth = { type: authType };
   if (authType === 'bearer') {
-    if (typeof values.auth_token === 'string') auth.token = values.auth_token;
+    if (typeof values.auth_token === 'string')
+      auth.token = normalizeMcpSecret('auth_token', values.auth_token);
   } else if (authType === 'jwt') {
-    if (typeof values.jwt_api_url === 'string') auth.api_url = values.jwt_api_url;
-    if (typeof values.jwt_api_token === 'string') auth.api_token = values.jwt_api_token;
-    if (typeof values.jwt_api_secret === 'string') auth.api_secret = values.jwt_api_secret;
+    if (typeof values.jwt_api_url === 'string') auth.api_url = values.jwt_api_url.trim();
+    if (typeof values.jwt_api_token === 'string')
+      auth.api_token = normalizeMcpSecret('jwt_api_token', values.jwt_api_token);
+    if (typeof values.jwt_api_secret === 'string')
+      auth.api_secret = normalizeMcpSecret('jwt_api_secret', values.jwt_api_secret);
   } else {
     Object.assign(auth, extractOAuthConfig(values));
   }

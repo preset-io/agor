@@ -2,6 +2,7 @@ import type {
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
+  AuthCheckResult,
   ProviderResolutionPolicy,
   TenantAgenticToolName,
   TenantAgenticToolSettings,
@@ -237,6 +238,28 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                                   await patch(tool, { connection: { [field]: null } });
                                 } finally {
                                   setSaving((state) => ({ ...state, [field]: false }));
+                                }
+                              }}
+                              onVerify={async (_field, value) => {
+                                if (!client) {
+                                  return {
+                                    status: 'unknown',
+                                    authenticated: false,
+                                    method: 'none',
+                                  };
+                                }
+                                try {
+                                  return (await client.service('check-auth').create({
+                                    tool: tool as AgenticToolName,
+                                    apiKey: value,
+                                  })) as AuthCheckResult;
+                                } catch {
+                                  return {
+                                    status: 'unknown',
+                                    authenticated: false,
+                                    method: 'none',
+                                    hint: 'Connection check failed.',
+                                  };
                                 }
                               }}
                               saving={saving}

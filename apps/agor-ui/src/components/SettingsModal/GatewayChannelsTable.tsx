@@ -26,6 +26,7 @@ import type {
 } from '@agor-live/client';
 import {
   GATEWAY_REDACTED_SENTINEL,
+  normalizeCredential,
   resolveSlackAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
 } from '@agor-live/client';
@@ -3251,7 +3252,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         config.app_id = Number(values.github_app_id);
       }
       if (values.github_private_key) {
-        config.private_key = values.github_private_key;
+        config.private_key = normalizeCredential(
+          'private_key',
+          values.github_private_key as string
+        ).value;
       }
       if (values.github_installation_id) {
         config.installation_id = Number(values.github_installation_id);
@@ -3271,13 +3275,21 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
     } else if (values.channel_type === 'teams') {
       if (values.teams_app_id) config.app_id = values.teams_app_id;
-      if (values.teams_app_password) config.app_password = values.teams_app_password;
+      if (values.teams_app_password)
+        config.app_password = normalizeCredential(
+          'app_password',
+          values.teams_app_password as string
+        ).value;
       config.tenant_id = values.teams_tenant_id;
       config.webhook_port = (values.teams_webhook_port as number) ?? 3978;
       config.webhook_path = (values.teams_webhook_path as string) || '/api/messages';
       config.require_mention = values.teams_require_mention ?? true;
     } else if (values.channel_type === 'shortcut') {
-      if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+      if (values.shortcut_api_token)
+        config.api_token = normalizeCredential(
+          'api_token',
+          values.shortcut_api_token as string
+        ).value;
       if (values.shortcut_agent_member_id) {
         config.agent_member_id = values.shortcut_agent_member_id;
       } else {
@@ -3304,8 +3316,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       }
     } else if (values.channel_type === 'slack') {
-      if (values.bot_token) config.bot_token = values.bot_token;
-      if (values.app_token) config.app_token = values.app_token;
+      if (values.bot_token)
+        config.bot_token = normalizeCredential('bot_token', values.bot_token as string).value;
+      if (values.app_token)
+        config.app_token = normalizeCredential('app_token', values.app_token as string).value;
       // The Slack wizard only creates inbound/Socket-Mode channels (bot + app
       // token, Socket Mode required), so record that intent by default. This
       // makes getRequiredSecretFields require app_token for UI-created inbound

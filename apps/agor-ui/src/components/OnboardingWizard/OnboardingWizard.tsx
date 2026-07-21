@@ -13,7 +13,7 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
-import { TOOL_API_KEY_NAMES } from '@agor-live/client';
+import { lintCredential, normalizeCredential, TOOL_API_KEY_NAMES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -287,36 +287,22 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
   ],
 };
 
+// Backed by the shared credential registry so prefix/length/cross-paste rules
+// live in one place. opencode expects a base URL, which the registry doesn't lint.
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
   const k = key.trim();
   if (!k) return null;
-  switch (agent) {
-    case 'claude-code':
-      if (!k.startsWith('sk-ant-')) return 'Claude keys start with sk-ant-…';
-      if (k.startsWith('sk-ant-oat'))
-        return 'That looks like a subscription token - use the Subscription token option above.';
-      if (k.length < 50) return 'Key looks incomplete - copy the full key.';
+  if (agent === 'opencode') {
+    try {
+      new URL(k);
       return null;
-    case 'codex':
-      if (k.startsWith('sk-ant-')) return 'That looks like a Claude key - pick Claude above.';
-      if (!k.startsWith('sk-')) return 'OpenAI keys start with sk-…';
-      if (k.length < 30) return 'Key looks incomplete.';
-      return null;
-    case 'gemini':
-      if (!k.startsWith('AIzaSy')) return 'Gemini keys start with AIzaSy…';
-      if (k.length < 20) return 'Key looks incomplete.';
-      return null;
-    case 'opencode': {
-      try {
-        new URL(k);
-        return null;
-      } catch {
-        return 'Enter a valid URL starting with https://';
-      }
+    } catch {
+      return 'Enter a valid URL starting with https://';
     }
-    default:
-      return null;
   }
+  const field = TOOL_API_KEY_NAMES[agent];
+  if (!field) return null;
+  return lintCredential(field, k)?.message ?? null;
 }
 
 function hasAnyLlmKey(user: User | null | undefined): boolean {
@@ -528,10 +514,27 @@ export function OnboardingWizard({
   const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmKeyFixed, setLlmKeyFixed] = useState(false);
   const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
   const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
     {}
   );
+
+  // Silent normalization (paste/blur) for the LLM key inputs. Repairs
+  // terminal-paste artifacts and flags an internal-whitespace fix for the notice.
+  // `raw` is the DOM value on paste (state is stale there).
+  const normalizeLlmKey = (raw: string) => {
+    if (!selectedAgent) return;
+    const field = keyNameForAgent(selectedAgent, authMethod);
+    const result = normalizeCredential(field, raw);
+    setApiKey(result.value);
+    if (result.internalWhitespaceFixed) setLlmKeyFixed(true);
+    setLlmError(
+      authMethod === 'claude-subscription-token'
+        ? null
+        : validateLlmKeyPattern(selectedAgent, result.value)
+    );
+  };
 
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
@@ -846,10 +849,12 @@ export function OnboardingWizard({
           return;
         }
         if (!user || !apiKey.trim()) return;
+        const keyField = keyNameForAgent(selectedAgent, authMethod);
+        const normalizedKey = normalizeCredential(keyField, apiKey).value;
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
-          const patternErr = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+          const patternErr = validateLlmKeyPattern(selectedAgent, normalizedKey);
           if (patternErr) {
             setLlmError(patternErr);
             return;
@@ -859,7 +864,7 @@ export function OnboardingWizard({
         setLlmError(null);
         if (onCheckAuth) {
           try {
-            const authResult = await onCheckAuth(selectedAgent, apiKey.trim());
+            const authResult = await onCheckAuth(selectedAgent, normalizedKey);
             // Only block on a definitive rejection; 'unknown' (transient/transport
             // failure) proceeds to save rather than rejecting a possibly-valid key.
             if (authResult.status === 'unauthenticated') {
@@ -1415,7 +1420,13 @@ export function OnboardingWizard({
                           onChange={(e) => {
                             setApiKey(e.target.value);
                             setLlmError(null);
+                            setLlmKeyFixed(false);
                           }}
+                          onPaste={(e) => {
+                            const el = e.currentTarget;
+                            window.setTimeout(() => normalizeLlmKey(el.value), 0);
+                          }}
+                          onBlur={() => normalizeLlmKey(apiKey)}
                           style={{
                             background: 'rgba(0,0,0,0.3)',
                             borderColor: 'rgba(255,255,255,0.12)',
@@ -1430,10 +1441,16 @@ export function OnboardingWizard({
                         placeholder={option.placeholder}
                         value={apiKey}
                         onChange={(e) => {
+                          // Validate on blur/paste, never on keystroke.
                           setApiKey(e.target.value);
-                          if (selectedAgent)
-                            setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
+                          setLlmError(null);
+                          setLlmKeyFixed(false);
                         }}
+                        onPaste={(e) => {
+                          const el = e.currentTarget;
+                          window.setTimeout(() => normalizeLlmKey(el.value), 0);
+                        }}
+                        onBlur={() => normalizeLlmKey(apiKey)}
                         style={{
                           background: 'rgba(0,0,0,0.3)',
                           borderColor: 'rgba(255,255,255,0.12)',
@@ -1448,6 +1465,16 @@ export function OnboardingWizard({
                     >
                       Stored securely - never shared or logged.
                     </Text>
+                    {llmKeyFixed && (
+                      <Alert
+                        type="warning"
+                        message="We removed spaces or line breaks from this key — a common side effect of copying from a terminal. Check that it verifies below."
+                        showIcon
+                        closable
+                        onClose={() => setLlmKeyFixed(false)}
+                        style={{ marginTop: 10, fontSize: 12 }}
+                      />
+                    )}
                     {llmError && (
                       <Alert
                         type="error"

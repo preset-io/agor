@@ -21,7 +21,7 @@
  */
 
 import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, normalizeCredential, ROLES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -34,6 +34,8 @@ import { useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks';
 import { useAgorStore } from '@/store/agorStore';
 import { useThemedMessage } from '@/utils/message';
+import { CredentialFieldFeedback } from '../credentials/CredentialFieldFeedback';
+import { type CredentialFieldState, useCredentialFields } from '../credentials/useCredentialField';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
 const { Text } = Typography;
@@ -146,11 +148,24 @@ interface FieldRowProps {
   field: string;
   value: string;
   onChange: (next: string) => void;
+  /** Normalize the current value (blur) or an explicit pasted value (paste). */
+  onNormalize: (raw?: string) => void;
+  feedback: CredentialFieldState;
+  onDismissInternalFix: () => void;
   error?: string;
   disabled: boolean;
 }
 
-const FieldRow: React.FC<FieldRowProps> = ({ field, value, onChange, error, disabled }) => {
+const FieldRow: React.FC<FieldRowProps> = ({
+  field,
+  value,
+  onChange,
+  onNormalize,
+  feedback,
+  onDismissInternalFix,
+  error,
+  disabled,
+}) => {
   const { token } = theme.useToken();
   const presentation = presentationFor(field);
   // Secure multi-line fields (GitHub PEM) start revealed for entry, then
@@ -161,6 +176,11 @@ const FieldRow: React.FC<FieldRowProps> = ({ field, value, onChange, error, disa
     value,
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange(e.target.value),
+    onBlur: () => onNormalize(),
+    onPaste: (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const el = e.currentTarget;
+      window.setTimeout(() => onNormalize(el.value), 0);
+    },
     placeholder: presentation.placeholder,
     disabled,
     'aria-label': `Value for ${presentation.label}`,
@@ -243,6 +263,11 @@ const FieldRow: React.FC<FieldRowProps> = ({ field, value, onChange, error, disa
           {error}
         </Text>
       ) : null}
+      <CredentialFieldFeedback
+        lint={feedback.lint}
+        internalFixVisible={feedback.showInternalFix}
+        onDismissInternalFix={onDismissInternalFix}
+      />
     </Space>
   );
 };
@@ -269,6 +294,18 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [localResolution, setLocalResolution] = useState<'submitted' | 'dismissed' | null>(null);
   const resolvingRef = useRef(false);
+  const credentials = useCredentialFields();
+
+  // Silent normalization (paste/blur). Repairs terminal-paste artifacts and
+  // surfaces the internal-fix notice + format lint. `raw` is the DOM value on
+  // paste (state is stale there); on blur we read the committed state value.
+  const normalizeField = (field: string, raw?: string) => {
+    const source = raw ?? values[field] ?? '';
+    if (!source) return;
+    const normalized = credentials.normalizeOnInput(field, source);
+    setValues((prev) => ({ ...prev, [field]: normalized }));
+    credentials.lintOnBlur(field, normalized);
+  };
 
   // Resolve the current user's role from the CANONICAL store row (mirrors
   // App.tsx) rather than the SLIM auth user, which carries no `role`. Setting a
@@ -285,17 +322,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     [fields, values]
   );
 
+  // Only genuinely-blocking conditions (a missing required value) belong here.
+  // Format mismatches are surfaced as non-blocking lint warnings via
+  // `CredentialFieldFeedback` — a stale prefix rule must never block a save.
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     for (const field of fields) {
-      const value = values[field]?.trim() ?? '';
-      if (!value) {
+      if (!(values[field]?.trim() ?? '')) {
         errors[field] = 'Enter a value.';
-        continue;
-      }
-      const prefix = presentationFor(field).prefix;
-      if (prefix && !value.startsWith(prefix)) {
-        errors[field] = `Expected a value starting with ${prefix}.`;
       }
     }
     return errors;
@@ -321,7 +355,8 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     setValidationMessage(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
-    for (const field of fields) tokens[field] = values[field]?.trim() ?? '';
+    for (const field of fields)
+      tokens[field] = normalizeCredential(field, values[field] ?? '').value;
     try {
       await post('submit', { tokens });
       setLocalResolution('submitted');
@@ -419,11 +454,15 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
             field={field}
             value={values[field] ?? ''}
             error={fieldErrors[field]}
+            feedback={credentials.get(field)}
+            onNormalize={(raw) => normalizeField(field, raw)}
+            onDismissInternalFix={() => credentials.dismissInternalFix(field)}
             disabled={submitting || dismissing}
             onChange={(next) => {
               setValidationMessage(null);
               setFieldErrors((prev) => ({ ...prev, [field]: '' }));
               setValues((prev) => ({ ...prev, [field]: next }));
+              credentials.reset(field);
             }}
           />
         ))}

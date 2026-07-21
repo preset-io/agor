@@ -195,9 +195,12 @@ describe('OnboardingWizard', () => {
 
     clickButton('Claude');
     const input = screen.getByLabelText('Anthropic API key');
+    // Validation is surfaced on blur (never on keystroke) via the shared
+    // credential lint registry.
     fireEvent.change(input, { target: { value: 'not-a-real-key' } });
+    fireEvent.blur(input);
 
-    const errorText = await screen.findByText(/Claude keys start with sk-ant-/i);
+    const errorText = await screen.findByText(/Anthropic keys usually start with sk-ant-api/i);
     expect(errorText).toBeInTheDocument();
     const connectButton = screen.getByText(/^connect →/i).closest('button');
     expect(connectButton).toBeDisabled();

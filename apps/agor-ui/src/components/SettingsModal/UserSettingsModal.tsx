@@ -3,6 +3,7 @@ import type {
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
+  AuthCheckResult,
   EnvVarMetadata,
   EnvVarScope,
   Group,
@@ -501,6 +502,28 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       throw err;
     } finally {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+    }
+  };
+
+  // Live-verify a credential (Layer 3). With a value, probe the freshly-entered
+  // key; without one, the daemon resolves the stored key for this tool.
+  const handleToolFieldVerify = async (
+    tool: AgenticToolName,
+    _field: AgenticToolConfigField,
+    value?: string
+  ): Promise<AuthCheckResult> => {
+    if (!client) return { status: 'unknown', authenticated: false, method: 'none' };
+    try {
+      return (await client
+        .service('check-auth')
+        .create({ tool, apiKey: value })) as AuthCheckResult;
+    } catch {
+      return {
+        status: 'unknown',
+        authenticated: false,
+        method: 'none',
+        hint: 'Connection check failed.',
+      };
     }
   };
 
@@ -1185,6 +1208,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     fieldStatus={fieldStatus}
                     onSave={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
                     onClear={(field) => handleToolFieldClear(credentialToolName, field)}
+                    onVerify={(field, value) =>
+                      handleToolFieldVerify(credentialToolName, field, value)
+                    }
                     saving={savingForTool}
                     publicValues={
                       user?.agentic_tools_public_values?.[credentialToolName] as

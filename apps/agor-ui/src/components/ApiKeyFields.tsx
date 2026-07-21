@@ -1,14 +1,70 @@
-import type { AgenticToolConfigField, AgenticToolName } from '@agor-live/client';
+import type {
+  AgenticToolConfigField,
+  AgenticToolName,
+  AuthCheckResult,
+  CredentialSpecKey,
+} from '@agor-live/client';
+import { normalizeCredential, resolveCredentialSpec } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
   InfoCircleOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
+import { CredentialFieldFeedback } from './credentials/CredentialFieldFeedback';
+import { useCredentialFields } from './credentials/useCredentialField';
 import { Tag } from './Tag';
+
+/** Spec kinds that have a live `check-auth` probe worth surfacing a Verify affordance for. */
+const VERIFIABLE_SPEC_KEYS = new Set<CredentialSpecKey>([
+  'anthropic-api-key',
+  'anthropic-oauth-token',
+  'openai-api-key',
+  'gemini-api-key',
+  'github-token',
+  'cursor-api-key',
+]);
+
+const isVerifiableField = (field: AgenticToolConfigField): boolean => {
+  const spec = resolveCredentialSpec(field);
+  return !!spec && VERIFIABLE_SPEC_KEYS.has(spec.key);
+};
+
+/** Live-verify (Layer 3) result line. `unknown` is a fail-safe, not a rejection. */
+const VerifyResultText: React.FC<{
+  verify?: { verifying: boolean; result?: AuthCheckResult };
+  providerName?: string;
+}> = ({ verify, providerName }) => {
+  const { token } = theme.useToken();
+  const result = verify?.result;
+  if (!result || verify?.verifying) return null;
+  const provider = providerName || 'the provider';
+
+  if (result.status === 'authenticated') {
+    return (
+      <Text type="success" style={{ fontSize: token.fontSizeSM }}>
+        Verified with {provider}
+      </Text>
+    );
+  }
+  if (result.status === 'unauthenticated') {
+    return (
+      <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+        {result.hint ??
+          `${provider} rejected this key. It may have been revoked or copied incompletely — regenerate and paste again.`}
+      </Text>
+    );
+  }
+  return (
+    <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+      {result.hint ?? `Couldn't verify with ${provider} right now — try again in a moment.`}
+    </Text>
+  );
+};
 
 const { Text, Link } = Typography;
 
@@ -174,6 +230,13 @@ export interface ApiKeyFieldsProps {
   onSave: (field: AgenticToolConfigField, value: string) => Promise<void>;
   /** Clear the stored value for one field. */
   onClear: (field: AgenticToolConfigField) => Promise<void>;
+  /**
+   * Live-verify a credential via the daemon `check-auth` probe (Layer 3). Called
+   * with the freshly-saved value right after save, and with no value when the
+   * user clicks Verify on an already-stored key (the daemon resolves it). Omit to
+   * hide the Verify affordance entirely.
+   */
+  onVerify?: (field: AgenticToolConfigField, value?: string) => Promise<AuthCheckResult>;
   /** Per-field saving spinner state. */
   saving?: Partial<Record<AgenticToolConfigField, boolean>>;
   /** Disable all inputs (e.g. while RBAC is loading). */
@@ -196,11 +259,17 @@ export interface ApiKeyFieldsProps {
   publicValues?: Partial<Record<AgenticToolConfigField, string>>;
 }
 
+interface VerifyState {
+  verifying: boolean;
+  result?: AuthCheckResult;
+}
+
 export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   tool,
   fieldStatus,
   onSave,
   onClear,
+  onVerify,
   saving = {},
   disabled = false,
   fields,
@@ -210,15 +279,40 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   const [inputValues, setInputValues] = useState<Partial<Record<AgenticToolConfigField, string>>>(
     {}
   );
+  const [verifyByField, setVerifyByField] = useState<
+    Partial<Record<AgenticToolConfigField, VerifyState>>
+  >({});
+  const credentials = useCredentialFields();
 
   const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
 
+  const runVerify = async (field: AgenticToolConfigField, value?: string) => {
+    if (!onVerify) return;
+    setVerifyByField((prev) => ({ ...prev, [field]: { verifying: true } }));
+    try {
+      const result = await onVerify(field, value);
+      setVerifyByField((prev) => ({ ...prev, [field]: { verifying: false, result } }));
+    } catch {
+      setVerifyByField((prev) => ({ ...prev, [field]: { verifying: false } }));
+    }
+  };
+
+  // Normalize a raw value (paste/blur) and reflect the repair + lint.
+  const normalizeInput = (field: AgenticToolConfigField, raw: string) => {
+    if (!raw) return;
+    const normalized = credentials.normalizeOnInput(field, raw);
+    setInputValues((prev) => ({ ...prev, [field]: normalized }));
+    credentials.lintOnBlur(field, normalized);
+  };
+
   const handleSave = async (field: AgenticToolConfigField) => {
-    const value = inputValues[field]?.trim();
+    const value = normalizeCredential(field, inputValues[field] ?? '').value;
     if (!value) return;
 
     await onSave(field, value);
     setInputValues((prev) => ({ ...prev, [field]: '' }));
+    credentials.reset(field);
+    if (isVerifiableField(field)) void runVerify(field, value);
   };
 
   const renderField = (config: AgenticToolFieldConfig) => {
@@ -229,6 +323,10 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     // value echoed back to the owner so they can verify the exact value
     // without clearing and retyping. Secret fields never show plaintext.
     const visibleSavedValue = type === 'text' && isSet ? publicValues?.[field] : undefined;
+    const feedback = credentials.get(field);
+    const verify = verifyByField[field];
+    const canVerify = !!onVerify && isVerifiableField(field);
+    const providerName = resolveCredentialSpec(field)?.provider;
 
     return (
       <div key={field} style={{ marginBottom: token.marginLG }}>
@@ -263,41 +361,75 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
           </Space>
 
           {isSet ? (
-            <Space wrap size="small" style={{ width: '100%' }}>
-              {visibleSavedValue && (
-                <Text code copyable style={{ fontSize: token.fontSizeSM, wordBreak: 'break-all' }}>
-                  {visibleSavedValue}
-                </Text>
-              )}
-              <Button
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => onClear(field)}
-                loading={saving[field]}
-                disabled={disabled}
-              >
-                Clear
-              </Button>
+            <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+              <Space wrap size="small" style={{ width: '100%' }}>
+                {visibleSavedValue && (
+                  <Text
+                    code
+                    copyable
+                    style={{ fontSize: token.fontSizeSM, wordBreak: 'break-all' }}
+                  >
+                    {visibleSavedValue}
+                  </Text>
+                )}
+                {canVerify && (
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    onClick={() => runVerify(field)}
+                    loading={verify?.verifying}
+                    disabled={disabled}
+                  >
+                    Verify
+                  </Button>
+                )}
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => onClear(field)}
+                  loading={saving[field]}
+                  disabled={disabled}
+                >
+                  Clear
+                </Button>
+              </Space>
+              <VerifyResultText verify={verify} providerName={providerName} />
             </Space>
           ) : (
-            <Space.Compact style={{ width: '100%' }}>
-              <InputComponent
-                placeholder={placeholder}
-                value={inputValues[field] || ''}
-                onChange={(e) => setInputValues((prev) => ({ ...prev, [field]: e.target.value }))}
-                onPressEnter={() => handleSave(field)}
-                style={{ flex: 1 }}
-                disabled={disabled}
+            <>
+              <Space.Compact style={{ width: '100%' }}>
+                <InputComponent
+                  placeholder={placeholder}
+                  value={inputValues[field] || ''}
+                  onChange={(e) => {
+                    setInputValues((prev) => ({ ...prev, [field]: e.target.value }));
+                    credentials.reset(field);
+                  }}
+                  onPaste={(e) => {
+                    // The input's value updates after the paste event; read it
+                    // from the DOM on the next tick (state is still stale here).
+                    const el = e.currentTarget;
+                    window.setTimeout(() => normalizeInput(field, el.value), 0);
+                  }}
+                  onBlur={() => normalizeInput(field, inputValues[field] ?? '')}
+                  onPressEnter={() => handleSave(field)}
+                  style={{ flex: 1 }}
+                  disabled={disabled}
+                />
+                <Button
+                  type="primary"
+                  onClick={() => handleSave(field)}
+                  loading={saving[field]}
+                  disabled={disabled || !inputValues[field]?.trim()}
+                >
+                  Save
+                </Button>
+              </Space.Compact>
+              <CredentialFieldFeedback
+                lint={feedback.lint}
+                internalFixVisible={feedback.showInternalFix}
+                onDismissInternalFix={() => credentials.dismissInternalFix(field)}
               />
-              <Button
-                type="primary"
-                onClick={() => handleSave(field)}
-                loading={saving[field]}
-                disabled={disabled || !inputValues[field]?.trim()}
-              >
-                Save
-              </Button>
-            </Space.Compact>
+            </>
           )}
 
           {docUrl && (

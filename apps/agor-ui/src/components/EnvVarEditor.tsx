@@ -1,7 +1,14 @@
-import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
+import {
+  ENV_VAR_SCOPES_V05,
+  type EnvVarMetadata,
+  type EnvVarScope,
+  normalizeCredential,
+} from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
+import { CredentialFieldFeedback } from './credentials/CredentialFieldFeedback';
+import { useCredentialFields } from './credentials/useCredentialField';
 import { Tag } from './Tag';
 
 const { Text } = Typography;
@@ -72,16 +79,30 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const credentials = useCredentialFields();
+
+  // Normalize the value against the variable NAME — only known credential names
+  // (e.g. GITHUB_TOKEN) trigger internal-whitespace repair / lint; others are
+  // edge-trimmed only. `credentials` state is keyed by the variable name.
+  const normalizeFor = (name: string, raw: string, setter: (v: string) => void) => {
+    if (!raw) return;
+    const normalized = credentials.normalizeOnInput(name, raw);
+    setter(normalized);
+    credentials.lintOnBlur(name, normalized);
+  };
 
   const handleAdd = async () => {
-    if (!newKey.trim() || !newValue.trim()) return;
+    const name = newKey.trim();
+    const value = normalizeCredential(name, newValue).value;
+    if (!name || !value) return;
 
     try {
       setError(null);
-      await onSave(newKey.trim(), newValue.trim(), newScope);
+      await onSave(name, value, newScope);
       setNewKey('');
       setNewValue('');
       setNewScope('global');
+      credentials.reset(name);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save environment variable';
       setError(message);
@@ -89,13 +110,15 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   };
 
   const handleUpdate = async (key: string, scope: EnvVarScope) => {
-    if (!editingValue.trim()) return;
+    const value = normalizeCredential(key, editingValue).value;
+    if (!value) return;
 
     try {
       setError(null);
-      await onSave(key, editingValue.trim(), scope);
+      await onSave(key, value, scope);
       setEditingKey(null);
       setEditingValue('');
+      credentials.reset(key);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update environment variable';
       setError(message);
@@ -164,29 +187,45 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
         const isEditing = editingKey === record.key;
 
         if (isEditing) {
+          const feedback = credentials.get(record.key);
           return (
-            <Space.Compact style={{ width: '100%' }}>
-              <Input.Password
-                placeholder="Enter new value"
-                value={editingValue}
-                onChange={(e) => setEditingValue(e.target.value)}
-                onPressEnter={() => handleUpdate(record.key, record.scope)}
-                autoFocus
-                disabled={disabled}
-                style={{ flex: 1, minWidth: 180 }}
+            <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Input.Password
+                  placeholder="Enter new value"
+                  value={editingValue}
+                  onChange={(e) => {
+                    setEditingValue(e.target.value);
+                    credentials.reset(record.key);
+                  }}
+                  onPaste={(e) => {
+                    const el = e.currentTarget;
+                    window.setTimeout(() => normalizeFor(record.key, el.value, setEditingValue), 0);
+                  }}
+                  onBlur={() => normalizeFor(record.key, editingValue, setEditingValue)}
+                  onPressEnter={() => handleUpdate(record.key, record.scope)}
+                  autoFocus
+                  disabled={disabled}
+                  style={{ flex: 1, minWidth: 180 }}
+                />
+                <Button
+                  type="primary"
+                  onClick={() => handleUpdate(record.key, record.scope)}
+                  loading={loading[record.key]}
+                  disabled={disabled || !editingValue.trim()}
+                >
+                  Save
+                </Button>
+                <Button onClick={() => setEditingKey(null)} disabled={disabled}>
+                  Cancel
+                </Button>
+              </Space.Compact>
+              <CredentialFieldFeedback
+                lint={feedback.lint}
+                internalFixVisible={feedback.showInternalFix}
+                onDismissInternalFix={() => credentials.dismissInternalFix(record.key)}
               />
-              <Button
-                type="primary"
-                onClick={() => handleUpdate(record.key, record.scope)}
-                loading={loading[record.key]}
-                disabled={disabled || !editingValue.trim()}
-              >
-                Save
-              </Button>
-              <Button onClick={() => setEditingKey(null)} disabled={disabled}>
-                Cancel
-              </Button>
-            </Space.Compact>
+            </Space>
           );
         }
 
@@ -289,7 +328,15 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
           <Input.Password
             placeholder="Value"
             value={newValue}
-            onChange={(e) => setNewValue(e.target.value)}
+            onChange={(e) => {
+              setNewValue(e.target.value);
+              credentials.reset(newKey.trim());
+            }}
+            onPaste={(e) => {
+              const el = e.currentTarget;
+              window.setTimeout(() => normalizeFor(newKey.trim(), el.value, setNewValue), 0);
+            }}
+            onBlur={() => normalizeFor(newKey.trim(), newValue, setNewValue)}
             onPressEnter={handleAdd}
             style={{ flex: 1 }}
             disabled={disabled}
@@ -303,6 +350,11 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
             Add
           </Button>
         </Space.Compact>
+        <CredentialFieldFeedback
+          lint={credentials.get(newKey.trim()).lint}
+          internalFixVisible={credentials.get(newKey.trim()).showInternalFix}
+          onDismissInternalFix={() => credentials.dismissInternalFix(newKey.trim())}
+        />
       </Space>
     </Space>
   );
