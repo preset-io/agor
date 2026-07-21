@@ -113,6 +113,105 @@
   text-decoration: none;
 }
 
+/* Streamdown 2.5 exposes semantic code-block parts but expects Tailwind to
+   supply their layout. Keep those compatibility rules local to this renderer. */
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block"] {
+  position: relative;
+  min-width: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-header"] {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 2rem;
+  padding-inline: 0.25rem;
+  color: var(--ant-color-text-secondary);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+:is(.markdown-content, .inline-markdown)
+  [data-streamdown="code-block-header"]
+  + div:has(> [data-streamdown="code-block-actions"]) {
+  position: sticky;
+  z-index: 10;
+  top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 2rem;
+  margin-top: -2.5rem;
+  pointer-events: none;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: var(--ant-border-radius);
+  background: var(--ant-color-bg-container);
+  pointer-events: auto;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] button {
+  padding: 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ant-color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+:is(.markdown-content, .inline-markdown)
+  [data-streamdown="code-block-actions"]
+  button:hover:not(:disabled) {
+  border-color: var(--ant-color-border);
+  background: var(--ant-color-fill-quaternary);
+  color: var(--ant-color-text);
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.ant-typography :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] pre {
+  width: max-content;
+  min-width: 100%;
+  margin-top: 0;
+  padding-top: 0;
+  /* Ant Typography injects pre-wrap at render time. */
+  /* biome-ignore lint/complexity/noImportantStyles: this narrow third-party override must survive runtime injection order */
+  white-space: pre !important;
+}
+
+.ant-typography :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] code {
+  display: block;
+  white-space: inherit;
+}
+
+.ant-typography
+  :is(.markdown-content, .inline-markdown)
+  [data-streamdown="code-block-body"]
+  code
+  > span {
+  display: block;
+}
+
 /* GitHub's blockquote-alert convention is portable Markdown. The remark
    plugin only supplies semantic classes; Agor maps them to Ant tokens here. */
 .markdown-alert {

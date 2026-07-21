@@ -175,8 +175,9 @@
   margin-bottom: 0.5em;
 }
 
-/* Code block controls - match Ant Design button styling */
-[data-code-block-header] {
+/* Vega-Lite's deliberate legacy code-block header contract. Streamdown's
+   native header/actions use scoped semantic rules in MarkdownRenderer.css. */
+:where([data-streamdown="code-block"]) > [data-code-block-header] {
   background-color: var(--ant-color-bg-container);
   border-bottom: 1px solid var(--ant-color-border);
   padding-top: 0;
@@ -185,25 +186,8 @@
   border-top-right-radius: 0;
 }
 
-/* Remove rounded corners from code block wrapper that contains the header */
-[data-streamdown="code-block"] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
-/* Remove padding/margin between code block header and content */
-[data-streamdown="code-block"] {
-  padding-top: 0;
-  margin-top: 0;
-}
-
-[data-streamdown="code-block"] pre {
-  margin-top: 0;
-  padding-top: 0;
-}
-
 /* Copy/Download button styling - override Tailwind classes */
-[data-code-block-header] button,
+:where([data-streamdown="code-block"]) > [data-code-block-header] button,
 [data-streamdown="mermaid-block"] button,
 [data-streamdown="table-wrapper"] button,
 [data-streamdown="image-wrapper"] button {
@@ -217,7 +201,7 @@
   transition: all 0.2s;
 }
 
-[data-code-block-header] button:hover:not(:disabled),
+:where([data-streamdown="code-block"]) > [data-code-block-header] button:hover:not(:disabled),
 [data-streamdown="mermaid-block"] button:hover:not(:disabled),
 [data-streamdown="table-wrapper"] button:hover:not(:disabled),
 [data-streamdown="image-wrapper"] button:hover:not(:disabled) {
@@ -227,7 +211,7 @@
   border-color: var(--ant-color-border);
 }
 
-[data-code-block-header] button:disabled,
+:where([data-streamdown="code-block"]) > [data-code-block-header] button:disabled,
 [data-streamdown="mermaid-block"] button:disabled,
 [data-streamdown="table-wrapper"] button:disabled,
 [data-streamdown="image-wrapper"] button:disabled {
@@ -302,12 +286,6 @@
 
 .rounded-xl {
   border-radius: 0.75rem;
-}
-
-/* Override rounded-xl for code block containers to keep top corners square */
-[data-code-block-container].rounded-xl {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 .px-1\.5 {
