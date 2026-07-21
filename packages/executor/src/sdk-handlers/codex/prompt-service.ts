@@ -34,7 +34,10 @@ import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
 import { isGatewaySession } from '@agor/core/types';
-import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
+import {
+  getDefaultCodexPermissionConfig,
+  mapToCodexPermissionConfig,
+} from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -90,9 +93,6 @@ type CodexConfigValue = CodexConfigObject[string];
  * clears the prompt.
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
-const CODEX_APPS_AUTO_APPROVE: CodexConfigObject = {
-  _default: { default_tools_approval_mode: 'approve' },
-};
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
@@ -1004,17 +1004,30 @@ export class CodexPromptService {
     // The daemon resolver (`resolvePermissionConfig`) always emits a full
     // codex sub-config for new sessions, so this fallback only fires for
     // legacy sessions in the DB with a partial / missing `permission_config`.
-    // It delegates to `getDefaultCodexPermissionConfig` so we have one source
-    // of truth for what "system default" means across daemon + executor.
+    // Derive partial-field fallbacks from the effective mode when available;
+    // only sessions without a recorded mode use the system default.
     const codexConfig = session.permission_config?.codex;
-    const defaults = getDefaultCodexPermissionConfig();
+    const effectivePermissionMode = permissionMode ?? session.permission_config?.mode;
+    const defaults = effectivePermissionMode
+      ? mapToCodexPermissionConfig(effectivePermissionMode)
+      : getDefaultCodexPermissionConfig();
     // workspace-write uses bwrap not available in pods; override with danger-full-access for k8s.
     const sandboxModeEnvOverride = process.env.AGOR_CODEX_SANDBOX_MODE as
       | CodexSandboxMode
       | undefined;
-    const sandboxMode = sandboxModeEnvOverride ?? codexConfig?.sandboxMode ?? defaults.sandboxMode;
+    const configuredSandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
+    const sandboxMode = sandboxModeEnvOverride ?? configuredSandboxMode;
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
+    // Apps can mutate remote systems outside the filesystem sandbox. Only
+    // remove their approval gate for explicit allow-all intent when no
+    // per-field or environment override makes the effective policy stricter.
+    const shouldAutoApproveApps =
+      effectivePermissionMode === 'allow-all' &&
+      configuredSandboxMode !== 'read-only' &&
+      sandboxMode !== 'read-only' &&
+      approvalPolicy === 'never' &&
+      networkAccess === true;
 
     codexDebug(
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`
@@ -1056,7 +1069,9 @@ export class CodexPromptService {
       // In headless SDK sessions, an approval prompt cannot be answered and
       // is otherwise reported as "user cancelled MCP tool call". Match the
       // effective allow-all policy without broadening restrictive sessions.
-      ...(approvalPolicy === 'never' ? { apps: CODEX_APPS_AUTO_APPROVE } : {}),
+      ...(shouldAutoApproveApps
+        ? { apps: { _default: { default_tools_approval_mode: 'approve' } } }
+        : {}),
     };
 
     // Recreate Codex instance only if the per-session config payload (or
