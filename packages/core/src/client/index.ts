@@ -37,6 +37,21 @@ export {
 
 export * from '../config/browser.js';
 export type { AgorConfig } from '../config/types.js';
+// Shared credential normalization + format-lint — pure, browser-safe. Every
+// credential input surface consumes these so paste/blur behavior stays uniform.
+export {
+  CREDENTIAL_SPECS,
+  type CredentialLintResult,
+  type CredentialLintSeverity,
+  type CredentialNormalizationChanges,
+  type CredentialSpec,
+  type CredentialSpecKey,
+  isKnownCredentialField,
+  lintCredential,
+  type NormalizeCredentialResult,
+  normalizeCredential,
+  resolveCredentialSpec,
+} from '../credentials/index.js';
 // Global-search field registry — same module on client (V1 in-memory filter)
 // and server (future V2 SQL fan-out per design doc §5.7).
 export {

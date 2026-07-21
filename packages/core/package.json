@@ -94,6 +94,12 @@
       "import": "./dist/permissions/index.js",
       "require": "./dist/permissions/index.cjs"
     },
+    "./credentials": {
+      "source": "./src/credentials/index.ts",
+      "types": "./dist/credentials/index.d.ts",
+      "import": "./dist/credentials/index.js",
+      "require": "./dist/credentials/index.cjs"
+    },
     "./feathers": {
       "source": "./src/feathers/index.ts",
       "types": "./dist/feathers/index.d.ts",
