@@ -320,7 +320,29 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     vi.clearAllMocks();
   });
 
-  it('builds session config, initializes the Codex client, and uses the configured accessor', async () => {
+  it.each([
+    {
+      name: 'allow-all',
+      codexPermissions: {},
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'approval-requiring',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'on-request',
+        networkAccess: false,
+      },
+      expectedApps: undefined,
+    },
+  ])('builds session config for $name permissions and uses the configured accessor', async ({
+    codexPermissions,
+    expectedApps,
+  }) => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -350,7 +372,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
-      permission_config: { codex: {} },
+      permission_config: { codex: codexPermissions },
       model_config: {},
       mcp_token: 'test-token',
     });
@@ -382,6 +404,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
             default_tools_approval_mode: 'approve',
           },
         },
+        ...(expectedApps ? { apps: expectedApps } : {}),
       },
     ]);
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({

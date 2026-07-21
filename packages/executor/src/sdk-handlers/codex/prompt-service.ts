@@ -90,6 +90,9 @@ type CodexConfigValue = CodexConfigObject[string];
  * clears the prompt.
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
+const CODEX_APPS_AUTO_APPROVE: CodexConfigObject = {
+  _default: { default_tools_approval_mode: 'approve' },
+};
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
@@ -1048,6 +1051,12 @@ export class CodexPromptService {
     const codexConfigPayload: CodexConfigObject = {
       model_instructions_file: instructionsFile,
       ...(Object.keys(mcpServersConfig).length > 0 ? { mcp_servers: mcpServersConfig } : {}),
+      // Codex Apps (for example the GitHub connector supplied by a plugin)
+      // use the separate `apps` policy namespace rather than `mcp_servers`.
+      // In headless SDK sessions, an approval prompt cannot be answered and
+      // is otherwise reported as "user cancelled MCP tool call". Match the
+      // effective allow-all policy without broadening restrictive sessions.
+      ...(approvalPolicy === 'never' ? { apps: CODEX_APPS_AUTO_APPROVE } : {}),
     };
 
     // Recreate Codex instance only if the per-session config payload (or
