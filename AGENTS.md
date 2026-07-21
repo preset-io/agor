@@ -34,10 +34,10 @@ pnpm dev
 
 **IMPORTANT FOR AGENTS:**
 
-- User runs dev environment in watch mode (daemon + UI)
-- **DO NOT run `pnpm build`** or compilation commands unless explicitly asked
-- **DO NOT start background processes** - user manages these
-- Focus on code edits; watch mode handles recompilation automatically
+- The user owns the long-running daemon and UI watch processes; do not start, stop, or restart them.
+- Do not run `pnpm build` merely to refresh an active watch checkout. One-shot repository-native validation is still in scope for implementation work.
+- In a fresh isolated clone, if validation is blocked only by missing workspace declarations, use the root Turbo validation command or the smallest prerequisite package build. Do not borrow `dist` from another checkout.
+- Focus on code edits; watch mode handles normal recompilation automatically.
 
 ---
 
@@ -148,8 +148,8 @@ Terms you'll see across the codebase, UI, and docs:
 **Watch Mode:**
 
 - User runs `pnpm dev` in daemon (watches core + daemon)
-- **DO NOT** run builds unless explicitly asked or you see compilation errors
-- **DO NOT** start background processes
+- Follow the validation/build boundary in Quick Start: no refresh build for watch mode, but bounded validation prerequisites are allowed.
+- **DO NOT** start, stop, or restart background processes; the user manages them.
 
 **Type Reuse:**
 
@@ -576,7 +576,7 @@ cd apps/agor-daemon && pnpm dev
 - Code is ground truth. Guides are user truth. `context/` is for orientation.
 - Branches are the primary card on boards — not sessions.
 - Never subprocess for git. Always `simple-git` via `packages/core/src/git/index.ts`.
-- Don't run `pnpm build` unless asked. Watch mode is running.
+- Don't run `pnpm build` to refresh watch mode; use repository-native validation and its bounded prerequisites as documented above.
 - Read the **Messaging & Positioning** doc in the Agor team Knowledge base ([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md)) before writing any user-facing copy.
 
 ---

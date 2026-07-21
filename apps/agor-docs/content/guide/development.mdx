@@ -206,6 +206,7 @@ packages:
 - Packages reference each other via `workspace:*`
 - Example: `@agor/cli` depends on `@agor/core@workspace:*`
 - pnpm symlinks workspace packages (no need to rebuild on every change)
+- Fresh isolated clones may still need generated declarations; root Turbo validation prepares required dependency outputs in graph order
 
 ### Turbo
 
@@ -226,6 +227,7 @@ pnpm dev
 
 - Reads `turbo.json` for task definitions
 - Understands package dependencies
+- Builds required dependency outputs before typechecking dependents
 - Runs tasks in parallel when possible
 - Caches build outputs for speed
 
@@ -308,8 +310,9 @@ See the **[Architecture Guide](/guide/architecture#technology-stack)** for the c
 **Watch Mode:**
 
 - User runs `pnpm dev` in daemon (watches core + daemon)
-- **DO NOT** run builds unless explicitly asked or you see compilation errors
-- **DO NOT** start background processes
+- Do not run `pnpm build` merely to refresh the active watch checkout; one-shot repository-native validation remains appropriate
+- In fresh isolated clones, use root Turbo validation or the smallest prerequisite package build when missing workspace declarations block a check
+- Do not start, stop, or restart background processes; the user manages them
 
 **Type Reuse:**
 

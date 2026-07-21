@@ -233,6 +233,8 @@ dbTest('should resolve short IDs with collision handling', ...)
 
 Run `pnpm typecheck` before committing. Your tests must pass TypeScript checking - they are code too.
 
+Run typechecks through Turbo from the repository root so workspace dependencies are prepared in graph order. For a focused daemon check, use `pnpm turbo run typecheck --filter=@agor/daemon`; do not call the daemon's package-local `typecheck` directly in a fresh clone unless dependency declarations already exist. If missing declarations are the only blocker, the smallest prerequisite package build is validation setup, not a watch-mode refresh build.
+
 **❌ Don't use loose mocks:**
 
 ```typescript
