@@ -313,6 +313,18 @@ function prependSlackGatewayReplyNote(prompt: string): string {
   return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
 }
 
+// Channel-agnostic nudge applied once, at the final assembly point, to every
+// brand-new gateway session (see #1982). Deliberately generic — no hardcoded
+// filename like "BOOT.md" — that's an agor-assistant convention, not a
+// universal one. Continuing-thread turns (`created === false`) never get this.
+const GATEWAY_FRESH_SESSION_HINT =
+  'Note: this is a brand-new session with no prior turns. If your working directory defines startup/bootstrap instructions (e.g. a BOOT.md or onboarding checklist), follow them before responding to the message below.';
+
+function prependGatewayFreshSessionHint(prompt: string): string {
+  if (prompt.includes(GATEWAY_FRESH_SESSION_HINT)) return prompt;
+  return `${GATEWAY_FRESH_SESSION_HINT}\n\n${prompt}`;
+}
+
 function formatSlackCatchUpPrompt(args: {
   channel: GatewayChannel;
   threadId: string;
@@ -2457,6 +2469,13 @@ export class GatewayService {
       // Prepend MCP auth warning to the initial prompt so the agent is aware
       if (created && mcpAuthWarning) {
         promptText = `${mcpAuthWarning}\n\n${promptText}`;
+      }
+
+      // Nudge brand-new sessions (across all channel types) to run their own
+      // startup/bootstrap ritual, if any, before acting on the first message.
+      // Single convergence point so it can't be missed by a future 4th path.
+      if (created) {
+        promptText = prependGatewayFreshSessionHint(promptText);
       }
 
       // Internal call: pass user, omit provider to bypass auth hooks

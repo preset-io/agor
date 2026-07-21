@@ -91,6 +91,7 @@ function makeGatewayHarness(args: {
   existingMapping?: ThreadSessionMap | null;
   connector?: Record<string, unknown>;
   db?: TenantScopeAwareDatabase;
+  outboundSeed?: Record<string, unknown> | null;
 }) {
   const channel = args.channel ?? slackChannel;
   let mapping = args.existingMapping ?? null;
@@ -149,9 +150,12 @@ function makeGatewayHarness(args: {
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
-    service as unknown as { outboundRepo: { findUnconsumedByChannelAndThread: unknown } }
+    service as unknown as {
+      outboundRepo: { findUnconsumedByChannelAndThread: unknown; markConsumed: unknown };
+    }
   ).outboundRepo = {
-    findUnconsumedByChannelAndThread: vi.fn(async () => null),
+    findUnconsumedByChannelAndThread: vi.fn(async () => args.outboundSeed ?? null),
+    markConsumed: vi.fn(async () => undefined),
   };
   (
     service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
@@ -465,6 +469,155 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
     expect(threadMapRepo.updateLastMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService fresh-session boot hint (#1982)', () => {
+  const HINT = 'Note: this is a brand-new session with no prior turns';
+
+  it('adds the boot hint to a brand-new Slack session prompt', async () => {
+    const sendMessage = vi.fn(async () => '100.000001');
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-100.000000',
+      channel: 'C123',
+      thread_ts: '100.000000',
+      messages: [
+        {
+          ts: '100.000000',
+          iso_time: '2026-06-22T00:00:00.000Z',
+          actor_label: 'Alice',
+          text: '<@U_BOT> start',
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: null,
+      connector: { fetchThreadHistory, sendMessage },
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: 'start',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain(HINT);
+    expect(prompt.indexOf(HINT)).toBe(0);
+  });
+
+  it('does not add the boot hint to a continuing Slack thread', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-100.000000',
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '103.000000',
+          iso_time: '2026-06-22T00:00:03.000Z',
+          actor_label: 'Alice',
+          text: '<@U_BOT> please answer',
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const mapping = makeMapping();
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: mapping,
+      connector: { fetchThreadHistory },
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: 'please answer',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '103.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: false });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).not.toContain(HINT);
+  });
+
+  it('adds the boot hint when a human replies to an outbound-seeded Slack thread', async () => {
+    const outboundSeed = {
+      id: 'seed-1',
+      emitted_by_session_id: 'sess-origin',
+      emitted_by_task_id: 'task-origin',
+      emitted_by_schedule_id: null,
+      emitted_by_user_id: 'user-1',
+      platform_thread_id: 'C999-500.000000',
+      platform_channel_id: 'C999',
+      message_text: 'Heads up, deploy starting soon.',
+    };
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: null,
+      connector: {},
+      outboundSeed,
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C999-500.000000',
+      text: 'thanks, looks good',
+      metadata: {
+        channel: 'C999',
+        channel_type: 'im',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain(HINT);
+    expect(prompt).toContain('This Slack thread began from a proactive Agor gateway message');
+    expect(prompt.indexOf(HINT)).toBe(0);
+  });
+
+  it('adds the boot hint to a brand-new GitHub session prompt', async () => {
+    const githubChannel: GatewayChannel = {
+      ...slackChannel,
+      id: 'chan-github',
+      channel_type: 'github',
+      channel_key: 'github-key',
+      config: {},
+    } as unknown as GatewayChannel;
+
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: githubChannel,
+      existingMapping: null,
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: 'github-key',
+      thread_id: 'preset-io/agor#1982',
+      text: '@agor please take a look',
+      metadata: {
+        github_user: 'octocat',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain(HINT);
+    expect(prompt).toContain('[GitHub] @octocat mentioned you');
+    expect(prompt.indexOf(HINT)).toBe(0);
   });
 });
 
