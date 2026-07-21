@@ -2,17 +2,22 @@
  * Auto-title heuristic — derives a short session title from a user's first
  * prompt, with no LLM call.
  *
- * Used by the daemon's task-completion hook ({@link TasksService.patch})
- * when a session's first task finishes and the session still has no
- * explicit title: cheap, synchronous, and tool-agnostic (works the same for
- * every agentic tool, since it only reads the prompt text already stored on
- * the task — see `Task.full_prompt`).
+ * Used by the daemon when a task is created, with a completion-time fallback
+ * when the session still has no explicit title: cheap, synchronous, and
+ * tool-agnostic (works the same for every agentic tool, since it only reads
+ * the prompt text already stored on the task — see `Task.full_prompt`).
  */
 
 const MAX_TITLE_LENGTH = 60;
 
 export function deriveTitleFromPrompt(prompt: string): string {
-  const collapsed = prompt.replace(/\s+/g, ' ').trim();
+  // The canonical attachment block leads ordinary prompts and follows slash
+  // commands; title only the user's text, or skip attachment-only prompts.
+  const promptText = prompt.replace(
+    /(?:^|\r?\n\r?\n)Attached files:\r?\n(?:- [^\r\n]*(?:\r?\n|$))+/,
+    ''
+  );
+  const collapsed = promptText.replace(/\s+/g, ' ').trim();
   if (!collapsed) return '';
   if (collapsed.length <= MAX_TITLE_LENGTH) return collapsed;
 

@@ -773,6 +773,7 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         tool_use_count: 0,
         metadata: { source: 'cli-repl' },
       })) as Task;
+      await (app.service('tasks') as unknown as TasksServiceImpl).autoTitleSession(task);
       emitServiceEvent(app, {
         path: 'tasks',
         event: 'created',

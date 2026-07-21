@@ -1578,6 +1578,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   ...(data.metadata ?? {}),
                 },
               });
+              await tasksService.autoTitleSession(queuedTask, params);
 
               console.log(
                 `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
@@ -1626,6 +1627,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               status: TaskStatus.CREATED,
               metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
             });
+            await tasksService.autoTitleSession(task, params);
             // Bypassing the service means no native 'created' emit; do it here
             // so reactive clients see the new task before the executor spawns.
             emitServiceEvent(app, {

@@ -59,7 +59,11 @@ function makeService(options: { task?: Partial<Task>; session?: Partial<Session>
       tasksById.set(id, updated);
       return updated;
     }),
-    create: vi.fn(),
+    create: vi.fn(async (data: Partial<Task>) => {
+      const created = makeTask(data);
+      tasksById.set(created.task_id, created);
+      return created;
+    }),
     findAll: vi.fn(async () => [...tasksById.values()]),
     delete: vi.fn(),
   };
@@ -113,6 +117,19 @@ function statusPatchCall(sessionsPatch: ReturnType<typeof vi.fn>) {
 }
 
 describe('TasksService auto-title', () => {
+  it.each([
+    TaskStatus.QUEUED,
+    TaskStatus.RUNNING,
+  ])('auto-titles an untitled session when a %s task is created', async (status) => {
+    const { service, sessionsPatch } = makeService({ session: { title: undefined } });
+
+    await service.create(makeTask({ status }), { provider: 'rest' });
+
+    const titleCall = titlePatchCall(sessionsPatch);
+    expect(titleCall?.[1]).toEqual({ title: DERIVED_TITLE });
+    expect(titleCall?.[2]).toMatchObject({ provider: undefined });
+  });
+
   it('writes the terminal status/ready patch prompt-flow-only, with the original params', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: undefined } });
 
@@ -200,28 +217,62 @@ describe('TasksService auto-title', () => {
     expect(titleCall?.[1]).toEqual({ title: DERIVED_TITLE });
   });
 
-  it('does not derive a title from an image-only (text-empty) prompt', async () => {
+  it('derives a create-time title from user text after the attachment preamble', async () => {
+    const { service, sessionsPatch } = makeService({ session: { title: undefined } });
+
+    await service.create(
+      makeTask({
+        status: TaskStatus.QUEUED,
+        full_prompt: 'Attached files:\n- .agor/uploads/chart.png\n\nExplain the anomaly',
+      })
+    );
+
+    expect(titlePatchCall(sessionsPatch)?.[1]).toEqual({ title: 'Explain the anomaly' });
+  });
+
+  it('excludes a trailing attachment block from a slash-command title', async () => {
+    const { service, sessionsPatch } = makeService({ session: { title: undefined } });
+
+    await service.create(
+      makeTask({
+        status: TaskStatus.QUEUED,
+        full_prompt: '/compact focus on this chart\n\nAttached files:\n- /tmp/chart.png',
+      })
+    );
+
+    expect(titlePatchCall(sessionsPatch)?.[1]).toEqual({ title: '/compact focus on this chart' });
+  });
+
+  it('does not derive a title from an attachment-only prompt', async () => {
     const { service, sessionsPatch } = makeService({
       session: { title: undefined },
-      task: { full_prompt: '' },
     });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await service.create(
+      makeTask({
+        status: TaskStatus.QUEUED,
+        full_prompt: 'Attached files:\n- .agor/uploads/chart.png',
+      })
+    );
 
     expect(titlePatchCall(sessionsPatch)).toBeUndefined();
   });
 
-  it('does not set a title when the task fails', async () => {
-    const { service, sessionsPatch } = makeService({ session: { title: undefined } });
+  it.each([
+    TaskStatus.FAILED,
+    TaskStatus.STOPPED,
+  ])('keeps the create-time title when execution ends %s', async (status) => {
+    const { service, sessionsPatch, session } = makeService({
+      session: { title: undefined },
+    });
 
+    await service.create(makeTask({ status: TaskStatus.RUNNING }));
     await service.patch(taskId, {
-      status: TaskStatus.FAILED,
+      status,
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    expect(titlePatchCall(sessionsPatch)).toBeUndefined();
+    expect(session.title).toBe(DERIVED_TITLE);
+    expect(sessionsPatch.mock.calls.filter((call) => call[1]?.title !== undefined)).toHaveLength(1);
   });
 });

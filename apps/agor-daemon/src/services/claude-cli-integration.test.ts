@@ -4,10 +4,12 @@ import { buildClaudeCliSpawn } from '@agor/core/claude-cli';
 import {
   getCurrentTenantDatabaseScope,
   runWithTenantContext,
+  SessionRepository,
+  TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { type Session, TaskStatus } from '@agor/core/types';
+import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateSessionToken } from '../mcp/tokens.js';
 import {
@@ -324,5 +326,80 @@ describe('Claude CLI integration', () => {
         targetUnixUser: 'bad user',
       })
     ).toThrow('invalid target Unix username');
+  });
+});
+
+describe('Claude CLI terminal-direct task creation', () => {
+  it('auto-titles a freshly minted task before continuing the turn', async () => {
+    const order: string[] = [];
+    const session = makeSession({ title: undefined });
+    const task = {
+      task_id: '019e8abc-0000-7000-8000-000000000002',
+      session_id: session.session_id,
+      created_by: session.created_by,
+      full_prompt: 'Investigate the terminal-direct prompt',
+      status: TaskStatus.RUNNING,
+      message_range: {
+        start_index: 0,
+        end_index: 0,
+        start_timestamp: '2026-07-20T12:00:00.000Z',
+        end_timestamp: '2026-07-20T12:00:00.000Z',
+      },
+      git_state: { ref_at_start: '', sha_at_start: '' },
+      tool_use_count: 0,
+      created_at: '2026-07-20T12:00:00.000Z',
+    } as Task;
+
+    vi.spyOn(SessionRepository.prototype, 'countMessages').mockResolvedValue(0);
+    vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue(session);
+    vi.spyOn(SessionRepository.prototype, 'update').mockResolvedValue(session);
+    vi.spyOn(TaskRepository.prototype, 'create').mockImplementation(async () => {
+      order.push('task-created');
+      return task;
+    });
+
+    const autoTitleSession = vi.fn(async () => {
+      order.push('auto-title');
+    });
+    const app = {
+      get: (key: string) => {
+        if (key === 'database') return testDb;
+        if (key === 'config') return {};
+        return undefined;
+      },
+      service: vi.fn((name: string) => {
+        if (name === 'tasks') return { autoTitleSession, emit: vi.fn() };
+        if (name === 'sessions') {
+          return {
+            patch: vi.fn(async () => {
+              order.push('session-running');
+              return session;
+            }),
+          };
+        }
+        if (name === 'messages') {
+          return {
+            create: vi.fn(async (message: unknown) => {
+              order.push('message-created');
+              return message;
+            }),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      }),
+    } as unknown as Application;
+
+    const sink = buildCliEventSink(app);
+    await sink(session.session_id, {
+      type: 'user_message',
+      uuid: 'cli-user-message-1',
+      timestamp: '2026-07-20T12:00:00.000Z',
+      permissionMode: null,
+      content: task.full_prompt,
+      isSidechain: false,
+    });
+
+    expect(autoTitleSession).toHaveBeenCalledWith(task);
+    expect(order).toEqual(['task-created', 'auto-title', 'session-running', 'message-created']);
   });
 });

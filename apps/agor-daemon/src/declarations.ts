@@ -136,6 +136,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
+  autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
