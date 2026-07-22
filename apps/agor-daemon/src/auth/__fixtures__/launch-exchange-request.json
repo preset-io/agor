@@ -1,0 +1,10 @@
+{
+  "$comment": "Canonical one-time launch-code exchange request body the daemon POSTs to the configured issuer exchange endpoint. Shared contract fixture: it MUST stay aligned with the issuer's canonical exchange schema so the two sides cannot drift. `request_host` is present only when host-bound launch is configured. `audience` and `instance_id` are compatibility fields; a correct issuer derives authority from its own records and the authenticated exchange credential, never from these caller-supplied values.",
+  "required": ["launch_code"],
+  "properties": {
+    "launch_code": "opaque one-time code captured from the browser URL",
+    "audience": "configured runtime audience (compatibility echo)",
+    "instance_id": "configured runtime instance id (compatibility echo, optional)",
+    "request_host": "normalized inbound browser host, only when forward_request_host is enabled"
+  }
+}

@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
@@ -40,6 +41,9 @@ const DEFAULT_EXCHANGE_URL_ENV = 'AGOR_EXTERNAL_LAUNCH_EXCHANGE_URL';
 const DEFAULT_ISSUER_ENV = 'AGOR_EXTERNAL_LAUNCH_ISSUER';
 const DEFAULT_AUDIENCE_ENV = 'AGOR_EXTERNAL_LAUNCH_AUDIENCE';
 const DEFAULT_INSTANCE_ID_ENV = 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID';
+const DEFAULT_FORWARD_REQUEST_HOST_ENV = 'AGOR_EXTERNAL_LAUNCH_FORWARD_REQUEST_HOST';
+const DEFAULT_TRUSTED_HOST_HEADER = 'host';
+const DEFAULT_RETURN_HOST_PARAM = 'return_host';
 
 interface ResolvedLaunchSettings {
   enabled: boolean;
@@ -56,11 +60,16 @@ interface ResolvedLaunchSettings {
   trustVerifiedEmailForLinking: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
+  forwardRequestHost: boolean;
+  trustedHostHeader: string;
+  returnHostParam?: string;
 }
 
 export interface PublicLaunchAuthSettings {
   enabled: boolean;
   loginRedirectUrl?: string;
+  /** Query parameter the UI uses to carry the current host to launch-init. */
+  returnHostParam?: string;
 }
 
 interface LaunchExchangeResponse {
@@ -134,16 +143,27 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
+    forwardRequestHost:
+      envFlag(process.env[DEFAULT_FORWARD_REQUEST_HOST_ENV]) ?? raw?.forward_request_host === true,
+    trustedHostHeader: (raw?.trusted_host_header || DEFAULT_TRUSTED_HOST_HEADER).toLowerCase(),
+    returnHostParam: raw?.return_host_param || undefined,
   };
 }
 
 export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunchAuthSettings {
   const raw = config.external_launch;
   const enabled = envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true;
+  // Only advertise a return-host param when a launch-init redirect exists to
+  // append it to; the param name itself is public routing metadata, not a secret.
+  const returnHostParam =
+    enabled && raw?.login_redirect_url
+      ? raw?.return_host_param || DEFAULT_RETURN_HOST_PARAM
+      : undefined;
 
   return {
     enabled,
     ...(enabled && raw?.login_redirect_url ? { loginRedirectUrl: raw.login_redirect_url } : {}),
+    ...(returnHostParam ? { returnHostParam } : {}),
   };
 }
 
@@ -403,9 +423,51 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
   }
 }
 
+/**
+ * Read the normalized inbound browser Host from the trusted local request
+ * context. The value comes from a single configured request header that the
+ * trusted proxy / edge owns and overwrites — never from a client-supplied body
+ * field. Multiple, array or comma-joined host values are treated as ambiguous
+ * and rejected so a caller cannot smuggle a second host past the edge.
+ *
+ * Returns `undefined` when host forwarding is disabled. Throws (fail closed)
+ * when forwarding is enabled but no unambiguous host is available.
+ */
+export function resolveRequestHost(
+  settings: ResolvedLaunchSettings,
+  headers: Record<string, unknown> | undefined
+): string | undefined {
+  if (!settings.forwardRequestHost) return undefined;
+
+  const wanted = settings.trustedHostHeader;
+  let raw: unknown;
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() === wanted) {
+      raw = value;
+      break;
+    }
+  }
+
+  if (Array.isArray(raw)) {
+    if (raw.length !== 1) {
+      throw new NotAuthenticated('Ambiguous launch request host');
+    }
+    raw = raw[0];
+  }
+  if (typeof raw !== 'string') {
+    throw new NotAuthenticated('Missing launch request host');
+  }
+  const host = raw.trim().toLowerCase();
+  if (!host || host.includes(',') || /\s/.test(host)) {
+    throw new NotAuthenticated('Invalid launch request host');
+  }
+  return host;
+}
+
 async function exchangeLaunchCode(
   launchCode: string,
-  settings: ResolvedLaunchSettings
+  settings: ResolvedLaunchSettings,
+  requestHost: string | undefined
 ): Promise<LaunchExchangeResponse> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -417,6 +479,9 @@ async function exchangeLaunchCode(
     launch_code: launchCode,
     audience: settings.audience,
     instance_id: settings.instanceId,
+    // Host-bound launch: the issuer binds the code to the exact route the
+    // browser entered. Only sent when configured; kept opaque to the daemon.
+    ...(settings.forwardRequestHost && requestHost ? { request_host: requestHost } : {}),
   };
 
   const json = await fetchJson(
@@ -464,12 +529,21 @@ async function verifyLaunchAssertion(
     throw new NotAuthenticated('Invalid one-time launch assertion');
   }
 
+  // Fail closed on the unsigned `none` algorithm regardless of configuration.
+  if (!decoded.header.alg || decoded.header.alg.toLowerCase() === 'none') {
+    throw new NotAuthenticated('Launch assertion verification failed');
+  }
+
   const key = await resolveVerificationKey(decoded.header, settings);
-  const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : undefined);
+  // Production verification is asymmetric and must pin an explicit algorithm
+  // allow-list. Defaulting to RS256 for the non-dev path prevents algorithm
+  // confusion (e.g. a public key coerced into HS256). The dev symmetric path
+  // stays HS256-only. An operator may still narrow/extend via `algorithms`.
+  const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : ['RS256']);
   const claims = jwt.verify(assertion, key, {
     issuer: settings.issuer,
     audience: settings.audience,
-    algorithms: algorithms as jwt.Algorithm[] | undefined,
+    algorithms: algorithms as jwt.Algorithm[],
   }) as LaunchClaims;
 
   validateLaunchClaims(claims, settings);
@@ -541,8 +615,17 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
       const settings = resolveLaunchSettings(options.config);
       assertConfigured(settings);
 
+      // Preserve the browser Host from the trusted local request context so a
+      // code minted for one host cannot be exchanged through another. Resolved
+      // before the network call so an ambiguous host fails closed with no code
+      // ever leaving the daemon.
+      const requestHost = resolveRequestHost(
+        settings,
+        params?.headers as Record<string, unknown> | undefined
+      );
+
       try {
-        const exchange = await exchangeLaunchCode(launchCode, settings);
+        const exchange = await exchangeLaunchCode(launchCode, settings, requestHost);
         if (!exchange.assertion) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
@@ -570,6 +653,15 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         if (error instanceof TenantResolutionError) {
           throw new NotAuthenticated(error.message);
         }
+        // Operator diagnostic only — the launch code, assertion, bearer
+        // credential and request host must never reach logs/telemetry.
+        console.warn(
+          safeLaunchDiagnostic(error instanceof Error ? error.message : 'exchange failed', [
+            launchCode,
+            settings.serviceCredential,
+            settings.devSharedSecret,
+          ])
+        );
         throw new NotAuthenticated('Invalid or expired one-time launch code');
       }
     },

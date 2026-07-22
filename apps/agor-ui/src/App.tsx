@@ -873,6 +873,11 @@ function AppContent() {
             ? authConfig.externalLaunch.loginRedirectUrl
             : undefined
         }
+        externalLaunchReturnHostParam={
+          authConfig?.externalLaunch?.enabled
+            ? authConfig.externalLaunch.returnHostParam
+            : undefined
+        }
       />
     );
   }

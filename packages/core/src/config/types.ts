@@ -226,6 +226,34 @@ export interface AgorExternalLaunchSettings {
    * sign-in is unavailable, missing, expired, or invalid.
    */
   login_redirect_url?: string;
+
+  /**
+   * Forward the normalized inbound browser Host to the exchange endpoint as an
+   * opaque `request_host` field. Enable when the launch issuer binds a code to
+   * the exact route the browser entered (host-bound launch). Default: false.
+   *
+   * The value is read from a trusted local request header — never from an
+   * arbitrary client-supplied body field — so the daemon cannot be tricked into
+   * presenting a code minted for one host through a different host.
+   */
+  forward_request_host?: boolean;
+
+  /**
+   * Request header the daemon reads the normalized browser Host from when
+   * `forward_request_host` is enabled. The trusted proxy / edge in front of the
+   * daemon owns host normalization and must overwrite this header. Default:
+   * `host`. Set to e.g. `x-forwarded-host` only when a trusted edge sets it.
+   */
+  trusted_host_header?: string;
+
+  /**
+   * Query parameter appended to `login_redirect_url` carrying the current
+   * browser host as an opaque return context, so a direct visit to a workspace
+   * host that has no local session can start the issuer's launch-init flow and
+   * be returned to the exact host it came from. The issuer must allow-list this
+   * value against its own routing records. Default: `return_host`.
+   */
+  return_host_param?: string;
 }
 
 /**

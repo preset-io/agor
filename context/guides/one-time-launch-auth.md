@@ -49,6 +49,19 @@ external_launch:
   # missing, expired, already used, invalid, or otherwise cannot be exchanged.
   # Must be http:// or https://.
   login_redirect_url: https://workspace.example.com/open
+
+  # Optional host-bound launch (multi-host single daemon). When enabled the
+  # daemon forwards the normalized inbound browser Host to the exchange endpoint
+  # as an opaque `request_host`, so the issuer can bind a code to the exact route
+  # the browser entered and reject a code minted for host A presented on host B.
+  forward_request_host: false
+  # Header the daemon reads the browser Host from. The trusted proxy / edge in
+  # front of the daemon owns host normalization and MUST overwrite this header.
+  # Default: host. Only set to x-forwarded-host when a trusted edge sets it.
+  trusted_host_header: host
+  # Query parameter appended to login_redirect_url carrying the current host as
+  # an opaque return context for direct-host entry. Default: return_host.
+  return_host_param: return_host
 ```
 
 For local development only, a symmetric assertion secret can be used:
@@ -80,11 +93,30 @@ The daemon sends a JSON `POST` to `exchange_url`:
 {
   "launch_code": "opaque-one-time-code",
   "audience": "agor-runtime:my-instance",
-  "instance_id": "my-instance"
+  "instance_id": "my-instance",
+  "request_host": "primary.workspace.example.com"
 }
 ```
 
-If `service_credential` or `service_credential_env` is configured, the daemon also sends `Authorization: Bearer <credential>`.
+`request_host` is present only when `forward_request_host` is enabled. It is the
+normalized inbound browser Host read from the configured `trusted_host_header`
+(default `Host`) of the daemon's own request — never from a client-supplied body
+field or an arbitrary forwarded header. The daemon treats it as opaque; the
+issuer maps it to the intended route and rejects a code presented on the wrong
+host. Ambiguous host values (multiple, array or comma-joined) fail closed before
+any code leaves the daemon. `audience` and `instance_id` are compatibility
+echoes; a correct issuer derives authority from its own records and the
+authenticated exchange credential, not from these caller-supplied fields. The
+canonical request shape is pinned by the shared contract fixture
+`apps/agor-daemon/src/auth/__fixtures__/launch-exchange-request.json`, which must
+stay aligned with the issuer's canonical exchange schema so the two sides cannot
+drift.
+
+If `service_credential` or `service_credential_env` is configured, the daemon also sends `Authorization: Bearer <credential>`. This static bearer is a
+server-to-server exchange credential: it is read only from config/env (in
+production, from a mounted Kubernetes Secret), is never included in the public
+`/health` launch settings, and is never returned to the browser or written to
+logs, errors or telemetry.
 
 The exchange endpoint should consume the launch code exactly once and return:
 
@@ -112,6 +144,41 @@ Required when `external_launch.instance_id` is configured:
 
 - `instance_id` or `runtime_instance_id`: must match configured `instance_id`
 
+## Direct-host entry
+
+Clicking a launch link is not required. A browser can navigate straight to a
+workspace host:
+
+- If a valid runtime session already exists for that host, the app opens
+  immediately with no new code or exchange. Runtime sessions live in
+  origin-scoped `localStorage`, never a `Domain`-wide cookie, so a session
+  established on `primary` is not automatically sent to `secondary`.
+- If there is no host-local session, the unauthenticated screen sends the
+  browser to the configured `login_redirect_url` (the issuer's launch-init
+  endpoint) with two query params: `return_to` (the current **relative** Agor
+  route, so deep links survive) and the configured `return_host_param` carrying
+  the exact current host. The issuer allow-lists that host against its own
+  routing records, mints a fresh code and redirects back to that exact host,
+  which then runs the normal exchange. Agor only ever sends the browser to the
+  operator-configured launch-init URL, so it introduces no open redirect; the
+  issuer owns return-host validation.
+
+## Fail-closed verification
+
+Production verification is asymmetric and fails closed:
+
+- The `none` algorithm is always rejected.
+- When verifying with `jwks_url` or `public_key`, the algorithm allow-list
+  defaults to `RS256` (override with `algorithms`), preventing algorithm
+  confusion (e.g. a public key coerced into an HS256 secret). The dev
+  `dev_shared_secret` path stays HS256-only.
+- JWKS assertions must carry a `kid` that matches a signing key whose `use` is
+  `sig` and whose `alg` matches the token header.
+- A missing/invalid issuer, audience, `exp`, `sub`, or (when
+  `multi_tenancy.mode: required_from_auth`) the configured tenant claim, creates
+  **no session**. Tenant scope applied to the runtime DB/RLS always equals the
+  signed tenant claim.
+
 ## Security notes
 
 - Put only an opaque, short-lived, one-time code in the browser URL.
@@ -120,3 +187,22 @@ Required when `external_launch.instance_id` is configured:
 - Assertions should be audience-bound to the runtime, instance-bound when `instance_id` is configured, and expire quickly.
 - Configure exactly one assertion verification method (`jwks_url`, `public_key`, or dev-only `dev_shared_secret`).
 - Local users are mapped by stable external identity `(provider, issuer, subject)`. A matching email alone never merges identities.
+- Launch codes, returned assertions, the exchange bearer credential, cookies and
+  database URLs are redacted from daemon errors, logs and telemetry
+  (`apps/agor-daemon/src/auth/launch-redaction.ts`). Exchange failures log only a
+  coarse, secret-safe reason.
+
+## Production-only operational validation
+
+The following cannot be exercised by unit tests and must be confirmed against a
+real deployment with a real issuer:
+
+- Public JWKS resolves to stable RS256 JSON from the signer (not an HTML
+  fallthrough) and the runtime verifies against it.
+- A code minted for host A and presented on host B is rejected end-to-end
+  (`request_host` binding), and a wrong/revoked/wrong-scope exchange credential
+  fails.
+- Two hosts sharing one daemon each establish sessions scoped to their own
+  `tenant_id`, and cross-tenant reads/writes fail under RLS.
+- No launch code, assertion, bearer credential, cookie or DB URL appears in
+  daemon/proxy logs, audit or analytics for the test window.

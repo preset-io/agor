@@ -326,6 +326,9 @@ function validateConfig(config: AgorConfig): void {
     'allow_admin_roles',
     'trust_verified_email_for_linking',
     'login_redirect_url',
+    'forward_request_host',
+    'trusted_host_header',
+    'return_host_param',
   ]);
   only(config.database, 'database', ['dialect', 'sqlite', 'postgresql']);
   only(config.database?.sqlite, 'database.sqlite', ['path', 'walMode', 'busyTimeout']);

@@ -46,4 +46,25 @@ describe('launch auth utilities', () => {
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh');
   });
+
+  it('stores the session in origin-scoped storage and sets no cross-host cookie', async () => {
+    const cookieBefore = document.cookie;
+    const client = {
+      service: vi.fn(() => ({
+        create: vi.fn(async () => ({
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          user: { user_id: 'u1', email: 'u@example.test' },
+        })),
+      })),
+    } as any;
+
+    await exchangeLaunchCode(client, 'code');
+
+    // Runtime sessions live in localStorage (per-origin) — never a Domain-wide
+    // cookie — so a session established on one workspace host is not
+    // automatically sent to another workspace host.
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access');
+    expect(document.cookie).toBe(cookieBefore);
+  });
 });
