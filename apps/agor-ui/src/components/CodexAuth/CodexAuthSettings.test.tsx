@@ -144,6 +144,24 @@ describe('CodexAuthSettings', () => {
     expect(screen.queryByText('Codex is connected')).not.toBeInTheDocument();
   });
 
+  it('never affirms a ChatGPT login while the effective method is api_key (banner tracks stored method)', async () => {
+    // Mixed state: method=api_key (keyless) with a login the probe can see. The
+    // executor won't use that login for api_key, so the banner must not claim
+    // "connected" — the sessions-broken-but-banner-connected contradiction.
+    const checkAuth = vi.fn(
+      async (): Promise<AuthCheckResult> => ({
+        status: 'authenticated',
+        authenticated: true,
+        method: 'native',
+      })
+    );
+    render(<Harness initialMethod="api_key" fieldStatus={{}} checkAuth={checkAuth} />);
+
+    await waitFor(() => expect(checkAuth).toHaveBeenCalled());
+    expect(screen.queryByText('Codex is connected')).not.toBeInTheDocument();
+    expect(screen.queryByText('A ChatGPT login is active on this server.')).not.toBeInTheDocument();
+  });
+
   it('saves an OpenAI API key through the API-key pane', async () => {
     const onSaveField = vi.fn(async () => undefined);
     render(<Harness initialMethod="api_key" onSaveField={onSaveField} />);

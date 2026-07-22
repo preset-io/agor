@@ -145,26 +145,30 @@ export function CodexAuthSettings({
     setView(next);
   }, []);
 
+  // The banner reflects the EFFECTIVE auth — the persisted method plus a probe
+  // of that method's credential — never the currently-viewed tab. Crucially, a
+  // "connected" verdict is only shown when the probe actually exercised the
+  // stored method: an authenticated api-key probe can't render "ChatGPT login
+  // active" and an authenticated login probe can't render "API key working".
+  // This makes the sessions-broken-but-banner-says-connected contradiction
+  // impossible even if the daemon's probe ever reported a credential the
+  // executor wouldn't use for the stored method.
   const connectionBanner = (() => {
     if (!probe) return null;
-    if (probe.status === 'authenticated') {
-      return (
-        <Alert
-          type="success"
-          showIcon
-          message="Codex is connected"
-          description={
-            // Describe what was actually probed, not the currently-selected tab,
-            // so a method flip can't momentarily mislabel a stale verdict.
-            probe.method === 'api-key'
-              ? 'Your OpenAI API key is working.'
-              : 'A ChatGPT login is active on this server.'
-          }
-        />
-      );
-    }
-    if (probe.status === 'unauthenticated') {
-      if (authMethod === 'subscription') {
+    const authenticated = probe.status === 'authenticated';
+    const unauthenticated = probe.status === 'unauthenticated';
+    if (authMethod === 'subscription') {
+      if (authenticated && probe.method !== 'api-key') {
+        return (
+          <Alert
+            type="success"
+            showIcon
+            message="Codex is connected"
+            description="A ChatGPT login is active on this server."
+          />
+        );
+      }
+      if (unauthenticated) {
         return (
           <Alert
             type="error"
@@ -177,20 +181,34 @@ export function CodexAuthSettings({
           />
         );
       }
-      // API-key method: only a stored-but-rejected key is a problem worth
-      // flagging; an empty key just means the user hasn't set one yet.
-      if (fieldStatus.OPENAI_API_KEY) {
-        return (
-          <Alert
-            type="error"
-            showIcon
-            message="Key not working"
-            description={probe.hint ?? 'Key stored but not working — enter a new one.'}
-          />
-        );
-      }
+      return null;
     }
-    // 'unknown' or unset-and-empty — surface nothing (fail safe).
+    // authMethod === 'api_key': the effective credential is the OpenAI key.
+    if (authenticated && probe.method === 'api-key') {
+      return (
+        <Alert
+          type="success"
+          showIcon
+          message="Codex is connected"
+          description="Your OpenAI API key is working."
+        />
+      );
+    }
+    // Only a stored-but-rejected key is worth flagging; an empty key just means
+    // the user hasn't set one yet (and a login on disk is irrelevant here —
+    // sessions use the api_key method, not that login).
+    if (unauthenticated && fieldStatus.OPENAI_API_KEY) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="Key not working"
+          description={probe.hint ?? 'Key stored but not working — enter a new one.'}
+        />
+      );
+    }
+    // 'unknown', or authenticated via a credential the stored method won't use,
+    // or unset-and-empty — surface nothing (fail safe).
     return null;
   })();
 
