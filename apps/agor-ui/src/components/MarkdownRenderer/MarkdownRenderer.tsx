@@ -13,7 +13,7 @@
 
 import { Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
-import { defaultRehypePlugins, Streamdown } from 'streamdown';
+import { defaultRehypePlugins, type LinkSafetyConfig, Streamdown } from 'streamdown';
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
@@ -66,6 +66,7 @@ interface MarkdownRendererProps {
 }
 
 const MAX_VEGA_LITE_CHARTS_PER_DOCUMENT = 4;
+const LINK_SAFETY_CONFIG: LinkSafetyConfig = { enabled: false };
 
 // Memoized: Streamdown does meaningful per-render work (syntax highlighting,
 // Mermaid, KaTeX) and this component is rendered once per text block in every
@@ -150,6 +151,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
           className={inline ? 'inline-markdown' : 'markdown-content'}
           isAnimating={isStreaming} // Disable buttons during streaming
           controls={showControls} // Show/hide controls based on context
+          linkSafety={LINK_SAFETY_CONFIG}
           mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
           plugins={plugins}
           components={components}

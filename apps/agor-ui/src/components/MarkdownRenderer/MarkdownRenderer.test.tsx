@@ -100,6 +100,15 @@ describe('MarkdownRenderer', () => {
     expect(container.querySelector('a.markdown-heading-anchor[href="#foo-1"]')).toBeInTheDocument();
   });
 
+  it('renders ordinary Markdown links as anchors', async () => {
+    render(<MarkdownRenderer content={'[Streamdown docs](https://streamdown.ai/docs)'} />);
+
+    const link = await screen.findByRole('link', { name: 'Streamdown docs' });
+    expect(link).toHaveAttribute('href', 'https://streamdown.ai/docs');
+    expect(link).toHaveAttribute('data-streamdown', 'link');
+    expect(screen.queryByRole('button', { name: 'Streamdown docs' })).not.toBeInTheDocument();
+  });
+
   it('renders GitHub alert syntax as a semantic, themed callout', async () => {
     const { container } = render(
       <MarkdownRenderer content={'> [!WARNING]\n> Deployments are paused.'} />
