@@ -159,6 +159,26 @@ describe('buildAuthFromValues', () => {
     expect(auth).toEqual({ type: 'bearer', token: 'tok' });
   });
 
+  describe('at-rest sanitize backstop', () => {
+    it('strips edge whitespace from a bearer token', () => {
+      const auth = buildAuthFromValues({ auth_type: 'bearer', auth_token: '  tok-clean  ' });
+      expect(auth?.token).toBe('tok-clean');
+    });
+
+    it('does NOT collapse internal whitespace or unwrap quotes (kept as-is)', () => {
+      const auth = buildAuthFromValues({ auth_type: 'bearer', auth_token: '"tok en"' });
+      expect(auth?.token).toBe('"tok en"');
+    });
+
+    it('leaves a template value untouched (internal whitespace is meaningful)', () => {
+      const auth = buildAuthFromValues({
+        auth_type: 'bearer',
+        auth_token: '{{ user.env.API_TOKEN }}',
+      });
+      expect(auth?.token).toBe('{{ user.env.API_TOKEN }}');
+    });
+  });
+
   it('omits bearer token when not a string', () => {
     const auth = buildAuthFromValues({ auth_type: 'bearer' });
     expect(auth).toEqual({ type: 'bearer' });

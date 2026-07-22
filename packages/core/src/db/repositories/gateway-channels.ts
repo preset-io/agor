@@ -37,7 +37,7 @@ import {
 /**
  * Encrypt sensitive fields within a config object
  */
-function encryptConfig(config: Record<string, unknown>): Record<string, unknown> {
+export function encryptConfig(config: Record<string, unknown>): Record<string, unknown> {
   const encrypted = { ...config };
   for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (typeof encrypted[field] === 'string' && encrypted[field]) {

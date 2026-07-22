@@ -170,7 +170,7 @@ function ensureCanExactEmailLookup(params: Params | undefined, email: string): v
  *
  * Returns the next stored shape (caller writes it back to `data.agentic_tools`).
  */
-function applyAgenticToolsPatch(
+export function applyAgenticToolsPatch(
   current: StoredAgenticTools,
   patch: AgenticToolsUpdate
 ): StoredAgenticTools {

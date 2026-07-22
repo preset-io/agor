@@ -14,9 +14,10 @@ import {
 import { describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { decryptApiKey } from '../encryption';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
-import { GatewayChannelRepository } from './gateway-channels';
+import { encryptConfig, GatewayChannelRepository } from './gateway-channels';
 import { RepoRepository } from './repos';
 
 async function seedBranch(db: Database) {
@@ -283,6 +284,28 @@ describe('GatewayChannelRepository', () => {
       expect(
         getRequiredSecretFields('slack', { outbound_enabled: true, enable_channels: true })
       ).toEqual(['bot_token', 'app_token']);
+    });
+  });
+
+  describe('encryptConfig — at-rest backstop', () => {
+    const stored = (value: string): string =>
+      decryptApiKey(encryptConfig({ bot_token: value }).bot_token as string);
+
+    it('strips edge whitespace and invisible characters', () => {
+      const bom = '﻿';
+      expect(stored(`  ${bom}xoxb-clean-token  `)).toBe('xoxb-clean-token');
+    });
+
+    it('does NOT collapse internal whitespace at rest (declined fix stored as-is)', () => {
+      expect(stored('xoxb-abc def-token')).toBe('xoxb-abc def-token');
+    });
+
+    it('does NOT unwrap wrapping quotes at rest', () => {
+      expect(stored('"xoxb-quoted-token"')).toBe('"xoxb-quoted-token"');
+    });
+
+    it('preserves the redaction sentinel', () => {
+      expect(stored(GATEWAY_REDACTED_SENTINEL)).toBe(GATEWAY_REDACTED_SENTINEL);
     });
   });
 });
