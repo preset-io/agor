@@ -17,7 +17,7 @@ same runtime access and refresh tokens used by normal login.
    subject.
 5. The daemon verifies issuer, audience, expiration, subject, and the configured
    instance ID; then it maps or creates a local user by `(provider, issuer,
-subject)`.
+   subject)`.
 6. The daemon returns normal runtime auth tokens. The UI stores those tokens and
    removes `launch_code` from the URL with `replaceState`.
 
@@ -154,6 +154,21 @@ Required when `external_launch.instance_id` is configured:
 
 - `instance_id` or `runtime_instance_id`: must match configured `instance_id`
 
+## Compatibility and upgrade notes
+
+- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
+  verification (`jwks_url` / `public_key`) defaults to an `RS256`-only allow-list
+  and refuses HS\* algorithms. If your issuer signs assertions with another
+  asymmetric algorithm (`RS384`, `ES256`, `PS256`, …) and previously relied on
+  library defaults, set `algorithms` explicitly to the intended asymmetric
+  algorithm **before** upgrading, or assertions will stop verifying.
+- **`login_redirect_url` deployments begin receiving a return-host parameter.**
+  When `login_redirect_url` is enabled, direct-host entry appends the configured
+  `return_host_param` (default `return_host`) to that URL. Existing deployments
+  are therefore not unchanged: the issuer's launch-init endpoint will start
+  receiving this query parameter and should tolerate and/or consume it. Leave
+  `login_redirect_url` unset if the issuer should not receive it.
+
 ## Security notes
 
 - Put only an opaque, short-lived, one-time code in the browser URL.
@@ -167,4 +182,4 @@ Required when `external_launch.instance_id` is configured:
 - Configure exactly one assertion verification method (`jwks_url`, `public_key`,
   or dev-only `dev_shared_secret`).
 - Local users are mapped by stable external identity `(provider, issuer,
-subject)`. A matching email alone never merges identities.
+  subject)`. A matching email alone never merges identities.

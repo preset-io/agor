@@ -107,10 +107,11 @@ host. Ambiguous host values (multiple, array or comma-joined) fail closed before
 any code leaves the daemon. `audience` and `instance_id` are compatibility
 echoes; a correct issuer derives authority from its own records and the
 authenticated exchange credential, not from these caller-supplied fields. The
-canonical request shape is pinned by the shared contract fixture
-`apps/agor-daemon/src/auth/__fixtures__/launch-exchange-request.json`, which must
-stay aligned with the issuer's canonical exchange schema so the two sides cannot
-drift.
+request shape the daemon emits is pinned by a daemon-side contract tripwire
+fixture `apps/agor-daemon/src/auth/__fixtures__/launch-exchange-request.json`: it
+catches an accidental daemon-side change in review, but it does not and cannot
+mechanically prevent the issuer from drifting. The issuer's canonical exchange
+schema remains the source of truth and must be kept in sync out of band.
 
 If `service_credential` or `service_credential_env` is configured, the daemon also sends `Authorization: Bearer <credential>`. This static bearer is a
 server-to-server exchange credential: it is read only from config/env (in
@@ -172,12 +173,31 @@ Production verification is asymmetric and fails closed:
   defaults to `RS256` (override with `algorithms`), preventing algorithm
   confusion (e.g. a public key coerced into an HS256 secret). The dev
   `dev_shared_secret` path stays HS256-only.
-- JWKS assertions must carry a `kid` that matches a signing key whose `use` is
-  `sig` and whose `alg` matches the token header.
+- JWKS assertions must carry a `kid` that matches a signing key. A key that
+  omits `use`/`alg` metadata is accepted; when either is present it must be
+  consistent (`use: sig`, and `alg` matching the token header). Only conflicting
+  metadata is rejected — the code intentionally treats those fields as optional.
 - A missing/invalid issuer, audience, `exp`, `sub`, or (when
   `multi_tenancy.mode: required_from_auth`) the configured tenant claim, creates
   **no session**. Tenant scope applied to the runtime DB/RLS always equals the
   signed tenant claim.
+
+## Compatibility and upgrade notes
+
+- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
+  verification (`jwks_url` / `public_key`) now defaults to an `RS256`-only
+  allow-list and refuses HS\* algorithms outright. A deployment that signs
+  assertions with a different asymmetric algorithm (e.g. `RS384`, `ES256`,
+  `PS256`) and previously relied on library defaults must set `algorithms`
+  explicitly to the intended asymmetric algorithm **before** upgrading, or its
+  assertions will stop verifying.
+- **`login_redirect_url` deployments begin receiving a return-host query
+  parameter.** When `login_redirect_url` is enabled, direct-host entry appends
+  the configured `return_host_param` (default `return_host`) to that URL. This is
+  not inert for existing deployments: the issuer's launch-init endpoint will
+  start receiving this query parameter and must tolerate and/or consume it
+  (allow-listing the host against its own routing records). If the issuer should
+  not receive it, leave `login_redirect_url` unset.
 
 ## Security notes
 

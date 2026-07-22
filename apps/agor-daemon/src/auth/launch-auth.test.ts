@@ -412,7 +412,7 @@ describe('one-time launch auth service', () => {
     ).rejects.toBeInstanceOf(NotAuthenticated);
   });
 
-  it('builds an exchange body whose keys stay within the shared contract fixture', async () => {
+  it('builds an exchange body whose keys stay within the daemon-side contract tripwire fixture', async () => {
     const fetchMock = mockExchange(signClaims());
     await service(hostConfig()).create({ launchCode: 'code' }, {
       headers: { host: 'primary.cloud.agor.live' },
@@ -490,6 +490,102 @@ describe('one-time launch auth service', () => {
         multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
       }).create({ launchCode: 'code' })
     ).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
+  it('derives tenant scope only from the signed claim, never a trusted header', async () => {
+    // Legal required_from_auth config that allows a header fallback for the
+    // generic request path. On the launch path the header must NOT be trusted:
+    // the assertion omits the tenant claim but a tenant header is present, so
+    // the exchange must reject and create no session.
+    mockExchange(signClaims({ sub: 'header-tenant-user', email: 'header-tenant@example.test' }));
+    await expect(
+      service({
+        ...baseConfig(),
+        database: { dialect: 'postgresql' },
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          auth_claim: 'tenant_id',
+          trusted_header: 'x-agor-tenant-id',
+        },
+      }).create({ launchCode: 'code' }, {
+        headers: { 'x-agor-tenant-id': 'tenant-from-header' },
+      } as never)
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+
+    const rows = await select(db).from(users).all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rejects asymmetric verification configured with an HS* algorithm', async () => {
+    mockExchange(signClaims());
+    const { dev_shared_secret: _dev, ...rest } = baseConfig().external_launch as Record<
+      string,
+      unknown
+    >;
+
+    await expect(
+      service({
+        external_launch: { ...rest, public_key: 'pem-placeholder', algorithms: ['HS256'] },
+      }).create({ launchCode: 'code' })
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+
+    await expect(
+      service({
+        external_launch: {
+          ...rest,
+          jwks_url: 'https://issuer.example.test/jwks',
+          algorithms: ['HS384'],
+        },
+      }).create({ launchCode: 'code' })
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
+  it('accepts a non-RS256 asymmetric algorithm when explicitly configured (ES256)', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const { dev_shared_secret: _dev, ...rest } = baseConfig().external_launch as Record<
+      string,
+      unknown
+    >;
+    const es256Config: AgorConfig = {
+      external_launch: { ...rest, public_key: publicKeyPem, algorithms: ['ES256'] },
+    };
+
+    const token = jwt.sign({ sub: 'es-user', instance_id: 'instance-1' }, privateKeyPem, {
+      algorithm: 'ES256',
+      keyid: 'k1',
+      expiresIn: '5m',
+      issuer: 'https://issuer.example.test',
+      audience: 'runtime:test',
+    });
+    mockExchange(token);
+    const ok = await service(es256Config).create({ launchCode: 'code' });
+    expect(ok.user.user_id).toBeTruthy();
+  });
+
+  it('logs a coarse, secret-safe diagnostic on expected launch failures', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const launchCode = 'otc_super_secret_launch_code_9999';
+    const serviceCredential = 'exchange-credential-do-not-log-abcdef';
+
+    // Exchange returns no assertion -> NotAuthenticated thrown inside the
+    // try/catch (the expected-failure path).
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({}, { status: 200 }))
+    );
+    await expect(
+      service({
+        external_launch: { ...baseConfig().external_launch, service_credential: serviceCredential },
+      }).create({ launchCode })
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+
+    expect(warn).toHaveBeenCalled();
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain('[auth/launch]');
+    expect(logged).not.toContain(launchCode);
+    expect(logged).not.toContain(serviceCredential);
   });
 });
 

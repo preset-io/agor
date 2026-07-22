@@ -62,7 +62,6 @@ interface ResolvedLaunchSettings {
   algorithms?: string[];
   forwardRequestHost: boolean;
   trustedHostHeader: string;
-  returnHostParam?: string;
 }
 
 export interface PublicLaunchAuthSettings {
@@ -146,7 +145,6 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     forwardRequestHost:
       envFlag(process.env[DEFAULT_FORWARD_REQUEST_HOST_ENV]) ?? raw?.forward_request_host === true,
     trustedHostHeader: (raw?.trusted_host_header || DEFAULT_TRUSTED_HOST_HEADER).toLowerCase(),
-    returnHostParam: raw?.return_host_param || undefined,
   };
 }
 
@@ -192,6 +190,15 @@ function assertConfigured(settings: ResolvedLaunchSettings): void {
   }
   if (configuredKeyCount > 1) {
     rejectConfig('multiple assertion verification methods configured');
+  }
+  // Asymmetric verification (jwks_url/public_key) must never be paired with a
+  // symmetric HS* algorithm. Pinning this makes the algorithm-confusion defense
+  // independent of the jsonwebtoken default allow-list: even if an operator
+  // overrides `algorithms`, an asymmetric public key can never be coerced into
+  // an HMAC secret. The RS256 default for asymmetric methods is preserved.
+  const usesAsymmetricKey = Boolean(settings.jwksUrl || settings.publicKey);
+  if (usesAsymmetricKey && settings.algorithms?.some((alg) => /^hs/i.test(alg))) {
+    rejectConfig('asymmetric verification cannot be configured with HS* algorithms');
   }
 }
 
@@ -630,11 +637,13 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
-        const tenant = resolveTenantContext(multiTenancy, {
-          params,
-          authPayload: claims,
-          headers: params?.headers as Record<string, unknown> | undefined,
-        });
+        // Tenant scope for the runtime DB/RLS must derive ONLY from the
+        // verified, signed assertion — never from params, params.tenant, or
+        // request headers, all of which are attacker-influenced on the launch
+        // request. We deliberately pass just the signed claims to the generic
+        // resolver so `required_from_auth` cannot fall back to a trusted_header
+        // or an explicit params tenant; an absent claim fails closed below.
+        const tenant = resolveTenantContext(multiTenancy, { authPayload: claims });
         return await runWithTenantDatabaseScope(options.db, tenant.tenant_id, async () => {
           const user = await upsertLaunchUser(options, claims, tenant);
           return issueRuntimeTokens(
@@ -647,21 +656,28 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           );
         });
       } catch (error) {
+        // Every expected launch failure emits exactly one coarse, secret-safe
+        // operator diagnostic before rethrowing. The launch code, assertion,
+        // bearer credential, request host, cookies and DB URLs must never reach
+        // logs/telemetry, so the reason is scrubbed through safeLaunchDiagnostic.
+        const logLaunchFailure = (reason: string): void => {
+          console.warn(
+            safeLaunchDiagnostic(reason, [
+              launchCode,
+              settings.serviceCredential,
+              settings.devSharedSecret,
+            ])
+          );
+        };
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {
+          logLaunchFailure(error.message);
           throw error;
         }
         if (error instanceof TenantResolutionError) {
+          logLaunchFailure(error.message);
           throw new NotAuthenticated(error.message);
         }
-        // Operator diagnostic only — the launch code, assertion, bearer
-        // credential and request host must never reach logs/telemetry.
-        console.warn(
-          safeLaunchDiagnostic(error instanceof Error ? error.message : 'exchange failed', [
-            launchCode,
-            settings.serviceCredential,
-            settings.devSharedSecret,
-          ])
-        );
+        logLaunchFailure(error instanceof Error ? error.message : 'exchange failed');
         throw new NotAuthenticated('Invalid or expired one-time launch code');
       }
     },
