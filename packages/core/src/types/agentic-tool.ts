@@ -241,6 +241,20 @@ export interface CodexAuthImportResult {
 }
 
 /**
+ * Result of removing a Codex login via the daemon's `/codex-auth/logout`
+ * endpoint. Carries ONLY non-secret metadata. `revoked` reports the best-effort
+ * OAuth token revocation attempted before the local file was deleted:
+ * - `revoked`: the provider accepted the revocation request.
+ * - `skipped`: no revocable token was on disk (already logged out / API-key file).
+ * - `failed`: the revocation call failed (network / provider error); the local
+ *   login was still removed. Never blocks removal.
+ */
+export interface CodexAuthLogoutResult {
+  status: 'removed';
+  revoked: 'revoked' | 'skipped' | 'failed';
+}
+
+/**
  * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
  * `/codex-auth/device` endpoints.
  * - `idle`: no attempt exists for this user.
