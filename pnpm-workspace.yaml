@@ -67,3 +67,5 @@ allowBuilds:
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true
   'tree-sitter-bash@0.25.0': true
+patchedDependencies:
+  streamdown@2.5.0: patches/streamdown@2.5.0.patch

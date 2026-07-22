@@ -52,6 +52,9 @@ overrides:
   yaml: '>=2.8.3 <3'
   zod: ^4.3.6
 
+patchedDependencies:
+  streamdown@2.5.0: 19300059403a0f3973e236d4d8049c92a6d5a3422d55cdf1653207fda4ddb8a4
+
 importers:
 
   .:
@@ -445,7 +448,7 @@ importers:
         version: 2.1.0
       streamdown:
         specifier: ^2.5.0
-        version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 2.5.0(patch_hash=19300059403a0f3973e236d4d8049c92a6d5a3422d55cdf1653207fda4ddb8a4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       use-stick-to-bottom:
         specifier: ^1.1.6
         version: 1.1.6(react@19.2.7)
@@ -19289,7 +19292,7 @@ snapshots:
 
   stream-shift@1.0.3: {}
 
-  streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  streamdown@2.5.0(patch_hash=19300059403a0f3973e236d4d8049c92a6d5a3422d55cdf1653207fda4ddb8a4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
       clsx: 2.1.1
       hast-util-to-jsx-runtime: 2.3.6

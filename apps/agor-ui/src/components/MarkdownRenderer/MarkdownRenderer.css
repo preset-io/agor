@@ -157,3 +157,117 @@
 .markdown-alert > :last-child {
   margin-bottom: 0;
 }
+
+/* Streamdown renders Mermaid fullscreen content through a body portal. Its
+   Tailwind utility classes are intentionally not part of Agor, so reproduce
+   only this dialog's layout with Ant Design tokens and its stable selector. */
+[data-streamdown="mermaid-fullscreen"] {
+  position: fixed;
+  inset: 0;
+  z-index: var(--streamdown-mermaid-z-index);
+  box-sizing: border-box;
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ant-padding-lg);
+  background: color-mix(in srgb, var(--ant-color-bg-elevated) 95%, transparent);
+  color: var(--ant-color-text);
+  backdrop-filter: blur(var(--ant-size-xxs));
+}
+
+[data-streamdown="mermaid-fullscreen"] > [role="presentation"],
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"],
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] > div,
+[data-streamdown="mermaid-fullscreen"] [role="application"],
+[data-streamdown="mermaid-fullscreen"] [role="img"] {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+[data-streamdown="mermaid-fullscreen"] > [role="presentation"],
+[data-streamdown="mermaid-fullscreen"] [role="application"],
+[data-streamdown="mermaid-fullscreen"] [role="img"] {
+  align-items: center;
+  justify-content: center;
+}
+
+[data-streamdown="mermaid-fullscreen"] > [role="presentation"] {
+  padding: 0;
+}
+
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] > div {
+  position: relative;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+[data-streamdown="mermaid-fullscreen"] [role="application"] {
+  flex: 1;
+}
+
+[data-streamdown="mermaid-fullscreen"] [role="img"] svg {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+[data-streamdown="mermaid-fullscreen"] button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ant-padding-xs);
+  border: var(--ant-line-width) solid var(--ant-color-border);
+  border-radius: var(--ant-border-radius-sm);
+  background: var(--ant-color-bg-elevated);
+  color: var(--ant-color-text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--ant-motion-duration-mid),
+    background-color var(--ant-motion-duration-mid),
+    border-color var(--ant-motion-duration-mid);
+}
+
+[data-streamdown="mermaid-fullscreen"] button:hover:not(:disabled) {
+  border-color: var(--ant-color-border-secondary);
+  background: var(--ant-color-fill-secondary);
+  color: var(--ant-color-text);
+}
+
+[data-streamdown="mermaid-fullscreen"] button:focus-visible {
+  outline: var(--ant-line-width-focus) solid var(--ant-color-primary-border);
+  outline-offset: var(--ant-line-width-focus);
+}
+
+[data-streamdown="mermaid-fullscreen"] button:disabled {
+  color: var(--ant-color-text-disabled);
+  cursor: not-allowed;
+}
+
+[data-streamdown="mermaid-fullscreen"] > button {
+  position: absolute;
+  top: var(--ant-margin);
+  right: var(--ant-margin);
+  z-index: 2;
+}
+
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] > div > div:first-child {
+  position: absolute;
+  bottom: var(--ant-margin);
+  left: var(--ant-margin);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ant-margin-xxs);
+  padding: var(--ant-padding-xxs);
+  border: var(--ant-line-width) solid var(--ant-color-border-secondary);
+  border-radius: var(--ant-border-radius);
+  background: var(--ant-color-bg-elevated);
+  box-shadow: var(--ant-box-shadow-secondary);
+}

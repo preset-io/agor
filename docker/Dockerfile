@@ -118,6 +118,7 @@ COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
+COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
