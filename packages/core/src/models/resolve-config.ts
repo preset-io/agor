@@ -10,9 +10,9 @@
  * branch auto-create, gateway session creation, ...). Centralizing here:
  *
  * - Guarantees every site writes the same shape (mode default, updated_at
- *   stamp, conditional effort/provider inclusion), avoiding drift.
- * - Makes it safe to add a new optional field (e.g. a future `notes` or
- *   `temperature`) in exactly one place.
+ *   stamp, conditional optional-field inclusion), avoiding drift.
+ * - Makes it safe to add a new optional field (e.g. a future `temperature`)
+ *   in exactly one place.
  * - Returns `undefined` when there is no usable model, so callers can chain
  *   with `??` or feed a list into `resolveModelConfigPrecedence`.
  */
@@ -131,6 +131,7 @@ function getModelLessFallbackOverrides(
   input: ModelConfigInput | undefined | null
 ): ModelConfigInput | undefined {
   const overrides: ModelConfigInput = {};
+  if (input?.notes !== undefined) overrides.notes = input.notes;
   if (input?.effort !== undefined) overrides.effort = input.effort;
   if (input?.advisorModel !== undefined) overrides.advisorModel = input.advisorModel;
   return Object.keys(overrides).length > 0 ? overrides : undefined;
@@ -160,7 +161,7 @@ function mergeModelLessFallbackOverrides(
  * We intentionally do not
  * carry model-less `mode` / `provider` because their meaning depends on the
  * missing model value. This prevents partial persisted model_config objects
- * while preserving explicit effort/advisor choices.
+ * while preserving explicit notes, effort, and advisor choices.
  */
 export function resolveModelConfigWithFallback(
   tool: AgenticToolName,
