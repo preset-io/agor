@@ -18,6 +18,7 @@ export default defineConfig({
     'config/index': 'src/config/index.ts',
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
     'permissions/index': 'src/permissions/index.ts',
+    'credentials/index': 'src/credentials/index.ts', // Shared credential sanitize/lint registry
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
