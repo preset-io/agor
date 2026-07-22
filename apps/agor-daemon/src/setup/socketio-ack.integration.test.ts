@@ -7,15 +7,27 @@ import {
   type BaseTool,
   executeToolTask,
 } from '../../../../packages/executor/src/handlers/sdk/base-executor.js';
-import { registerExecutorClientHooks } from '../../../../packages/executor/src/services/feathers-client.js';
+import { createExecutorClient } from '../../../../packages/executor/src/services/feathers-client.js';
 import { TasksService } from '../services/tasks.js';
 
 const TASK_ID = '018f0000-0000-7000-8000-000000000001';
 const SESSION_ID = '018f0000-0000-7000-8000-000000000002';
+const SESSION_TOKEN = 'executor-session-token';
 
-function waitForSocketConnect(client: AgorClient): Promise<void> {
-  if (client.io.connected) return Promise.resolve();
-  return new Promise((resolve) => client.io.once('connect', resolve));
+interface SocketParams {
+  provider?: string;
+  connection?: Record<string, unknown>;
+}
+
+function requireSocketAuthentication(params?: SocketParams): void {
+  if (params?.provider && params.connection?.testAuthenticated !== true) {
+    throw new Error('Socket request arrived before executor reauthentication');
+  }
+}
+
+function waitForSocketConnect(socketClient: AgorClient): Promise<void> {
+  if (socketClient.io.connected) return Promise.resolve();
+  return new Promise((resolve) => socketClient.io.once('connect', resolve));
 }
 
 describe('executor acknowledgement failure convergence', () => {
@@ -31,10 +43,62 @@ describe('executor acknowledgement failure convergence', () => {
     }
   });
 
+  it('rejects a lost acknowledgement after the native deadline without retrying', async () => {
+    const app = feathersExpress(feathers());
+    let mutationCount = 0;
+    app.use('lost-ack', {
+      async create(data: { value: string }) {
+        mutationCount += 1;
+        return data;
+      },
+    });
+    app.configure(
+      socketio({}, (io) => {
+        io.on('connection', (socket) => {
+          socket.use((packet, next) => {
+            const [event, path] = packet;
+            if (event === 'create' && path === 'lost-ack') {
+              packet[packet.length - 1] = () => {};
+            }
+            next();
+          });
+        });
+      })
+    );
+
+    server = await new Promise<Server>((resolve) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+
+    client = createClient(`http://127.0.0.1:${address.port}`, true, {
+      ackTimeout: 50,
+      reconnectionAttempts: 0,
+    });
+    await waitForSocketConnect(client);
+
+    const lostAckService = (
+      client as AgorClient & {
+        service(path: 'lost-ack'): {
+          create(data: { value: string }): Promise<unknown>;
+        };
+      }
+    ).service('lost-ack');
+    await expect(lostAckService.create({ value: 'sub-limit' })).rejects.toThrow(/timed out/i);
+    expect(mutationCount).toBe(1);
+  });
+
   it('rejects a stranded mutation once and converges through the executor terminal boundary', async () => {
     const app = feathersExpress(feathers());
     let mutationCount = 0;
+    let authenticationCount = 0;
+    let reauthenticationCount = 0;
     let shouldStrandAcknowledgement = true;
+    let resolveReauthenticated!: () => void;
+    const reauthenticated = new Promise<void>((resolve) => {
+      resolveReauthenticated = resolve;
+    });
     let session = {
       session_id: SESSION_ID,
       status: SessionStatus.RUNNING,
@@ -50,7 +114,8 @@ describe('executor acknowledgement failure convergence', () => {
     } as Task;
 
     app.use('lost-ack', {
-      async create(data: { value: string }) {
+      async create(data: { value: string }, params?: SocketParams) {
+        requireSocketAuthentication(params);
         mutationCount += 1;
         await new Promise((resolve) => setTimeout(resolve, 30));
         return data;
@@ -59,14 +124,14 @@ describe('executor acknowledgement failure convergence', () => {
     const taskService = Object.create(TasksService.prototype) as TasksService & {
       app: typeof app;
       get: (id: string) => Promise<Task>;
-      repository: { update: (id: string, data: Partial<Task>) => Promise<Task> };
+      taskRepo: { updateFromExecutor: (id: string, data: Partial<Task>) => Promise<Task> };
       id: string;
       emit: () => boolean;
     };
     taskService.app = app;
     taskService.get = async () => task;
-    taskService.repository = {
-      async update(_id, data) {
+    taskService.taskRepo = {
+      async updateFromExecutor(_id, data) {
         task = { ...task, ...data };
         return task;
       },
@@ -74,27 +139,53 @@ describe('executor acknowledgement failure convergence', () => {
     taskService.id = 'task_id';
     taskService.emit = () => false;
     app.use('tasks', taskService);
+    app.service('tasks').hooks({
+      before: {
+        all: [
+          async (context) => {
+            requireSocketAuthentication(context.params as SocketParams);
+            return context;
+          },
+        ],
+      },
+    });
     app.use('sessions', {
-      async get() {
+      async get(_id: string, params?: SocketParams) {
+        requireSocketAuthentication(params);
         return session;
       },
-      async patch(_id: string, data: Partial<Session>) {
+      async patch(_id: string, data: Partial<Session>, params?: SocketParams) {
+        requireSocketAuthentication(params);
         session = { ...session, ...data };
         return session;
       },
       async triggerQueueProcessing() {},
     });
     app.use('config/resolve-api-key', {
-      async create() {
+      async create(_data: unknown, params?: SocketParams) {
+        requireSocketAuthentication(params);
         return { apiKey: 'test-key', source: 'global', useNativeAuth: false };
       },
     });
     app.use('messages', {
-      async find() {
+      async find(params?: SocketParams) {
+        requireSocketAuthentication(params);
         return { total: 0, limit: 10, skip: 0, data: [] };
       },
-      async create(data: unknown) {
+      async create(data: unknown, params?: SocketParams) {
+        requireSocketAuthentication(params);
         return data;
+      },
+    });
+    app.use('authentication', {
+      async create(data: { accessToken?: string }, params?: SocketParams) {
+        authenticationCount += 1;
+        if (params?.connection) params.connection.testAuthenticated = true;
+        return {
+          accessToken: data.accessToken ?? SESSION_TOKEN,
+          authentication: { strategy: 'jwt' },
+          user: { user_id: 'executor-user' },
+        };
       },
     });
 
@@ -108,7 +199,9 @@ describe('executor acknowledgement failure convergence', () => {
               return;
             }
             shouldStrandAcknowledgement = false;
-            packet[packet.length - 1] = () => {};
+            packet[packet.length - 1] = () => {
+              socket.disconnect(true);
+            };
             next();
           });
         });
@@ -121,12 +214,12 @@ describe('executor acknowledgement failure convergence', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
 
-    client = createClient(`http://127.0.0.1:${address.port}`, true, {
-      ackTimeout: 100,
-      reconnectionAttempts: 3,
+    client = await createExecutorClient(`http://127.0.0.1:${address.port}`, SESSION_TOKEN, {
+      onReauthenticated: () => {
+        reauthenticationCount += 1;
+        resolveReauthenticated();
+      },
     });
-    registerExecutorClientHooks(client);
-    await waitForSocketConnect(client);
 
     let rejection: unknown;
     const startedAt = Date.now();
@@ -161,16 +254,17 @@ describe('executor acknowledgement failure convergence', () => {
 
     expect(rejection).toBeInstanceOf(Error);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
-    client.io.disconnect().connect();
-    await waitForSocketConnect(client);
+    await reauthenticated;
     expect(mutationCount).toBe(1);
+    expect(authenticationCount).toBeGreaterThanOrEqual(2);
+    expect(reauthenticationCount).toBe(1);
 
     expect(task).toMatchObject({
       status: TaskStatus.FAILED,
       error_message: expect.any(String),
     });
     expect(task.error_message).toBe((rejection as Error).message);
-    expect(task.error_message).toMatch(/timed out/i);
+    expect(task.error_message).toMatch(/disconnected|timed out/i);
     expect(session).toMatchObject({ status: SessionStatus.FAILED, ready_for_prompt: true });
   });
 });

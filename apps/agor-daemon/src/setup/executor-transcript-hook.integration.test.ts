@@ -66,7 +66,7 @@ describe('executor transcript application hook', () => {
         {
           type: 'tool_result',
           tool_use_id: `tool-${id}`,
-          content: `${id}-HEAD_${'x'.repeat(850_000)}_${id}-TAIL`,
+          content: `${id}-HEAD_${'x'.repeat(1_100_000)}_${id}-TAIL`,
         },
       ],
     });
