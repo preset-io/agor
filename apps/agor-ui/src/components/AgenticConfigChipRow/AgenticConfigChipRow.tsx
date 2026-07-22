@@ -114,6 +114,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     hasUserDefault,
     resolveConfiguration,
     myDefaultSummary,
+    isSourceAllowedByPolicy,
     isValidSource,
     preferredSource,
   } = useAgenticConfigurationSources({ tool, client, currentUser });
@@ -129,9 +130,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const configError = loading
     ? 'Loading configuration'
     : loadError
-      ? source
-        ? undefined
-        : 'Unable to load configuration presets'
+      ? !source
+        ? 'Unable to load configuration presets'
+        : isSourceAllowedByPolicy(source)
+          ? undefined
+          : 'This configuration is not allowed by workspace policy'
       : isValidSource(source)
         ? undefined
         : source

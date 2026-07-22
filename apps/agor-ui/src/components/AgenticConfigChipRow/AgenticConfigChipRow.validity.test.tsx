@@ -114,4 +114,33 @@ describe('AgenticConfigChipRow config validity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledOnce());
   });
+
+  it('rejects a known inline user default when preset loading fails', async () => {
+    const onValidity = vi.fn();
+    const onValid = vi.fn();
+    const onInvalid = vi.fn();
+    const client = {
+      service: () => ({
+        find: () => Promise.reject(new Error('preset service unavailable')),
+        on: () => {},
+        off: () => {},
+      }),
+    } as unknown as AgorClient;
+
+    render(
+      <Harness client={client} onValidity={onValidity} onValid={onValid} onInvalid={onInvalid} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('source')).toHaveTextContent(USER_DEFAULT_AGENTIC_CONFIGURATION);
+      expect(onValidity).toHaveBeenLastCalledWith(
+        false,
+        'This configuration is not allowed by workspace policy'
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledOnce());
+    expect(onValid).not.toHaveBeenCalled();
+  });
 });

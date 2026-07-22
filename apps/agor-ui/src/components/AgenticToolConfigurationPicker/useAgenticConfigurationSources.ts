@@ -127,14 +127,28 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     tool
   );
   const hasConfiguredUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
+  const userDefaultUsesInline = Boolean(
+    currentUser &&
+      hasConfiguredUserDefault &&
+      userSelection?.source !== 'preset' &&
+      userSelection?.source !== 'workspace_default'
+  );
+  const isSourceAllowedByPolicy = useCallback(
+    (source: string | undefined) =>
+      inlineAllowed ||
+      (source !== INLINE_AGENTIC_CONFIGURATION &&
+        (source !== USER_DEFAULT_AGENTIC_CONFIGURATION || !userDefaultUsesInline)),
+    [inlineAllowed, userDefaultUsesInline]
+  );
   const hasUserDefault =
     hasConfiguredUserDefault &&
+    isSourceAllowedByPolicy(USER_DEFAULT_AGENTIC_CONFIGURATION) &&
     (!currentUser ||
       (userSelection?.source === 'preset'
         ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
         : userSelection?.source === 'workspace_default'
           ? inlineAllowed || Boolean(workspacePreset)
-          : inlineAllowed));
+          : true));
 
   const resolveConfiguration = useCallback(
     (source: string | undefined, inlineConfig: DefaultAgenticToolConfig = {}) => {
@@ -172,12 +186,13 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
 
   const isValidSource = useCallback(
     (source: string | undefined) =>
-      presets.some((preset) => preset.preset_id === source) ||
-      (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
-      (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION &&
-        (inlineAllowed || Boolean(workspacePreset))) ||
-      (inlineAllowed && source === INLINE_AGENTIC_CONFIGURATION),
-    [hasUserDefault, inlineAllowed, presets, workspacePreset]
+      isSourceAllowedByPolicy(source) &&
+      (presets.some((preset) => preset.preset_id === source) ||
+        (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
+        (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION &&
+          (inlineAllowed || Boolean(workspacePreset))) ||
+        source === INLINE_AGENTIC_CONFIGURATION),
+    [hasUserDefault, inlineAllowed, isSourceAllowedByPolicy, presets, workspacePreset]
   );
 
   const preferredSource = hasUserDefault
@@ -200,6 +215,7 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     hasUserDefault,
     resolveConfiguration,
     myDefaultSummary,
+    isSourceAllowedByPolicy,
     isValidSource,
     preferredSource,
   };
