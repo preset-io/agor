@@ -1,3 +1,4 @@
+import { request as httpRequest } from 'node:http';
 import { getCurrentTenantId } from '@agor/core/db';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -667,6 +668,62 @@ describe('POST /mcp with personal API keys', () => {
         multi_tenancy: {
           mode: 'required_from_auth',
           auth_claim: 'tenant_id',
+        },
+      }
+    );
+  });
+
+  it('rejects duplicate on-wire trusted tenant headers before API-key lookup', async () => {
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+
+    await withMcpServer(
+      {},
+      async (baseUrl) => {
+        const requestBody = JSON.stringify({
+          jsonrpc: '2.0',
+          id: 24,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        });
+        const response = await new Promise<{ status: number | undefined; body: string }>(
+          (resolve, reject) => {
+            const req = httpRequest(
+              `${baseUrl}/mcp`,
+              {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/json, text/event-stream',
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(requestBody),
+                  'X-API-Key': 'agor_sk_valid',
+                  'X-Agor-Tenant-Id': ['tenant-a', 'tenant-b'],
+                },
+              },
+              (res) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk: string) => {
+                  body += chunk;
+                });
+                res.on('end', () => resolve({ status: res.statusCode, body }));
+              }
+            );
+            req.on('error', reject);
+            req.end(requestBody);
+          }
+        );
+
+        expect(response.status, response.body).toBe(401);
+        expect(JSON.parse(response.body)).toMatchObject({
+          error: { message: 'Conflicting tenant identities' },
+        });
+        expect(verifyKey).not.toHaveBeenCalled();
+      },
+      {
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          trusted_header: 'x-agor-tenant-id',
         },
       }
     );

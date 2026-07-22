@@ -199,6 +199,20 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/Invalid trusted tenant header/);
   });
 
+  it('rejects a comma-coalesced trusted header as an ambiguous HTTP list', () => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        { headers: { 'x-agor-tenant-id': 'tenant-a, tenant-b' } }
+      )
+    ).toThrow(/Invalid trusted tenant header/);
+  });
+
   it('fails closed in required_from_auth mode when tenant context is missing', () => {
     expect(() =>
       resolveTenantContext({

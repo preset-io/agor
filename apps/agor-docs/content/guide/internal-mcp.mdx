@@ -110,8 +110,9 @@ In hosted `required_from_auth` deployments:
 - Personal API keys are opaque and do not contain a signed tenant. Using them
   at `/mcp` therefore requires `multi_tenancy.trusted_header`; the trusted
   reverse proxy must remove any client-supplied value and set the header from
-  its authenticated routing decision. Do not expose the daemon directly when
-  this mode relies on a trusted header.
+  its authenticated routing decision. It must send exactly one tenant value;
+  duplicate or comma/list-valued tenant headers are rejected. Do not expose the
+  daemon directly when this mode relies on a trusted header.
 - If more than one tenant signal is present, all signals must agree. Missing or
   conflicting identity fails closed before tenant-owned authentication data is
   queried.

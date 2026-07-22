@@ -67,7 +67,8 @@ raw connection or a superuser/BYPASSRLS daemon role.
 
 1. **One request tenant:** every available trusted tenant signal must agree.
    Static configuration, verified token binding, configured trusted header,
-   authenticated claim, and explicit internal context may not disagree.
+   authenticated claim, and explicit internal context may not disagree. The
+   trusted header is a singleton: duplicate or comma/list values fail closed.
 2. **Bootstrap before data:** no personal-key, user, session, or other
    tenant-owned lookup runs before the MCP request tenant is established.
    Personal API keys in auth-resolved mode therefore require the configured

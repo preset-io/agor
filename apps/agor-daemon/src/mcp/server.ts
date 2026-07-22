@@ -467,6 +467,19 @@ export function setupMCPRoutes(
     return coerceString(Array.isArray(xApiKey) ? xApiKey[0] : xApiKey);
   };
 
+  /**
+   * Preserve duplicate on-wire header fields for tenant resolution. Node's
+   * normalized `headers` map comma-coalesces most duplicate names;
+   * `headersDistinct` lets the resolver compare every trusted tenant value.
+   * Non-Node test adapters may not expose it, so retain the normalized map as
+   * a fail-closed fallback (the resolver rejects comma/list values).
+   */
+  const getTenantResolutionHeaders = (req: Request): Record<string, unknown> => {
+    const distinct = (req as Request & { headersDistinct?: Record<string, string[] | undefined> })
+      .headersDistinct;
+    return distinct ?? (req.headers as Record<string, unknown>);
+  };
+
   const getRequestedSessionId = (req: Request): string | undefined => {
     const fromQuery = coerceString(req.query.sessionId);
     if (fromQuery) return fromQuery;
@@ -522,7 +535,7 @@ export function setupMCPRoutes(
           // the tenant-owned key table. Auth-claim-only hosted deployments must
           // use an internal tenant-bound MCP token instead.
           tenant = resolveTenantContext(multiTenancy, {
-            headers: req.headers as Record<string, unknown>,
+            headers: getTenantResolutionHeaders(req),
           });
         } catch (error) {
           if (error instanceof TenantResolutionError) {
@@ -582,7 +595,7 @@ export function setupMCPRoutes(
           // agree with it before the token's session is looked up.
           tenant = resolveTenantContext(multiTenancy, {
             params: { tenant_id: verifiedToken.tenantId },
-            headers: req.headers as Record<string, unknown>,
+            headers: getTenantResolutionHeaders(req),
           });
         } catch (error) {
           if (error instanceof TenantResolutionError) {

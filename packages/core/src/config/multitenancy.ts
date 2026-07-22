@@ -86,6 +86,12 @@ function readHeaderValues(
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() !== wanted) continue;
     for (const rawValue of Array.isArray(value) ? value : [value]) {
+      // A trusted tenant header contains one identifier, never an HTTP list.
+      // Reject coalesced duplicates even if an adapter discarded their
+      // original on-wire multiplicity.
+      if (typeof rawValue === 'string' && rawValue.includes(',')) {
+        throw new TenantResolutionError(`Invalid trusted tenant header ${header}`);
+      }
       const tenantId = normalizeTenantId(rawValue);
       if (!tenantId) {
         throw new TenantResolutionError(`Invalid trusted tenant header ${header}`);
