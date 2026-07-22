@@ -28,7 +28,6 @@ import type {
   AgenticAuthMethods,
   AuthenticatedParams,
   CodexAuthLogoutResult,
-  User,
   UserID,
 } from '@agor/core/types';
 import { deleteCodexAuthFile, readCodexAuthFile } from '../utils/codex-auth-file.js';
@@ -37,7 +36,6 @@ import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-import.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
 interface UsersServiceLike {
-  get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
     data: { agentic_auth_methods: AgenticAuthMethods },
@@ -66,17 +64,18 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      // Best-effort revoke the tokens currently on disk BEFORE deleting them.
-      // Revocation never blocks removal (network/expired/already-revoked all
-      // proceed); a missing file simply yields `skipped`.
-      let revoked: CodexAuthLogoutResult['revoked'] = 'skipped';
+      // Capture the current login (if any) to revoke its tokens, then delete it
+      // IMMEDIATELY — before the network revoke — so a concurrent connect/refresh
+      // can't be clobbered by a delete that waited on the multi-second revoke
+      // round-trip. In shared-identity Unix modes the auth.json is a single
+      // server-wide file, so connects/deletes are inherently last-writer-wins;
+      // deleting before the revoke keeps logout's window to two back-to-back
+      // filesystem ops rather than a network-length one.
       const existing = readCodexAuthFile(identity.unixUser);
-      if (existing.ok) {
-        revoked = await revokeCodexChatgptTokens(existing.content);
-      }
 
       // Delete the local login (idempotent). A genuine delete failure is a real
-      // server problem worth surfacing; the error class only, never token bytes.
+      // server problem worth surfacing — and we do NOT revoke in that case, so a
+      // login we could not remove keeps working. Log the error class only.
       try {
         deleteCodexAuthFile(identity.unixUser);
       } catch (err) {
@@ -90,15 +89,23 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
+      // Best-effort revoke the tokens we just removed (server-side; independent
+      // of the now-deleted file). Never blocks — network/expired/already-revoked
+      // all proceed; a missing file simply yields `skipped`.
+      const revoked: CodexAuthLogoutResult['revoked'] = existing.ok
+        ? await revokeCodexChatgptTokens(existing.content)
+        : 'skipped';
+
       // Clear the stored method via the users SERVICE (not a direct db write) so
       // the Feathers `patched` event fires and the settings pane + board banners
-      // re-probe to a disconnected state. Setting `codex: undefined` clears it
-      // through the service's merge while preserving any other tool's method.
+      // re-probe to a disconnected state. Send ONLY the codex key so the
+      // service's merge clears it against the FRESH record — preserving any
+      // concurrently-updated method for another tool instead of clobbering it
+      // with a read-modify-write of a stale snapshot.
       const usersService = app.service('users') as UsersServiceLike;
-      const current = await usersService.get(userId, { user: authUser, authenticated: true });
       await usersService.patch(
         userId,
-        { agentic_auth_methods: { ...current.agentic_auth_methods, codex: undefined } },
+        { agentic_auth_methods: { codex: undefined } },
         { user: authUser, authenticated: true }
       );
 

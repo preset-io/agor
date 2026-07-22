@@ -266,10 +266,10 @@ export function CodexAuthSettings({
               <Popconfirm
                 title="Remove Codex login?"
                 description={
-                  <div style={{ maxWidth: 300 }}>
-                    Signs out the Codex ChatGPT login and revokes its tokens. In shared-identity
-                    setups this is one login for the whole server — removing it signs Codex out for
-                    everyone here, not just you.
+                  <div style={{ maxWidth: 320 }}>
+                    Revokes this ChatGPT login's tokens, which signs the account out of Codex on
+                    every machine — not just here. In shared-identity setups it's also one login for
+                    the whole server, so removing it disconnects Codex for everyone on this server.
                   </div>
                 }
                 okText="Remove"

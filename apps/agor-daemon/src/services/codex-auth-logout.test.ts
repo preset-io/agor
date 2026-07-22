@@ -85,11 +85,18 @@ describe('codex-auth-logout', () => {
     // Revocation is attempted against the on-disk tokens BEFORE the delete.
     expect(revokeMock).toHaveBeenCalledWith(LOGIN_JSON);
     expect(deleteCodexAuthFileMock).toHaveBeenCalledWith(null); // simple mode → daemon user
-    // The method is cleared while any other tool's method is preserved. userId is
-    // taken from the auth context, never from request data.
+    // Delete happens BEFORE the network revoke, so a concurrent connect/refresh
+    // can't be clobbered by a delete that waited on the revoke round-trip.
+    expect(deleteCodexAuthFileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      revokeMock.mock.invocationCallOrder[0]
+    );
+    // Only the codex key is sent — the users-service merge clears it against the
+    // FRESH record, so a concurrent method update for another tool isn't
+    // clobbered by a read-modify-write of a stale snapshot. userId comes from the
+    // auth context, never from request data.
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
-      { agentic_auth_methods: { 'claude-code': 'api_key', codex: undefined } },
+      { agentic_auth_methods: { codex: undefined } },
       expect.objectContaining({ authenticated: true })
     );
     expect(result).toEqual({ status: 'removed', revoked: 'revoked' });
@@ -116,7 +123,7 @@ describe('codex-auth-logout', () => {
     expect(result.revoked).toBe('skipped');
   });
 
-  it('surfaces a friendly error and does NOT clear the method if the delete fails', async () => {
+  it('surfaces a friendly error, does NOT revoke, and does NOT clear the method if the delete fails', async () => {
     deleteCodexAuthFileMock.mockImplementation(() => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
@@ -127,6 +134,9 @@ describe('codex-auth-logout', () => {
       const logged = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n');
       expect(logged).toContain('Error');
       expect(logged).not.toContain('refresh-xyz');
+      // Delete precedes revoke: a login we could not remove keeps its tokens
+      // valid rather than being left revoked-but-present (broken).
+      expect(revokeMock).not.toHaveBeenCalled();
       expect(usersService.patch).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();

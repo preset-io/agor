@@ -389,8 +389,12 @@ describe('CodexAuthSettings', () => {
     expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
 
     // The confirm's destructive action calls the daemon logout endpoint (no
-    // token material crosses this boundary — the request body is empty).
+    // token material crosses this boundary — the request body is empty). The
+    // copy must disclose the global (every-machine) scope of the revocation.
     clickText('Remove login');
+    expect(
+      await screen.findByText(/signs the account out of Codex on every machine/i)
+    ).toBeInTheDocument();
     fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
     await waitFor(() => expect(logoutCreate).toHaveBeenCalledWith({}));
 
