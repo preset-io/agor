@@ -120,6 +120,16 @@ export type ProcessedEvent =
       raw_sdk_message: SDKResultMessage; // Pass the entire SDK message unchanged
       agentSessionId?: string;
     }
+  /**
+   * A per-invocation result for a turn that will be auto-resumed after a rate
+   * limit (synthesized by the retry wrapper). Its billable usage is aggregated,
+   * but it is NOT the task's final result — so it must not set error state or
+   * overwrite the final result.
+   */
+  | {
+      type: 'intermediate_result';
+      raw_sdk_message: SDKResultMessage;
+    }
   | {
       type: 'system_complete';
       systemType: string;
@@ -143,6 +153,22 @@ export type ProcessedEvent =
       overageStatus?: string;
       isUsingOverage?: boolean;
       agentSessionId?: string;
+    }
+  /**
+   * Synthesized (not produced by the SDK) when a rate-limited turn is about to
+   * be automatically resumed after a wait. Surfaced as a system message.
+   */
+  | {
+      type: 'rate_limit_retry';
+      /** Wall-clock time the resume is scheduled for. */
+      retryAtMs: number;
+      attempt: number;
+      maxRetries: number;
+    }
+  /** Synthesized when the auto-resume cap is hit and the turn falls back to manual continue. */
+  | {
+      type: 'rate_limit_retry_exhausted';
+      attempts: number;
     }
   | {
       type: 'sdk_event';

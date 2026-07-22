@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateId, shortId } from '@agor/core/db';
-import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
+import type { PermissionMode as ClaudeSDKPermissionMode, TerminalReason } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   BranchRepository,
@@ -57,6 +57,12 @@ import {
 } from './message-builder.js';
 import type { ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
+import { autoResumeOnRateLimit, RATE_LIMIT_TERMINAL_REASON } from './rate-limit-retry.js';
+import {
+  accumulateResultUsage,
+  applyAccumulatedUsage,
+  emptyRetryUsageAccumulator,
+} from './usage-aggregation.js';
 
 const DEBUG_CLAUDE_STREAMING =
   process.env.AGOR_DEBUG_CLAUDE_STREAMING === '1' ||
@@ -80,7 +86,7 @@ function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit'
   const resetsAtStr = event.resetsAt ? new Date(event.resetsAt * 1000).toLocaleString() : undefined;
 
   if (event.status === 'rejected') {
-    return `Rate limited (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting for limit to reset...`;
+    return `Rate limited (${type}).${resetsAtStr ? ` Resets at ${resetsAtStr}.` : ''}`;
   }
   if (event.status === 'allowed_warning') {
     return `Approaching rate limit (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Requests may be delayed.`;
@@ -237,6 +243,34 @@ export class ClaudeTool implements ITool {
   }
 
   /**
+   * Stream a turn with auto-resume on hard rate limits (see
+   * {@link autoResumeOnRateLimit}): a turn cut short by `blocking_limit` waits
+   * and resumes instead of going idle, its throttled result re-labelled
+   * `intermediate_result` while the eventual one is the final `result`. A user
+   * stop / session cancel interrupts the wait via `abortController`.
+   */
+  private promptWithRateLimitResume(
+    sessionId: SessionID,
+    prompt: string,
+    taskId: TaskID | undefined,
+    permissionMode: ClaudeSDKPermissionMode | undefined,
+    abortController?: AbortController
+  ): AsyncGenerator<ProcessedEvent> {
+    return autoResumeOnRateLimit(
+      (resumePrompt) =>
+        this.promptService!.promptSessionStreaming(
+          sessionId,
+          resumePrompt,
+          taskId,
+          permissionMode,
+          undefined, // chunkCallback (unused)
+          abortController
+        ),
+      { prompt, signal: abortController?.signal }
+    );
+  }
+
+  /**
    * Execute a prompt against a session WITH real-time streaming
    *
    * Creates user message, streams response chunks from Claude, then creates complete assistant messages.
@@ -348,23 +382,35 @@ export class ClaudeTool implements ITool {
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
+    // Billable usage summed across every SDK invocation this task spans (a
+    // rate-limited turn can be auto-resumed into several). Applied to the final
+    // rawSdkResponse so accounting reflects total consumption, not just the last.
+    let usageAcc = emptyRetryUsageAccumulator();
+    // Latest throttled invocation's raw result, used to carry the accumulated
+    // accounting onto a stopped outcome when the user cancels during the wait.
+    let lastIntermediateRaw: import('@agor/core/sdk').SDKResultMessage | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
       ? (mapPermissionMode(permissionMode, 'claude-code') as ClaudeSDKPermissionMode)
       : undefined;
 
-    for await (const event of this.promptService.promptSessionStreaming(
+    for await (const event of this.promptWithRateLimitResume(
       sessionId,
       prompt,
       taskId,
       mappedPermissionMode,
-      undefined, // chunkCallback (unused)
       abortController
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
         wasStopped = true;
+        // If the user cancelled during an auto-retry wait, no final `result`
+        // arrives — carry the accounting from the already-completed throttled
+        // invocation(s) onto the stopped outcome so their usage isn't dropped.
+        if (lastIntermediateRaw && !rawSdkResponse) {
+          rawSdkResponse = applyAccumulatedUsage(lastIntermediateRaw, usageAcc);
+        }
         console.log(`🛑 Claude execution was stopped for session ${sessionId}`);
         continue; // Skip processing this event
       }
@@ -614,6 +660,55 @@ export class ClaudeTool implements ITool {
         });
       }
 
+      // Auto-resume is about to wait then re-issue the turn — surface the plan
+      // and reset any stream left dangling by the throttled turn so the resumed
+      // turn's text lands on a fresh message.
+      if (event.type === 'rate_limit_retry') {
+        if (currentTextMessageId && streamingCallbacks) {
+          await streamingCallbacks.onStreamEnd(currentTextMessageId);
+        }
+        currentTextMessageId = null;
+        currentThinkingMessageId = null;
+        firstTokenTime = null;
+        firstActivityTime = null;
+        apiWaitMessageSent = false;
+        streamStartTime = Date.now();
+
+        const retryAt = new Date(event.retryAtMs).toLocaleTimeString();
+        const text = `Rate limited — auto-retrying at ${retryAt} (attempt ${event.attempt} of ${event.maxRetries})…`;
+        console.log(`⏳ ${text}`);
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const retryMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            retryMessageId,
+            [{ type: 'rate_limit', text, status: 'rejected', retryAt: event.retryAtMs }],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+        });
+      }
+
+      // Auto-resume gave up after the cap — tell the user how to continue.
+      if (event.type === 'rate_limit_retry_exhausted') {
+        const text = `Rate limit auto-retry gave up after ${event.attempts} attempts. Send a message to continue.`;
+        console.warn(`🚫 ${text}`);
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const exhaustedMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            exhaustedMessageId,
+            [{ type: 'rate_limit', text, status: 'rejected' }],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+        });
+      }
+
       // Handle sdk_event — surface unhandled SDK messages as system messages
       if (event.type === 'sdk_event') {
         const sdkEvent = event as Extract<ProcessedEvent, { type: 'sdk_event' }>;
@@ -663,17 +758,35 @@ export class ClaudeTool implements ITool {
         });
       }
 
+      // A throttled turn's result: aggregate its billable usage, then drop it —
+      // it is neither the final result nor an error (we are auto-resuming). Reset
+      // per-turn usage so it can't attach to the resumed turn's messages.
+      if (event.type === 'intermediate_result') {
+        usageAcc = accumulateResultUsage(usageAcc, event.raw_sdk_message);
+        lastIntermediateRaw = event.raw_sdk_message;
+        tokenUsage = undefined;
+        modelUsage = undefined;
+      }
+
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
-        rawSdkResponse = event.raw_sdk_message;
-        // Detect error results from SDK (e.g., error_during_execution)
+        usageAcc = accumulateResultUsage(usageAcc, event.raw_sdk_message);
+        rawSdkResponse = applyAccumulatedUsage(event.raw_sdk_message, usageAcc);
+        // Detect error results from SDK (e.g., error_during_execution). A final
+        // `blocking_limit` means auto-resume was exhausted, not a failure — the
+        // task goes idle for manual continue (its own system message was shown).
         if (rawSdkResponse && 'subtype' in rawSdkResponse) {
           const sdkResult = rawSdkResponse as {
             subtype?: string;
             errors?: string[];
             is_error?: boolean;
+            terminal_reason?: TerminalReason;
           };
-          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
+          if (
+            sdkResult.subtype &&
+            sdkResult.subtype !== 'success' &&
+            sdkResult.terminal_reason !== RATE_LIMIT_TERMINAL_REASON
+          ) {
             hadError = true;
             errorDetails = sdkResult.errors;
             console.error(
