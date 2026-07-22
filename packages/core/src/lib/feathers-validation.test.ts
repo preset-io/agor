@@ -3,6 +3,7 @@ import {
   boardObjectQueryValidator,
   branchQueryValidator,
   mcpServerQueryValidator,
+  sessionQueryValidator,
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
@@ -90,6 +91,31 @@ describe('userQueryValidator', () => {
       offset: 3,
       $limit: 50,
       $skip: 5,
+    });
+  });
+});
+
+describe('sessionQueryValidator', () => {
+  it('preserves the _swapReplace marker so the switch-tool guard can see it', async () => {
+    // Regression: `removeAdditional: 'all'` silently stripped `_swapReplace`
+    // before it reached SessionsService.remove, making the swap-safety guard
+    // dead on the external client path. It must now survive validation (and
+    // coerce the REST string form) while genuinely unknown props are dropped.
+    const context = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          _swapReplace: 'true',
+          unknown: 'removed',
+        },
+      },
+    };
+
+    await typedValidateQuery(sessionQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      session_id: '019e8e1c',
+      _swapReplace: true,
     });
   });
 });

@@ -1,4 +1,5 @@
 import type {
+  ExecutorPulse,
   SessionStatus as SessionStatusValue,
   TaskStatus as TaskStatusValue,
 } from '@agor-live/client';
@@ -13,7 +14,7 @@ import {
   QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Popover, theme } from 'antd';
+import { Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { formatAbsoluteTime } from '../../utils/time';
@@ -28,15 +29,42 @@ interface TimerPillProps {
   endedAt?: string | number | Date;
   durationMs?: number | null;
   lastExecutorHeartbeatAt?: string | number | Date | null;
+  latestExecutorPulse?: ExecutorPulse | null;
   style?: React.CSSProperties;
 }
 
 const ACTIVE_STATUSES: TimerStatus[] = [
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
   TaskStatus.AWAITING_INPUT,
 ];
+
+const PULSE_LABELS: Record<ExecutorPulse['kind'], string> = {
+  sdk_started: 'Starting',
+  progress: 'Working',
+  waiting: 'Waiting',
+  unknown_activity: 'Active',
+};
+
+const PulseIcon = () => (
+  <svg
+    aria-hidden="true"
+    focusable="false"
+    viewBox="0 0 24 24"
+    width="1em"
+    height="1em"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ marginRight: 4, verticalAlign: '-0.125em' }}
+  >
+    <path d="M2 12h4l3-9 6 18 3-9h4" />
+  </svg>
+);
 
 const statusConfig: Record<
   TimerStatus,
@@ -46,6 +74,10 @@ const statusConfig: Record<
     label?: string;
   }
 > = {
+  [TaskStatus.DISPATCHING]: {
+    icon: <HourglassOutlined />,
+    color: PILL_COLORS.processing,
+  },
   [TaskStatus.RUNNING]: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.processing,
@@ -138,6 +170,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   endedAt,
   durationMs,
   lastExecutorHeartbeatAt,
+  latestExecutorPulse,
   style,
 }) => {
   const { token } = theme.useToken();
@@ -146,6 +179,10 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   const heartbeatMs = useMemo(
     () => parseTimestamp(lastExecutorHeartbeatAt ?? undefined),
     [lastExecutorHeartbeatAt]
+  );
+  const pulseMs = useMemo(
+    () => parseTimestamp(latestExecutorPulse?.observed_at),
+    [latestExecutorPulse?.observed_at]
   );
 
   const fixedDuration = useMemo(() => {
@@ -220,6 +257,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     };
 
     const heartbeatAgeMs = heartbeatMs ? Math.max(0, Date.now() - heartbeatMs) : null;
+    const pulseAgeMs = pulseMs ? Math.max(0, Date.now() - pulseMs) : null;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
@@ -251,9 +289,29 @@ export const TimerPill: React.FC<TimerPillProps> = ({
             </span>
           </div>
         )}
+        {pulseMs && latestExecutorPulse && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Pulse</span>
+            <span style={valueStyle}>
+              <PulseIcon />
+              {pulseAgeMs !== null ? `${formatDuration(pulseAgeMs)} ago` : '—'}
+              <Tooltip
+                title={
+                  latestExecutorPulse.detail
+                    ? `Latest SDK event: ${latestExecutorPulse.detail}`
+                    : undefined
+                }
+              >
+                <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
+                  {PULSE_LABELS[latestExecutorPulse.kind]}
+                </span>
+              </Tooltip>
+            </span>
+          </div>
+        )}
       </div>
     );
-  }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, token]);
+  }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, pulseMs, latestExecutorPulse, token]);
 
   if (!startMs && fixedDuration === null) {
     return null;

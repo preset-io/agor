@@ -6,23 +6,23 @@ heroImage: '/screenshots/scheduler-modal.png'
 
 # Branch Scheduler
 
-Agor is built to orchestrate autonomous teammates. The scheduler turns every branch into a programmable surface: attach a cadence, hand it a prompt, and Agor will spin up fresh sessions with full context and the authority to act—just like a human collaborator.
+Agor is built to orchestrate autonomous teammates. The scheduler turns every branch into a programmable surface: attach a cadence, hand it a prompt, and Agor will spin up fresh sessions with full context and the authority to act, just like a human collaborator.
 
 ## Why a Scheduler?
 
 - **Automation is everything.** Branches are the durable unit of work in Agor; scheduling keeps them progressing without waiting for a human to click “run.”
 - **Supervision becomes routine.** Because Agor’s agents are self-aware (they can see boards, sessions, and metadata) and they have the same MCP access you do, schedules can watch active work and step in when something drifts.
-- **MCP makes it limitless.** Pair the scheduler with Slack, GitHub, HubSpot, or any other MCP server and you can move information—or trigger actions—anywhere your tooling reaches.
+- **MCP makes it limitless.** Pair the scheduler with Slack, GitHub, HubSpot, or any other MCP server and you can move information (or trigger actions) anywhere your tooling reaches.
 
 Think of it as an always-on teammate: “Every morning, look at the last 24 hours of activity, write up a report, and post it in #agor,” or “Every Friday, tidy the Superset branches; if the PR merged, stop the Docker environment and archive the branch record.”
 
 <img
   src="/screenshots/scheduler-modal.png"
-  alt="Configure Schedule modal — Enable Schedule toggle, cron builder with humanized preview ('At 12:00 AM, every day (UTC)'), Agent Selection card picker showing all five SDK runtimes (Claude Code, Codex, Gemini, OpenCode BETA, Copilot BETA), collapsible Advanced Agent Settings, and a Prompt Template field with 'Boot up, read HEARTBEAT.md and execute a heartbeat'"
+  alt="Configure Schedule modal: Enable Schedule toggle, cron builder with humanized preview ('At 12:00 AM, every day (UTC)'), Agent Selection card picker showing all five SDK runtimes (Claude Code, Codex, Gemini, OpenCode BETA, Copilot BETA), collapsible Advanced Agent Settings, and a Prompt Template field with 'Boot up, read HEARTBEAT.md and execute a heartbeat'"
   style={{ maxWidth: '600px', borderRadius: '8px' }}
 />
 
-_The scheduler dovetails with [Teammates](/guide/teammates) — a daily cron firing `read HEARTBEAT.md and execute a heartbeat` is exactly how a persistent teammate ticks._
+_The scheduler dovetails with [Teammates](/guide/teammates): a daily cron firing `read HEARTBEAT.md and execute a heartbeat` is exactly how a persistent teammate ticks._
 
 ## How Scheduled Runs Work
 
@@ -32,7 +32,7 @@ _The scheduler dovetails with [Teammates](/guide/teammates) — a daily cron fir
 - **Self-aware execution.** The session launches with the branch + board context, inherits the agent/tool settings you chose, and (with MCP enabled) can take all the actions a user could.
 - **Smart reliability.** Runs are deduplicated (two-minute grace window), there’s no backfill flood after downtime (only the most recent missed slot fires), and an optional retention policy keeps history trimmed.
 
-> Each scheduled run leaves behind a complete session transcript—perfect for audits, postmortems, or seeding future prompts.
+> Each scheduled run leaves behind a complete session transcript, perfect for audits, postmortems, or seeding future prompts.
 
 ## Configuring a Schedule
 
@@ -81,7 +81,7 @@ Use conditionals or loops (standard Handlebars) to branch based on metadata.
 - **Environment janitor.** Hourly, scan the Superset board; if a “Completed” task’s PR merged, stop its Docker environment and delete the branch record.
 - **Dependency upkeep.** Monday at 02:00, run npm updates, execute tests, and open a follow-up session for any failures.
 
-Because MCP is just JSON-RPC, you can bring any service into the loop—Agor’s internal MCP for orchestration, Slack for comms, HubSpot for CRM, or custom servers for bespoke workflows.
+Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s internal MCP for orchestration, Slack for comms, HubSpot for CRM, or custom servers for bespoke workflows.
 
 ## Monitoring & History
 
@@ -104,14 +104,14 @@ Because MCP is just JSON-RPC, you can bring any service into the loop—Agor’s
 ## Troubleshooting
 
 - **“Invalid cron expression.”** The UI validates with `cron-parser`; edit the expression or pick a preset.
-- **No session fired.** Confirm the schedule is enabled and `Next run` is in the past—remember the two-minute grace window.
+- **No session fired.** Confirm the schedule is enabled and `Next run` is in the past. Remember the two-minute grace window.
 - **Agent lacks permissions.** Switch permission mode to `auto` or attach the necessary MCP servers in advanced settings.
 - **Timezone surprises.** Everything evaluates in UTC today; adjust the cron or translate from your local time.
 
 ## Related Reading
 
-- [Teammates](/guide/teammates) — Long-lived agents whose **heartbeats** are powered by the scheduler. If you want a persistent AI teammate, start there.
-- [Branches](/guide/branches) — The container a schedule attaches to.
-- [Agor MCP Server](/guide/internal-mcp) — What scheduled agents can reach out to (boards, sessions, users, etc.).
-- [Architecture: Scheduler service](/guide/architecture#scheduler-service) — Deeper dive into the daemon's background workers.
-- [SDK Comparison](/guide/sdk-comparison) — Choose the right agent for scheduled tasks.
+- [Teammates](/guide/teammates): Long-lived agents whose **heartbeats** are powered by the scheduler. If you want a persistent AI teammate, start there.
+- [Branches](/guide/branches): The container a schedule attaches to.
+- [Agor MCP Server](/guide/internal-mcp): What scheduled agents can reach out to (boards, sessions, users, etc.).
+- [Architecture: Scheduler service](/guide/architecture#scheduler-service): Deeper dive into the daemon's background workers.
+- [SDK Comparison](/guide/sdk-comparison): Choose the right agent for scheduled tasks.

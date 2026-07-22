@@ -274,6 +274,8 @@ describe('loadConfig', () => {
         daemon: { allowAnonymous: false, requireAuth: true },
         defaults: { board: 'main', agent: 'claude-code' },
         display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+        execution: { managed_envs_minimum_role: 'admin' },
+        branches: { others_can_default: 'view', others_fs_access_default: 'none' },
         onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
       }),
       'utf-8'
@@ -282,6 +284,8 @@ describe('loadConfig', () => {
       daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'main', agent: 'claude-code' },
       display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+      execution: { managed_envs_minimum_role: 'admin' },
+      branches: { others_can_default: 'view', others_fs_access_default: 'none' },
       onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
     });
   });
@@ -806,16 +810,24 @@ describe('getConfigValue', () => {
     expect(value).toBeUndefined();
   });
 
-  it('ignores retired display settings from an existing config file', async () => {
+  it('ignores retired settings from an existing config file', async () => {
     await saveConfig({
+      daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'legacy', agent: 'legacy-agent' },
       display: { tableStyle: 'ascii', colorOutput: false },
+      execution: { managed_envs_minimum_role: 'admin' },
+      branches: { others_can_default: 'view', others_fs_access_default: 'none' },
       onboarding: { teammatePending: true },
     } as unknown as AgorConfig);
 
+    expect(await getConfigValue('daemon.allowAnonymous')).toBeUndefined();
+    expect(await getConfigValue('daemon.requireAuth')).toBeUndefined();
     expect(await getConfigValue('defaults.board')).toBeUndefined();
     expect(await getConfigValue('display.tableStyle')).toBeUndefined();
     expect(await getConfigValue('display.colorOutput')).toBeUndefined();
+    expect(await getConfigValue('execution.managed_envs_minimum_role')).toBeUndefined();
+    expect(await getConfigValue('branches.others_can_default')).toBeUndefined();
+    expect(await getConfigValue('branches.others_fs_access_default')).toBeUndefined();
     expect(await getConfigValue('onboarding.teammatePending')).toBeUndefined();
   });
 
@@ -839,9 +851,14 @@ describe('setConfigValue', () => {
   });
 
   it.each([
+    'daemon.allowAnonymous',
+    'daemon.requireAuth',
     'display.tableStyle',
     'display.colorOutput',
     'display.shortIdLength',
+    'execution.managed_envs_minimum_role',
+    'branches.others_can_default',
+    'branches.others_fs_access_default',
   ])('rejects newly setting retired key %s', async (key) => {
     await expect(setConfigValue(key, 'legacy')).rejects.toThrow(/has been retired/);
   });

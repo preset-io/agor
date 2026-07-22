@@ -1,6 +1,6 @@
 ---
 title: Cards
-description: Generic workflow cards that give you spatial oversight of any agentic workflow — not just code
+description: Generic workflow cards that give you spatial oversight of any agentic workflow, not just code
 heroImage: '/screenshots/cards-hero.png'
 ---
 
@@ -21,14 +21,14 @@ heroImage: '/screenshots/cards-hero.png'
   backgroundColor: 'rgba(212, 148, 10, 0.08)',
   fontSize: '14px'
 }}>
-**Beta** — Cards are a new feature. The data model and MCP tools are stable, but the UI and workflows are evolving based on feedback.
+**Beta.** Cards are a new feature. The data model and MCP tools are stable, but the UI and workflows are evolving based on feedback.
 </div>
 
-Every entity on an Agor board used to be a **branch** — a git branch tied to a repo. That works for coding, but what about support tickets, sales leads, patient records, or content pipelines?
+Every entity on an Agor board used to be a **branch**, a git branch tied to a repo. That works for coding, but what about support tickets, sales leads, patient records, or content pipelines?
 
-**Cards** are generic entities that live on boards alongside branches. They give you spatial oversight of any workflow — not just code. An [teammate](/guide/teammates) creates and manages cards via MCP tools, and you see the work unfold on the board in real time.
+**Cards** are generic entities that live on boards alongside branches. They give you spatial oversight of any workflow, not just code. An [teammate](/guide/teammates) creates and manages cards via MCP tools, and you see the work unfold on the board in real time.
 
-The board becomes a dashboard: 12 tickets in triage, 8 being worked, 3 escalated, 27 resolved — at a glance, without asking the agent "what's the status?" The spatial layout IS the status.
+The board becomes a dashboard: 12 tickets in triage, 8 being worked, 3 escalated, 27 resolved, all at a glance, without asking the agent "what's the status?" The spatial layout IS the status.
 
 ---
 
@@ -36,41 +36,41 @@ The board becomes a dashboard: 12 tickets in triage, 8 being worked, 3 escalated
 
 A teammate manages cards through Agor's [MCP tools](/guide/internal-mcp). The typical flow:
 
-1. **Define Card Types** — Create types like "Ticket", "Lead", or "Patient" with an emoji, color, and optional JSON schema
-2. **Create cards** — The teammate creates cards on a board, placing them directly into zones
-3. **Move cards through zones** — As work progresses, the teammate moves cards between zones (Triage → In Progress → Resolved)
-4. **Update cards** — The teammate keeps cards current with descriptions, notes, and structured data
+1. **Define Card Types.** Create types like "Ticket", "Lead", or "Patient" with an emoji, color, and optional JSON schema
+2. **Create cards.** The teammate creates cards on a board, placing them directly into zones
+3. **Move cards through zones.** As work progresses, the teammate moves cards between zones (Triage → In Progress → Resolved)
+4. **Update cards.** The teammate keeps cards current with descriptions, notes, and structured data
 
-Cards are **dumb by design** in v1 — they don't trigger automation or spawn sessions. The teammate is the brain. Cards are how it shows you what's happening.
+Cards are **dumb by design** in v1. They don't trigger automation or spawn sessions. The teammate is the brain. Cards are how it shows you what's happening.
 
 ---
 
 ## Card anatomy
 
-Every card has a clear information hierarchy — what you see at a glance vs. what you see on click.
+Every card has a clear information hierarchy (what you see at a glance vs. what you see on click).
 
 **Visible on the board:**
 
-- **Title** — What is this thing. Clickable link if a URL is set
-- **Description** — Stable context about the entity. Collapsed after a few lines with "show more"
-- **Note** — The teammate's live commentary, always shown in full with distinct styling. Ephemeral — the teammate updates this as the card progresses
+- **Title.** What is this thing. Clickable link if a URL is set
+- **Description.** Stable context about the entity. Collapsed after a few lines with "show more"
+- **Note.** The teammate's live commentary, always shown in full with distinct styling. Ephemeral, updated by the teammate as the card progresses
 
 **Visible in the detail modal:**
 
-- **Data** — Structured JSON blob for workflow state. Not a system of record — it's a local cache that lets agents keep context without round-tripping to external APIs. Each workflow defines its own schema
+- **Data.** Structured JSON blob for workflow state. Not a system of record, just a local cache that lets agents keep context without round-tripping to external APIs. Each workflow defines its own schema
 
 ---
 
 ## Card Types
 
-Card Types define the visual identity and optional data schema for a category of cards. They're **global** — define a type once, use it on any board.
+Card Types define the visual identity and optional data schema for a category of cards. They're **global**. Define a type once, use it on any board.
 
 A Card Type has:
 
-- **Name** — "Support Ticket", "Sales Lead", "Patient"
-- **Emoji** — Default emoji shown on all cards of this type
-- **Color** — Default color for the card's visual treatment
-- **JSON Schema** (optional) — Validates the structured `data` field on cards. No auto-form generation — agents set data directly via MCP
+- **Name.** "Support Ticket", "Sales Lead", "Patient"
+- **Emoji.** Default emoji shown on all cards of this type
+- **Color.** Default color for the card's visual treatment
+- **JSON Schema** (optional) validates the structured `data` field on cards. No auto-form generation. Agents set data directly via MCP
 
 Individual cards can override the emoji and color (e.g., to flag a critical ticket red), but normally they inherit from their type.
 
@@ -89,7 +89,7 @@ Cards work with the same zone system as branches. Define zones on your board, an
 └───────────────┘   └───────────────┘   └───────────────┘
 ```
 
-A card's **zone is its status**. No separate status field — the board tells the story.
+A card's **zone is its status**. No separate status field. The board tells the story.
 
 ---
 
@@ -135,23 +135,23 @@ In each case, a teammate processes the work while the board gives you real-time 
 
 The three-column layout lets you browse: Card Types → Cards of that type → Card detail. Most card management happens through agents, but the Settings UI is there when you need direct access.
 
-Cards can also be clicked on the board canvas to open a detail modal — same view, two entry points.
+Cards can also be clicked on the board canvas to open a detail modal. Same view, two entry points.
 
 ---
 
 ## What's next
 
-Cards in v1 are intentionally simple — agents manage everything, cards are visual feedback. Future iterations may explore:
+Cards in v1 are intentionally simple. Agents manage everything, cards are visual feedback. Future iterations may explore:
 
-- **Card events** — Track who moved what, when, enabling teammates to react to user actions on the board
-- **Zone triggers for cards** — Moving a card into a zone could notify a teammate automatically
-- **Dynamic forms** — Auto-generate edit forms from Card Type JSON schemas
-- **List layout zones** — Ordered Kanban-style columns for boards with many cards
+- **Card events.** Track who moved what, when, enabling teammates to react to user actions on the board
+- **Zone triggers for cards.** Moving a card into a zone could notify a teammate automatically
+- **Dynamic forms.** Auto-generate edit forms from Card Type JSON schemas
+- **List layout zones.** Ordered Kanban-style columns for boards with many cards
 
 ---
 
 ## Related docs
 
-- [Teammates](/guide/teammates) — The persistent agents that manage cards
-- [Agor MCP Server](/guide/internal-mcp) — The MCP tools teammates use
-- [Scheduler](/guide/scheduler) — Automated heartbeats for teammate-driven card workflows
+- [Teammates](/guide/teammates) (the persistent agents that manage cards)
+- [Agor MCP Server](/guide/internal-mcp) (the MCP tools teammates use)
+- [Scheduler](/guide/scheduler) (automated heartbeats for teammate-driven card workflows)

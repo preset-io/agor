@@ -27,7 +27,7 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, App as AntApp, ConfigProvider, theme } from 'antd';
+import { Alert, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -40,6 +40,7 @@ import { LoginPage } from './components/LoginPage';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
+import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -1989,7 +1990,7 @@ function AppWrapper() {
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
-      <AntApp>
+      <StreamdownPortalApp>
         <ErrorBoundary variant="global">
           {/* CanvasNavigationProvider lives outside the agor `App` body so
               hooks called in that body (useUrlState, useAppNavigation) can
@@ -2009,7 +2010,7 @@ function AppWrapper() {
             )}
           </CanvasNavigationProvider>
         </ErrorBoundary>
-      </AntApp>
+      </StreamdownPortalApp>
     </ConfigProvider>
   );
 }

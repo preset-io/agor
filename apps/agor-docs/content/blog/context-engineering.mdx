@@ -7,7 +7,7 @@ image: '/images/blog/context-engineering.png'
 
 # Context Engineering the @mistercrunch Way
 
-AGENTS.md and CLAUDE.md made it easy to dump everything in one place—and just as easy to blow up your context window. Great for a quick start; brittle at scale. On bigger projects with many engineers (and even more agents), you need structure that doesn’t fight velocity.
+AGENTS.md and CLAUDE.md made it easy to dump everything in one place, and just as easy to blow up your context window. Great for a quick start; brittle at scale. On bigger projects with many engineers (and even more agents), you need structure that doesn’t fight velocity.
 
 The pattern I use: keep context bite‑sized, self‑referential, and treat it like code. Simple, durable, and it scales with humans and AIs.
 
@@ -60,10 +60,10 @@ This makes “docs as inputs” repeatable and auditable.
 
 - Started with `context/explorations/*.md` for fast sketching.
 - As ideas hardened, rewrote and moved them to `context/concepts/` or `context/guidelines/`.
-- CLAUDE.md is now a symlink to AGENTS.md — a glossary that routes agents to the right nuggets on demand.
+- CLAUDE.md is now a symlink to AGENTS.md (a glossary that routes agents to the right nuggets on demand).
 - Agents fetch what they need per task instead of slurping everything.
 
-Did this alone enable shipping most of Agor in under a month (after hours)? Not alone — but it removed a major bottleneck for both me and the agents.
+Did this alone enable shipping most of Agor in under a month (after hours)? Not alone, but it removed a major bottleneck for both me and the agents.
 
 ## Attaching Context To Your Development Workflow
 
@@ -71,13 +71,13 @@ Having organized context nuggets is step one. Using them effectively is where th
 
 ### 1. Plan Mode: Design Before Code
 
-Start every significant feature in plan mode — no code yet. The goal is a design document.
+Start every significant feature in plan mode. No code yet. The goal is a design document.
 
 - Describe the feature clearly.
 - Pull in the relevant context nuggets (`architecture.md`, `models.md`, the specific guidelines that apply).
 - Let the agent synthesize a proposal: scope, approach, edge cases, open questions.
 
-Iterate until the design feels solid. This is cheap — just markdown — and catches misunderstandings before they become refactoring.
+Iterate until the design feels solid. This is cheap (just markdown) and catches misunderstandings before they become refactoring.
 
 ### 2. Clear The Long Tail
 
@@ -89,7 +89,7 @@ This surfaces the long tail of questions that would otherwise become bugs or rew
 
 Here's the hard-won intuition:
 
-**One agent can probably do it all** — frontend, backend, tests, docs — sequentially. Models are getting better at long-duration, heavy-context tasks.
+**One agent can probably do it all** (frontend, backend, tests, docs) sequentially. Models are getting better at long-duration, heavy-context tasks.
 
 **But specialist agents with just the right context often do better.** A backend agent with `backend-guidelines.md` and `architecture.md`. A frontend agent with `design.md` and `frontend-guidelines.md`. Each with a fresh context window, focused on their slice.
 
@@ -97,7 +97,7 @@ Here's the hard-won intuition:
 
 - Context can be cleanly segmented (backend vs. frontend vs. tests).
 - The task is complex enough that a single agent starts losing coherence.
-- You want parallelism — multiple agents working simultaneously.
+- You want parallelism, with multiple agents working simultaneously.
 
 **When to keep it unified:**
 
@@ -154,7 +154,7 @@ A simple glossary in CLAUDE.md works today; these tools add just enough structur
 ## FAQs I Keep Hitting
 
 - Isn’t this duplicative of README/user docs? Sometimes. That’s fine. Docs have audiences; context is for coding (human + agent).
-- Won’t links rot? Less than you think with small files and reviews. Rot shows up in prompts quickly — fix at the source.
+- Won’t links rot? Less than you think with small files and reviews. Rot shows up in prompts quickly. Fix at the source.
 - Where do types belong? In code. Docs link to canonical types; they never redefine them.
 
 ## Try It In Your Repo
@@ -164,7 +164,7 @@ A simple glossary in CLAUDE.md works today; these tools add just enough structur
 - Keep explorations rough; graduate when stable.
 - Review docs like code. Small PRs win.
 
-If you use Agor, you’ll see this structure reflected across boards and the agent workflows. It keeps everyone — humans and AIs — on the same page without inflating prompts.
+If you use Agor, you’ll see this structure reflected across boards and the agent workflows. It keeps everyone (humans and AIs) on the same page without inflating prompts.
 
 ## Related
 

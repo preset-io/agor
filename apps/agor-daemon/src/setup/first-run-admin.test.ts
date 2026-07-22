@@ -117,7 +117,19 @@ describe('warnDeprecatedConfig', () => {
     expect(written).toContain('onboarding.teammatePending: true');
     expect(written).toContain('onboarding.frameworkRepoUrl: https://example.test/repo.git');
     expect(written).toContain('teammates.framework_repo_url');
-    expect(written).toContain('Onboarding progress is stored');
+    expect(written).toContain('onboarding progress is stored');
+  });
+
+  it('warns about retired branch defaults and managed-environment role config', () => {
+    warnDeprecatedConfig({
+      execution: { managed_envs_minimum_role: 'admin' },
+      branches: { others_can_default: 'view', others_fs_access_default: 'none' },
+    } as unknown as AgorConfig);
+    expect(written).toContain('execution.managed_envs_minimum_role: admin');
+    expect(written).toContain('branches.others_can_default: view');
+    expect(written).toContain('branches.others_fs_access_default: none');
+    expect(written).toContain('typed board defaults');
+    expect(written).toContain('effective branch permissions');
   });
 });
 

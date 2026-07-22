@@ -10,28 +10,28 @@ heroImage: '/screenshots/teammates-list.png'
   <strong>Rename note:</strong> In July 2026, Agor renamed <strong>Assistants</strong> to <strong>Teammates</strong>. If you arrived from <code>/guide/assistants</code>, this is the canonical guide. Older references to <code>assistant</code> may still appear where they describe LLM message roles or provider protocol terms.
 </div>
 
-An **AI teammate** is a persistent AI companion that lives in your Agor workspace. While a normal branch is _where_ code gets written, an AI teammate is a _who_ — a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
+An **AI teammate** is a persistent AI companion that lives in your Agor workspace. While a normal branch is _where_ code gets written, an AI teammate is a _who_, a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
 
 <img
   src="/screenshots/teammates-list.png"
-  alt="A chat response listing twelve teammates in an Agor instance — a mix of coding orchestrators (AgorClaw, GitHub Handler), ops bots (patch-bot, OpEx), and business helpers (Saul, Blake, Peggy, Hippa) — each with an emoji, name, and one-line function"
+  alt="A chat response listing twelve teammates in an Agor instance, a mix of coding orchestrators (AgorClaw, GitHub Handler), ops bots (patch-bot, OpEx), and business helpers (Saul, Blake, Peggy, Hippa), each with an emoji, name, and one-line function"
   style={{ maxWidth: '600px', borderRadius: '8px' }}
 />
 
-_A real Agor instance with a curated mix of coding, ops, and business teammates — each callable from any session via the `agor_teammates_list` MCP tool._
+_A real Agor instance with a curated mix of coding, ops, and business teammates, each callable from any session via the `agor_teammates_list` MCP tool._
 
-The teammate framework is heavily inspired by [OpenClaw](https://github.com/ricklamers/openclaw), a proven pattern for building persistent AI agents with file-based memory and identity. Agor's implementation adapts the core ideas — markdown-based memory, identity files, and scheduled loops — while making the teammate deeply aware of its environment through Agor's [MCP tools](/guide/internal-mcp). An Agor teammate can create branches, spawn sessions, manage boards, and coordinate multi-agent workflows — capabilities that go well beyond the original pattern.
+The teammate framework is heavily inspired by [OpenClaw](https://github.com/ricklamers/openclaw), a proven pattern for building persistent AI agents with file-based memory and identity. Agor's implementation adapts the core ideas (markdown-based memory, identity files, and scheduled loops) while making the teammate deeply aware of its environment through Agor's [MCP tools](/guide/internal-mcp). An Agor teammate can create branches, spawn sessions, manage boards, and coordinate multi-agent workflows, capabilities that go well beyond the original pattern.
 
 **Framework repository:** [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
 
 ## How it works
 
-An AI teammate is a special branch backed by the **framework repository** — a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
+An AI teammate is a special branch backed by the **framework repository**, a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
 
 1. Forks the framework repo into a new branch
 2. Tags the branch with teammate metadata (name, framework version)
 3. Creates a dedicated board for the teammate's work
-4. Launches your first session — beginning the guided experience in `ONBOARDING.md`
+4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
 
 From there, every session in that branch picks up the teammate's accumulated memory and context.
 
@@ -47,21 +47,21 @@ Teammates maintain file-based memory in their branch. Memory is organized into t
 
 **Identity files** (root of the branch):
 
-- **SOUL.md** — Personality, communication style, core principles
-- **IDENTITY.md** — Who the teammate is, its name, and purpose
-- **USER.md** — Knowledge about you, your preferences, and patterns
+- **SOUL.md**: Personality, communication style, core principles
+- **IDENTITY.md**: Who the teammate is, its name, and purpose
+- **USER.md**: Knowledge about you, your preferences, and patterns
 
 **Daily memory** (`memory/` directory):
 
-- **`memory/{YYYY-MM-DD}.md`** — Daily journal entries. Each day the teammate works, it appends observations, decisions, and learnings to that day's file. This creates a chronological, searchable record of everything the teammate has done and learned.
+- **`memory/{YYYY-MM-DD}.md`**: Daily journal entries. Each day the teammate works, it appends observations, decisions, and learnings to that day's file. This creates a chronological, searchable record of everything the teammate has done and learned.
 
-Each new session reads the identity files and recent memory, giving the teammate continuity across conversations. As the teammate works, it updates these files — building a richer understanding over time. All memory is plain markdown — fully inspectable, editable, and version-controlled.
+Each new session reads the identity files and recent memory, giving the teammate continuity across conversations. As the teammate works, it updates these files, building a richer understanding over time. All memory is plain markdown, fully inspectable, editable, and version-controlled.
 
-### BOARD.md — Resident board semantics
+### BOARD.md (resident board semantics)
 
-Every teammate has a `BOARD.md` file that describes the semantics of its main (resident) board. This file tells the teammate what each zone on the board means, how branches should be organized spatially, and what the overall layout represents. When the teammate creates or moves branches on its board, it refers to `BOARD.md` to understand the intended structure — ensuring consistent spatial organization across sessions.
+Every teammate has a `BOARD.md` file that describes the semantics of its main (resident) board. This file tells the teammate what each zone on the board means, how branches should be organized spatially, and what the overall layout represents. When the teammate creates or moves branches on its board, it refers to `BOARD.md` to understand the intended structure, ensuring consistent spatial organization across sessions.
 
-### HEARTBEAT.md — Scheduled tick workflows
+### HEARTBEAT.md (scheduled tick workflows)
 
 `HEARTBEAT.md` contains the instructions and workflows the teammate processes every time a scheduled tick occurs. Think of it as a flowchart in pseudo-code: a set of steps the teammate follows on each heartbeat, such as:
 
@@ -71,32 +71,32 @@ Every teammate has a `BOARD.md` file that describes the semantics of its main (r
 - Summarize progress to daily memory (`memory/{YYYY-MM-DD}.md`)
 - Start new work based on priorities
 
-Configure heartbeat frequency through Agor's [scheduler](/guide/scheduler) — from every few minutes to once a day.
+Configure heartbeat frequency through Agor's [scheduler](/guide/scheduler), from every few minutes to once a day.
 
 ### Skills
 
-Teammates aren't limited to code generation — they can be equipped with **skills** that extend their capabilities through tools, APIs, and integrations. Skills are defined in the framework repo and give your teammate the ability to interact with external systems.
+Teammates aren't limited to code generation. They can be equipped with **skills** that extend their capabilities through tools, APIs, and integrations. Skills are defined in the framework repo and give your teammate the ability to interact with external systems.
 
 Examples of what skills enable:
 
-- **SaaS integrations** — Query Jira for open tickets, post updates to Linear, fetch metrics from Datadog or PagerDuty
-- **Communication** — Send Slack messages, create GitHub issues, post comments on PRs
-- **CLI tools** — Run linters, test suites, deployment scripts, or any command-line tooling in your stack
-- **REST APIs** — Call internal or external APIs to fetch data, trigger webhooks, or sync state
-- **MCP servers** — Connect to any [MCP-compatible service](/guide/mcp-servers) for specialized capabilities (databases, cloud providers, monitoring systems)
+- **SaaS integrations**: Query Jira for open tickets, post updates to Linear, fetch metrics from Datadog or PagerDuty
+- **Communication**: Send Slack messages, create GitHub issues, post comments on PRs
+- **CLI tools**: Run linters, test suites, deployment scripts, or any command-line tooling in your stack
+- **REST APIs**: Call internal or external APIs to fetch data, trigger webhooks, or sync state
+- **MCP servers**: Connect to any [MCP-compatible service](/guide/mcp-servers) for specialized capabilities (databases, cloud providers, monitoring systems)
 
-Skills make teammates practical for real workflows — not just coding, but the coordination and communication around it.
+Skills make teammates practical for real workflows, not just coding, but the coordination and communication around it.
 
 ### Workspace orchestration
 
 Through Agor's [MCP tools](/guide/internal-mcp), teammates can:
 
-- **Create branches** — Spin up new isolated work environments for specific tasks
-- **Spawn sessions** — Delegate work to child sessions with focused prompts
-- **Manage boards** — Organize branches across spatial canvases (guided by `BOARD.md`)
-- **Check on work** — Review session status, read files, assess progress
+- **Create branches**: Spin up new isolated work environments for specific tasks
+- **Spawn sessions**: Delegate work to child sessions with focused prompts
+- **Manage boards**: Organize branches across spatial canvases (guided by `BOARD.md`)
+- **Check on work**: Review session status, read files, assess progress
 
-This makes teammates natural orchestrators — they can break down complex tasks, distribute work across multiple branches, and synthesize results.
+This makes teammates natural orchestrators. They can break down complex tasks, distribute work across multiple branches, and synthesize results.
 
 ### Learning and adaptation
 

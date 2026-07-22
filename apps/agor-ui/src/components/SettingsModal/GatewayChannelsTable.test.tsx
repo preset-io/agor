@@ -150,6 +150,21 @@ function clickButton(text: RegExp) {
 /** Drain microtasks so a Form.validateFields()-gated step transition settles. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Open the (real) channel-type antd Select and pick a platform by its option
+ * label. `getByRole('combobox')` scans the whole antd-modal DOM computing roles
+ * (~250ms per call in jsdom, same class of cost as the button-name lookup above)
+ * — enough to push these Select-opening wizard tests toward the CI timeout — so
+ * we grab the same role-bearing node via a plain `[role]` querySelector, which
+ * skips the accessibility-tree walk.
+ */
+function selectChannelType(label: string) {
+  const combobox = document.querySelector('[role="combobox"]');
+  if (!combobox) throw new Error('No channel-type Select found');
+  fireEvent.mouseDown(combobox);
+  fireEvent.click(screen.getByText(label));
+}
+
 /** Fill the universal "Channel" step (step 0) and advance to "Options" (step 1). */
 async function advanceToOptions() {
   fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -665,8 +680,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     clickButton(/Add Channel/);
 
     // Switch the channel type to GitHub via the (real) antd Select.
-    fireEvent.mouseDown(screen.getByRole('combobox'));
-    fireEvent.click(screen.getByText('GitHub'));
+    selectChannelType('GitHub');
 
     // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -704,7 +718,11 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
       target_branch_id: 'branch-1',
       config: { app_id: 111, watch_repos: ['preset-io/agor'] },
     });
-  });
+    // These two wizard tests are the only ones that open the real channel-type
+    // Select; that plus the 4-step form mount makes them the heaviest in the
+    // file. Give them extra headroom over the global 15s so CI load spikes
+    // (which already pushed this test past 15s once) don't flake them.
+  }, 30_000);
 });
 
 describe('GatewayChannelsTable Teams create wizard', () => {
@@ -714,8 +732,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     clickButton(/Add Channel/);
 
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
-    fireEvent.mouseDown(screen.getByRole('combobox'));
-    fireEvent.click(screen.getByText('Microsoft Teams'));
+    selectChannelType('Microsoft Teams');
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -748,5 +765,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       agor_user_id: 'user-1',
       config: { app_id: 'app-123', tenant_id: 'tenant-123' },
     });
-  });
+    // Same headroom rationale as the GitHub wizard test above: opens the real
+    // channel-type Select, so it's among the heaviest tests in this file.
+  }, 30_000);
 });

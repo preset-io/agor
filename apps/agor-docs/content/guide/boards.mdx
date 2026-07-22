@@ -6,7 +6,7 @@ heroImage: '/screenshots/board-hero.png'
 
 # Boards & Zones
 
-**Boards are 2D spatial canvases for organizing branches.** Like Figma for AI coding work — drag, group, comment, collaborate in real time.
+**Boards are 2D spatial canvases for organizing branches.** Like Figma for AI coding work. Drag, group, comment, collaborate in real time.
 
 Instead of linear lists or kanban columns, every [branch](/guide/branches) lives at an `(x, y)` coordinate on a board. Sessions appear as a genealogy tree on the branch card. Multiple users see the same canvas with live cursors.
 
@@ -24,7 +24,7 @@ _An Agor board staged for an active team: live cursors, roomy workflow zones, br
 - "Testing sessions cluster on the right."
 - "That failed experiment is way down there."
 
-This is location-based memory — the same reason you remember where you parked but forget a shopping list. A 2D board gives every branch and session a *place*. Linear lists discard that.
+This is location-based memory, the same reason you remember where you parked but forget a shopping list. A 2D board gives every branch and session a *place*. Linear lists discard that.
 
 **Like Figma did for design**, Agor brings spatial collaboration to AI coding:
 
@@ -44,28 +44,28 @@ Drag a branch into "Code Review" → auto-prompts the agent for review.
 Drag into "Needs Tests" → auto-prompts for test generation.
 Drag into "Ship It" → auto-prompts for changelog + PR description.
 
-Zones turn your board into a workflow engine. Spatial position *means something* — it triggers behavior.
+Zones turn your board into a workflow engine. Spatial position *means something*. It triggers behavior.
 
 ### How zone triggers work
 
 When you drop a branch into a zone:
 
-1. **Session selection** — which session gets the prompt?
-   - **Always create new session** (default) — clean slate for the zone's task
-   - **Let me pick** — choose which session in the tree has the right context
-   - **Most recently active** — usually the session you were just working in
+1. **Session selection**: which session gets the prompt?
+   - **Always create new session** (default): clean slate for the zone's task
+   - **Let me pick**: choose which session in the tree has the right context
+   - **Most recently active**: usually the session you were just working in
 
-2. **Templated prompt executes** — the zone's Handlebars template renders with dynamic data from the branch, board, repo, and environment.
+2. **Templated prompt executes**: the zone's Handlebars template renders with dynamic data from the branch, board, repo, and environment.
 
 ### Handlebars template variables
 
 Zone prompts have access to:
 
-- **Branch** — `{{ branch.name }}`, `{{ branch.issue_url }}`, `{{ branch.pull_request_url }}`, `{{ branch.unique_id }}`
-- **Board** — `{{ board.name }}`, `{{ board.description }}`
-- **Session** — `{{ session.title }}`, `{{ session.description }}`
-- **Environment** — `{{ environment.url }}`, `{{ environment.status }}`
-- **Repo** — `{{ repo.name }}`, `{{ repo.default_branch }}`
+- **Branch**: `{{ branch.name }}`, `{{ branch.issue_url }}`, `{{ branch.pull_request_url }}`, `{{ branch.unique_id }}`
+- **Board**: `{{ board.name }}`, `{{ board.description }}`
+- **Session**: `{{ session.title }}`, `{{ session.description }}`
+- **Environment**: `{{ environment.url }}`, `{{ environment.status }}`
+- **Repo**: `{{ repo.name }}`, `{{ repo.default_branch }}`
 
 ### Example zone prompt
 
@@ -84,11 +84,11 @@ Drop a branch → auto-prompts with issue and PR links pre-filled. **No copy-pas
 
 <img
   src="/screenshots/zone-trigger.png"
-  alt="Zone Trigger modal for a 'Codex review' zone — toggles between 'Create a new session' and 'Reuse a session', picks an action (Prompt / Fork / Spawn), and shows the editable templated prompt with mustache placeholders like {{ branch.name }} and {{ branch.pull_request_url }}"
+  alt="Zone Trigger modal for a 'Codex review' zone, which toggles between 'Create a new session' and 'Reuse a session', picks an action (Prompt / Fork / Spawn), and shows the editable templated prompt with mustache placeholders like {{ branch.name }} and {{ branch.pull_request_url }}"
   style={{ maxWidth: '600px' }}
 />
 
-_The zone trigger modal — pick an action, override session config, and edit the templated prompt before firing._
+_The zone trigger modal, where you pick an action, override session config, and edit the templated prompt before firing._
 
 ---
 
@@ -110,26 +110,26 @@ You can also build asymmetric pipelines: a "Stuck" zone that escalates to a diff
 
 ## Multiple boards, one workspace
 
-A workspace can have many boards — one per team, one per project, one per long-running initiative. Boards are independent canvases with their own branches, zones, and members.
+A workspace can have many boards, one per team, one per project, one per long-running initiative. Boards are independent canvases with their own branches, zones, and members.
 
 Common patterns:
 
-- **Per-project boards** — One board per major product, each with its own zones and team.
-- **Per-pipeline boards** — A "PR review" board, a "Bug triage" board, a "Roadmap" board.
-- **Solo vs team boards** — Personal scratch board for experiments, team board for shipped work.
+- **Per-project boards**: One board per major product, each with its own zones and team.
+- **Per-pipeline boards**: A "PR review" board, a "Bug triage" board, a "Roadmap" board.
+- **Solo vs team boards**: Personal scratch board for experiments, team board for shipped work.
 
 ---
 
 ## Cards (Beta)
 
-Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)** are generic workflow entities — support tickets, sales leads, content pieces — that an [teammate](/guide/teammates) creates and manages via MCP. Same spatial canvas, same zones, same multiplayer presence — just not git-bound.
+Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)** are generic workflow entities (support tickets, sales leads, content pieces) that an [teammate](/guide/teammates) creates and manages via MCP. Same spatial canvas, same zones, same multiplayer presence, just not git-bound.
 
 ---
 
 ## Related
 
-- [Branches](/guide/branches) — The primary primitive that lives on boards
-- [Sessions & Trees](/guide/sessions) — The genealogy rendered on each branch card
-- [Multiplayer & Social](/guide/multiplayer-social) — Cursors, facepile, comments
-- [Cards](/guide/cards) — Non-branch entities on boards
-- [Teammates](/guide/teammates) — AI teammates that orchestrate branches and zones
+- [Branches](/guide/branches): The primary primitive that lives on boards
+- [Sessions & Trees](/guide/sessions): The genealogy rendered on each branch card
+- [Multiplayer & Social](/guide/multiplayer-social): Cursors, facepile, comments
+- [Cards](/guide/cards): Non-branch entities on boards
+- [Teammates](/guide/teammates): AI teammates that orchestrate branches and zones

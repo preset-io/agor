@@ -8,6 +8,7 @@
  * 4. Exits when task completes
  */
 
+import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
   MessageSource,
@@ -21,6 +22,12 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import {
+  getSdkActivityVersion,
+  isSdkHealthAbort,
+  markSdkHealthAbort,
+  SdkWatchdog,
+} from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
@@ -53,6 +60,7 @@ export class AgorExecutor {
   private abortController: AbortController;
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
+  private watchdog: SdkWatchdog | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -67,7 +75,7 @@ export class AgorExecutor {
     status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
     errorMessage?: string
   ): Promise<void> {
-    if (!this.client) return;
+    if (!this.client || isSdkHealthAbort(this.abortController)) return;
     await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
   }
 
@@ -86,6 +94,11 @@ export class AgorExecutor {
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
+
+      // Authentication is complete. Atomically claim the daemon-dispatched task
+      // before starting heartbeats or SDK work; a late executor cannot revive a
+      // stopped or terminal task.
+      await this.client.service('tasks').connectExecutor({ task_id: this.config.taskId });
 
       // Setup event listeners
       this.setupEventListeners();
@@ -133,6 +146,7 @@ export class AgorExecutor {
       console.log('[executor] Received permission_resolved event:', event);
 
       if (event.taskId === this.config.taskId) {
+        this.recordPulse('sdk_started', 'permission.resolved');
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
           requestId: event.requestId,
@@ -166,6 +180,19 @@ export class AgorExecutor {
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
     });
+    const watchdogConfig =
+      this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
+    if (this.config.tool !== 'cursor') {
+      this.watchdog = new SdkWatchdog({
+        tool: this.config.tool,
+        config: watchdogConfig,
+        sdkVersion: getSdkActivityVersion(this.config.tool),
+        onDecision: (evidence) => this.handleWatchdogDecision(evidence),
+      });
+      // Start at the executor boundary so imports, subscriptions, prompt
+      // submission, and a silent first SDK event are all covered.
+      this.recordPulse('sdk_started', this.config.tool);
+    }
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -186,11 +213,66 @@ export class AgorExecutor {
         abortController: this.abortController,
         messageSource: this.config.messageSource,
         resolvedConfig: this.config.resolvedConfig,
+        onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });
     } finally {
+      this.watchdog?.stop();
+      this.watchdog = null;
       this.heartbeat?.stop();
       this.heartbeat = null;
       this.isRunning = false;
+    }
+  }
+
+  private recordPulse(
+    kind: Parameters<ExecutorHeartbeatHandle['recordPulse']>[0],
+    detail?: string
+  ) {
+    this.heartbeat?.recordPulse(kind, detail);
+    this.watchdog?.record(kind, detail);
+  }
+
+  private async handleWatchdogDecision(
+    evidence: Omit<import('@agor/core/types').SdkHealthFailureInput, 'task_id'>
+  ): Promise<void> {
+    if (!this.client) return;
+    let acknowledged = false;
+    const report = this.client
+      .service('tasks')
+      .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
+      .then(() => {
+        acknowledged = true;
+      })
+      .catch((error) => console.error('[executor] Failed to report SDK health:', error));
+    if (evidence.watchdog_action !== 'enforced') {
+      await report;
+      return;
+    }
+
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      report,
+      new Promise<void>((resolve) => {
+        deadline = setTimeout(resolve, 2_000);
+        deadline.unref?.();
+      }),
+    ]);
+    if (deadline) clearTimeout(deadline);
+    markSdkHealthAbort(this.abortController);
+    if (!acknowledged) {
+      this.heartbeat?.stop();
+      this.heartbeat = null;
+      const abortGraceMs =
+        this.config.resolvedConfig?.execution?.sdk_watchdog?.abort_grace_ms ??
+        resolveSdkWatchdogConfig().abort_grace_ms;
+      const exitDeadline = setTimeout(() => {
+        if (acknowledged) return;
+        console.error(
+          '[executor] SDK health report remained unacknowledged; exiting for containment'
+        );
+        process.exit(70);
+      }, abortGraceMs);
+      exitDeadline.unref?.();
     }
   }
 
@@ -207,10 +289,11 @@ export class AgorExecutor {
       }
       this.heartbeat?.stop();
       this.heartbeat = null;
+      this.watchdog?.stop();
+      this.watchdog = null;
 
-      // The daemon's stop route already patches the task to STOPPED before
-      // sending the signal — this fallback only fires if we received an
-      // out-of-band signal and the task is still active.
+      // The daemon's termination coordinator owns STOPPING → terminal. This
+      // fallback only fires for an out-of-band signal while the task is active.
       await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
 
       process.exit(0);

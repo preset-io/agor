@@ -316,12 +316,14 @@ export const tasks = pgTable(
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').notNull(),
     started_at: t.timestamp('started_at'),
+    executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
     status: text('status', {
       enum: [
         'queued',
         'created',
+        'dispatching',
         'running',
         'stopping',
         'awaiting_permission',
@@ -376,6 +378,11 @@ export const tasks = pgTable(
 
         // Generic metadata (e.g., is_agor_callback, source, child_session_id)
         metadata?: Task['metadata'];
+        executor_mode?: Task['executor_mode'];
+        latest_executor_pulse?: Task['latest_executor_pulse'];
+        sdk_failure?: Task['sdk_failure'];
+        termination_request?: Task['termination_request'];
+        sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
       }>()
       .notNull(),
   },

@@ -11,7 +11,7 @@ At first glance, Agor looks like a GUI for managing AI agents. A multiplayer can
 
 That's true. But it's also the smallest part of the story.
 
-The GUI is just one interface to a much deeper platform. Everything you see in the interface—every session, every worktree, every agent interaction—is available programmatically through layers of APIs, SDKs, and tools.
+The GUI is just one interface to a much deeper platform. Everything you see in the interface (every session, every worktree, every agent interaction) is available programmatically through layers of APIs, SDKs, and tools.
 
 **Here's the insight:** Agor isn't a GUI with an API. It's a platform that happens to have a really good GUI.
 
@@ -88,7 +88,7 @@ WebSocket /
   → message.created
 ```
 
-Build custom dashboards, monitoring tools, or CI/CD integrations. The API doesn't care what client you are—it's just HTTP.
+Build custom dashboards, monitoring tools, or CI/CD integrations. The API doesn't care what client you are. It's just HTTP.
 
 ### The TypeScript Client
 
@@ -114,7 +114,7 @@ Fully typed, real-time, same capabilities as the GUI. Build automation scripts, 
 
 ### Clients in Other Languages
 
-The TypeScript client is the only official client right now, but we'd love to offer clients in other languages—Python, Rust, and Go are all on the radar.
+The TypeScript client is the only official client right now, but we'd love to offer clients in other languages. Python, Rust, and Go are all on the radar.
 
 Since the REST API is OpenAPI/Swagger compliant, generating clients for other languages should be straightforward. If you're interested in building or maintaining a client for your language of choice, reach out! Open a [GitHub Discussion](https://github.com/preset-io/agor/discussions) and we can coordinate.
 
@@ -147,7 +147,7 @@ Composable with shell scripts, perfect for CI/CD, integrates with your dotfiles.
 
 ### GitHub Actions / CI Automation
 
-Agent integrations like `@claude` in GitHub PRs are useful—comment on a pull request, tag Claude, and it reviews your code. But those sessions are ephemeral: you can't see what the agent actually did beyond the final output, you can't resume if you need to course-correct, and the conversation history vanishes.
+Agent integrations like `@claude` in GitHub PRs are useful. Comment on a pull request, tag Claude, and it reviews your code. But those sessions are ephemeral: you can't see what the agent actually did beyond the final output, you can't resume if you need to course-correct, and the conversation history vanishes.
 
 Agor takes a different approach. Here's what it looks like:
 
@@ -174,7 +174,7 @@ What happens:
 
 1. GitHub Action creates an Agor worktree for the PR branch
 2. Spawns a Claude Code / Codex / Gemini session on your "CI Reviews" board
-3. The agent reviews the code—**you can watch it live in the Agor GUI**
+3. The agent reviews the code (**you can watch it live in the Agor GUI**)
 4. Session persists after the review completes
 5. Results get posted back to the PR
 6. **You get a direct link to the session in Agor**
@@ -185,7 +185,7 @@ Unlike `@claude` or ephemeral CI bots, this session doesn't vanish. You can:
 - **Resume the session** - Comment again: "Actually, can you also check for race conditions?"
 - **Spawn follow-up agents** - "Now run the test-writing agent on this worktree"
 - **Reuse context across runs** - "Find the session that created this PR and ask it to fix the unit tests"
-- **Choose any agent** - Claude Code, Codex, Gemini—whatever fits your workflow
+- **Choose any agent** - Claude Code, Codex, Gemini, whatever fits your workflow
 - **Configure permissions and tools** - Pass MCP servers, context files, permission modes
 
 Because Agor is **stateful**, you're not starting from scratch every time. The PR creation session? Still there. The review session? Available for follow-up. The bug fix attempt? Its context can inform the next iteration.
@@ -203,7 +203,7 @@ agor session prompt abc123 "The tests are failing on line 45, can you fix it?"
 
 The GitHub Action gives you a link that goes **straight to the live session** in your Agor instance. Click it and you're watching the agent work in real-time, on your board, with full history.
 
-This isn't a future vision—the infrastructure exists today. The primitives are there: persistent sessions, worktrees, real-time updates, multi-agent coordination. The GitHub Action is the wrapper that makes it seamless.
+This isn't a future vision. The infrastructure exists today. The primitives are there: persistent sessions, worktrees, real-time updates, multi-agent coordination. The GitHub Action is the wrapper that makes it seamless.
 
 ### Git Worktree Management (Even Without Agents)
 
@@ -229,7 +229,7 @@ Even if you never spawn an agent through Agor, Agor gives you:
 - Parallel development without conflicts
 - Visual board to track which worktrees are active
 
-It's `git worktree` with a brain—and a GUI if you want it.
+It's `git worktree` with a brain, and a GUI if you want it.
 
 ### Agent Orchestration from External Apps
 
@@ -282,7 +282,7 @@ The TypeScript client + REST API means you can build **any interface** you want:
 - Custom dashboard for your team's process
 - Mobile app (why not?) - Agor's got one, but maybe something more fitted to your app or workflow.
 
-The platform doesn't care. It's just HTTP + WebSocket. The Agor GUI is one opinion about how to visualize sessions—yours might be different.
+The platform doesn't care. It's just HTTP + WebSocket. The Agor GUI is one opinion about how to visualize sessions. Yours might be different.
 
 ### Multi-Agent Workflows from Scripts
 
@@ -449,7 +449,7 @@ We're working on:
 - **Better docs for API consumers** - OpenAPI specs, more examples, SDKs for other languages
 - **Community-built interfaces** - We're excited to see what people build
 
-The platform is young but the foundation is solid. REST API, WebSocket events, TypeScript client, CLI—all production-ready.
+The platform is young but the foundation is solid. REST API, WebSocket events, TypeScript client, CLI. All production-ready.
 
 ## Try It Yourself
 

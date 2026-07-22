@@ -108,11 +108,25 @@ export function OnboardingBanners({
   const credentialOwner = preferredCredentialOwner(probeSettings);
   const canManageWorkspaceCredentials = user?.role === 'admin' || user?.role === 'superadmin';
 
+  // Auth-method markers for the subscription/native paths (ChatGPT device
+  // sign-in, imported Codex login, Claude subscription token). These land
+  // server-side via their own services and flow back on the users `patched`
+  // event WITHOUT a stored key or a credentialVersion bump — so hasLlm alone
+  // can't see them. They are primitives ('api_key' | 'subscription' |
+  // undefined) that change only on a genuine method flip, never on unrelated
+  // user-record patches, keeping the ~5–10s probe from firing on name/emoji
+  // edits. `agentic_auth_methods` only ever carries these two tools.
+  const codexAuthMethod = user?.agentic_auth_methods?.codex;
+  const claudeAuthMethod = user?.agentic_auth_methods?.['claude-code'];
+
   // One probe (plus a bounded fallback) per identity/credential change. Deps are
   // primitives/stable so the effect never re-fires on board navigation or
   // unrelated re-renders of the persistent App shell — each claude-code probe
   // spawns a ~5–10s subprocess. userId resets stale state on a user switch;
-  // credentialVersion is a trigger-only dep re-probing after a credential save.
+  // credentialVersion is a trigger-only dep re-probing after a legacy key save;
+  // codexAuthMethod/claudeAuthMethod re-probe after a subscription/native login
+  // lands server-side (device sign-in, auth.json import) — paths that bump
+  // neither hasLlm nor credentialVersion — and cover a second browser tab too.
   // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
     if (!onboardingCompleted) {
@@ -135,7 +149,16 @@ export function OnboardingBanners({
     return () => {
       cancelled = true;
     };
-  }, [userId, onboardingCompleted, probeAgent, hasLlm, onCheckAuth, credentialVersion]);
+  }, [
+    userId,
+    onboardingCompleted,
+    probeAgent,
+    hasLlm,
+    onCheckAuth,
+    credentialVersion,
+    codexAuthMethod,
+    claudeAuthMethod,
+  ]);
 
   const decision = decideBanner({
     onboardingCompleted,

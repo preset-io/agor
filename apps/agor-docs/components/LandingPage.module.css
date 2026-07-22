@@ -1764,6 +1764,20 @@
   letter-spacing: 0.04em;
 }
 
+/* "Hover" on pointer devices, "Tap" on touch/narrow screens. */
+.tapWord {
+  display: none;
+}
+
+@media (hover: none), (max-width: 720px) {
+  .hoverWord {
+    display: none;
+  }
+  .tapWord {
+    display: inline;
+  }
+}
+
 .rosterStatusDot {
   flex: none;
   width: 7px;

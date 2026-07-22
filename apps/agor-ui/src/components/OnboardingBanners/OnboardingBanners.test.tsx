@@ -63,6 +63,53 @@ describe('OnboardingBanners probe effect', () => {
     await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
   });
 
+  it('re-probes and clears the banner when a Codex subscription login lands via a user patch (no remount)', async () => {
+    // The daemon device-sign-in / auth.json-import flows persist
+    // agentic_auth_methods.codex server-side; it arrives as a user patch with no
+    // stored key and no credentialVersion bump — the case that previously left
+    // the banner stuck until a page refresh.
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+    const callsBefore = onCheckAuth.mock.calls.length;
+
+    onCheckAuth.mockImplementation(async () => result('authenticated'));
+    rerender(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            agentic_auth_methods: { codex: 'subscription' },
+          } as Partial<User>),
+          onCheckAuth,
+        })}
+      />
+    );
+
+    // Same identity → same component instance (no remount); the method-marker
+    // dep change re-fires the probe, which now clears the banner.
+    await waitFor(() => expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument());
+    expect(onCheckAuth.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('does not re-probe on an unrelated user-record patch (e.g. a name edit)', async () => {
+    const onCheckAuth = vi.fn(async () => result('authenticated'));
+    const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
+
+    // A field that touches neither identity, stored keys, nor auth methods must
+    // NOT spawn another ~5–10s probe.
+    rerender(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', { name: 'Renamed' } as Partial<User>),
+          onCheckAuth,
+        })}
+      />
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCheckAuth).toHaveBeenCalledTimes(1);
+  });
+
   it('treats CLAUDE_CODE_OAUTH_TOKEN in user env vars as Claude auth (probes claude-code, no banner)', async () => {
     const onCheckAuth = vi.fn(async () => result('authenticated'));
     render(

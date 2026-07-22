@@ -9,13 +9,13 @@ image: '/images/blog/orchestration-layers.png'
 
 Software development used to be bounded by your typing speed and mental working memory. Now it's bounded by how many agents you can coordinate without losing your mind.
 
-That's not hyperbole—it's where we've arrived. While working on [Apache Superset](https://github.com/apache/superset), I found myself juggling 5-10 parallel Claude sessions across as many tmux tabs and Docker environments. The agents were productive individually, but coordinating them was chaos. That pain led me to build [Agor](https://agor.live)—but more importantly, it showed me developers everywhere were hitting the same wall.
+That's not hyperbole. It's where we've arrived. While working on [Apache Superset](https://github.com/apache/superset), I found myself juggling 5-10 parallel Claude sessions across as many tmux tabs and Docker environments. The agents were productive individually, but coordinating them was chaos. That pain led me to build [Agor](https://agor.live), but more importantly, it showed me developers everywhere were hitting the same wall.
 
 The agentic coding tools got too good to use just one at a time, but we had no structure to orchestrate these agents.
 
 The future of software engineering isn't about writing more code or writing it faster. It's about orchestrating agents that do the writing while you focus on the architecture, the vision, the coordination.
 
-Let me trace how we got here—seven distinct phases that brought us from prompt engineering to full agent orchestration.
+Let me trace how we got here, seven distinct phases that brought us from prompt engineering to full agent orchestration.
 
 ## Phase 1: Prompt Engineering (2023–2024)
 
@@ -27,7 +27,7 @@ The early days. ChatGPT is magic, but the workflow is brutal:
 - Copy/paste the response into your editor
 - Repeat
 
-The bottleneck wasn't the AI—it was the context handoff. You spent more time explaining your codebase than coding. Every new conversation meant starting from scratch: "I have a React app using TypeScript and..."
+The bottleneck wasn't the AI. It was the context handoff. You spent more time explaining your codebase than coding. Every new conversation meant starting from scratch: "I have a React app using TypeScript and..."
 
 The smart ones learned to build context libraries in text files they'd paste in. Prompt engineering was real work. You got good at being deliberate about what context you included, because you were paying for it in attention and copy/paste tax.
 
@@ -56,7 +56,7 @@ The solution: treat context like code. Stop dumping everything into `CLAUDE.md` 
 - Cross-linked, versioned, reviewed in PRs
 - Agents fetch what they need per task
 
-This is [context engineering](/blog/context-engineering)—the realization that good AI-assisted development requires good information architecture. Your codebase's context graph became as important as its dependency graph.
+This is [context engineering](/blog/context-engineering), the realization that good AI-assisted development requires good information architecture. Your codebase's context graph became as important as its dependency graph.
 
 Anthropic formalized this in their September 2025 engineering blog: _"Context engineering is the art and science of curating what will go into the limited context window from the constantly evolving universe of possible information."_
 
@@ -64,7 +64,7 @@ Many also realized that agents do much better when provided with [only] the requ
 
 ## Phase 4: Parallelization Chaos (Fall 2025)
 
-Then Claude Code got really good. Claude 4 launched in May, Sonnet 4.5 dropped in September—good enough that waiting for one agent to finish felt like watching paint dry.
+Then Claude Code got really good. Claude 4 launched in May, Sonnet 4.5 dropped in September, good enough that waiting for one agent to finish felt like watching paint dry.
 
 People realized: I can just open another terminal.
 
@@ -88,10 +88,10 @@ But something else was happening too: the quality kept improving. As Armin Ronac
 
 This is where tools like Agor come in. The realization: if you're managing multiple agents, you need multiplayer infrastructure.
 
-I built Agor after hitting this wall on Apache Superset—first trying [Claudette](https://github.com/mistercrunch/claudette-cli) (project-specific tooling), then realizing this needed to be generalized. The key insights:
+I built Agor after hitting this wall on Apache Superset, first trying [Claudette](https://github.com/mistercrunch/claudette-cli) (project-specific tooling), then realizing this needed to be generalized. The key insights:
 
 - **Git worktree management**: One worktree per feature, isolated environments
-- **Spatial boards**: Inspired by Figma/Miro—leverage human spatial memory instead of terminal archaeology
+- **Spatial boards**: Inspired by Figma/Miro, leveraging human spatial memory instead of terminal archaeology
 - **Environment awareness**: Connect projects to Docker, GitHub issues, dev servers with auto-assigned ports
 - **Session trees**: Fork to parallelize, spawn to delegate, maintain genealogy
 - **Multiplayer**: Share environments and agent context, collaborate in real-time with presence and cursors
@@ -122,13 +122,13 @@ Imagine an agent that:
 
 You prompted once. Four agents collaborated. You reviewed the output.
 
-This isn't science fiction—Agor's MCP integration enables exactly this pattern. Early on while building Agor, I realized that exposing an internal MCP service would let agents interact with the environment they're operating in—and with each other. That insight accelerated development dramatically. I was able to start using Agor to build Agor, and that's how it got so good so quick.
+This isn't science fiction. Agor's MCP integration enables exactly this pattern. Early on while building Agor, I realized that exposing an internal MCP service would let agents interact with the environment they're operating in, and with each other. That insight accelerated development dramatically. I was able to start using Agor to build Agor, and that's how it got so good so quick.
 
 The infrastructure is here: MCP (Model Context Protocol) launched in November 2024, and by 2025, the industry standardized around it. OpenAI adopted MCP in March 2025, Google DeepMind confirmed support in April. Thousands of MCP servers exist. The plumbing for agent-to-agent communication is production-ready.
 
 ## Phase 7: Meta-Orchestration (The Future!?)
 
-The next layer: autonomous orchestration with different agent roles—not just agents doing work, but **supervisor agents** managing other agents.
+The next layer: autonomous orchestration with different agent roles, not just agents doing work, but **supervisor agents** managing other agents.
 
 Think hypervisors for your development workflow.
 
@@ -155,7 +155,7 @@ For all IDLE worktrees in the "In Development" zone:
 
 Run that every hour. Your projects push themselves through your workflow.
 
-With the right setup, everything eventually lands in either "Ready for Human Review" or "Needs Human Support"—automatically. The supervisor automates the operator's workflow as your process becomes more defined.
+With the right setup, everything eventually lands in either "Ready for Human Review" or "Needs Human Support," automatically. The supervisor automates the operator's workflow as your process becomes more defined.
 
 Where to invest in this type of automation? Easy, wherever you spend significant time and effort doing things that can be automated with an agent.
 
@@ -178,7 +178,7 @@ But here's the concern: **agent chain reactions**. Agents triggering agents trig
 - **Resource caps**: "Only 10 dev environments running in parallel"
 - **Circuit breakers**: "Pause all automation if error rate exceeds 30%"
 
-Policy systems for agent orchestration—like Kubernetes resource limits, but for AI workflows.
+Policy systems for agent orchestration, like Kubernetes resource limits, but for AI workflows.
 
 ### What This Enables
 
@@ -210,7 +210,7 @@ You'd orchestrate the orchestra, not play every instrument. The supervisor keeps
 
 As Addy Osmani described in July 2025: _"Background agents turn coding into delegated background work: submit a task, let it run in the cloud, review a completed PR later—coding as queued, asynchronous workflow."_
 
-This is software development reimagined as an async, delegated process—closer to how you'd manage a distributed team than how you'd code alone. Except your team runs 24/7, costs pennies, and never complains about meetings.
+This is software development reimagined as an async, delegated process, closer to how you'd manage a distributed team than how you'd code alone. Except your team runs 24/7, costs pennies, and never complains about meetings.
 
 **All the primitives for this exist in Agor today.** The question is how much autonomy we're ready to hand over.
 
@@ -228,13 +228,13 @@ Agor (and tools like it) are breaking down those boundaries:
 
 Is this the future? **Unclear.**
 
-Agent orchestration might be a solo sport—you, conducting your own symphony of agents. Or it might become genuinely multiplayer: teams sharing not just code but the entire AI-assisted development process.
+Agent orchestration might be a solo sport. You, conducting your own symphony of agents. Or it might become genuinely multiplayer: teams sharing not just code but the entire AI-assisted development process.
 
 Imagine:
 
 - "Hey, jump into this Claude Code session with me"
 - "I forked your session to try a different approach"
-- "The review agent found 3 issues—spawned fix agents"
+- "The review agent found 3 issues, spawned fix agents"
 - Pair programming, but with 5 people and 10 agents
 
 Call it **group vibe coding**. Call it **multi-conductor orchestration**. Whatever it is, Agor enables something completely new: synchronous, multiplayer, agent-assisted development with full visibility and structure.
@@ -243,7 +243,7 @@ Will people use it? I don't know. But the option exists now in a way it didn't b
 
 ## The Vibe Coding Divergence
 
-There's a parallel track here worth acknowledging: **vibe coding**—apps spawning into existence from prompts, landing pages built in minutes, MVPs shipped before lunch.
+There's a parallel track here worth acknowledging: **vibe coding**, apps spawning into existence from prompts, landing pages built in minutes, MVPs shipped before lunch.
 
 This branch of software development is real and getting more viable every day. The bar for what you can accomplish with "just vibes" keeps rising. But here's the thing: as vibe coding gets augmented and accelerated, true engineered software will keep dominating the hard problems.
 
@@ -272,7 +272,7 @@ Are we headed toward a software utopia? What does that even look like? The absen
 
 I don't have answers. But I know it's coming fast.
 
-Whatever you think the software utopia looks like—**go orchestrate agents to build it.** Quick, before it's too late. The velocity we're seeing now is just the beginning. The tools exist. The models are good enough. The only question is whether we can coordinate the work faster than the future arrives.
+Whatever you think the software utopia looks like, **go orchestrate agents to build it.** Quick, before it's too late. The velocity we're seeing now is just the beginning. The tools exist. The models are good enough. The only question is whether we can coordinate the work faster than the future arrives.
 
 ---
 
@@ -285,4 +285,4 @@ If you're juggling agents across terminals and losing track, [try Agor](https://
 - Armin Ronacher: [Agentic Coding Recommendations](https://lucumr.pocoo.org/2025/6/12/agentic-coding/) (June 2025)
 - Addy Osmani: [Coding for the Future Agentic World](https://addyo.substack.com/p/coding-for-the-future-agentic-world) (July 2025)
 
-— The velocity is real. Now go orchestrate your vision.
+The velocity is real. Now go orchestrate your vision.

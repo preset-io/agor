@@ -19,7 +19,7 @@ I didn't set out to build a "platform." I wanted to stop losing the thread acros
 
 ## Early ideas I kept around
 
-- “Context nuggets” — a small graph of markdown notes you can cherry‑pick into sessions.
+- “Context nuggets” (a small graph of markdown notes you can cherry‑pick into sessions).
 - Lightweight session reports I can generate and attach as metadata.
 - If an agent touched a PR, inspect that conversation later and continue it with the same context window.
 
@@ -37,23 +37,23 @@ A little product design surfaces the state you actually need while AI coding. Li
 ## The snap‑together week
 
 - React Flow: I had a board up so quickly it’s not even funny. Seeing sessions spatially made me stop asking “where was I?” and start dragging work where it belonged.
-- Ant Design (x.ant.design): amazing stuff. I know it by heart; the agent knows it even better. Tables, modals, forms — shipped faster than felt fair.
+- Ant Design (x.ant.design): amazing stuff. I know it by heart; the agent knows it even better. Tables, modals, forms. Shipped faster than felt fair.
 - FeathersJS: sensible services; REST + WebSocket out of the box; hooks model I could live with.
 - Swagger: it took me six minutes to hook it in and have live, interactive API docs.
-- Nextra: the docs website kind of wrote itself. Structure, theming, MDX — done.
+- Nextra: the docs website kind of wrote itself. Structure, theming, MDX. Done.
 - WebSockets: “just worked” for the basics. Service events broadcast, the UI felt alive with minimal glue.
 
-If you told me a year ago this would come together at this pace, I wouldn't have believed you. I'm not sure I'd have believed an army could write this level of software in a month. Insanity. I'm honestly confused about the state of software engineering right now — in a good, disorienting way.
+If you told me a year ago this would come together at this pace, I wouldn't have believed you. I'm not sure I'd have believed an army could write this level of software in a month. Insanity. I'm honestly confused about the state of software engineering right now (in a good, disorienting way).
 
 ## The velocity part that's hard to explain
 
-Pre-launch shipped around v0.4.x. That's backend, frontend, docs website, blogs, animated gifs, single-npm-package distribution, onboarding flow — all of it. Under a month. Most of it after-hours: 8pm to 2am sessions, coordinating multiple AI agents, shipping faster than I could track.
+Pre-launch shipped around v0.4.x. That's backend, frontend, docs website, blogs, animated gifs, single-npm-package distribution, onboarding flow. All of it. Under a month. Most of it after-hours: 8pm to 2am sessions, coordinating multiple AI agents, shipping faster than I could track.
 
 ![Using Agor to build Agor](/screenshots/agor_for_agor.png)
 
 _Building Agor with Agor: multiple parallel sessions across different zones (Analyze/plan, Code!, Done!), each working on different parts of the system simultaneously._
 
-I know software velocity slows as complexity grows. I've lived that curve my entire career. But this foundation is _solid_ and actually extensible — not the kind of prototype you throw away. The data model makes sense. The primitives compose. The architecture breathes.
+I know software velocity slows as complexity grows. I've lived that curve my entire career. But this foundation is _solid_ and actually extensible, not the kind of prototype you throw away. The data model makes sense. The primitives compose. The architecture breathes.
 
 So what does this pace mean for the month ahead? The next year? If this is the _starting_ velocity, what happens when the foundation is done and we're just building _on top_ of it?
 
@@ -65,7 +65,7 @@ I don't have an answer yet. I just know this felt different.
 - Session trees: fork to parallelize, spawn to delegate; keep genealogy; don’t lose context.
 - SDK‑first orchestration: Claude Code, OpenAI, Gemini via SDKs; CLIs as adapters, not the core.
 - MCP self‑awareness: sessions that know where they are (board, worktree) and can nudge Agor (spawn, log, attach artifacts).
-- Light real‑time: presence, cursors, comments — just enough to keep context alive.
+- Light real‑time: presence, cursors, comments. Just enough to keep context alive.
 
 ## Where I’m unsure (on purpose)
 
@@ -76,6 +76,6 @@ I don't have an answer yet. I just know this felt different.
 
 ## Now and later
 
-Agor is the right “now” solution for me and my team — at least for some things. It reduces friction between “what I’m doing,” “where it lives,” and “who can see it while it’s happening.” At this pace, I don’t know how long any of this shape stays relevant. That’s okay. I’ll keep adjusting the shape while the work (and the tools) evolve.
+Agor is the right “now” solution for me and my team, at least for some things. It reduces friction between “what I’m doing,” “where it lives,” and “who can see it while it’s happening.” At this pace, I don’t know how long any of this shape stays relevant. That’s okay. I’ll keep adjusting the shape while the work (and the tools) evolve.
 
-If you try it, I’d love to hear where you lose the thread — and what you wish was visible exactly when you needed it.
+If you try it, I’d love to hear where you lose the thread, and what you wish was visible exactly when you needed it.

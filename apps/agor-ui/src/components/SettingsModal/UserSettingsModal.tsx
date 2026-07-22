@@ -11,7 +11,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -53,6 +53,7 @@ import {
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
+import { CodexAuthSettings } from '../CodexAuth';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -1011,15 +1012,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'cursor': {
         const toolName = activeTab as AgenticToolName;
         const currentForm = agenticFormByTool[toolName];
-        const displayNames: Record<AgenticToolName, string> = {
-          'claude-code': 'Claude Code',
-          'claude-code-cli': 'Claude Code CLI',
-          codex: 'Codex',
-          gemini: 'Gemini',
-          opencode: 'OpenCode',
-          copilot: 'Copilot',
-          cursor: 'Cursor SDK',
-        };
+        const displayNames = AGENTIC_TOOL_DISPLAY_NAMES;
         const canonicalTool = (
           toolName === 'claude-code-cli' ? 'claude-code' : toolName
         ) as TenantAgenticToolName;
@@ -1151,13 +1144,35 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   </Popconfirm>
                 </Space>
               )
+            ) : canonicalTool === 'codex' ? (
+              <CodexAuthSettings
+                client={client}
+                authMethod={authMethod ?? 'api_key'}
+                apiKeyFields={allToolFields}
+                fieldStatus={fieldStatus}
+                onSaveField={(field, value) =>
+                  handleToolFieldSave(credentialToolName, field, value)
+                }
+                onClearField={(field) => handleToolFieldClear(credentialToolName, field)}
+                savingFields={Object.fromEntries(
+                  allToolFields.map((c) => [
+                    c.field,
+                    !!savingToolField[`${credentialToolName}.${c.field}`],
+                  ])
+                )}
+                publicValues={
+                  user?.agentic_tools_public_values?.[credentialToolName] as
+                    | Partial<Record<AgenticToolConfigField, string>>
+                    | undefined
+                }
+              />
             ) : (
               <>
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
                   Personal credentials are encrypted at rest and injected only into the agent
                   runtime.
                 </Typography.Paragraph>
-                {(canonicalTool === 'claude-code' || canonicalTool === 'codex') && (
+                {canonicalTool === 'claude-code' && (
                   <Radio.Group
                     value={authMethod}
                     onChange={(event) =>
@@ -1165,34 +1180,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     }
                     style={{ marginBottom: 16 }}
                   >
-                    <Radio.Button value="subscription">
-                      {canonicalTool === 'codex' ? 'ChatGPT subscription' : 'Claude subscription'}
-                    </Radio.Button>
+                    <Radio.Button value="subscription">Claude subscription</Radio.Button>
                     <Radio.Button value="api_key">API key</Radio.Button>
                   </Radio.Group>
                 )}
-                {canonicalTool === 'codex' && authMethod === 'subscription' ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    title="Use Codex CLI subscription authentication"
-                    description="Agor will use the Codex CLI login belonging to this session's Unix user. Run `codex login` in a terminal as that same user. This declaration does not prove that the login is still valid."
-                  />
-                ) : (
-                  <ApiKeyFields
-                    tool={toolName}
-                    fields={toolFields}
-                    fieldStatus={fieldStatus}
-                    onSave={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
-                    onClear={(field) => handleToolFieldClear(credentialToolName, field)}
-                    saving={savingForTool}
-                    publicValues={
-                      user?.agentic_tools_public_values?.[credentialToolName] as
-                        | Partial<Record<AgenticToolConfigField, string>>
-                        | undefined
-                    }
-                  />
-                )}
+                <ApiKeyFields
+                  tool={toolName}
+                  fields={toolFields}
+                  fieldStatus={fieldStatus}
+                  onSave={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
+                  onClear={(field) => handleToolFieldClear(credentialToolName, field)}
+                  saving={savingForTool}
+                  publicValues={
+                    user?.agentic_tools_public_values?.[credentialToolName] as
+                      | Partial<Record<AgenticToolConfigField, string>>
+                      | undefined
+                  }
+                />
               </>
             )}
           </>
@@ -1216,17 +1220,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Get title for current section
   const getSectionTitle = () => {
     const titles: Record<string, string> = {
+      ...AGENTIC_TOOL_DISPLAY_NAMES,
       general: 'General',
       'env-vars': 'Environment Variables',
       audio: 'Audio',
       groups: 'Groups',
       'personal-api-keys': 'Agor API Tokens',
-      'claude-code': 'Claude Code',
-      codex: 'Codex',
-      gemini: 'Gemini',
-      opencode: 'OpenCode',
-      cursor: 'Cursor SDK',
-      copilot: 'GitHub Copilot',
     };
     return titles[activeTab] || 'User Settings';
   };

@@ -5,7 +5,13 @@
  * Makes it easier to add new tools and ensures consistency.
  */
 
-import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ExecutorPulseKind,
+  MessageSource,
+  PermissionMode,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -28,6 +34,7 @@ export type ToolRunner = (params: {
   messageSource?: MessageSource;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
+  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }) => Promise<void>;
 
 /**
@@ -104,6 +111,7 @@ export class ToolRegistry {
       abortController: AbortController;
       messageSource?: MessageSource;
       resolvedConfig?: ResolvedConfigSlice;
+      onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);

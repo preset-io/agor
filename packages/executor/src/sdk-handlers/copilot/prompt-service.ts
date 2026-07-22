@@ -29,6 +29,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -232,7 +233,8 @@ export class CopilotPromptService {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    abortController?: AbortController
+    abortController?: AbortController,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<CopilotStreamEvent> {
     // Get session to check for existing SDK session ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
@@ -382,7 +384,18 @@ export class CopilotPromptService {
       // Wire up event listeners for streaming
       const sessionEvents = copilotSession as unknown as CopilotSessionEvents;
 
+      for (const eventName of [
+        'assistant.turn_start',
+        'assistant.turn_end',
+        'assistant.reasoning_delta',
+        'subagent.started',
+        'subagent.completed',
+      ]) {
+        sessionEvents.on(eventName, () => reportSdkActivity(onActivity, 'copilot', eventName));
+      }
+
       sessionEvents.on('assistant.message_delta', (event) => {
+        reportSdkActivity(onActivity, 'copilot', 'assistant.message_delta');
         const chunk = event.data.deltaContent;
         if (chunk) {
           textChunks.push(chunk);
@@ -390,6 +403,7 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('tool.execution_start', (event) => {
+        reportSdkActivity(onActivity, 'copilot', 'tool.execution_start');
         const data = event.data;
         const toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
@@ -404,6 +418,7 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('tool.execution_complete', (event) => {
+        reportSdkActivity(onActivity, 'copilot', 'tool.execution_complete');
         const data = event.data;
         const _toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
@@ -418,6 +433,7 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('assistant.usage', (event) => {
+        reportSdkActivity(onActivity, 'copilot', 'assistant.usage');
         const data = event.data;
         usageData = {
           input_tokens: data.input_tokens,

@@ -7,6 +7,12 @@
  * - Application instance
  */
 
+import type {
+  TerminationClaimInput,
+  TerminationClaimResult,
+  TerminationSettlementInput,
+  TerminationSettlementResult,
+} from '@agor/core/db';
 import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
@@ -21,6 +27,8 @@ import type {
   Params as FeathersParams,
   Message,
   Repo,
+  RuntimeTelemetryInput,
+  SdkHealthFailureInput,
   Session,
   Task,
 } from '@agor/core/types';
@@ -120,6 +128,14 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
+  connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  recordExecutorStartupWarning(
+    taskId: string,
+    warning: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
+  reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
+  reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
@@ -129,11 +145,14 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
-  failForLostHeartbeat(
-    id: string,
-    data: { completed_at?: string; error_message: string },
+  claimTermination(
+    input: TerminationClaimInput,
     params?: FeathersParams
-  ): Promise<Task>;
+  ): Promise<TerminationClaimResult>;
+  settleTermination(
+    input: TerminationSettlementInput,
+    params?: FeathersParams
+  ): Promise<TerminationSettlementResult>;
 }
 
 /**

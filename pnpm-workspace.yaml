@@ -44,6 +44,7 @@ overrides:
   smol-toml: '>=1.6.1 <2'
   socket.io-parser: '>=4.2.6 <5'
   systeminformation: '>=5.31.0 <6'
+  tar@<7.5.19: '>=7.5.19 <8'
   undici: '>=7.25.0 <8'
   vite: '>=8.0.10 <9'
   yaml: '>=2.8.3 <3'
@@ -67,3 +68,5 @@ allowBuilds:
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true
   'tree-sitter-bash@0.25.0': true
+patchedDependencies:
+  streamdown@2.5.0: patches/streamdown@2.5.0.patch

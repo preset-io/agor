@@ -144,7 +144,7 @@ The unified model is no longer used in current Agor releases.
 
 ### Typed TypeScript Client (`@agor-live/client`)
 
-The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use — there is no second-class "internal API."
+The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use. There is no second-class "internal API."
 
 ```typescript
 import { createAgorClient } from '@agor-live/client';
@@ -171,11 +171,11 @@ agor.service('messages').on('created', (msg) => {
 
 **What you get:**
 
-- **Branded ID types** — `BranchId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
-- **Service hooks across REST + WebSocket** — One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
-- **Schema-driven types** — Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
-- **Authentication strategies built in** — `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
-- **Same client the UI uses** — Whatever pattern works for an Agor screen works for your script.
+- **Branded ID types**: `BranchId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
+- **Service hooks across REST + WebSocket**: One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
+- **Schema-driven types**: Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
+- **Authentication strategies built in**: `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
+- **Same client the UI uses**: Whatever pattern works for an Agor screen works for your script.
 
 > If you're integrating Agor into your own tooling, prefer `@agor-live/client` over raw HTTP. You'll inherit every type and event the product evolves.
 
@@ -355,7 +355,7 @@ https://localhost:3030/
 
 ## MCP Tools Reference
 
-The MCP server provides a growing toolkit across sessions, branches, boards, tasks, users, environments, cards, artifacts, and more — enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
+The MCP server provides a growing toolkit across sessions, branches, boards, tasks, users, environments, cards, artifacts, and more, enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
 
 ```typescript
 // ❌ Brittle approach
@@ -491,7 +491,7 @@ Every session requires a branch (foreign key constraint):
 
 ## Authentication
 
-Four authentication strategies (all require credentials — there is no anonymous path):
+Four authentication strategies (all require credentials; there is no anonymous path):
 
 1. **Local** (email/password) - JWT-based authentication for user login
 2. **JWT** - Token refresh and validation for user sessions
@@ -517,8 +517,8 @@ The daemon exposes three **unauthenticated** monitoring endpoints:
 
 | Endpoint  | Purpose                    | Touches DB? | Status codes                     |
 | --------- | -------------------------- | ----------- | -------------------------------- |
-| `/livez`  | Liveness — process alive   | **No**      | `200` (when responsive)          |
-| `/readyz` | Readiness — can serve      | **Yes**     | `200` healthy · `503` DB down    |
+| `/livez`  | Liveness (process alive)   | **No**      | `200` (when responsive)          |
+| `/readyz` | Readiness (can serve)      | **Yes**     | `200` healthy · `503` DB down    |
 | `/health` | Rich status for UI / admin | **Yes**     | `200` always (`status` reflects) |
 
 `/readyz` runs a time-bounded `SELECT 1` and returns `{ status, db: { ok, latencyMs } }`.
@@ -526,7 +526,7 @@ The daemon exposes three **unauthenticated** monitoring endpoints:
 signal on `status` (`ok`/`degraded`); authenticated callers also get the DB error,
 masked DB URL, and a non-gating pending-migrations count.
 
-Wire k8s probes liveness→`/livez`, readiness→`/readyz` — **never** point liveness
+Wire k8s probes liveness→`/livez`, readiness→`/readyz`. **Never** point liveness
 at a DB-checking endpoint, or a DB outage restarts every pod (fleet-wide crash
 loop) instead of just pulling them from rotation:
 
@@ -539,8 +539,8 @@ readinessProbe:
 
 ## Next Steps
 
-- **[Getting Started](/guide/getting-started)** — Install and run Agor
-- **[Agor MCP Server](/guide/internal-mcp)** — The agent-facing automation surface
-- **[Security](/security)** — Deployment modes, RBAC, Unix isolation, trust boundaries
-- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across agent SDKs
+- **[Getting Started](/guide/getting-started)**: Install and run Agor
+- **[Agor MCP Server](/guide/internal-mcp)**: The agent-facing automation surface
+- **[Security](/security)**: Deployment modes, RBAC, Unix isolation, trust boundaries
+- **[SDK Comparison](/guide/sdk-comparison)**: Capability matrix across agent SDKs
 - Run `agor --help` for complete CLI documentation

@@ -28,7 +28,7 @@ import {
   UserX,
 } from 'lucide-react';
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import {
   AI_ENABLEMENT_POST_URL,
@@ -47,36 +47,66 @@ import Orb from './Orb/Orb';
 // "The problem" cards — the diagnosis before the pitch. Amber accents (see
 // .problemCard in the CSS module) mark these as the warning register; the
 // mint solution palette arrives at the pivot line below the grid.
-const problemCards: Array<{ icon: LucideIcon; title: string; body: string }> = [
+const problemCards: Array<{ icon: LucideIcon; title: string; body: ReactNode }> = [
   {
     icon: Boxes,
     title: 'Boxed into silos',
-    body: 'Agents live in personal terminals, but real processes cut across teams. The work crosses boundaries; the agents can’t.',
+    body: (
+      <>
+        Agents live in <strong>personal terminals</strong>, but real processes cut across{' '}
+        <strong>teams</strong>. The work crosses boundaries; the agents can’t.
+      </>
+    ),
   },
   {
     icon: DatabaseZap,
     title: 'Context everywhere, truth nowhere',
-    body: 'Knowledge is scattered across repos, docs, and DMs — so agents answer confidently without your business’s actual context.',
+    body: (
+      <>
+        Knowledge is <strong>scattered</strong> across repos, docs, and DMs, letting agents answer
+        confidently without your business’s <strong>actual context</strong>.
+      </>
+    ),
   },
   {
     icon: EyeOff,
     title: 'Zero line of sight',
-    body: 'Tokens burned isn’t a KPI. Nobody can point to which AI work actually moved the business.',
+    body: (
+      <>
+        Tokens burned isn’t a KPI. Nobody can point to which AI work actually{' '}
+        <strong>impacted the business</strong>.
+      </>
+    ),
   },
   {
     icon: Unlink,
     title: 'Married to one model',
-    body: 'It’s a multi-model world. Hard-wiring workflows to a single frontier is signing up for tomorrow’s migration.',
+    body: (
+      <>
+        It’s a <strong>multi-model</strong> world. Locking workflows to a single frontier is signing
+        up for tomorrow’s migration.
+      </>
+    ),
   },
   {
     icon: UserX,
-    title: 'Multipliers who can’t multiply',
-    body: 'AI-enablement skill is scarce and mostly grown in-house — and the few people who have it are stuck doing instead of enabling.',
+    title: 'Multipliers can’t multiply',
+    body: (
+      <>
+        AI-enablement skill is scarce and mostly grown in-house. The few people who have it are
+        stuck <strong>doing</strong> instead of <strong>enabling</strong>.
+      </>
+    ),
   },
   {
     icon: Repeat,
     title: 'Efficiency theater',
-    body: 'Most AI spend just makes old processes faster — not the business different.',
+    body: (
+      <>
+        Most AI spend just makes an <strong>old process</strong> faster, not making the business{' '}
+        <strong>operate differently</strong>.
+      </>
+    ),
   },
 ];
 
@@ -279,19 +309,19 @@ const busItems: Array<{
 }> = [
   {
     title: 'Open source & self-hosted',
-    desc: 'Your repos, your database, your infrastructure — nobody’s moat but yours. BSL 1.1.',
+    desc: 'Your repos, your database, your infrastructure. Nobody’s moat but your own. BSL 1.1.',
     rippleSize: 10,
     rippleDelays: [0, 1500],
   },
   {
     title: 'No frontier lock-in',
-    desc: 'Claude Code, Codex, Gemini, Copilot, OpenCode. Pick the best harness per session — and switch the day something better ships.',
+    desc: 'Claude Code, Codex, Gemini, Copilot, OpenCode. Pick the best harness per session, and switch the day something better ships.',
     rippleSize: 13,
     rippleDelays: [0, 1000, 2000],
   },
   {
     title: 'Governance & visibility',
-    desc: 'One auditable canvas for every session and prompt, so leadership sees outcomes — not token bills.',
+    desc: 'One auditable canvas for every session and prompt. Leadership sees outcomes, not token bills.',
     rippleSize: 17,
     rippleDelays: [0, 750, 1500, 2250],
   },
@@ -309,7 +339,7 @@ const busItems: Array<{
   },
   {
     title: 'Agor Cloud is coming',
-    desc: 'Managed hosting for teams who’d rather not run it themselves — ',
+    desc: 'Managed hosting for teams who’d rather not run it themselves. ',
     beta: true,
     rippleSize: 27,
     rippleDelays: [0, 600, 1200, 1800, 2400],
@@ -501,15 +531,15 @@ const radarTooltip = (r: number, a: number): { style: CSSProperties; below: bool
 const liveCards = [
   {
     title: 'Live presence',
-    body: 'Cursors, comments, and reactions as work happens — from humans and AI teammates on the same board.',
+    body: 'Cursors, comments, and reactions as work happens, all on the same board.',
   },
   {
     title: 'Shared dev environments',
-    body: 'Engineers, reviewers, PMs, and QA rally around the same running branch instead of “spin up your own to see it.”',
+    body: 'Engineers, reviewers, PMs, and QA rally around the same branches and builds. No more “spin up your own to see it.”',
   },
   {
     title: 'Learn from each other',
-    body: 'Watch how teammates prompt, lift the patterns that work, and standardize them as zone triggers.',
+    body: 'Watch how teammates prompt, standardize the patterns that work, and build a shared knowledge base as you go.',
   },
 ];
 
@@ -1267,7 +1297,7 @@ export function LandingPage() {
                       className={styles.busBetaLink}
                       onClick={() => setIsBetaFormOpen(true)}
                     >
-                      register for the Agor Cloud beta
+                      Register for the Agor Cloud beta
                     </button>
                     .
                   </>
@@ -1347,12 +1377,15 @@ export function LandingPage() {
             </h2>
           </div>
           <p className={styles.rosterBody}>
-            The teammates running in our own Agor instance today — each with a name, a job, and a
-            memory.
+            These teammates are a few examples from our own Agor instance today. Each with a name, a
+            job, with its own memory and personality.
           </p>
           <p className={styles.rosterStatusLine}>
             <span className={styles.rosterStatusDot} aria-hidden="true" />
-            {rosterMembers.length} contacts tracked — hover or tap to scan
+            <span>
+              <span className={styles.hoverWord}>Hover</span>
+              <span className={styles.tapWord}>Tap</span> to meet them
+            </span>
           </p>
         </div>
         <div className={styles.radarScope} ref={radarScopeRef}>
@@ -1454,8 +1487,8 @@ export function LandingPage() {
             <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
-            Agor Cloud is opening to teams now — or onboard your first AI teammate in three minutes
-            with the open-source build.
+            Onboard your first AI teammate via open-source build, or reach out to build at
+            enterprise-ready scale. Agor Cloud is opening to teams now.
           </p>
           <div className={styles.heroActions}>
             <button

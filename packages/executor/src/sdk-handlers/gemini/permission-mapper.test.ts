@@ -1,10 +1,16 @@
 import { Gemini } from '@agor/core/sdk';
 import type { GeminiPermissionMode } from '@agor/core/types';
 import { getDefaultPermissionMode } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@agor/core/sdk', () => ({
+  Gemini: {
+    ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
+  },
+}));
 
 const { ApprovalMode } = Gemini;
 
-import { describe, expect, it } from 'vitest';
 import { GEMINI_DEFAULT_PERMISSION_MODE, mapPermissionMode } from './permission-mapper.js';
 
 describe('mapPermissionMode', () => {

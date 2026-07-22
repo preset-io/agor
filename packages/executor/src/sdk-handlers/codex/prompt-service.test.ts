@@ -20,6 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionMode } from '../../types.js';
 
 const appServerMocks = vi.hoisted(() => ({
   forkCodexThreadViaAppServer: vi.fn(),
@@ -317,10 +318,138 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     delete process.env.OPENAI_BASE_URL;
+    delete process.env.AGOR_CODEX_SANDBOX_MODE;
     vi.clearAllMocks();
   });
 
-  it('builds session config, initializes the Codex client, and uses the configured accessor', async () => {
+  it.each([
+    {
+      name: 'persisted allow-all',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'prompt allow-all overriding persisted auto',
+      persistedPermissionMode: 'auto',
+      promptPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'prompt auto overriding persisted allow-all',
+      persistedPermissionMode: 'allow-all',
+      promptPermissionMode: 'auto',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'mode-less legacy session using the Codex system default',
+      persistedPermissionMode: undefined,
+      codexPermissions: {},
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'allow-all with the k8s sandbox override',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      sandboxModeEnvOverride: 'danger-full-access',
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'allow-all with a read-only sandbox environment override',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      sandboxModeEnvOverride: 'read-only',
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with network disabled',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: false,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with approval required',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'on-request',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with a configured read-only sandbox',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'persisted auto mode with never approval',
+      persistedPermissionMode: 'auto',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+  ])('builds session config for $name permissions and uses the configured accessor', async ({
+    persistedPermissionMode,
+    promptPermissionMode,
+    codexPermissions,
+    sandboxModeEnvOverride,
+    expectedApps,
+  }) => {
+    if (sandboxModeEnvOverride) {
+      process.env.AGOR_CODEX_SANDBOX_MODE = sandboxModeEnvOverride;
+    }
+
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -350,7 +479,10 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
-      permission_config: { codex: {} },
+      permission_config: {
+        ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
+        codex: codexPermissions,
+      },
       model_config: {},
       mcp_token: 'test-token',
     });
@@ -368,7 +500,12 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     ];
 
     const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('session-flow' as any, 'review')) {
+    for await (const event of service.promptSessionStreaming(
+      'session-flow' as any,
+      'review',
+      undefined,
+      promptPermissionMode as PermissionMode | undefined
+    )) {
       emitted.push(event as Record<string, unknown>);
     }
 
@@ -382,6 +519,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
             default_tools_approval_mode: 'approve',
           },
         },
+        ...(expectedApps ? { apps: expectedApps } : {}),
       },
     ]);
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({

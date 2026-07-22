@@ -8,29 +8,29 @@ heroImage: '/images/artifacts-hero.png'
 
 <img
   src="/images/artifacts-hero.png"
-  alt="Agor board with live artifacts — interactive Sandpack applications built by AI agents directly on the canvas"
+  alt="Agor board with live artifacts: interactive Sandpack applications built by AI agents directly on the canvas"
   style={{ width: '100%', borderRadius: '12px', marginBottom: '24px', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}
 />
 
-Artifacts are live, interactive applications that agents create and render directly on the board canvas. An agent scaffolds a small app via MCP, writes code into it, and you see it running — no deploy, no preview URL, no context switching.
+Artifacts are live, interactive applications that agents create and render directly on the board canvas. An agent scaffolds a small app via MCP, writes code into it, and you see it running. No deploy, no preview URL, no context switching.
 
-Under the hood, artifacts are powered by [Sandpack](https://sandpack.codesandbox.io/), the open-source in-browser bundler by [CodeSandbox](https://codesandbox.io/). A directory of source files inside the branch gets compiled and rendered live in the browser — no server-side build step needed. The agent writes code, the board shows the result.
+Under the hood, artifacts are powered by [Sandpack](https://sandpack.codesandbox.io/), the open-source in-browser bundler by [CodeSandbox](https://codesandbox.io/). A directory of source files inside the branch gets compiled and rendered live in the browser, with no server-side build step needed. The agent writes code, the board shows the result.
 
 ---
 
 ## How it works
 
-1. **Agent writes a folder** of ordinary source files (a regular `package.json`, `App.tsx`, etc.) — typically inside the branch so the code is version-controlled.
+1. **Agent writes a folder** of ordinary source files (a regular `package.json`, `App.tsx`, etc.), typically inside the branch so the code is version-controlled.
 2. **Agent calls `agor_artifacts_publish`** with the folder path, the board, the Sandpack template, and (optionally) declarative metadata: `requiredEnvVars`, `agorGrants`, `sandpackConfig`. The daemon serializes the file map into the database.
 3. **The artifact appears on the board** as an interactive node with a live Sandpack preview.
 4. **Agent edits files and republishes** with the same `artifactId`. The board hot-reloads via WebSocket.
-5. **You interact with the running app** directly on the canvas — click buttons, fill forms, see state updates.
+5. **You interact with the running app** directly on the canvas: click buttons, fill forms, see state updates.
 
 ---
 
 ## Artifact anatomy
 
-Each artifact is a stored file map plus a small set of declarative metadata columns. The folder on disk is just the staging area an agent writes before calling `publish` — no Agor-specific sidecars required.
+Each artifact is a stored file map plus a small set of declarative metadata columns. The folder on disk is just the staging area an agent writes before calling `publish`. No Agor-specific sidecars required.
 
 **File map** (shipped to the browser):
 ```
@@ -41,26 +41,26 @@ Each artifact is a stored file map plus a small set of declarative metadata colu
 ```
 
 **Stored metadata** (DB columns; not in the file map):
-- `template` — Sandpack template (`react`, `react-ts`, `vue3`, …).
-- `sandpack_config` — Author-controlled SandpackProvider props (template, customSetup, options). Sanitized on write.
-- `required_env_vars` — Names of env vars the artifact needs (e.g. `["OPENAI_KEY"]`). The daemon synthesizes a per-viewer `.env` at render time.
-- `agor_grants` — Declarative daemon capabilities (`agor_token`, `agor_api_url`, `agor_proxies`, …).
-- `agor_runtime` — Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`. The runtime ships as an iframe-level `<script>` tag via Sandpack's `externalResources`, so it works regardless of which user files exist (no entry-file detection, no file mutation, no template-specific gotchas).
+- `template`: Sandpack template (`react`, `react-ts`, `vue3`, …).
+- `sandpack_config`: Author-controlled SandpackProvider props (template, customSetup, options). Sanitized on write.
+- `required_env_vars`: Names of env vars the artifact needs (e.g. `["OPENAI_KEY"]`). The daemon synthesizes a per-viewer `.env` at render time.
+- `agor_grants`: Declarative daemon capabilities (`agor_token`, `agor_api_url`, `agor_proxies`, …).
+- `agor_runtime`: Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`. The runtime ships as an iframe-level `<script>` tag via Sandpack's `externalResources`, so it works regardless of which user files exist (no entry-file detection, no file mutation, no template-specific gotchas).
 
 **On the board:**
-- **Header** — Artifact name with a trust badge (`Yours`/`Trusted`/`Untrusted`), an interact toggle (eye icon), and a 🔒 lock affordance to open the consent modal when the artifact is untrusted.
-- **Preview** — Live Sandpack renderer showing the running application.
-- **Legacy banner** — Old-format artifacts (those still carrying `sandpack.json` / `agor.config.js`) render in safe-degraded mode with an inline upgrade prompt you can hand to an agent.
+- **Header**: Artifact name with a trust badge (`Yours`/`Trusted`/`Untrusted`), an interact toggle (eye icon), and a 🔒 lock affordance to open the consent modal when the artifact is untrusted.
+- **Preview**: Live Sandpack renderer showing the running application.
+- **Legacy banner**: Old-format artifacts (those still carrying `sandpack.json` / `agor.config.js`) render in safe-degraded mode with an inline upgrade prompt you can hand to an agent.
 
 ---
 
 ## Use cases
 
-The possibilities are genuinely endless. Artifacts are a general-purpose way for agents to express themselves visually and interactively — any time you need something rendered, an artifact can do it.
+The possibilities are genuinely endless. Artifacts are a general-purpose way for agents to express themselves visually and interactively. Any time you need something rendered, an artifact can do it.
 
 The key advantage over having an agent build a regular app in a folder is that it's *right there on your board*. No deploy step, no preview URL, no context switching. You ask for a change, the agent writes code, and you see the result update live. It's the tightest iteration loop you can get.
 
-If you've used artifacts in Claude Desktop or ChatGPT Canvas, the concept is similar — rich interactive windows embedded in your conversation. But here they live on a multiplayer spatial canvas where multiple agents and humans collaborate side by side.
+If you've used artifacts in Claude Desktop or ChatGPT Canvas, the concept is similar: rich interactive windows embedded in your conversation. But here they live on a multiplayer spatial canvas where multiple agents and humans collaborate side by side.
 
 The most basic use case is anything where you need visual feedback during agent collaboration. Writing an article and want to see it rendered? Building a form and want to click through it? Sketching a chart and want to see the data? If you need to *see* it while you work on it, artifacts are the answer.
 
@@ -68,39 +68,39 @@ The most basic use case is anything where you need visual feedback during agent 
 
 This is the killer app. Things that would take a D3.js expert days, an agent can scaffold in minutes.
 
-- **Interactive dashboards** — Real-time charts, metrics, and KPIs rendered live on the board. Ask "show me API latency by endpoint" and watch it materialize.
-- **Data explorers** — Filterable, sortable tables with search. Feed in a dataset and get an interactive viewer instead of squinting at terminal output.
-- **Network and graph visualizations** — Force-directed graphs, dependency trees, org charts. Complex visual structures that are nearly impossible to convey in text.
+- **Interactive dashboards**: Real-time charts, metrics, and KPIs rendered live on the board. Ask "show me API latency by endpoint" and watch it materialize.
+- **Data explorers**: Filterable, sortable tables with search. Feed in a dataset and get an interactive viewer instead of squinting at terminal output.
+- **Network and graph visualizations**: Force-directed graphs, dependency trees, org charts. Complex visual structures that are nearly impossible to convey in text.
 
 ### Developer tools
 
-- **Live component playground** — Iterate on a React component with your agent and see changes instantly in the live dev environment.
-- **API playground** — A form-based endpoint tester with response viewer. Build one per service your team works with.
-- **Schema and architecture visualizer** — Interactive ER diagrams, service topology maps, data flow diagrams. Turn abstract architecture into something you can point at.
+- **Live component playground**: Iterate on a React component with your agent and see changes instantly in the live dev environment.
+- **API playground**: A form-based endpoint tester with response viewer. Build one per service your team works with.
+- **Schema and architecture visualizer**: Interactive ER diagrams, service topology maps, data flow diagrams. Turn abstract architecture into something you can point at.
 
 ### Design iteration and prototyping
 
-- **UI mockups** — "Sketch me a settings page for feature X" produces an interactive prototype right on the board, not a static screenshot.
-- **Content authoring** — Write a blog post, doc page, or marketing email with your agent and see it rendered live as you iterate. The most natural artifact use case.
-- **Landing page drafts** — Quick marketing page iterations without touching production. Get stakeholder feedback before a single line hits your real codebase.
+- **UI mockups**: "Sketch me a settings page for feature X" produces an interactive prototype right on the board, not a static screenshot.
+- **Content authoring**: Write a blog post, doc page, or marketing email with your agent and see it rendered live as you iterate. The most natural artifact use case.
+- **Landing page drafts**: Quick marketing page iterations without touching production. Get stakeholder feedback before a single line hits your real codebase.
 
 ### Business operations
 
 Artifacts are not just for developers. Any role that needs a custom, purpose-built UI can get one in minutes.
 
-- **Contract redline viewer** — Legal gets an interactive diff showing proposed changes with accept/reject affordances, instead of emailing Word docs back and forth.
-- **Deal calculator** — Sales gets a pricing configurator with sliders for seats, tiers, and discounts, showing ARR impact in real time.
-- **Compliance checklist** — Ops gets an interactive onboarding tracker for a specific customer implementation, tailored to exactly what that deal requires.
-- **Customer health scorecard** — CS gets a single-page view pulling data from multiple sources that no single SaaS tool provides.
+- **Contract redline viewer**: Legal gets an interactive diff showing proposed changes with accept/reject affordances, instead of emailing Word docs back and forth.
+- **Deal calculator**: Sales gets a pricing configurator with sliders for seats, tiers, and discounts, showing ARR impact in real time.
+- **Compliance checklist**: Ops gets an interactive onboarding tracker for a specific customer implementation, tailored to exactly what that deal requires.
+- **Customer health scorecard**: CS gets a single-page view pulling data from multiple sources that no single SaaS tool provides.
 
 ### Ephemeral SaaS alternatives
 
 When you need a custom workflow but your existing tools (HubSpot, Salesforce, Jira) are too rigid for the situation:
 
-- **Custom approval forms** — Replace a 15-click SaaS workflow with a purpose-built form that does exactly what you need.
-- **Cross-tool aggregator** — Pull data from CRM, usage metrics, and support tickets into one unified view.
-- **QBR and report builder** — Agent pulls metrics from multiple sources and renders presentation-ready charts. No more copying numbers between tabs.
-- **Release notes generator** — An interactive editor that pulls from git log and PRs, letting you format customer-facing comms without context switching.
+- **Custom approval forms**: Replace a 15-click SaaS workflow with a purpose-built form that does exactly what you need.
+- **Cross-tool aggregator**: Pull data from CRM, usage metrics, and support tickets into one unified view.
+- **QBR and report builder**: Agent pulls metrics from multiple sources and renders presentation-ready charts. No more copying numbers between tabs.
+- **Release notes generator**: An interactive editor that pulls from git log and PRs, letting you format customer-facing comms without context switching.
 
 ---
 
@@ -115,7 +115,7 @@ Artifacts support several Sandpack templates:
 | `vanilla` | Plain JavaScript | `index.js` + `index.html` |
 | `vanilla-ts` | TypeScript | `index.ts` + `index.html` |
 
-Agents can also provide custom files and dependencies at creation time — the template just determines the default scaffold.
+Agents can also provide custom files and dependencies at creation time. The template just determines the default scaffold.
 
 ---
 
@@ -134,7 +134,7 @@ Agents manage artifacts through Agor's [MCP tools](/guide/internal-mcp):
 | `agor_artifacts_status` | Get build status + Sandpack errors + console logs + compact diagnostic suggestions for debugging |
 | `agor_artifacts_list` | List visible artifacts (optionally filtered by board) |
 | `agor_artifacts_delete` | Remove an artifact (DB record + board placement) |
-| `agor_artifacts_export_codesandbox` | Eject the artifact to CodeSandbox (returns a sandbox URL). Daemon-supplied capabilities won't work there — set required env vars via CodeSandbox Secret Keys |
+| `agor_artifacts_export_codesandbox` | Eject the artifact to CodeSandbox (returns a sandbox URL). Daemon-supplied capabilities won't work there, so set required env vars via CodeSandbox Secret Keys |
 | `agor_artifacts_query_dom` | Query the rendered DOM via CSS selector. Round-trips through the viewer's open tab (no headless browser). Requires `agor_runtime.enabled !== false` and a browser tab logged in as you currently viewing the artifact |
 
 The typical agent workflow: **publish** the folder, **iterate** by editing files locally and republishing with the same `artifactId`. To pick up where you left off from another branch, **land** the artifact back to disk first.
@@ -147,8 +147,8 @@ The typical agent workflow: **publish** the folder, **iterate** by editing files
 
 Artifacts live on the React Flow canvas, which means mouse events need careful handling:
 
-- **Default mode** — Canvas zoom/pan/drag works normally over the artifact. The preview is visible but non-interactive
-- **Interact mode** — Click the eye icon in the header to enable direct interaction. Mouse events pass through to the iframe so you can click buttons, scroll, and type
+- **Default mode**: Canvas zoom/pan/drag works normally over the artifact. The preview is visible but non-interactive
+- **Interact mode**: Click the eye icon in the header to enable direct interaction. Mouse events pass through to the iframe so you can click buttons, scroll, and type
 
 This toggle prevents the iframe from capturing canvas navigation while still letting you use the running app when needed.
 
@@ -162,15 +162,15 @@ This toggle prevents the iframe from capturing canvas navigation while still let
 - Edit name and description
 - Delete artifacts (removes filesystem directory, board placement, and database record)
 
-Artifacts are created exclusively by agents via MCP — there's no manual creation UI. The Settings table is for oversight and cleanup.
+Artifacts are created exclusively by agents via MCP. There's no manual creation UI. The Settings table is for oversight and cleanup.
 
 ---
 
 ## Beyond frontend
 
-Sandpack's [Nodebox](https://sandpack.codesandbox.io/docs/advanced-usage/nodebox) runtime can execute Node.js code directly in the browser, with out-of-the-box support for frameworks like Next.js, Vite, and Astro. This means artifacts aren't limited to pure client-side apps — you can prototype lightweight full-stack patterns too. The main limitation is that Nodebox can't access raw sockets, so native database drivers (Postgres, MySQL, MongoDB) won't work in-browser.
+Sandpack's [Nodebox](https://sandpack.codesandbox.io/docs/advanced-usage/nodebox) runtime can execute Node.js code directly in the browser, with out-of-the-box support for frameworks like Next.js, Vite, and Astro. This means artifacts aren't limited to pure client-side apps. You can prototype lightweight full-stack patterns too. The main limitation is that Nodebox can't access raw sockets, so native database drivers (Postgres, MySQL, MongoDB) won't work in-browser.
 
-For anything that needs a real backend, the artifact is still a great starting point — the code is just files in a directory.
+For anything that needs a real backend, the artifact is still a great starting point. The code is just files in a directory.
 
 ---
 
@@ -178,8 +178,8 @@ For anything that needs a real backend, the artifact is still a great starting p
 
 Artifacts get secrets and daemon capabilities through two declarative fields on the artifact row, with a **TOFU consent flow** for non-self artifacts:
 
-- `requiredEnvVars` — names of env vars the artifact needs.
-- `agorGrants` — capabilities the daemon will inject (JWT, daemon URL, vendor proxy URLs, etc.).
+- `requiredEnvVars`: names of env vars the artifact needs.
+- `agorGrants`: capabilities the daemon will inject (JWT, daemon URL, vendor proxy URLs, etc.).
 
 At render time the daemon resolves consent, looks up the **viewing user's** values, and synthesizes a `.env` file into the served file map (never persisted). Apps read the values via the standard bundler convention.
 
@@ -198,7 +198,7 @@ agor_artifacts_publish({
 
 ### Reading injected values in app code
 
-The daemon prefixes the synthesized `.env` keys per template — each bundler has
+The daemon prefixes the synthesized `.env` keys per template. Each bundler has
 its own hard-coded allowlist (CRA only inlines `REACT_APP_*`, Vite only inlines
 `VITE_*`, etc.). Apps use the standard idiom for their template:
 
@@ -230,20 +230,20 @@ if (!apiKey) {
 
 | Grant | Env var name | Behavior |
 |---|---|---|
-| `agor_token: true` | `AGOR_TOKEN` | Mints a 15-min artifact-runtime token for the viewer. It is accepted by artifact/proxy runtime paths, not as a general daemon API credential. **Artifact-scoped consent only** — author/instance grants don't auto-cover this. |
+| `agor_token: true` | `AGOR_TOKEN` | Mints a 15-min artifact-runtime token for the viewer. It is accepted by artifact/proxy runtime paths, not as a general daemon API credential. **Artifact-scoped consent only;** author/instance grants don't auto-cover this. |
 | `agor_api_url: true` | `AGOR_API_URL` | Daemon base URL. |
 | `agor_proxies: ["openai", ...]` | `AGOR_PROXY_OPENAI`, … | HTTP proxy URLs for listed vendors (see [API Proxies](/guide/api-proxies)). |
 | `agor_user_email: true` | `AGOR_USER_EMAIL` | Viewer's email. |
-| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Pure metadata — no consent. |
-| `agor_board_id: true` | `AGOR_BOARD_ID` | Pure metadata — no consent. |
+| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Pure metadata, no consent. |
+| `agor_board_id: true` | `AGOR_BOARD_ID` | Pure metadata, no consent. |
 
 #### Local Chrome note: Private Network Access
 
 When an artifact uses the hosted Sandpack preview iframe
 (`https://*.codesandbox.io`) and calls an Agor URL that Chrome classifies as
-local/private — for example `http://localhost:3030`, or an internal/sandbox
+local/private (for example `http://localhost:3030`, or an internal/sandbox
 hostname such as `https://agor.sandbox.preset.zone` when it resolves to a
-private network address — Chrome may treat the request as **Private Network
+private network address), Chrome may treat the request as **Private Network
 Access / Local Network Access** and block the artifact's `fetch()` before the
 daemon sees it. The common symptom is a generic `TypeError: Failed to fetch` in
 the artifact, even though the URL and token were injected correctly.
@@ -274,12 +274,12 @@ hosted-Sandpack → local/private Agor URL block.
 
 When the viewer is **not** the artifact's author, the daemon won't inject secrets or grants without an explicit trust grant:
 
-1. **Untrusted state** — The artifact renders with empty `.env` values and shows a `Untrusted` badge in the header.
+1. **Untrusted state**: The artifact renders with empty `.env` values and shows a `Untrusted` badge in the header.
 2. **The viewer clicks 🔒 to open the consent modal.** The modal displays the artifact's source files (with an inline preview pane), the requested env var names, and the requested grants.
-3. **The viewer picks a trust scope** — just-once / this-artifact / this-author / instance-wide.
+3. **The viewer picks a trust scope**: just-once / this-artifact / this-author / instance-wide.
 4. **The grant is persisted** in `artifact_trust_grants` (or held in-memory for "just-once") and the daemon re-renders with secrets injected.
 
-The matching check is a **strict subset**: if the artifact later adds a new required env var or grant, the existing grant doesn't cover it and the consent modal re-prompts. `agor_token` is treated stricter still — only artifact-scoped grants cover it; author or instance scopes don't.
+The matching check is a **strict subset**: if the artifact later adds a new required env var or grant, the existing grant doesn't cover it and the consent modal re-prompts. `agor_token` is treated stricter still: only artifact-scoped grants cover it; author or instance scopes don't.
 
 You can review and revoke grants from **Settings > Trusted Artifacts**.
 
@@ -287,16 +287,16 @@ You can review and revoke grants from **Settings > Trusted Artifacts**.
 
 1. Go to **Settings > Environment Variables**.
 2. Add the keys your artifacts need (e.g., `OPENAI_KEY`, `GITHUB_TOKEN`).
-3. Values are encrypted at rest with AES-256-GCM — they're only decrypted when rendering.
+3. Values are encrypted at rest with AES-256-GCM. They're only decrypted when rendering.
 
 Missing values render as empty string, not undefined. Check for that and surface a "configure X in Settings" prompt rather than calling APIs with empty creds.
 
 ### Security properties
 
-- **Raw secret values never enter agent prompts.** Agents see env var **names**; values are resolved at view time on the daemon and injected into the served file map — they're not in any payload an agent reads via the artifacts MCP tools. **Caveat:** `agor_artifacts_query_dom` and `agor_artifacts_query_document_html` return whatever the iframe rendered, so an artifact that prints (or otherwise reflects) a secret-derived value into the DOM will surface that into the calling agent's context. Opt out with `agor_runtime: { enabled: false }` for artifacts that intentionally render sensitive output.
+- **Raw secret values never enter agent prompts.** Agents see env var **names**; values are resolved at view time on the daemon and injected into the served file map. They're not in any payload an agent reads via the artifacts MCP tools. **Caveat:** `agor_artifacts_query_dom` and `agor_artifacts_query_document_html` return whatever the iframe rendered, so an artifact that prints (or otherwise reflects) a secret-derived value into the DOM will surface that into the calling agent's context. Opt out with `agor_runtime: { enabled: false }` for artifacts that intentionally render sensitive output.
 - **Per-viewer rendering.** Two users viewing the same artifact get their own `.env` with their own values.
 - **Encrypted at rest** with AES-256-GCM.
-- **No cross-author injection without consent** — the TOFU flow blocks accidental secret leaks into someone else's code.
+- **No cross-author injection without consent.** The TOFU flow blocks accidental secret leaks into someone else's code.
 
 <div style={{
   marginTop: '12px',
@@ -306,12 +306,12 @@ Missing values render as empty string, not undefined. Check for that and surface
   backgroundColor: 'rgba(212, 148, 10, 0.08)',
   fontSize: '14px'
 }}>
-**Trust boundary:** Once you grant trust, secrets are injected into the artifact's JavaScript and execute in the Sandpack iframe. A malicious artifact could exfiltrate injected values via `fetch()`, or render them into the DOM where `agor_artifacts_query_dom` would surface them to a calling agent. Only grant trust to artifacts you've reviewed — the consent modal includes a code-preview pane for exactly that reason. The guarantee is that **no daemon-side secret injection happens without your explicit consent**, not that the artifact JS can't read or expose those values once you opt in.
+**Trust boundary:** Once you grant trust, secrets are injected into the artifact's JavaScript and execute in the Sandpack iframe. A malicious artifact could exfiltrate injected values via `fetch()`, or render them into the DOM where `agor_artifacts_query_dom` would surface them to a calling agent. Only grant trust to artifacts you've reviewed; the consent modal includes a code-preview pane for exactly that reason. The guarantee is that **no daemon-side secret injection happens without your explicit consent**, not that the artifact JS can't read or expose those values once you opt in.
 </div>
 
 ### Legacy format (`agor.config.js`)
 
-Older artifacts used a `/agor.config.js` Handlebars sidecar. That format is no longer rendered. Artifacts still carrying it render in safe-degraded mode (no env vars or grants injected) and the board node displays a warning banner with an interpolated upgrade prompt — copy it into a new conversation with an agent that has `agor_artifacts_get` and `agor_artifacts_publish` tools, and the agent can do the migration mechanically.
+Older artifacts used a `/agor.config.js` Handlebars sidecar. That format is no longer rendered. Artifacts still carrying it render in safe-degraded mode (no env vars or grants injected) and the board node displays a warning banner with an interpolated upgrade prompt. Copy it into a new conversation with an agent that has `agor_artifacts_get` and `agor_artifacts_publish` tools, and the agent can do the migration mechanically.
 
 ---
 
@@ -319,12 +319,12 @@ Older artifacts used a `/agor.config.js` Handlebars sidecar. That format is no l
 
 Artifacts are designed for rapid prototyping, not permanent hosting. When you're ready to ship, the graduation path is straightforward:
 
-1. **The code is already on disk** — artifact source files live at `.agor/artifacts/<id>/` inside your branch. They're standard source files, not a proprietary format
-2. **Ask your agent to scaffold a real project** — "Take this artifact and set it up as a Next.js app" or "Create a Vite project from this prototype"
-3. **Pick your hosting** — Vercel, Netlify, Cloudflare Pages, a Docker container — the agent can set up deployment config for whatever platform you choose
-4. **Graduate your secrets** — Move `requiredEnvVars` to your hosting platform's environment variable system. The bundler convention is the same on the other side (CRA reads `process.env.REACT_APP_*`, Vite reads `import.meta.env.VITE_*`, etc.) — only the source of values changes.
+1. **The code is already on disk**: artifact source files live at `.agor/artifacts/<id>/` inside your branch. They're standard source files, not a proprietary format
+2. **Ask your agent to scaffold a real project**: "Take this artifact and set it up as a Next.js app" or "Create a Vite project from this prototype"
+3. **Pick your hosting:** Vercel, Netlify, Cloudflare Pages, a Docker container. The agent can set up deployment config for whatever platform you choose
+4. **Graduate your secrets**: Move `requiredEnvVars` to your hosting platform's environment variable system. The bundler convention is the same on the other side (CRA reads `process.env.REACT_APP_*`, Vite reads `import.meta.env.VITE_*`, etc.). Only the source of values changes.
 
-You can also one-click eject to CodeSandbox (`agor_artifacts_export_codesandbox`) if you want a quick share link — note that daemon-supplied capabilities (`AGOR_TOKEN`, `AGOR_PROXY_*`) won't work there.
+You can also one-click eject to CodeSandbox (`agor_artifacts_export_codesandbox`) if you want a quick share link. Note that daemon-supplied capabilities (`AGOR_TOKEN`, `AGOR_PROXY_*`) won't work there.
 
 The artifact gets you from idea to working UI in minutes. The agent gets you from prototype to deployed app when you're ready.
 
@@ -332,7 +332,7 @@ The artifact gets you from idea to working UI in minutes. The agent gets you fro
 
 ## Sandpack and CodeSandbox
 
-[Sandpack](https://sandpack.codesandbox.io/) is the open-source in-browser bundler that powers artifact rendering. It's built and maintained by the team at [CodeSandbox](https://codesandbox.io/), who also offer a full cloud development platform with collaborative VMs, instant environments, and team features. Sandpack itself is free and open-source (MIT licensed) — Agor uses the [`@codesandbox/sandpack-react`](https://www.npmjs.com/package/@codesandbox/sandpack-react) package.
+[Sandpack](https://sandpack.codesandbox.io/) is the open-source in-browser bundler that powers artifact rendering. It's built and maintained by the team at [CodeSandbox](https://codesandbox.io/), who also offer a full cloud development platform with collaborative VMs, instant environments, and team features. Sandpack itself is free and open-source (MIT licensed). Agor uses the [`@codesandbox/sandpack-react`](https://www.npmjs.com/package/@codesandbox/sandpack-react) package.
 
 ---
 
@@ -340,15 +340,15 @@ The artifact gets you from idea to working UI in minutes. The agent gets you fro
 
 Artifact filesystem operations include containment guards:
 
-- **Path traversal protection** — All file paths are resolved and validated to stay within the branch boundary
-- **Symlink filtering** — Symbolic links are skipped during file enumeration to prevent filesystem escape
-- **Browser sandboxing** — Artifacts render in [Sandpack's](https://sandpack.codesandbox.io/) in-browser bundler, isolated from the host
+- **Path traversal protection**: All file paths are resolved and validated to stay within the branch boundary
+- **Symlink filtering**: Symbolic links are skipped during file enumeration to prevent filesystem escape
+- **Browser sandboxing**: Artifacts render in [Sandpack's](https://sandpack.codesandbox.io/) in-browser bundler, isolated from the host
 
 ---
 
 ## Related docs
 
-- [API Proxies](/guide/api-proxies) — How to call third-party APIs (Shortcut, Linear, Jira) that don't return CORS headers
-- [Agor MCP Server](/guide/internal-mcp) — The MCP tools agents use to create and manage artifacts
-- [Cards](/guide/cards) — Another board primitive for non-code workflow entities
-- [Teammates](/guide/teammates) — Persistent AI teammates that can create artifacts as part of their work
+- [API Proxies](/guide/api-proxies): How to call third-party APIs (Shortcut, Linear, Jira) that don't return CORS headers
+- [Agor MCP Server](/guide/internal-mcp): The MCP tools agents use to create and manage artifacts
+- [Cards](/guide/cards): Another board primitive for non-code workflow entities
+- [Teammates](/guide/teammates): Persistent AI teammates that can create artifacts as part of their work

@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { OpenCodeTool } from './opencode-tool.js';
+import { isOpenCodeSessionEvent, OpenCodeTool } from './opencode-tool.js';
 
 // Track client creation calls
 let clientCreateCount = 0;
@@ -17,6 +17,7 @@ const createdClients: Array<{ baseUrl: string; directory?: string }> = [];
 
 // Mock MCP add calls per client
 const mockMcpAddCalls: Array<{ name: string; config: unknown }> = [];
+const mockSessionAbort = vi.fn();
 
 // Create a mock client factory
 function createMockClient(opts: { baseUrl: string; directory?: string }) {
@@ -30,6 +31,7 @@ function createMockClient(opts: { baseUrl: string; directory?: string }) {
       get: vi.fn().mockResolvedValue({ data: {} }),
       prompt: vi.fn().mockResolvedValue({ data: { parts: [], info: {} } }),
       messages: vi.fn().mockResolvedValue({ data: [] }),
+      abort: mockSessionAbort,
     },
     event: {
       subscribe: vi.fn().mockResolvedValue({ stream: [] }),
@@ -80,6 +82,25 @@ describe('OpenCodeTool', () => {
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;
     vi.clearAllMocks();
+    mockSessionAbort.mockResolvedValue({ data: true });
+  });
+
+  describe('Event session ownership', () => {
+    it.each([
+      [{ type: 'session.status', properties: { sessionID: 'session-1' } }, 'session-1'],
+      [{ type: 'message.updated', properties: { info: { sessionID: 'session-2' } } }, 'session-2'],
+      [
+        { type: 'message.part.updated', properties: { part: { sessionID: 'session-3' } } },
+        'session-3',
+      ],
+      [{ type: 'session.updated', properties: { info: { id: 'session-4' } } }, 'session-4'],
+      [{ type: 'server.connected', properties: {} }, undefined],
+    ])('accepts only the owning session from %j', (event, expected) => {
+      expect(isOpenCodeSessionEvent(event as never, expected ?? 'session-1')).toBe(
+        expected !== undefined
+      );
+      if (expected) expect(isOpenCodeSessionEvent(event as never, 'other-session')).toBe(false);
+    });
   });
 
   describe('Constructor', () => {
@@ -103,6 +124,30 @@ describe('OpenCodeTool', () => {
       );
 
       expect(tool).toBeDefined();
+    });
+  });
+
+  describe('Stopping', () => {
+    it('aborts the mapped provider session in its branch directory', async () => {
+      const tool = new OpenCodeTool({ enabled: true, serverUrl: 'http://localhost:4096' });
+      tool.setSessionContext('agor-session', 'opencode-session', undefined, undefined, '/branch');
+
+      await expect(tool.stopTask('agor-session')).resolves.toEqual({ success: true });
+      expect(mockSessionAbort).toHaveBeenCalledWith({
+        path: { id: 'opencode-session' },
+        query: { directory: '/branch' },
+      });
+    });
+
+    it('reports provider abort failures without claiming quiescence', async () => {
+      mockSessionAbort.mockRejectedValueOnce(new Error('server unavailable'));
+      const tool = new OpenCodeTool({ enabled: true, serverUrl: 'http://localhost:4096' });
+      tool.setSessionContext('agor-session', 'opencode-session');
+
+      await expect(tool.stopTask('agor-session')).resolves.toEqual({
+        success: false,
+        reason: 'server unavailable',
+      });
     });
   });
 
@@ -380,7 +425,7 @@ describe('OpenCodeTool', () => {
             name: 'Remote API',
             transport: 'http',
             url: 'https://api.example.com/mcp',
-            auth: { token: 'bearer-token' },
+            auth: { type: 'bearer', token: 'bearer-token' },
             scope: 'session',
             enabled: true,
           } as any,

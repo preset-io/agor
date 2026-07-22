@@ -4,7 +4,13 @@
  * Executes prompts using Claude Code SDK with Feathers/WebSocket architecture
  */
 
-import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ExecutorPulseKind,
+  MessageSource,
+  PermissionMode,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
@@ -26,6 +32,7 @@ export async function executeClaudeCodeTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
+  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
   const { client, sessionId } = params;
 
@@ -37,6 +44,8 @@ export async function executeClaudeCodeTask(params: {
 
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
+    if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
+    if (event === 'permission:timeout') params.onPulse?.('sdk_started', 'permission.timeout');
     // Emit permission events directly via Feathers
     client.service('sessions').emit(event, data);
   }, permissionTimeoutMs);

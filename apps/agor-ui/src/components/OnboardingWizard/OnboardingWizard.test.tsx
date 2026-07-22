@@ -499,3 +499,244 @@ describe('OnboardingWizard', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Codex ChatGPT login import', () => {
+  // Client harness whose codex-auth/import service is controllable per test.
+  function renderWithCodexImport(create: ReturnType<typeof vi.fn>) {
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'boards' ? boardsService : name === 'codex-auth/import' ? { create } : {}
+      ),
+    };
+    const rendered = renderWizard({ initialStep: 'llm', client: client as never });
+    return { ...rendered, importCreate: create };
+  }
+
+  it('offers an auth-method toggle for GPT and reveals the paste flow with inline help', async () => {
+    renderWizard({ initialStep: 'llm' });
+
+    clickButton('GPT');
+    expect(screen.getByText('Sign in with ChatGPT')).toBeInTheDocument();
+    expect(screen.getByText('Import auth.json')).toBeInTheDocument();
+
+    clickButton('Import auth.json');
+    expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
+    // Inline help: where the file lives, how to print it, and the overwrite caveat.
+    expect(screen.getByText(/cat ~\/\.codex\/auth\.json/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/replaces the Codex login already stored on this server/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/one login for the whole server/i)).toBeInTheDocument();
+    // No API-key format validation applies to a pasted file.
+    expect(screen.queryByText(/OpenAI keys start with/i)).not.toBeInTheDocument();
+  });
+
+  it('submits the pasted auth.json to the daemon and advances on success', async () => {
+    const create = vi.fn(async () => ({ status: 'authenticated', authMode: 'chatgpt' }));
+    const { importCreate } = renderWithCodexImport(create);
+
+    clickButton('GPT');
+    clickButton('Import auth.json');
+    const pasted = JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: 'r' } });
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: pasted },
+    });
+    // The import pane owns its own submit; success self-advances the wizard.
+    clickButton('Import login');
+
+    await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+  });
+
+  it('shows the daemon rejection message and stays on the LLM step', async () => {
+    const create = vi.fn(async () => {
+      throw new Error('This file has no ChatGPT login tokens and no API key.');
+    });
+    renderWithCodexImport(create);
+
+    clickButton('GPT');
+    clickButton('Import auth.json');
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: '{"tokens":{}}' },
+    });
+    clickButton('Import login');
+
+    expect(
+      await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Connect your AI')).toBeInTheDocument();
+    expect(screen.queryByText('Name your AI teammate')).not.toBeInTheDocument();
+  });
+
+  it('switching auth methods clears the pasted value and error state', async () => {
+    const create = vi.fn(async () => {
+      throw new Error('This file has no ChatGPT login tokens and no API key.');
+    });
+    renderWithCodexImport(create);
+
+    clickButton('GPT');
+    clickButton('Import auth.json');
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: '{"a":1}' },
+    });
+    clickButton('Import login');
+    expect(
+      await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).toBeInTheDocument();
+
+    clickButton('API key');
+    const keyInput = screen.getByLabelText('OpenAI API key') as HTMLInputElement;
+    expect(keyInput.value).toBe('');
+    // A stale rejection from the paste attempt must not linger on the API-key pane.
+    expect(
+      screen.queryByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).not.toBeInTheDocument();
+  });
+
+  it('describes a broken ChatGPT login in subscription terms, not API-key terms', async () => {
+    // Stored method is subscription but the server-side auth.json is gone
+    // (wipe / `codex logout`) — the probe reports unauthenticated.
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unauthenticated' as const,
+      authenticated: false,
+    }));
+    renderWizard({
+      initialStep: 'llm',
+      user: makeUser({ agentic_auth_methods: { codex: 'subscription' } } as never),
+      onCheckAuth,
+    });
+
+    expect(await screen.findByText('Login not found')).toBeInTheDocument();
+    expect(screen.queryByText('Key not working')).not.toBeInTheDocument();
+
+    clickButton('GPT');
+    expect(
+      await screen.findByText(/Codex login no longer found on this server/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Key stored but not working/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Codex ChatGPT device sign-in', () => {
+  // Client harness with a controllable codex-auth/device service.
+  function renderWithDeviceService(overrides: {
+    create?: ReturnType<typeof vi.fn>;
+    find?: ReturnType<typeof vi.fn>;
+  }) {
+    const create =
+      overrides.create ??
+      vi.fn(async () => ({
+        phase: 'pending',
+        userCode: 'ABCD-1234',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      }));
+    const find = overrides.find ?? vi.fn(async () => ({ phase: 'idle' }));
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'codex-auth/device' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+      ),
+    };
+    const rendered = renderWizard({ initialStep: 'llm', client: client as never });
+    return { ...rendered, deviceCreate: create, deviceFind: find };
+  }
+
+  function openDevicePane() {
+    clickButton('GPT');
+    clickButton('Sign in with ChatGPT');
+  }
+
+  it('requests a code on selection and shows it with the verification link and expiry', async () => {
+    const { deviceCreate } = renderWithDeviceService({});
+    openDevicePane();
+
+    await waitFor(() => expect(deviceCreate).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
+    expect(screen.getByText(/auth\.openai\.com\/codex\/device/)).toBeInTheDocument();
+    expect(screen.getByText(/waiting for approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/code expires in/i)).toBeInTheDocument();
+    // Approval has not happened — Connect stays disabled.
+    expect(screen.getByText(/^connect →/i).closest('button')).toBeDisabled();
+  });
+
+  it('advances once the daemon reports success', async () => {
+    const find = vi.fn().mockResolvedValueOnce({ phase: 'idle' }).mockResolvedValue({
+      phase: 'success',
+      planType: 'pro',
+      hint: 'Signed in with ChatGPT (pro plan).',
+    });
+    renderWithDeviceService({ find });
+    openDevicePane();
+
+    // The 2s status poll flips the pane to success.
+    expect(
+      await screen.findByText(/signed in with chatgpt \(pro plan\)/i, {}, { timeout: 5000 })
+    ).toBeInTheDocument();
+
+    // The pane reports success to the parent via effect — enablement lands a tick later.
+    await waitFor(() => expect(screen.getByText(/^connect →/i).closest('button')).toBeEnabled());
+    const connect = screen.getByText(/^connect →/i).closest('button');
+    fireEvent.click(connect as HTMLButtonElement);
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+  });
+
+  it('treats a gated account as a first-class state with working fallbacks', async () => {
+    const create = vi.fn(async () => ({
+      phase: 'unavailable',
+      hint: 'Your ChatGPT account does not allow device-code sign-in.',
+    }));
+    renderWithDeviceService({ create });
+    openDevicePane();
+
+    expect(
+      await screen.findByText(/device sign-in is turned off for this chatgpt account/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/device code authorization for codex/i)).toBeInTheDocument();
+
+    clickButton('Paste a login file');
+    expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
+  });
+
+  it('offers a fresh code after expiry', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        phase: 'expired',
+        hint: 'The sign-in code expired — get a new one and try again.',
+      })
+      .mockResolvedValue({
+        phase: 'pending',
+        userCode: 'WXYZ-9876',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      });
+    renderWithDeviceService({ create });
+    openDevicePane();
+
+    expect(await screen.findByText(/code expired/i)).toBeInTheDocument();
+    await findAndClickButton(/get a new code/i);
+    expect(await screen.findByText('WXYZ-9876')).toBeInTheDocument();
+  });
+
+  it('adopts a still-pending attempt instead of burning a fresh code', async () => {
+    const find = vi.fn(async () => ({
+      phase: 'pending',
+      userCode: 'KEEP-0001',
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }));
+    const create = vi.fn();
+    renderWithDeviceService({ create, find });
+    openDevicePane();
+
+    expect(await screen.findByText('KEEP-0001')).toBeInTheDocument();
+    // The adopted attempt's expiry drives the countdown just like a fresh one.
+    expect(await screen.findByText(/code expires in/i)).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+  });
+});

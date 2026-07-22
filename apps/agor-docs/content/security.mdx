@@ -1,6 +1,6 @@
 ---
 title: Security
-description: How to operate Agor safely — deployment modes, what's enforced, what's not, and what every admin needs to know before sharing access.
+description: How to operate Agor safely, covering deployment modes, what's enforced, what's not, and what every admin needs to know before sharing access.
 heroImage: '/security_audit.png'
 ---
 
@@ -29,7 +29,7 @@ Agor has four canonical modes. Choose based on **who shares the daemon** and **h
 | **Dev / Solo** | `false` | `simple` | Personal machine, trusted team of one |
 | **Local Team** | `true` | `simple` | Small team, RBAC for organization, no Unix isolation |
 | **Insulated** | `true` | `insulated` | Shared dev box, filesystem protection, no per-user processes |
-| **Strict** | `true` | `strict` | Production / compliance — full per-user OS isolation |
+| **Strict** | `true` | `strict` | Production / compliance, full per-user OS isolation |
 
 ```yaml
 # ~/.agor/config.yaml
@@ -54,8 +54,8 @@ execution:
 **What it is:** Open access. All authenticated users can act on all branches. Everything runs as the daemon user.
 
 **What's enforced:**
-- ✅ Authentication — REST and WebSocket calls require a JWT
-- ✅ Role checks — privileged endpoints (terminals, env controls) require `admin`
+- ✅ Authentication. REST and WebSocket calls require a JWT
+- ✅ Role checks. Privileged endpoints (terminals, env controls) require `admin`
 - ✅ Encrypted credentials at rest (AES-256-GCM with `AGOR_MASTER_SECRET`)
 - ✅ Path traversal protection on file browsing
 - ✅ Body size limits (10MB)
@@ -79,7 +79,7 @@ execution:
   unix_user_mode: simple
 ```
 
-App-layer permission checks for branch ownership and access tiers. No OS-level isolation — all execution still runs as the daemon user.
+App-layer permission checks for branch ownership and access tiers. No OS-level isolation, so all execution still runs as the daemon user.
 
 **Adds:**
 - ✅ Branch owners + `others_can` permission tiers (see below)
@@ -149,17 +149,17 @@ When `branch_rbac: true` is set, every branch has owners plus an `others_can` ti
 
 | Tier | What others can do |
 |---|---|
-| `none` | No access — completely private to owners |
+| `none` | No access, completely private to owners |
 | `view` | Read branches, sessions, tasks, messages |
 | **`session`** (default) | Create *their own* sessions; prompt their own sessions only |
 | `prompt` | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
 | `all` | Full control (create/update/delete sessions, change permissions) |
 
-The `session` tier is the safe default — collaborators can work independently without impersonating each other's OS identity.
+The `session` tier is the safe default. Collaborators can work independently without impersonating each other's OS identity.
 
 ### Session Sharing (`dangerously_allow_session_sharing`)
 
-A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller* — it runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
+A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller*. It runs as the caller's Unix user. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute as the original session owner.
 
 Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md` for the full discussion.
 
@@ -169,13 +169,13 @@ Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `con
 
 Independent of mode:
 
-- ✅ **Authentication on every call** — REST and Socket.IO require a JWT, API key, or valid session token. There is no anonymous / unauthenticated path.
-- ✅ **Role-based authorization** — `viewer` / `member` / `admin` / `owner` gate privileged endpoints (terminals, env controls, config, user management).
-- ✅ **Encrypted credentials at rest** — Passwords with bcrypt (12 rounds), API keys and per-user env vars with AES-256-GCM under `AGOR_MASTER_SECRET`.
-- ✅ **Path traversal guards** — File browsing is restricted to `context/` within each branch with traversal protection.
-- ✅ **MCP token security** — Short-lived (24h default) JWTs in `Authorization: Bearer` header. Query-string tokens are rejected.
-- ✅ **Request size limits** — 10MB body cap to prevent oversized-payload DoS.
-- ✅ **Executor isolation** — SDKs run in separate processes; no direct DB access; just-in-time API keys via IPC. See [Architecture](/guide/architecture#current-architecture-executor-isolation).
+- ✅ **Authentication on every call.** REST and Socket.IO require a JWT, API key, or valid session token. There is no anonymous / unauthenticated path.
+- ✅ **Role-based authorization.** `viewer` / `member` / `admin` / `owner` gate privileged endpoints (terminals, env controls, config, user management).
+- ✅ **Encrypted credentials at rest.** Passwords with bcrypt (12 rounds), API keys and per-user env vars with AES-256-GCM under `AGOR_MASTER_SECRET`.
+- ✅ **Path traversal guards.** File browsing is restricted to `context/` within each branch with traversal protection.
+- ✅ **MCP token security.** Short-lived (24h default) JWTs in `Authorization: Bearer` header. Query-string tokens are rejected.
+- ✅ **Request size limits.** 10MB body cap to prevent oversized-payload DoS.
+- ✅ **Executor isolation.** SDKs run in separate processes; no direct DB access; just-in-time API keys via IPC. See [Architecture](/guide/architecture#current-architecture-executor-isolation).
 
 ---
 
@@ -198,9 +198,9 @@ The browser terminal is enabled by default for `member+` users. **In `unix_user_
 
 Three ways to handle this:
 
-1. **`unix_user_mode: strict`** — terminal runs as the user's Unix account. Safe.
-2. **`unix_user_mode: insulated`** — terminal runs as the executor user, scoped by branch group. Mostly safe.
-3. **`execution.allow_web_terminal: false`** — disables the terminal entirely.
+1. **`unix_user_mode: strict`** runs the terminal as the user's Unix account. Safe.
+2. **`unix_user_mode: insulated`** runs the terminal as the executor user, scoped by branch group. Mostly safe.
+3. **`execution.allow_web_terminal: false`** disables the terminal entirely.
 
 The daemon prints a startup warning when the unsafe combination is active.
 
@@ -228,20 +228,20 @@ Users with the `admin` role can manage other users, configure MCP servers, view 
 
 - **Keep the daemon behind a firewall, VPN, or private network.** Pair with a reverse proxy if you need SSO or IP allowlists.
 - **Patch the host like any shared dev box.** Monitor logs, rotate credentials, audit users.
-- **Prefer scoped or temporary API credentials** — `OPENAI_API_KEY` for an artifact session shouldn't be your team's master key.
+- **Prefer scoped or temporary API credentials.** `OPENAI_API_KEY` for an artifact session shouldn't be your team's master key.
 - **Rotate the master secret periodically.** Re-encrypt at rest by triggering a settings update flow.
-- **Audit `/var/log/auth.log`** in Unix isolation modes — sudo activity is the trail.
-- **Pilot before scaling** — run the first weeks of multi-user use with logs open.
+- **Audit `/var/log/auth.log`** in Unix isolation modes, where sudo activity is the trail.
+- **Pilot before scaling.** Run the first weeks of multi-user use with logs open.
 
 ---
 
 ## What's on the Roadmap
 
-- **Rate limiting & quotas** — Per-user limits on session count and API spend
-- **Enhanced audit log UI** — In-product viewer for security events
-- **Hardened MCP token management** — More granular scoping, revocation
-- **Resource usage tracking** — Per-user cost dashboards (partial today via Settings → Analytics)
-- **Formal pen testing** — Ongoing; until then, keep daemons inside trusted network boundaries
+- **Rate limiting & quotas** (per-user limits on session count and API spend)
+- **Enhanced audit log UI** (in-product viewer for security events)
+- **Hardened MCP token management** (more granular scoping, revocation)
+- **Resource usage tracking.** Per-user cost dashboards (partial today via Settings → Analytics)
+- **Formal pen testing.** Ongoing; until then, keep daemons inside trusted network boundaries
 
 ---
 
@@ -253,7 +253,7 @@ Please email `security@preset.io` (or open a [private security advisory](https:/
 
 ## Related
 
-- [Full Multiplayer Mode](/guide/multiplayer-unix-isolation) — Setup guide for Insulated and Strict modes
-- [Architecture](/guide/architecture#current-architecture-executor-isolation) — Executor isolation deep dive
-- [Containerized Execution](/guide/containerized-execution) — Running Agor in Docker
-- [Agor MCP Server](/guide/internal-mcp) — MCP token model and access gating
+- [Full Multiplayer Mode](/guide/multiplayer-unix-isolation) (setup guide for Insulated and Strict modes)
+- [Architecture](/guide/architecture#current-architecture-executor-isolation) (executor isolation deep dive)
+- [Containerized Execution](/guide/containerized-execution) (running Agor in Docker)
+- [Agor MCP Server](/guide/internal-mcp) (MCP token model and access gating)

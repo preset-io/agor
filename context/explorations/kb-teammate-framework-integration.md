@@ -299,11 +299,13 @@ Daily memory docs should be valid markdown, append-mostly, and deterministic. Pr
 <!-- agor-memory-entry id=01J... ordinal=000001 sha256=... -->
 
 - 2026-06-07T14:23:11Z [decision] User prefers review-first PR workflow. (source: agor://session/...)
+
 <!-- /agor-memory-entry -->
 
 <!-- agor-memory-entry id=01J... ordinal=000002 sha256=... -->
 
 - 2026-06-07T15:01:04Z [learning] For repo preset-io/agor, do not run `pnpm build` unless asked.
+
 <!-- /agor-memory-entry -->
 ```
 

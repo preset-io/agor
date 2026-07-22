@@ -1,6 +1,7 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
+  GatewayListenerDiscoveryRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
@@ -121,6 +122,16 @@ function makeGatewayHarness(args: {
     if (getCurrentTenantDatabaseScope()) return create(data);
     return runWithTenantDatabaseScope(db, 'tenant-channel', () => create(data));
   };
+  const routeMessage = service.routeMessage.bind(service);
+  service.routeMessage = (data) => {
+    if (getCurrentTenantId()) return routeMessage(data);
+    return runWithTenantContext('tenant-channel', () => routeMessage(data));
+  };
+  const handleMessageStreamingEvent = service.handleMessageStreamingEvent.bind(service);
+  service.handleMessageStreamingEvent = (event, data) => {
+    if (getCurrentTenantId()) return handleMessageStreamingEvent(event, data);
+    return runWithTenantContext('tenant-channel', () => handleMessageStreamingEvent(event, data));
+  };
   const channelRepo = {
     findByKey: vi.fn(async () => channel),
     findById: vi.fn(async () => channel),
@@ -155,8 +166,10 @@ function makeGatewayHarness(args: {
   };
   (
     service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
-  ).activeListeners.set(channel.id, args.connector ?? {});
-  (service as unknown as { hasActiveChannels: boolean }).hasActiveChannels = true;
+  ).activeListeners.set(`tenant-channel\0${channel.id}`, args.connector ?? {});
+  (service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants.add(
+    'tenant-channel'
+  );
 
   return {
     service,
@@ -179,6 +192,175 @@ describe('gateway tenant metadata helpers', () => {
 
     expect(tenantIdFromGatewayChannel(channel)).toBe('tenant-channel');
     expect(Object.keys(channel)).not.toContain('tenant_id');
+  });
+});
+
+describe('GatewayService multi-tenant process state', () => {
+  it("does not let one tenant's empty channel set suppress another tenant's delivery", async () => {
+    const sendMessage = vi.fn(async () => 'sent-1');
+    const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+    const tenantAChannel = attachHiddenTenant(
+      { ...slackChannel, id: 'shared-looking-channel' as never },
+      { tenant_id: 'tenant-a' }
+    );
+    const mapping = makeMapping({ channel_id: tenantAChannel.id });
+    const channelRepo = {
+      findAll: vi.fn(async () => (getCurrentTenantId() === 'tenant-a' ? [tenantAChannel] : [])),
+      findById: vi.fn(async () => tenantAChannel),
+      updateLastMessage: vi.fn(async () => undefined),
+    };
+    const threadMapRepo = {
+      findBySession: vi.fn(async () => mapping),
+      updateLastMessage: vi.fn(async () => undefined),
+      findById: vi.fn(async () => mapping),
+      updateMetadata: vi.fn(async () => undefined),
+    };
+    (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
+    (
+      service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
+    ).activeListeners.set('tenant-a\0shared-looking-channel', { sendMessage });
+
+    await runWithTenantContext('tenant-a', () => service.refreshChannelState());
+    await runWithTenantContext('tenant-b', () => service.refreshChannelState());
+
+    const result = await runWithTenantContext('tenant-a', () =>
+      service.routeMessage({ session_id: 'sess-1', message: 'hello tenant A' })
+    );
+
+    expect(result).toEqual({ routed: true, channelType: 'slack' });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(
+      (service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants
+    ).toEqual(new Set(['tenant-a']));
+  });
+
+  it('discovers and starts same-looking channel IDs independently in two tenant contexts', async () => {
+    const db = { run: vi.fn() } as never;
+    const service = new GatewayService(db, { service: vi.fn() } as never);
+    const callbacks: Array<(message: { threadId: string; text: string; userId: string }) => void> =
+      [];
+    const startedInTenants: Array<string | undefined> = [];
+    const handledInTenants: Array<string | undefined> = [];
+    const findEnabledTenantRefs = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
+      .mockResolvedValue([
+        { channel_id: 'same-channel' as never, tenant_id: 'tenant-a' },
+        { channel_id: 'same-channel' as never, tenant_id: 'tenant-b' },
+      ]);
+    const channelRepo = {
+      findById: vi.fn(async () =>
+        attachHiddenTenant(
+          {
+            ...slackChannel,
+            id: 'same-channel' as never,
+            channel_key: `${getCurrentTenantId()}-key`,
+            config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+          },
+          { tenant_id: getCurrentTenantId() }
+        )
+      ),
+    };
+    (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    vi.spyOn(service, 'create').mockImplementation(async () => {
+      handledInTenants.push(getCurrentTenantId());
+      return { success: true, sessionId: 'sess-1', created: false };
+    });
+    vi.mocked(getConnector).mockImplementation(() => ({
+      startListening: vi.fn(async (callback) => {
+        startedInTenants.push(getCurrentTenantId());
+        callbacks.push(callback);
+      }),
+      sendMessage: vi.fn(async () => 'sent'),
+    }));
+
+    try {
+      await service.startListenersAcrossTenants();
+
+      expect(startedInTenants).toEqual(['tenant-a', 'tenant-b']);
+      expect(channelRepo.findById.mock.calls).toHaveLength(2);
+      expect([
+        ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
+      ]).toEqual(['tenant-a\0same-channel', 'tenant-b\0same-channel']);
+
+      callbacks[0]({ threadId: 'thread-a', text: 'a', userId: 'user-a' });
+      callbacks[1]({ threadId: 'thread-b', text: 'b', userId: 'user-b' });
+      await vi.waitFor(() => expect(handledInTenants).toEqual(['tenant-a', 'tenant-b']));
+    } finally {
+      findEnabledTenantRefs.mockRestore();
+    }
+  });
+
+  it('starts static-tenant listeners and refreshes the fast path with one channel scan', async () => {
+    const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+    const channel = attachHiddenTenant(
+      {
+        ...slackChannel,
+        id: 'static-channel' as never,
+        config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      },
+      { tenant_id: 'static-tenant' }
+    );
+    const channelRepo = { findAll: vi.fn(async () => [channel]) };
+    (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    const startListening = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({
+      startListening,
+      sendMessage: vi.fn(async () => 'sent'),
+    });
+
+    await runWithTenantContext('static-tenant', () => service.startListeners());
+
+    expect(channelRepo.findAll).toHaveBeenCalledOnce();
+    expect(startListening).toHaveBeenCalledOnce();
+    expect(
+      (service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants
+    ).toEqual(new Set(['static-tenant']));
+    expect([
+      ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
+    ]).toEqual(['static-tenant\0static-channel']);
+  });
+
+  it('fails closed on a discovered tenant mismatch while continuing other tenants', async () => {
+    const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+    const findEnabledTenantRefs = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
+      .mockResolvedValue([
+        { channel_id: 'forged-channel' as never, tenant_id: 'tenant-a' },
+        { channel_id: 'valid-channel' as never, tenant_id: 'tenant-b' },
+      ]);
+    const channelRepo = {
+      findById: vi.fn(async (channelId: string) =>
+        attachHiddenTenant(
+          {
+            ...slackChannel,
+            id: channelId as never,
+            config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+          },
+          { tenant_id: channelId === 'forged-channel' ? 'tenant-x' : 'tenant-b' }
+        )
+      ),
+    };
+    (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    const startListening = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({
+      startListening,
+      sendMessage: vi.fn(async () => 'sent'),
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await service.startListenersAcrossTenants();
+
+      expect(startListening).toHaveBeenCalledOnce();
+      expect([
+        ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
+      ]).toEqual(['tenant-b\0valid-channel']);
+      expect(error.mock.calls.flat().join(' ')).toMatch(/tenant mismatch/i);
+    } finally {
+      error.mockRestore();
+      findEnabledTenantRefs.mockRestore();
+    }
   });
 });
 

@@ -2,10 +2,12 @@ import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
 import {
   runWithoutTenantDatabaseScope,
+  type SystemDatabaseCapability,
   tenantContextScope,
   tenantDatabaseScope,
 } from './tenant-context';
 
+export type { SystemDatabaseCapability } from './tenant-context';
 export {
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
@@ -195,7 +197,8 @@ async function drainAfterTenantDatabaseCommitCallbacks(
 export async function runWithSystemDatabaseScope<T>(
   db: TenantScopeAwareDatabase | RawDatabase | Database,
   reason: string,
-  work: (db: SystemDatabase) => Promise<T>
+  work: (db: SystemDatabase) => Promise<T>,
+  options: { capability?: SystemDatabaseCapability } = {}
 ): Promise<T> {
   const operationTenantId = tenantContextScope.getStore()?.tenantId;
   if (operationTenantId) {
@@ -210,13 +213,39 @@ export async function runWithSystemDatabaseScope<T>(
         `Cannot enter system database scope (${reason}) from active tenant scope ${existingScope.tenantId}`
       );
     }
+    if (existingScope.systemCapability !== options.capability) {
+      throw new Error(
+        `Cannot change system database capability from ${existingScope.systemCapability ?? 'none'} to ${options.capability ?? 'none'} (${reason})`
+      );
+    }
     return work(existingScope.db as SystemDatabase);
   }
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
-  return tenantDatabaseScope.run({ db: baseDb, kind: 'system', systemReason: reason }, () =>
-    work(baseDb as SystemDatabase)
-  );
+  const scope = (scopedDb: Database) =>
+    tenantDatabaseScope.run(
+      {
+        db: scopedDb,
+        kind: 'system',
+        systemReason: reason,
+        ...(options.capability ? { systemCapability: options.capability } : {}),
+      },
+      () => work(scopedDb as SystemDatabase)
+    );
+
+  if (!options.capability || !isPostgresDatabase(baseDb)) {
+    return scope(baseDb);
+  }
+
+  // Capabilities are transaction-local Postgres GUCs consumed by narrowly
+  // scoped RLS policies. They must never leak onto a pooled connection.
+  return baseDb.transaction(async (tx) => {
+    const scopedDb = tx as unknown as Database;
+    await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
+      sql`SELECT set_config('agor.system_scope', ${options.capability}, true)`
+    );
+    return scope(scopedDb);
+  });
 }
 
 async function drainTenantDatabasePostCommitCallbacks(

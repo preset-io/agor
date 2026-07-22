@@ -1,6 +1,13 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: distinctive ConfigProvider tokens verify fullscreen portal theme inheritance
 import { readFileSync } from 'node:fs';
-import { render, screen, waitFor } from '@testing-library/react';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { ConfigProvider } from 'antd';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  STREAMDOWN_MERMAID_Z_INDEX_VARIABLE,
+  STREAMDOWN_PORTAL_ROOT_CLASS_NAME,
+  StreamdownPortalApp,
+} from '../StreamdownPortalApp';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { VegaLiteRendererGate } from './VegaLiteRendererGate';
 
@@ -11,6 +18,19 @@ const markdownRendererStyles = readFileSync(
 );
 let markdownRendererStyleElement: HTMLStyleElement;
 
+vi.mock('@streamdown/mermaid', () => ({
+  mermaid: {
+    getMermaid: () => ({
+      initialize: vi.fn(),
+      render: vi.fn().mockResolvedValue({
+        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Diagram</title></svg>',
+      }),
+    }),
+    language: 'mermaid',
+    name: 'mermaid',
+    type: 'diagram',
+  },
+}));
 vi.mock('./vegaRendererLoader', () => ({ loadVegaRenderer: mocks.loadRenderer }));
 
 const doc = `# Knowledge Base: Next Steps\n\n- Add semantic and hybrid search once embeddings are configured.\n- Introduce smart document units/chunking for long pages, without exposing chunking as a user-facing concept.\n- Use Knowledge as durable memory for Agor teammates: preferences, project context, decisions, and reusable prompts.\n- Support skill bundles and lightweight import/export, including zip export later.\n- Keep polishing authoring: backlinks, better history/diff flows, and safer collaboration defaults.\n- autocomplete referencing from sessions and other places\n- Git syncing?`;
@@ -27,6 +47,13 @@ const asciiDiagram = [
 const fenced = (language: string, lines: string[], closed = true) =>
   `\`\`\`${language}\n${lines.join('\n')}${closed ? '\n```' : ''}`;
 
+const fullscreenTheme = {
+  token: {
+    colorBgElevated: '#123456',
+    zIndexPopupBase: 4321,
+  },
+};
+
 describe('MarkdownRenderer', () => {
   beforeAll(() => {
     markdownRendererStyleElement = document.createElement('style');
@@ -35,6 +62,10 @@ describe('MarkdownRenderer', () => {
   });
 
   afterAll(() => markdownRendererStyleElement.remove());
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   beforeEach(() => {
     mocks.loadRenderer.mockReset();
@@ -195,6 +226,106 @@ describe('MarkdownRenderer', () => {
         highlightedTokens.some((token) => token.style.getPropertyValue('--sdm-c').length > 0)
       ).toBe(true);
     });
+  });
+
+  it('opens completed Mermaid diagrams in an interactive, dismissible dialog', async () => {
+    class IntersectionObserverStub {
+      private readonly callback: IntersectionObserverCallback;
+
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+      }
+
+      disconnect() {}
+
+      observe(target: Element) {
+        this.callback(
+          [{ isIntersecting: true, target } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver
+        );
+      }
+
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+
+      unobserve() {}
+    }
+    vi.stubGlobal('IntersectionObserver', IntersectionObserverStub);
+
+    const { container } = render(
+      <ConfigProvider theme={fullscreenTheme}>
+        <StreamdownPortalApp>
+          <MarkdownRenderer content={'```mermaid\nflowchart LR\n  A --> B\n```'} />
+        </StreamdownPortalApp>
+      </ConfigProvider>
+    );
+
+    expect(await screen.findByRole('img', { name: 'Mermaid chart' })).toBeInTheDocument();
+    expect(container.querySelector('[data-streamdown="mermaid-block"]')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    const openFullscreen = screen.getByTitle('View fullscreen');
+    fireEvent.click(openFullscreen);
+
+    const dialog = await screen.findByRole('dialog', { name: 'View fullscreen' });
+    expect(dialog).toHaveAttribute('data-streamdown', 'mermaid-fullscreen');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    const portalRoot = container.querySelector(`.${STREAMDOWN_PORTAL_ROOT_CLASS_NAME}`);
+    expect(portalRoot).toContainElement(dialog);
+    // jsdom does not expose inherited custom properties on descendants, so
+    // prove both halves of browser resolution: the portal is inside the Ant
+    // App scope and that exact scope resolves the configured token values.
+    const portalRootStyle = window.getComputedStyle(portalRoot as Element);
+    for (const tokenName of [
+      '--ant-border-radius-sm',
+      '--ant-color-bg-elevated',
+      '--ant-color-border',
+      '--ant-color-text-secondary',
+      '--ant-padding-lg',
+    ]) {
+      expect(portalRootStyle.getPropertyValue(tokenName).trim(), tokenName).not.toBe('');
+    }
+    expect(portalRootStyle.getPropertyValue('--ant-color-bg-elevated').trim()).toBe(
+      fullscreenTheme.token.colorBgElevated
+    );
+    expect(portalRootStyle.getPropertyValue(STREAMDOWN_MERMAID_Z_INDEX_VARIABLE).trim()).toBe(
+      String(fullscreenTheme.token.zIndexPopupBase)
+    );
+    await waitFor(() => expect(document.body.style.overflow).toBe('hidden'));
+
+    const fullscreenViewer = within(dialog).getByRole('application');
+    Object.defineProperties(fullscreenViewer, {
+      releasePointerCapture: { value: vi.fn() },
+      setPointerCapture: { value: vi.fn() },
+    });
+    fireEvent.click(within(dialog).getByTitle('Zoom in'));
+    expect(fullscreenViewer).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.1)' });
+    fireEvent.pointerDown(fullscreenViewer, {
+      button: 0,
+      clientX: 10,
+      clientY: 20,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(fullscreenViewer, { clientX: 40, clientY: 60, pointerId: 1 });
+    expect(fullscreenViewer).toHaveStyle({ transform: 'translate(30px, 40px) scale(1.1)' });
+    fireEvent.pointerUp(fullscreenViewer, { pointerId: 1 });
+
+    fireEvent.click(within(dialog).getByTitle('Exit fullscreen'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
+
+    fireEvent.click(openFullscreen);
+    fireEvent.click(await screen.findByRole('dialog', { name: 'View fullscreen' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
+
+    fireEvent.click(openFullscreen);
+    await screen.findByRole('dialog', { name: 'View fullscreen' });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
   });
 
   it('keeps an incomplete Vega-Lite fence as copyable code while streaming', async () => {

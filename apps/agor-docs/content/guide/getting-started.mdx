@@ -20,27 +20,27 @@ The first time you open the UI, the **Onboarding Wizard** runs. It picks between
 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
   <img
     src="/screenshots/onboarding-welcome.png"
-    alt="Onboarding: Welcome — Set up your AI teammate or use your own repo"
+    alt="Onboarding: Welcome, set up your AI teammate or use your own repo"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
     src="/screenshots/onboarding-branch.png"
-    alt="Onboarding: Branch — name a personal branch"
+    alt="Onboarding: Branch, name a personal branch"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
     src="/screenshots/onboarding-api-keys.png"
-    alt="Onboarding: API Keys — pick an agent and paste a key (or skip)"
+    alt="Onboarding: API Keys, pick an agent and paste a key (or skip)"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
     src="/screenshots/onboarding-launch.png"
-    alt="Onboarding: Launch — your AI teammate is ready"
+    alt="Onboarding: Launch, your AI teammate is ready"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
 </div>
 
-Once you're in the session, your AI teammate introduces itself — asks for a name and emoji, who you are, and what you'd like to get started on. From there it can register more repos, set up boards, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too** — it has full access to the [Agor MCP Server](/guide/internal-mcp).
+Once you're in the session, your AI teammate introduces itself, asking for a name and emoji, who you are, and what you'd like to get started on. From there it can register more repos, set up boards, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp).
 
 ## Customize your install
 
@@ -49,20 +49,20 @@ Agor runs out of the box on SQLite as a single-user instance, but it's designed 
 - **PostgreSQL backend** instead of SQLite, for multi-user / team setups
 - **Multiplayer mode** with branch-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
 - **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
-- **Docker Compose** and source builds
+- **Docker Compose** and source builds for contributor / dev workflows — see the **Docker Compose** tab above for the evaluation quickstart
 - **Custom config / database paths** for non-default install layouts
 
 For any of those, see [Extended Installation](/guide/extended-install). For credential alternatives (`claude setup-token`, `codex login --device-auth`, workspace-wide env vars), see [Authentication](/guide/extended-install#authentication).
 
 ## What's next
 
-- **[Branches](/guide/branches)** · **[Sessions & Trees](/guide/sessions)** · **[Boards & Zones](/guide/boards)** — the core primitives
-- **[Features Overview](/guide/features-overview)** — Teammates, MCP, Rich Chat UX, Multiplayer, Environments, Scheduler, Cards, Artifacts
-- **[Architecture](/guide/architecture)** — system design and the typed TypeScript client
+- **[Branches](/guide/branches)** · **[Sessions & Trees](/guide/sessions)** · **[Boards & Zones](/guide/boards)**: the core primitives
+- **[Features Overview](/guide/features-overview)**: Teammates, MCP, Rich Chat UX, Multiplayer, Environments, Scheduler, Cards, Artifacts
+- **[Architecture](/guide/architecture)**: system design and the typed TypeScript client
 
 ## Get help
 
-- **[Discord](https://discord.gg/Qh4TrFQZpd)** — community support and discussion
-- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** — questions and ideas
-- **[GitHub Issues](https://github.com/preset-io/agor/issues)** — bugs and feature requests
+- **[Discord](https://discord.gg/Qh4TrFQZpd)**: community support and discussion
+- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)**: questions and ideas
+- **[GitHub Issues](https://github.com/preset-io/agor/issues)**: bugs and feature requests
 - Run `agor --help` for the full CLI reference

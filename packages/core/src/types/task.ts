@@ -1,4 +1,5 @@
 // src/types/task.ts
+import type { AgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
@@ -6,6 +7,7 @@ import type { ReportPath, ReportTemplate } from './report';
 export const TaskStatus = {
   QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
+  DISPATCHING: 'dispatching', // Daemon persisted launch intent; executor has not connected yet
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
@@ -17,6 +19,74 @@ export const TaskStatus = {
 } as const;
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
+
+export type ExecutorMode = 'local' | 'templated';
+
+export const ExecutorPulseKind = {
+  SDK_STARTED: 'sdk_started',
+  PROGRESS: 'progress',
+  WAITING: 'waiting',
+  UNKNOWN_ACTIVITY: 'unknown_activity',
+} as const;
+
+export type ExecutorPulseKind = (typeof ExecutorPulseKind)[keyof typeof ExecutorPulseKind];
+
+export interface ExecutorPulse {
+  sequence: number;
+  kind: ExecutorPulseKind;
+  detail?: string;
+  /** Daemon-authored time; advances only with a greater sequence. */
+  observed_at: string;
+}
+
+export interface RuntimeTelemetryInput {
+  task_id: string;
+  pulse?: Omit<ExecutorPulse, 'observed_at'>;
+}
+
+export const SDK_WATCHDOG_FAILURE_REASONS = [
+  'no_first_progress',
+  'progress_stalled',
+  'unknown_activity',
+] as const;
+
+export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[number];
+
+export type SdkFailureReason =
+  | 'startup_timeout'
+  | SdkWatchdogFailureReason
+  | 'heartbeat_lost'
+  | 'termination_unverified';
+
+export interface SdkFailure {
+  reason: SdkFailureReason;
+  detected_at: string;
+  tool: AgenticToolName;
+  last_pulse?: ExecutorPulse;
+  elapsed_ms?: number;
+  watchdog_action?: 'would_fire' | 'enforced';
+  unknown_event_count?: number;
+  sdk_version?: string;
+  termination: 'not_requested' | 'requested' | 'verified' | 'unverified';
+}
+
+export type SdkHealthFailureInput = Pick<
+  SdkFailure,
+  'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
+> & { task_id: string; reason: SdkWatchdogFailureReason };
+
+export type TerminationCause =
+  | 'user_stop'
+  | 'startup_timeout'
+  | 'heartbeat_lost'
+  | 'sdk_health_failure';
+
+export interface TerminationRequest {
+  cause: TerminationCause;
+  requested_at: string;
+  /** Failure/stop reason captured with the winning claim. */
+  error_message?: string;
+}
 
 /**
  * Structured metadata attached to a task. All fields are optional, but the
@@ -94,6 +164,7 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
  * pre-executor row and QUEUED is waiting for a future turn.
  */
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
@@ -256,8 +327,20 @@ export interface Task {
   session_md5?: string;
 
   created_at: string;
-  started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  started_at?: string; // When task execution was dispatched (UTC ISO string)
+  /** Server timestamp recorded when the authenticated executor claims the task. */
+  executor_connected_at?: string; // UTC ISO string
   /** Latest heartbeat emitted by the executor while this task is active. */
   last_executor_heartbeat_at?: string; // UTC ISO string
+  /** Immutable launch-mode snapshot used to classify launcher exit safely. */
+  executor_mode?: ExecutorMode;
+  /** Latest bounded SDK activity fact; this is not an event history. */
+  latest_executor_pulse?: ExecutorPulse;
+  /** Bounded SDK/process health diagnosis. */
+  sdk_failure?: SdkFailure;
+  /** Durable intent while verified local containment is pending. */
+  termination_request?: TerminationRequest;
+  /** Immutable watchdog policy snapshot for this dispatch. */
+  sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

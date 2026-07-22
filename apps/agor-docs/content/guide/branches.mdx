@@ -1,15 +1,15 @@
 ---
 title: Branches
-description: Branches are the primary unit of work in Agor — isolated git working directories where AI sessions live, organized spatially on boards.
+description: Branches are the primary unit of work in Agor, isolated git working directories where AI sessions live, organized spatially on boards.
 ---
 
 # Branches
 
-**A branch is the primary unit of work in Agor.** It's an isolated git working directory — a checkout of your repo at a specific branch — paired with a metadata record (issue/PR links, owners, environment, sessions) that gives it identity on the board.
+**A branch is the primary unit of work in Agor.** It's an isolated git working directory (a checkout of your repo at a specific branch) paired with a metadata record (issue/PR links, owners, environment, sessions) that gives it identity on the board.
 
 > **Best practice:** 1 branch = 1 issue = 1 PR = 1 feature.
 
-Agor uses [git branches](https://git-scm.com/docs/git-branch) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you — just create a branch in the UI or CLI and it handles the git plumbing.
+Agor uses [git branches](https://git-scm.com/docs/git-branch) under the hood, so multiple branches of the same repo can be checked out simultaneously without stashing or switching. Agor manages all of that for you. Just create a branch in the UI or CLI and it handles the git plumbing.
 
 ```
 ~/.agor/worktrees/<repo>/<name>
@@ -41,7 +41,7 @@ Agor uses [git branches](https://git-scm.com/docs/git-branch) under the hood, so
   />
 </div>
 
-_Left: a branch's static anatomy — branch, PR, env, files, sessions in one tile. Right: the same primitive packed with a coordinator and eight running children._
+_Left: a branch's static anatomy (branch, PR, env, files, sessions in one tile). Right: the same primitive packed with a coordinator and eight running children._
 
 ---
 
@@ -49,12 +49,12 @@ _Left: a branch's static anatomy — branch, PR, env, files, sessions in one til
 
 A git branch is a ref. An Agor branch is a _workspace_.
 
-- **Parallel work** — Run 5 features in 5 branches simultaneously. No `git stash`, no "kill your dev server so I can test mine."
-- **Spatial identity** — Each branch is a card on a board. You can see, drag, group, and zone them.
-- **Session containers** — Every session belongs to exactly one branch. The conversation tree lives on the card.
-- **Environment scope** — Dev servers, ports, and processes are scoped to the branch, not the repo.
+- **Parallel work**: Run 5 features in 5 branches simultaneously. No `git stash`, no "kill your dev server so I can test mine."
+- **Spatial identity**: Each branch is a card on a board. You can see, drag, group, and zone them.
+- **Session containers**: Every session belongs to exactly one branch. The conversation tree lives on the card.
+- **Environment scope**: Dev servers, ports, and processes are scoped to the branch, not the repo.
 
-Each branch is fully isolated — changes in one don't affect another. AI agents can work on three features in parallel without stepping on each other's filesystem.
+Each branch is fully isolated. Changes in one don't affect another. AI agents can work on three features in parallel without stepping on each other's filesystem.
 
 ---
 
@@ -66,7 +66,7 @@ A branch is a filesystem directory plus a database record. The record tracks:
 | ------------------------------- | --------------------------------------------------- |
 | `name`                          | Human-readable label shown on the card              |
 | `branch`                        | Git branch checked out in the working directory     |
-| `issue_url`, `pull_request_url` | GitHub linkage — auto-injected into zone prompts    |
+| `issue_url`, `pull_request_url` | GitHub linkage, auto-injected into zone prompts    |
 | `owners` / `others_can`         | RBAC permissions (when branch RBAC is enabled)      |
 | `board_id` + `(x, y)`           | Where the card lives on the canvas                  |
 | `environment`                   | Per-branch dev environment (start/stop, ports, URL) |
@@ -77,7 +77,7 @@ A branch is a filesystem directory plus a database record. The record tracks:
   style={{ maxWidth: '600px', borderRadius: '8px' }}
 />
 
-_Behind every card: the branch details modal — General / Sessions / Environment / Files / Schedule tabs. The same fields the table above describes, rendered as actual inputs._
+_Behind every card: the branch details modal (General / Sessions / Environment / Files / Schedule tabs). The same fields the table above describes, rendered as actual inputs._
 
 Sessions, tasks, comments, and artifacts all reference a branch. **The branch is the spine.**
 
@@ -87,8 +87,8 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 When you create a branch, Agor can materialize its working directory in two ways:
 
-- **Worktree** — native `git worktree add`, using the repo's shared `.git` metadata.
-- **Clone** — a self-standing `git clone` with its own `.git/` directory, isolating branch-local git config and credentials from sibling branches.
+- **Worktree**: native `git worktree add`, using the repo's shared `.git` metadata.
+- **Clone**: a self-standing `git clone` with its own `.git/` directory, isolating branch-local git config and credentials from sibling branches.
 
 Operators can choose which modes are available and which one the UI selects by default:
 
@@ -118,7 +118,7 @@ When the agent runs, it sees the link, fetches the issue, and works against the 
 
 ## Environments
 
-Each branch can have its own **dev environment** — long-running processes (dev server, database, watchers) scoped to that branch, with auto-assigned unique ports so multiple branches can run simultaneously without collisions.
+Each branch can have its own **dev environment**, long-running processes (dev server, database, watchers) scoped to that branch, with auto-assigned unique ports so multiple branches can run simultaneously without collisions.
 
 Configure once on the repo, then everyone on your team gets one-click start/stop on every branch.
 
@@ -145,14 +145,14 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 **Filesystem options:**
 
-- **Leave untouched** — Metadata-only archival. Files stay on disk.
-- **Clean workspace** — Runs `git clean -fdx` (removes `node_modules`, builds, untracked files).
-- **Delete completely** — Removes the branch directory from disk.
+- **Leave untouched**: Metadata-only archival. Files stay on disk.
+- **Clean workspace**: Runs `git clean -fdx` (removes `node_modules`, builds, untracked files).
+- **Delete completely**: Removes the branch directory from disk.
 
 **Metadata options:**
 
-- **Archive (recommended)** — Hides from board, preserves all sessions and conversations for analytics and history.
-- **Delete permanently** — Removes all data including sessions and conversations. No undo.
+- **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
+- **Delete permanently**: Removes all data including sessions and conversations. No undo.
 
 **Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
 
@@ -162,10 +162,10 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 The branch is also where several other features attach:
 
-- **[Sessions & Trees](/guide/sessions)** — Every session lives in exactly one branch. The fork/spawn tree appears on the branch card.
-- **[Boards & Zones](/guide/boards)** — Branches are placed on boards; dropping into zones triggers templated prompts.
-- **[Multiplayer & Social](/guide/multiplayer-social)** — Spatial comments pin to branches; shared terminal sessions are branch-scoped.
-- **[Scheduler](/guide/scheduler)** — Templated prompts can fire on a schedule against a specific branch (great for teammate heartbeats).
+- **[Sessions & Trees](/guide/sessions)**: Every session lives in exactly one branch. The fork/spawn tree appears on the branch card.
+- **[Boards & Zones](/guide/boards)**: Branches are placed on boards; dropping into zones triggers templated prompts.
+- **[Multiplayer & Social](/guide/multiplayer-social)**: Spatial comments pin to branches; shared terminal sessions are branch-scoped.
+- **[Scheduler](/guide/scheduler)**: Templated prompts can fire on a schedule against a specific branch (great for teammate heartbeats).
 
 ---
 
@@ -175,7 +175,7 @@ When `execution.branch_rbac: true` is set, branches enforce ownership and a per-
 
 | Tier      | What others can do                                                                           |
 | --------- | -------------------------------------------------------------------------------------------- |
-| `none`    | No access — completely private to owners                                                     |
+| `none`    | No access, completely private to owners                                                     |
 | `view`    | Read branches, sessions, tasks, messages                                                     |
 | `session` | **Default.** Create their own sessions on this branch                                        |
 | `prompt`  | Prompt any session, including others' (but the session still runs as its creator's identity) |
@@ -187,7 +187,7 @@ See **[Security](/security)** for deployment modes and the trust boundary discus
 
 ## Related
 
-- [Sessions & Trees](/guide/sessions) — Conversations and genealogy that live inside a branch
-- [Boards & Zones](/guide/boards) — How branches are organized spatially
-- [Environments](/guide/environment-configuration) — Per-branch dev environments
-- [Scheduler](/guide/scheduler) — Time-based prompts targeting branches
+- [Sessions & Trees](/guide/sessions): Conversations and genealogy that live inside a branch
+- [Boards & Zones](/guide/boards): How branches are organized spatially
+- [Environments](/guide/environment-configuration): Per-branch dev environments
+- [Scheduler](/guide/scheduler): Time-based prompts targeting branches

@@ -1,6 +1,10 @@
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { executorRuntimeScopeGuard, scopeExecutorRuntimeAuth } from './executor-runtime-scope';
+import {
+  executorRuntimeScopeGuard,
+  requireExecutorRuntimeToken,
+  scopeExecutorRuntimeAuth,
+} from './executor-runtime-scope';
 
 const payload = {
   type: 'executor-session',
@@ -20,6 +24,37 @@ function ctx(overrides: Partial<HookContext>): HookContext {
 }
 
 describe('executorRuntimeScopeGuard', () => {
+  it.each([
+    'connectExecutor',
+    'reportRuntimeTelemetry',
+    'reportSdkHealthFailure',
+  ])('accepts scoped %s and rejects a different task', async (method) => {
+    const context = ctx({ path: 'tasks', method, data: { task_id: 'task-1' } });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+    await expect(
+      executorRuntimeScopeGuard()(ctx({ path: 'tasks', method, data: { task_id: 'task-2' } }))
+    ).rejects.toThrow(/task scope/);
+  });
+
+  it('requires an executor token for the executor connection method', async () => {
+    const context = ctx({
+      method: 'connectExecutor',
+      data: { task_id: 'task-1' },
+      params: { provider: 'socketio', query: {}, user: { user_id: 'user-1' } },
+    });
+
+    await expect(requireExecutorRuntimeToken()(context)).rejects.toThrow(/executor token/);
+  });
+
+  it('allows a patch only for the executor token task', async () => {
+    const matching = ctx({ method: 'patch', id: 'task-1', data: { status: 'running' } });
+    const otherTask = ctx({ method: 'patch', id: 'task-2', data: { status: 'running' } });
+
+    await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
+    await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
+  });
+
   it('narrows find queries to executor token scope', async () => {
     const context = ctx({ path: 'messages', method: 'find' });
 
@@ -389,6 +424,22 @@ describe('executorRuntimeScopeGuard', () => {
     await executorRuntimeScopeGuard()(context);
 
     expect(context.data).toMatchObject({ taskId: 'task-1' });
+  });
+
+  it('does not treat ordinary JWT payloads with transport fields as executor scope', async () => {
+    const context = ctx({
+      method: 'patch',
+      id: 'task-1',
+      data: { status: 'completed' },
+      params: {
+        authentication: { strategy: 'jwt', payload: { type: 'access' } },
+        task_id: 'task-1',
+        query: {},
+        provider: 'socketio',
+      } as never,
+    });
+
+    await expect(requireExecutorRuntimeToken()(context)).rejects.toThrow(/executor token/);
   });
 
   it('rejects API key resolution for another task under executor token auth', async () => {

@@ -10,11 +10,13 @@ import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import {
   getAgorHome,
+  resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   MessagesRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -23,6 +25,7 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import { containAllTrackedExecutors } from './executor-tracking.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -143,6 +146,19 @@ interface OrphanCleanupResult {
   sessionsResetFromOrphanedTasks: number;
 }
 
+async function collectAllPages<T>(
+  fetchPage: (skip: number) => Promise<T[] | Paginated<T>>
+): Promise<T[]> {
+  const rows: T[] = [];
+  while (true) {
+    const result = await fetchPage(rows.length);
+    const page = Array.isArray(result) ? result : result.data;
+    rows.push(...page);
+    const total = Array.isArray(result) ? rows.length : result.total;
+    if (page.length === 0 || rows.length >= total) return rows;
+  }
+}
+
 export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
   return runStartupTenantDatabaseScope(ctx, () => cleanupOrphanStatusesInTenantScope(ctx));
 }
@@ -164,17 +180,28 @@ async function cleanupOrphanStatusesInTenantScope(
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
-  // Find all orphaned executor-owned tasks (running, stopping, awaiting_permission, awaiting_input)
+  // Find all orphaned executor-owned tasks (dispatching, running, stopping, awaiting_permission, awaiting_input)
   const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
 
   if (orphanedTasks.length > 0) {
     for (const task of orphanedTasks) {
-      await tasksService.patch(
-        task.task_id,
+      const session = await sessionsService.get(task.session_id, startupParams as never);
+      await tasksService.settleTermination(
         {
-          status: TaskStatus.STOPPED,
+          taskId: task.task_id,
+          outcome: 'restart_unverified',
+          sdkFailure: task.sdk_failure
+            ? { ...task.sdk_failure, termination: 'unverified' }
+            : {
+                reason: 'termination_unverified',
+                detected_at: new Date().toISOString(),
+                tool: session.agentic_tool,
+                last_pulse: task.latest_executor_pulse,
+                termination: 'unverified',
+              },
+          errorMessage: 'Daemon restart released this Task without verifying executor termination.',
         },
-        startupParams as never
+        { ...startupParams, suppressTerminalQueueProcessing: true } as never
       );
       startupDebug(
         `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
@@ -186,11 +213,13 @@ async function cleanupOrphanStatusesInTenantScope(
   // which invalidates the ordering premise of anything waiting behind them — a queued prompt
   // typically depends on whatever was running first. Wiping here prevents the session after-patch
   // hook (triggered below) from draining queued tasks that should be discarded.
-  const queuedResult = (await tasksService.find({
-    query: { status: TaskStatus.QUEUED, $limit: 1000 },
-    ...startupParams,
-  })) as unknown as Paginated<Task>;
-  const queuedTasks = queuedResult.data;
+  const queuedTasks = await collectAllPages<Task>(
+    (skip) =>
+      tasksService.find({
+        query: { status: TaskStatus.QUEUED, $limit: 1000, $skip: skip },
+        ...startupParams,
+      }) as Promise<Task[] | Paginated<Task>>
+  );
 
   if (queuedTasks.length > 0) {
     for (const task of queuedTasks) {
@@ -213,11 +242,15 @@ async function cleanupOrphanStatusesInTenantScope(
     SessionStatus.AWAITING_INPUT,
     SessionStatus.TIMED_OUT,
   ]) {
-    const result = (await sessionsService.find({
-      query: { status, $limit: 1000 },
-      ...startupParams,
-    })) as unknown as Paginated<Session>;
-    orphanedSessions.push(...result.data);
+    orphanedSessions.push(
+      ...(await collectAllPages<Session>(
+        (skip) =>
+          sessionsService.find({
+            query: { status, $limit: 1000, $skip: skip },
+            ...startupParams,
+          }) as Promise<Session[] | Paginated<Session>>
+      ))
+    );
   }
 
   if (orphanedSessions.length > 0) {
@@ -286,13 +319,16 @@ async function cleanupOrphanStatusesInTenantScope(
     ...queuedTasks.map((t: Task) => t.task_id as string),
   ]);
 
-  const idleNotReadyResult = (await sessionsService.find({
-    query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000 },
-    ...startupParams,
-  })) as unknown as Paginated<Session>;
+  const idleNotReadySessions = await collectAllPages<Session>(
+    (skip) =>
+      sessionsService.find({
+        query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000, $skip: skip },
+        ...startupParams,
+      }) as Promise<Session[] | Paginated<Session>>
+  );
 
   const stuckIdleSessions: Session[] = [];
-  for (const session of idleNotReadyResult.data) {
+  for (const session of idleNotReadySessions) {
     // Sessions maintain an ordered task-ID list; the last entry is the most
     // recent task (same convention as injectRestartNotices below).
     const latestTaskId = session.tasks?.at(-1);
@@ -609,7 +645,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 5. Start executor heartbeat stale supervisor
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
-  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({ app, config: heartbeatConfig });
+  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({
+    app,
+    config: heartbeatConfig,
+    dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
+  });
   heartbeatSupervisor.start();
   if (heartbeatConfig.enabled) {
     console.log(
@@ -647,16 +687,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
 
-  // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
+  // 8. Initialize gateway listeners. Static mode preserves the historical
+  // tenant. Auth-resolved mode performs narrow global ID discovery, then
+  // reloads and starts each channel under its immutable tenant identity.
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
-    runStartupTenantDatabaseScope(ctx, () => gatewayService.refreshChannelState())
-      .then(() => {
-        return runStartupTenantDatabaseScope(ctx, () => gatewayService.startListeners());
-      })
-      .catch((error: unknown) => {
-        console.error('[gateway] Failed to start listeners:', error);
-      });
+    const multiTenancy = resolveMultiTenancyConfig(config);
+    const startGateway =
+      multiTenancy.mode === 'static'
+        ? runWithTenantContext(multiTenancy.static_tenant_id, () => gatewayService.startListeners())
+        : gatewayService.startListenersAcrossTenants();
+    void startGateway.catch((error: unknown) => {
+      console.error('[gateway] Failed to start listeners:', error);
+    });
   }
 
   // 8. Graceful shutdown handler
@@ -674,6 +717,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
       // Stop heartbeat supervisor
       heartbeatSupervisor.stop();
+
+      await containAllTrackedExecutors();
 
       // Clean up terminal sessions
       if (terminalsService) {

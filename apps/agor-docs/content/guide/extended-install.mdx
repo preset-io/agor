@@ -1,19 +1,19 @@
 ---
 title: Extended Installation
-description: Alternative ways to install and run Agor — optional companions, authentication options, and custom config locations.
+description: Alternative ways to install and run Agor, including optional companions, authentication options, and custom config locations.
 ---
 
 import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor, including Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
-> Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development) — it covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
+> Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development). It covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
 ## Requirements
 
-- **Node.js ≥ 22.12** — see [nodejs.org](https://nodejs.org) for installation.
+- **Node.js ≥ 22.12** (see [nodejs.org](https://nodejs.org) for installation).
 
 That's the only hard requirement for npm installs. The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
 
@@ -29,7 +29,7 @@ Homebrew is a convenience path for macOS/Linux users; npm remains the canonical 
 
 ## Optional: Zellij (for the web terminal)
 
-Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional** — Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
+Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional**. Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
 
 If you want the terminal:
 
@@ -58,16 +58,16 @@ If pgvector is missing or the Agor DB user cannot enable it, semantic search ret
 
 ## Authentication
 
-Agor supports Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, and Cursor. The [onboarding wizard](/guide/getting-started#meet-your-first-ai-teammate) handles the simple case — paste an API key, done.
+Agor supports Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, and Cursor. The [onboarding wizard](/guide/getting-started#meet-your-first-ai-teammate) handles the simple case. Paste an API key, done.
 
 ### Credential resolution policy
 
 Workspace admins choose an explicit policy per tool:
 
-- **Require personal** — personal configuration only.
-- **Prefer personal** — personal configuration, then workspace configuration. This is the default.
-- **Prefer workspace** — workspace configuration, then personal configuration.
-- **Require workspace** — workspace configuration only.
+- **Require personal.** Personal configuration only.
+- **Prefer personal.** Personal configuration, then workspace configuration. This is the default.
+- **Prefer workspace.** Workspace configuration, then personal configuration.
+- **Require workspace.** Workspace configuration only.
 
 Personal credentials are encrypted in the DB and set through **User Settings → Agentic Tools**. Workspace credentials are encrypted in the tenant-scoped DB and managed through **Workspace Settings → Agentic Tools**. Policy changes do not delete dormant personal credentials.
 
@@ -79,9 +79,9 @@ The complete provider connection always comes from one scope. Agor does not comb
 
 Workspace administrators can define live, tool-specific presets under **Workspace Settings → Agentic Tools**. Configuration surfaces always ask for the tool first and then show only presets for that tool. When inline configuration is allowed, members may instead choose **Define configuration here**.
 
-Administrators can require presets independently for each tool. Presets contain runtime behavior—model, permissions, and sandbox policy—but never provider credentials or MCP attachments. MCP servers are selected independently on sessions, schedules, and gateway channels. Referenced presets cannot be deleted. Editing a preset affects the next task started by every session, schedule, or gateway channel that references it; a running task keeps the configuration resolved when it started.
+Administrators can require presets independently for each tool. Presets contain runtime behavior (model, permissions, and sandbox policy) but never provider credentials or MCP attachments. MCP servers are selected independently on sessions, schedules, and gateway channels. Referenced presets cannot be deleted. Editing a preset affects the next task started by every session, schedule, or gateway channel that references it; a running task keeps the configuration resolved when it started.
 
-Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or—when policy permits—an inline personal default. Creation forms also offer **Use my default**. Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
+Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or (when policy permits) an inline personal default. Creation forms also offer **Use my default**.  Sessions and gateway channels resolve those defaults when saved, then store the concrete preset reference or inline configuration. Schedules preserve a symbolic user/workspace default and resolve it from the schedule creator immediately before every run, so later default changes apply to the next run. A schedule that names a specific preset continues to follow that preset directly.
 
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 
@@ -139,6 +139,6 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ## What's next?
 
-- [Getting Started](/guide/getting-started) — add your first repo and create a session.
-- [Branches](/guide/branches), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) — core primitives.
-- [Development Guide](/guide/development) — contributor workflow.
+- [Getting Started](/guide/getting-started) (add your first repo and create a session).
+- [Branches](/guide/branches), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) (core primitives).
+- [Development Guide](/guide/development) (contributor workflow).

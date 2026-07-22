@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type { BranchID, BranchName } from '@agor/core/types';
+import type { BranchID, BranchName, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -114,7 +114,7 @@ vi.mock('./claude-cli-integration.js', () => ({
   writeClaudeCliMcpConfigForSession: vi.fn(async () => undefined),
 }));
 
-import { buildBranchShellTabName, TerminalsService } from './terminals';
+import { buildBranchShellTabName, buildZellijSessionName, TerminalsService } from './terminals';
 
 function makeApp() {
   const emit = vi.fn();
@@ -139,6 +139,18 @@ beforeEach(() => {
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
   mocks.repositoryDbs.length = 0;
+});
+
+describe('buildZellijSessionName', () => {
+  it('builds a compact stable identity from the full user id', () => {
+    const userId = '019ed836-1fdc-7cfa-a356-3477c2c54693' as UserID;
+    const first = buildZellijSessionName(userId);
+    const second = buildZellijSessionName('019ed836-1fdc-7cfa-a356-3477c2c54694' as UserID);
+
+    expect(first).toBe(buildZellijSessionName(userId));
+    expect(first).toMatch(/^agor-[a-f0-9]{16}$/);
+    expect(first).not.toBe(second);
+  });
 });
 
 describe('TerminalsService tenant database units of work', () => {

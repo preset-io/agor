@@ -180,3 +180,63 @@ describe('SDKMessageProcessor rate_limit_event handling', () => {
     expect(events.filter((e) => e.type === 'rate_limit')).toHaveLength(0);
   });
 });
+
+describe('SDKMessageProcessor tool lifecycle', () => {
+  it('keeps a tool active until its result arrives', async () => {
+    const processor = createProcessor();
+    const started = await processor.process({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'tool-1', name: 'Read' },
+      },
+    } as never);
+    const streamed = await processor.process({
+      type: 'stream_event',
+      event: { type: 'content_block_stop', index: 0 },
+    } as never);
+    const completed = await processor.process({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }],
+      },
+    } as never);
+
+    expect(started).toEqual([expect.objectContaining({ type: 'tool_start', toolUseId: 'tool-1' })]);
+    expect(streamed).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'tool_complete' })])
+    );
+    expect(completed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'tool_complete', toolUseId: 'tool-1' }),
+      ])
+    );
+  });
+
+  it('completes parallel tools, including errors, and ignores replayed results', async () => {
+    const processor = createProcessor();
+    const completed = await processor.process({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tool-1', content: 'done' },
+          { type: 'tool_result', tool_use_id: 'tool-2', content: 'failed', is_error: true },
+        ],
+      },
+    } as never);
+    const replayed = await processor.process({
+      type: 'user',
+      isReplay: true,
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }],
+      },
+    } as never);
+
+    expect(completed.filter((event) => event.type === 'tool_complete')).toEqual([
+      expect.objectContaining({ toolUseId: 'tool-1' }),
+      expect.objectContaining({ toolUseId: 'tool-2' }),
+    ]);
+    expect(replayed).toEqual([]);
+  });
+});

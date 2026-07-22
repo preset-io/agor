@@ -7,9 +7,13 @@ export interface TenantDatabaseScope {
   kind: 'tenant' | 'system';
   tenantId?: TenantID | string;
   systemReason?: string;
+  systemCapability?: SystemDatabaseCapability;
   postCommitCallbacks?: Array<() => Promise<void>>;
   afterCommitCallbacks?: Array<() => Promise<void> | void>;
 }
+
+/** Narrow RLS capabilities available to explicit system database work. */
+export type SystemDatabaseCapability = 'gateway_listener_discovery';
 
 export interface TenantContextScope {
   tenantId: TenantID | string;

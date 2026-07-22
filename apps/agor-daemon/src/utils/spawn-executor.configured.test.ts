@@ -125,7 +125,7 @@ describe('configured executor spawning', () => {
 
     proc.emit('exit', 17);
 
-    expect(onExit).toHaveBeenCalledWith(17);
+    expect(onExit).toHaveBeenCalledWith(17, { mode: 'templated' });
   });
 
   it('keeps createConfiguredSpawner isolated from module-level defaults', async () => {
