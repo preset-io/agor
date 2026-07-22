@@ -118,10 +118,19 @@ describe('multi-tenancy config and tenant resolution', () => {
       },
     },
     {
-      label: 'authentication payload and authenticated user',
+      label: 'decoded payload and authenticated user',
       input: {
         authPayload: { tenant_id: 'tenant-a' },
         params: { user: { tenant_id: 'tenant-b' } },
+      },
+    },
+    {
+      label: 'Feathers authentication payload and authenticated user',
+      input: {
+        params: {
+          authentication: { payload: { tenant_id: 'tenant-a' } },
+          user: { tenant_id: 'tenant-b' },
+        },
       },
     },
   ])('rejects conflicting auth claims from $label', ({ input }) => {
@@ -148,6 +157,46 @@ describe('multi-tenancy config and tenant resolution', () => {
         }
       )
     ).toThrow(/Conflicting tenant identities/);
+  });
+
+  it.each([
+    {
+      label: 'a multi-valued header',
+      headers: { 'x-agor-tenant-id': ['tenant-a', 'tenant-b'] },
+    },
+    {
+      label: 'case-insensitive duplicate keys',
+      headers: {
+        'x-agor-tenant-id': 'tenant-a',
+        'X-Agor-Tenant-Id': 'tenant-b',
+      },
+    },
+  ])('rejects conflicting tenant identities within $label', ({ headers }) => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        { headers }
+      )
+    ).toThrow(/Conflicting tenant identities/);
+  });
+
+  it('rejects a malformed duplicate trusted-header value instead of ignoring it', () => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        { headers: { 'x-agor-tenant-id': ['tenant-a', ''] } }
+      )
+    ).toThrow(/Invalid trusted tenant header/);
   });
 
   it('fails closed in required_from_auth mode when tenant context is missing', () => {

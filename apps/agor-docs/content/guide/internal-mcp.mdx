@@ -155,15 +155,16 @@ Because an MCP token binds `uid` to the authorized caller and lets the bearer
 act as that user on the MCP channel, it is only issued to callers who are
 allowed to receive a token for the session:
 
-- **`GET /sessions/:id`** issues a token to the creator themselves (provided they are still
-  `member+`), a superadmin, or the executor's service identity
-  (`role: 'service'`, used when spawning the child process). A plain
-  `member+` with `view` permission on the branch does **not** receive a
-  token. View permission alone does not grant the session-scoped execution
-  authority represented by the token.
+- **`GET /sessions/:id`** first applies normal session and branch
+  authorization, then issues a caller-scoped token to any authenticated
+  `member+` or to the executor's service identity (`role: 'service'`, used when
+  spawning the child process). The caller need not be the session creator:
+  MCP tools continue to act as that caller and enforce their normal
+  authorization checks.
 - For **`POST /sessions`**, the caller is the creator by construction, so
   `member+` is the only gate here.
-- **Viewers** never receive an `mcp_token` on either path. They cannot
+- Callers with the account role **viewer** never receive an `mcp_token` on
+  either path. They cannot
   prompt via REST either, so MCP would be useless for them regardless.
 
 ### Config knobs

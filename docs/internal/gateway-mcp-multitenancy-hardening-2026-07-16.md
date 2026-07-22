@@ -79,8 +79,9 @@ raw connection or a superuser/BYPASSRLS daemon role.
    inside the signed tenant.
 4. **Immutable stateful binding:** an MCP Streamable HTTP session is bound at
    initialize time to `(tenant, user, optional Agor session)`. Every subsequent
-   request re-authenticates and must reproduce all three bindings before the
-   stored handler context is refreshed.
+   request re-authenticates; tenant and user must match. The optional Agor
+   session may be omitted and retained, but cannot be added or replaced, and is
+   re-authorized before the stored handler context is refreshed.
 5. **Short database units:** MCP authentication probes, tool repository calls,
    gateway discovery, channel reloads, and dispatch lookups each use short
    scopes. Transport sessions and provider network work retain tenant identity

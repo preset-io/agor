@@ -76,18 +76,24 @@ function readClaim(payload: unknown, claim: string | undefined): TenantID | null
   return normalizeTenantId(value);
 }
 
-function readHeader(
+function readHeaderValues(
   headers: Record<string, unknown> | undefined,
   header: string | undefined
-): TenantID | null {
-  if (!headers || !header) return null;
+): TenantID[] {
+  if (!headers || !header) return [];
   const wanted = header.toLowerCase();
+  const values: TenantID[] = [];
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() !== wanted) continue;
-    if (Array.isArray(value)) return normalizeTenantId(value[0]);
-    return normalizeTenantId(value);
+    for (const rawValue of Array.isArray(value) ? value : [value]) {
+      const tenantId = normalizeTenantId(rawValue);
+      if (!tenantId) {
+        throw new TenantResolutionError(`Invalid trusted tenant header ${header}`);
+      }
+      values.push(tenantId);
+    }
   }
-  return null;
+  return values;
 }
 
 export function resolveMultiTenancyConfig(
@@ -158,10 +164,10 @@ export function resolveTenantContext(
     }
 
     for (const tenantId of [
-      readHeader(input.headers, resolved.trusted_header),
-      readHeader(params?.headers, resolved.trusted_header),
+      ...readHeaderValues(input.headers, resolved.trusted_header),
+      ...readHeaderValues(params?.headers, resolved.trusted_header),
     ]) {
-      if (tenantId) candidates.push({ tenant_id: tenantId, source: 'trusted_header' });
+      candidates.push({ tenant_id: tenantId, source: 'trusted_header' });
     }
   }
 
