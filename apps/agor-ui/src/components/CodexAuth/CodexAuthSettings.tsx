@@ -3,6 +3,7 @@ import type {
   AgenticToolConfigField,
   AgorClient,
   AuthCheckResult,
+  CodexAuthLogoutResult,
 } from '@agor-live/client';
 import { Alert, Button, Popconfirm, Segmented, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -69,6 +70,7 @@ export function CodexAuthSettings({
   const [probing, setProbing] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removeWarning, setRemoveWarning] = useState<string | null>(null);
 
   // Keep the visible sub-pane in step with the persisted method (e.g. a
   // successful device/import flips it to subscription), while preserving which
@@ -147,8 +149,21 @@ export function CodexAuthSettings({
     if (!client) return;
     setRemoving(true);
     setRemoveError(null);
+    setRemoveWarning(null);
     try {
-      await client.service('codex-auth/logout').create({});
+      const result = (await client
+        .service('codex-auth/logout')
+        .create({})) as CodexAuthLogoutResult;
+      // The login is removed locally regardless; the confirm promised a global
+      // sign-out, so if the provider-side revocation couldn't be confirmed, say
+      // so plainly — the account may still be signed in on other machines. This
+      // banner sits at the pane top so it survives the flip back to the api_key
+      // view that the removal triggers.
+      if (result?.revoked === 'failed') {
+        setRemoveWarning(
+          'Login removed from this server, but token revocation could not be confirmed. If this account may be compromised, sign it out from your ChatGPT account settings or another machine.'
+        );
+      }
     } catch (err) {
       setRemoveError(
         err instanceof Error && err.message
@@ -247,6 +262,17 @@ export function CodexAuthSettings({
       <Text type="secondary">
         Personal credentials are encrypted at rest and injected only into the agent runtime.
       </Text>
+
+      {removeWarning && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setRemoveWarning(null)}
+          message="Revocation not confirmed"
+          description={removeWarning}
+        />
+      )}
 
       {(connectionBanner || authMethod === 'subscription') && (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>

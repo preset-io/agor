@@ -82,7 +82,8 @@ describe('codex-auth-logout', () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
 
-    // Revocation is attempted against the on-disk tokens BEFORE the delete.
+    // Revocation targets the tokens CAPTURED before the delete (the file is
+    // already gone by the time revoke runs — see the ordering assertion below).
     expect(revokeMock).toHaveBeenCalledWith(LOGIN_JSON);
     expect(deleteCodexAuthFileMock).toHaveBeenCalledWith(null); // simple mode → daemon user
     // Delete happens BEFORE the network revoke, so a concurrent connect/refresh
@@ -121,6 +122,32 @@ describe('codex-auth-logout', () => {
     expect(deleteCodexAuthFileMock).toHaveBeenCalledTimes(1);
     expect(usersService.patch).toHaveBeenCalledTimes(1);
     expect(result.revoked).toBe('skipped');
+  });
+
+  it('reports `failed` (not `skipped`) when the login file could not be read to revoke', async () => {
+    // A real login may be present but unreadable (permission/sudo) — deleting it
+    // leaves the tokens un-revoked, so this must not masquerade as "nothing to
+    // revoke". The UI warns on `failed`.
+    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
+    const { app, usersService } = makeApp();
+    const result = await service(app).create({}, AUTH_PARAMS);
+
+    expect(revokeMock).not.toHaveBeenCalled();
+    expect(deleteCodexAuthFileMock).toHaveBeenCalledTimes(1);
+    expect(usersService.patch).toHaveBeenCalledTimes(1);
+    expect(result.revoked).toBe('failed');
+  });
+
+  it('refuses hosted multi-tenant mode before touching the shared login file', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+    } as never);
+    const { app, usersService } = makeApp();
+    await expect(service(app).create({}, AUTH_PARAMS)).rejects.toThrow(/hosted multi-tenant/);
+    expect(readCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(deleteCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(revokeMock).not.toHaveBeenCalled();
+    expect(usersService.patch).not.toHaveBeenCalled();
   });
 
   it('surfaces a friendly error, does NOT revoke, and does NOT clear the method if the delete fails', async () => {

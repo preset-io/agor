@@ -13,10 +13,13 @@
  * - Token material is read transiently to revoke and is never logged or
  *   returned; only a class-level revocation outcome is reported.
  * - Removal is idempotent and is NEVER blocked by a revocation failure.
- * - Unlike import, removal is not gated on hosted-mode / tool-enabled checks:
- *   cleaning up a login must stay possible even after Codex is disabled.
+ * - Refuses hosted multi-tenant mode, exactly like import/device: there the
+ *   auth.json is the daemon's own server-global file, so a tenant user must not
+ *   be able to delete/revoke it. (It is NOT gated on the tool-enabled check —
+ *   cleaning up a login must stay possible even after Codex is disabled.)
  */
 
+import { loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -51,6 +54,13 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         throw new NotAuthenticated('Sign in before removing your Codex login.');
       }
       const userId = authUser.user_id as UserID;
+
+      // Refuse hosted multi-tenant mode, like import/device: there the Codex
+      // auth.json is the daemon's server-global file, so no tenant user may
+      // delete or globally-revoke it via this endpoint.
+      if (loadConfigSync().multi_tenancy?.mode === 'required_from_auth') {
+        throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
+      }
 
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for Codex auth logout');
@@ -91,17 +101,24 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
 
       // Best-effort revoke the tokens we just removed (server-side; independent
       // of the now-deleted file). Never blocks — network/expired/already-revoked
-      // all proceed; a missing file simply yields `skipped`.
+      // all proceed. `not-found` is genuinely nothing to revoke (`skipped`); an
+      // `unreadable` file may hold a real login we couldn't read to revoke, so
+      // report `failed` rather than pretend there was nothing (the UI warns).
       const revoked: CodexAuthLogoutResult['revoked'] = existing.ok
         ? await revokeCodexChatgptTokens(existing.content)
-        : 'skipped';
+        : existing.reason === 'unreadable'
+          ? 'failed'
+          : 'skipped';
 
       // Clear the stored method via the users SERVICE (not a direct db write) so
       // the Feathers `patched` event fires and the settings pane + board banners
       // re-probe to a disconnected state. Send ONLY the codex key so the
       // service's merge clears it against the FRESH record — preserving any
       // concurrently-updated method for another tool instead of clobbering it
-      // with a read-modify-write of a stale snapshot.
+      // with a read-modify-write of a stale snapshot. This relies on the
+      // in-process service call: the explicitly-undefined key survives to the
+      // merge and is dropped when the JSON column serializes; a client-
+      // transported patch would lose the key in JSON and silently no-op.
       const usersService = app.service('users') as UsersServiceLike;
       await usersService.patch(
         userId,

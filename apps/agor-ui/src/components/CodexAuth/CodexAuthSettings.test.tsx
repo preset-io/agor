@@ -408,6 +408,19 @@ describe('CodexAuthSettings', () => {
     expect(screen.queryByText('Remove login')).not.toBeInTheDocument();
   });
 
+  it('warns when the login is removed but token revocation could not be confirmed', async () => {
+    const logoutCreate = vi.fn(async () => ({ status: 'removed', revoked: 'failed' }));
+    render(<Harness initialMethod="subscription" logoutCreate={logoutCreate} />);
+
+    clickText('Remove login');
+    fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
+
+    // A failed provider-side revocation must not be silently reported as a
+    // confirmed global sign-out.
+    expect(await screen.findByText('Revocation not confirmed')).toBeInTheDocument();
+    expect(screen.getByText(/token revocation could not be confirmed/i)).toBeInTheDocument();
+  });
+
   it('surfaces a daemon error when removal fails, without crashing', async () => {
     const logoutCreate = vi.fn(async () => {
       throw new Error('Could not remove the Codex credentials file on the server.');
