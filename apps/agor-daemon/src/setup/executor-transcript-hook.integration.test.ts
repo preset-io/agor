@@ -1,8 +1,10 @@
 import type { Server } from 'node:http';
-import { type AgorClient, createClient } from '@agor/core/api';
+import type { AgorClient } from '@agor/core/api';
 import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerExecutorClientHooks } from '../../../../packages/executor/src/services/feathers-client.js';
+import { createExecutorClient } from '../../../../packages/executor/src/services/feathers-client.js';
+
+const SESSION_TOKEN = 'executor-session-token';
 
 interface RecordedCall {
   path: string;
@@ -17,6 +19,18 @@ interface GenericService {
 
 function service(client: AgorClient, path: string): GenericService {
   return (client as unknown as { service(path: string): GenericService }).service(path);
+}
+
+function executorAuthenticationService() {
+  return {
+    async create(data: { accessToken?: string }) {
+      return {
+        accessToken: data.accessToken ?? SESSION_TOKEN,
+        authentication: { strategy: 'jwt' },
+        user: { user_id: 'executor-user' },
+      };
+    },
+  };
 }
 
 describe('executor transcript application hook', () => {
@@ -48,6 +62,7 @@ describe('executor transcript application hook', () => {
     for (const path of ['messages', 'messages/bulk', 'messages/streaming', 'other']) {
       app.use(path, recordingService(path));
     }
+    app.use('authentication', executorAuthenticationService());
     app.configure(socketio());
 
     server = await new Promise<Server>((resolve) => {
@@ -56,9 +71,7 @@ describe('executor transcript application hook', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
 
-    client = createClient(`http://127.0.0.1:${address.port}`);
-    registerExecutorClientHooks(client);
-    await new Promise<void>((resolve) => client?.io.once('connect', resolve));
+    client = await createExecutorClient(`http://127.0.0.1:${address.port}`, SESSION_TOKEN);
 
     const oversizedMessage = (id: string) => ({
       message_id: id,
@@ -113,6 +126,7 @@ describe('executor transcript application hook', () => {
         return data;
       },
     });
+    app.use('authentication', executorAuthenticationService());
     app.configure(socketio());
     server = await new Promise<Server>((resolve) => {
       const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
@@ -120,9 +134,7 @@ describe('executor transcript application hook', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
 
-    client = createClient(`http://127.0.0.1:${address.port}`);
-    registerExecutorClientHooks(client);
-    await new Promise<void>((resolve) => client?.io.once('connect', resolve));
+    client = await createExecutorClient(`http://127.0.0.1:${address.port}`, SESSION_TOKEN);
 
     await expect(
       service(client, 'messages').create({ ordinary_text: 'x'.repeat(800_000) })

@@ -166,7 +166,10 @@ export function projectTranscriptRequestData(
 
     if (markerOnlyBytes <= EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
       let low = byteLength(TRANSCRIPT_PROJECTION_MARKER);
-      let high = Math.max(low, candidate.originalContentBytes - 1);
+      let high = Math.max(
+        low,
+        Math.min(candidate.originalContentBytes - 1, EXECUTOR_REQUEST_DATA_BUDGET_BYTES)
+      );
       let best = markerOnly;
 
       while (low <= high) {

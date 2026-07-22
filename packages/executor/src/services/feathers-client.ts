@@ -26,7 +26,7 @@ function feathersClientDebug(...args: unknown[]): void {
   }
 }
 
-export function registerExecutorClientHooks(client: AgorClient): void {
+function registerExecutorClientHooks(client: AgorClient): void {
   client.hooks({
     before: {
       all: [

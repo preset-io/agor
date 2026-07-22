@@ -50,7 +50,7 @@ export interface ToolRendererProps {
   /**
    * Optional tool result (if available)
    */
-  result?: ToolResultContentBlock;
+  result?: Pick<ToolResultContentBlock, 'content' | 'is_error' | 'diff'>;
 }
 
 /**

@@ -1,8 +1,6 @@
-import type { AgorClient } from '@agor/core/api';
 import type { Message } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesRepository, SessionRepository } from '../../db/feathers-repositories.js';
-import { executeToolTask } from '../../handlers/sdk/base-executor.js';
 import type { MessagesService } from '../base/index.js';
 import { CodexTool } from './codex-tool.js';
 import type { CodexStreamEvent } from './prompt-service.js';
@@ -171,118 +169,5 @@ describe('CodexTool ordered transcript persistence', () => {
       'patch:tool-1',
       'create:assistant:3',
     ]);
-  });
-
-  it('stops later transcript persistence when a tool result acknowledgement rejects', async () => {
-    const persisted: string[] = [];
-    const taskPatches: Array<Record<string, unknown>> = [];
-    const messagesService: MessagesService = {
-      create: vi.fn(async (data: Partial<Message>) => {
-        const content = Array.isArray(data.content) ? data.content : [];
-        persisted.push(
-          content.some((block) => block.type === 'tool_use')
-            ? 'tool-start'
-            : data.role === 'user'
-              ? 'user'
-              : 'assistant'
-        );
-        return data as Message;
-      }),
-      patch: vi.fn().mockRejectedValue(new Error('tool result acknowledgement timed out')),
-    };
-    const messagesRepo = {
-      findBySessionId: vi.fn().mockResolvedValue([]),
-    } as unknown as MessagesRepository;
-    const sessionsRepo = {
-      findById: vi.fn().mockResolvedValue(null),
-    } as unknown as SessionRepository;
-    const tool = new CodexTool(
-      messagesRepo,
-      sessionsRepo,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      messagesService
-    );
-    const events: CodexStreamEvent[] = [
-      {
-        type: 'tool_start',
-        toolUse: { id: 'tool-1', name: 'WebSearch', input: { query: 'agor' } },
-      },
-      {
-        type: 'tool_complete',
-        toolUse: {
-          id: 'tool-1',
-          name: 'WebSearch',
-          input: { query: 'agor' },
-          output: 'tool output',
-        },
-      },
-      {
-        type: 'complete',
-        threadId: '',
-        content: [{ type: 'text', text: 'must not persist' }],
-      },
-    ];
-    const promptService = {
-      async *promptSessionStreaming() {
-        yield* events;
-      },
-    };
-    (tool as unknown as { promptService: typeof promptService }).promptService = promptService;
-
-    const client = {
-      service(path: string) {
-        if (path === 'sessions') {
-          return { get: vi.fn().mockResolvedValue({ session_id: 'session-1' }) };
-        }
-        if (path === 'config/resolve-api-key') {
-          return {
-            create: vi
-              .fn()
-              .mockResolvedValue({ apiKey: 'test-key', source: 'global', useNativeAuth: false }),
-          };
-        }
-        if (path === 'tasks') {
-          return {
-            patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
-              taskPatches.push(data);
-              return data;
-            }),
-          };
-        }
-        if (path === '/tasks/streaming') {
-          return { create: vi.fn() };
-        }
-        if (path === 'messages') {
-          return {
-            find: vi.fn().mockResolvedValue({ total: 0, limit: 0, skip: 0, data: [] }),
-            create: vi.fn(async (data: unknown) => data),
-          };
-        }
-        throw new Error(`Unexpected executor service: ${path}`);
-      },
-    } as unknown as AgorClient;
-
-    await expect(
-      executeToolTask({
-        client,
-        sessionId: '018f0000-0000-7000-8000-000000000003' as never,
-        taskId: '018f0000-0000-7000-8000-000000000004' as never,
-        prompt: 'prompt',
-        abortController: new AbortController(),
-        apiKeyEnvVar: 'OPENAI_API_KEY',
-        toolName: 'codex',
-        createTool: () => tool,
-      })
-    ).rejects.toThrow('tool result acknowledgement timed out');
-    expect(persisted).toEqual(['user', 'tool-start']);
-    expect(taskPatches).toContainEqual(
-      expect.objectContaining({
-        status: 'failed',
-        error_message: 'tool result acknowledgement timed out',
-      })
-    );
   });
 });

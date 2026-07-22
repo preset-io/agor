@@ -84,7 +84,19 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     return (
       <div>
         <TranscriptProjectionNotice projection={toolResult?.transcript_projection} />
-        <CustomRenderer toolUseId={toolUse.id} input={input} result={toolResult} />
+        <CustomRenderer
+          toolUseId={toolUse.id}
+          input={input}
+          result={
+            toolResult
+              ? {
+                  content: toolResult.content,
+                  is_error: toolResult.is_error,
+                  diff: toolResult.diff,
+                }
+              : undefined
+          }
+        />
         {inputParamsBlock}
       </div>
     );

@@ -103,7 +103,7 @@ export interface TranscriptContentProjection {
 }
 
 /** Canonical persisted content accepted by a tool-result block. */
-export type ToolResultContent = string | ContentBlock[] | unknown[] | Record<string, unknown>;
+export type ToolResultContent = string | unknown[] | Record<string, unknown>;
 
 /** Canonical tool-result block shared by executors and every transcript renderer. */
 export interface ToolResultContentBlock {

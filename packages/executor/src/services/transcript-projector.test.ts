@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   EXECUTOR_REQUEST_DATA_BUDGET_BYTES,
   projectTranscriptRequestData,
@@ -86,6 +86,27 @@ describe('projectTranscriptRequestData', () => {
       },
     });
     expect(JSON.stringify(data)).toBe(before);
+  });
+
+  it('does not materialize multi-megabyte preview candidates during projection', () => {
+    const content = 'x'.repeat(EXECUTOR_REQUEST_DATA_BUDGET_BYTES * 20);
+    const byteLength = vi.spyOn(Buffer, 'byteLength');
+    let multiMegabyteMeasurements = 0;
+    try {
+      projectTranscriptRequestData(
+        { content: [{ type: 'tool_result', tool_use_id: 'huge', content }] },
+        { path: 'messages', method: 'create' }
+      );
+      multiMegabyteMeasurements = byteLength.mock.calls.filter(
+        ([value]) =>
+          typeof value === 'string' && value.length > EXECUTOR_REQUEST_DATA_BUDGET_BYTES * 2
+      ).length;
+    } finally {
+      byteLength.mockRestore();
+    }
+
+    // The original request and source are measured once each; preview candidates stay bounded.
+    expect(multiMegabyteMeasurements).toBe(2);
   });
 
   it('projects structured result content into a bounded textual preview with exact byte metadata', () => {
