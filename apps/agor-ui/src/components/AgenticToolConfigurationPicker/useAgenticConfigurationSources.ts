@@ -54,7 +54,9 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     if (!client) {
       setPresets([]);
       setLoading(false);
-      setLoaded(true);
+      // Client absence is not a successful empty response. Keep the current
+      // source untouched until a client can prove whether that preset exists.
+      setLoaded(false);
       setLoadError(false);
       retryRef.current = () => {};
       return undefined;

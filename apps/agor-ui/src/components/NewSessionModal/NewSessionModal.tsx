@@ -294,7 +294,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     advancedBits.push(`${envVarNames.length} env var${envVarNames.length === 1 ? '' : 's'}`);
   }
   if (isClaudeAgent && isInlineConfig && advisorOn) advancedBits.push('advisor on');
-  if (selectedAgent === 'codex') advancedBits.push('Codex sandbox');
+  if (selectedAgent === 'codex' && isInlineConfig) advancedBits.push('Codex sandbox');
   const advancedSummary = `Advanced${advancedBits.length > 0 ? ` · ${advancedBits.join(' · ')}` : ''}`;
 
   return (
@@ -440,7 +440,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                     </Form.Item>
                   )}
 
-                  {selectedAgent === 'codex' && <CodexSettingsForm showHelpText={false} />}
+                  {selectedAgent === 'codex' && isInlineConfig && (
+                    <CodexSettingsForm showHelpText={false} />
+                  )}
                 </>
               ),
             },

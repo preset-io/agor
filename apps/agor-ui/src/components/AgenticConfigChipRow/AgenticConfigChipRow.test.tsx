@@ -64,7 +64,7 @@ function Harness({
   initialSource,
 }: {
   user: User;
-  client?: AgorClient;
+  client?: AgorClient | null;
   initialSource?: string;
 }) {
   const [form] = Form.useForm();
@@ -152,6 +152,18 @@ describe('AgenticConfigChipRow', () => {
       expect(screen.queryByText('Unable to load configuration presets')).not.toBeInTheDocument()
     );
     expect(JSON.parse(screen.getByTestId('state').textContent || '{}').src).toBe('preset-1');
+  });
+
+  it('preserves the selected preset while the client is unavailable', async () => {
+    render(
+      <Harness user={userWithDefault} client={null} initialSource="preset-while-disconnected" />
+    );
+
+    await waitFor(() =>
+      expect(JSON.parse(screen.getByTestId('state').textContent || '{}').src).toBe(
+        'preset-while-disconnected'
+      )
+    );
   });
 
   it('flips the Select to Custom (seeded from resolved values) when a chip is edited', async () => {

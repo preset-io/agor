@@ -25,6 +25,7 @@ import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker'
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CodexSettingsForm } from '../CodexSettingsForm';
 import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
@@ -363,6 +364,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                       client={client}
                     />
                   </Form.Item>
+                )}
+
+                {selectedAgent === 'codex' && isInlineConfig && (
+                  <CodexSettingsForm showHelpText={false} />
                 )}
 
                 {/* Session-scope env var selections (only the creator / admin

@@ -27,6 +27,9 @@ vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
 vi.mock('../ModelSelector', () => ({
   AdvisorModelSelect: () => <div data-testid="advisor-select" />,
 }));
+vi.mock('../CodexSettingsForm', () => ({
+  CodexSettingsForm: () => <div data-testid="codex-settings" />,
+}));
 // Chip-row stub that registers + drives the shared `agenticToolPresetId` field.
 vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: () => {
@@ -59,6 +62,13 @@ const claudeSession = {
   session_id: 'parent',
   title: 'Parent',
   agentic_tool: 'claude-code',
+} as unknown as Session;
+
+const codexSession = {
+  session_id: 'parent-codex',
+  title: 'Codex parent',
+  agentic_tool: 'codex',
+  permission_config: { mode: 'auto' },
 } as unknown as Session;
 
 describe('ForkSpawnModal advisor + canonical defaults', { timeout: 10_000 }, () => {
@@ -126,5 +136,26 @@ describe('ForkSpawnModal advisor + canonical defaults', { timeout: 10_000 }, () 
     // Canonical read → the claude-code default flows into the spawn config.
     expect(spawnConfig.modelConfig?.model).toBe('canon-model');
     expect(spawnConfig.permissionMode).toBe('plan');
+  });
+
+  it('restores Codex-specific controls for inline custom spawns only', async () => {
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={codexSession}
+        currentUser={null}
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Custom config'));
+    expect(await screen.findByTestId('codex-settings')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pick-preset'));
+    await waitFor(() => expect(screen.queryByTestId('codex-settings')).not.toBeInTheDocument());
   });
 });

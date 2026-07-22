@@ -62,7 +62,10 @@ describe('ModelSelector (Claude)', () => {
         onChange={onChange}
       />
     );
-    fireEvent.click(screen.getByText('Pin a specific version…'));
+    const pinButton = screen.getByRole('button', { name: 'Pin a specific version…' });
+    pinButton.focus();
+    expect(pinButton).toHaveFocus();
+    fireEvent.click(pinButton);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ mode: 'exact' }));
   });
 

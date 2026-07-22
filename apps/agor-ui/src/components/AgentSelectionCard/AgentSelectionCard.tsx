@@ -34,12 +34,23 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
     cursor: 'pointer',
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onClick?.();
+  };
+
   if (size === 'small') {
     return (
       <Tooltip title={agent.description} open={betaHovered ? false : undefined}>
         <Card
           hoverable
+          role="button"
+          tabIndex={0}
+          aria-label={agent.name}
+          aria-pressed={selected}
           onClick={onClick}
+          onKeyDown={handleKeyDown}
           style={cardStyle}
           styles={{ body: { padding: token.paddingXS } }}
         >
@@ -78,7 +89,17 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
   }
 
   return (
-    <Card hoverable onClick={onClick} style={cardStyle} styles={{ body: { padding: 8 } }}>
+    <Card
+      hoverable
+      role="button"
+      tabIndex={0}
+      aria-label={agent.name}
+      aria-pressed={selected}
+      onClick={onClick}
+      onKeyDown={handleKeyDown}
+      style={cardStyle}
+      styles={{ body: { padding: 8 } }}
+    >
       <Space orientation="vertical" style={{ width: '100%' }} size={3}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} size={6}>
           <Space size={6}>

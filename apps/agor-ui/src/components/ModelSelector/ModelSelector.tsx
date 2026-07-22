@@ -10,7 +10,7 @@ import {
   type GeminiModel,
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { AutoComplete, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
@@ -464,13 +464,23 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       )}
 
       {!pinned ? (
-        <Typography.Link onClick={enablePin} style={{ fontSize: token.fontSizeSM }}>
+        <Button
+          type="link"
+          size="small"
+          onClick={enablePin}
+          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+        >
           Pin a specific version…
-        </Typography.Link>
+        </Button>
       ) : (
-        <Typography.Link onClick={disablePin} style={{ fontSize: token.fontSizeSM }}>
+        <Button
+          type="link"
+          size="small"
+          onClick={disablePin}
+          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+        >
           Use a recommended model
-        </Typography.Link>
+        </Button>
       )}
 
       {isClaude && showAdvisor && (

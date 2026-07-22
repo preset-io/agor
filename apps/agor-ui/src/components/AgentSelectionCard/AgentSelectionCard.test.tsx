@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from './AgentSelectionCard';
 
@@ -12,6 +12,22 @@ const betaAgent: AgenticToolOption = {
 };
 
 describe('AgentSelectionCard beta badge', () => {
+  it('uses a focusable button with accessible selection state', () => {
+    const onClick = vi.fn();
+    const { container } = render(
+      <AgentSelectionCard agent={betaAgent} selected onClick={onClick} size="small" />
+    );
+
+    const button = container.querySelector('[role="button"]') as HTMLElement;
+    expect(button).toHaveAttribute('aria-label', 'OpenCode');
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    expect(button).toHaveAttribute('tabindex', '0');
+    fireEvent.click(button);
+    fireEvent.keyDown(button, { key: ' ' });
+    fireEvent.keyDown(button, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(3);
+  });
+
   it('small variant: icon-only beta badge (no "BETA" text), full name visible', () => {
     render(<AgentSelectionCard agent={betaAgent} size="small" />);
     // Full name is rendered (never replaced by a text pill that eats width).

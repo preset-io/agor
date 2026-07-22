@@ -18,13 +18,20 @@ vi.mock('../AutocompleteTextarea', () => ({
   ),
 }));
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => <div data-testid="agent-grid" />,
+  AgentSelectionGrid: ({ onSelect }: { onSelect: (tool: string) => void }) => (
+    <button type="button" data-testid="select-codex" onClick={() => onSelect('codex')}>
+      Codex
+    </button>
+  ),
 }));
 vi.mock('../MCPServerSelect', () => ({
   SessionMcpServersField: () => <div data-testid="mcp-servers-field" />,
 }));
 vi.mock('../ModelSelector', () => ({
   AdvisorModelSelect: () => <div data-testid="advisor-select" />,
+}));
+vi.mock('../CodexSettingsForm', () => ({
+  CodexSettingsForm: () => <div data-testid="codex-settings" />,
 }));
 
 vi.mock('../AgenticToolConfigurationPicker', () => ({
@@ -97,5 +104,30 @@ describe('NewSessionModal advisor gating', { timeout: 10_000 }, () => {
     // …and choosing a preset hides it again (it would be discarded).
     fireEvent.click(screen.getByTestId('pick-preset'));
     await waitFor(() => expect(screen.queryByText('Advisor model')).not.toBeInTheDocument());
+  });
+
+  it('only shows Codex-specific controls while inline configuration is active', async () => {
+    render(
+      <NewSessionModal
+        open
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+        availableAgents={[]}
+        branchId="branch-1"
+        client={null}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('select-codex'));
+    fireEvent.click(screen.getByText(/^Advanced/));
+    expect(screen.queryByTestId('codex-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pick-inline'));
+    expect(await screen.findByTestId('codex-settings')).toBeInTheDocument();
+    expect(screen.getByText(/Codex sandbox/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pick-preset'));
+    await waitFor(() => expect(screen.queryByTestId('codex-settings')).not.toBeInTheDocument());
+    expect(screen.queryByText(/Codex sandbox/)).not.toBeInTheDocument();
   });
 });
