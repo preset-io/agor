@@ -245,28 +245,42 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         runWithTenantDatabaseScope(db, tenantId, work);
 
       // Resolve + validate the stored Claude subscription token specifically.
-      const verifyStoredSubscription = async (): Promise<AuthCheckResult> => {
+      // `present: false` means no token is stored (distinct from a probe result)
+      // so callers branch on structure, not on user-facing copy.
+      type StoredSubscriptionOutcome =
+        | { present: false }
+        | { present: true; result: AuthCheckResult };
+      const verifyStoredSubscription = async (): Promise<StoredSubscriptionOutcome> => {
         const resolution = await withTenantDatabase((tenantDb) =>
           resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', { userId, db: tenantDb, tool: 'claude-code' })
         );
         if (resolution.decryptionFailed) {
-          return unauthenticated(
-            'none',
-            'Stored Claude subscription token could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.'
-          );
+          return {
+            present: true,
+            result: unauthenticated(
+              'none',
+              'Stored Claude subscription token could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.'
+            ),
+          };
         }
         if (!resolution.apiKey) {
-          return unauthenticated('none', 'No usable Claude subscription token is stored.');
+          return { present: false };
         }
         const status = await validateClaudeSubscriptionToken(resolution.apiKey);
-        if (status === 'authenticated') return authed('oauth');
+        if (status === 'authenticated') return { present: true, result: authed('oauth') };
         if (status === 'unauthenticated') {
-          return unauthenticated(
-            'none',
-            'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
-          );
+          return {
+            present: true,
+            result: unauthenticated(
+              'none',
+              'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
+            ),
+          };
         }
-        return unknown('Could not verify the Claude subscription token — try again.');
+        return {
+          present: true,
+          result: unknown('Could not verify the Claude subscription token — try again.'),
+        };
       };
 
       if (
@@ -315,7 +329,10 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       // about the stored OAuth token, not the API key that resolveApiKey would
       // otherwise pick first.
       if (field === 'CLAUDE_CODE_OAUTH_TOKEN') {
-        return verifyStoredSubscription();
+        const subscription = await verifyStoredSubscription();
+        return subscription.present
+          ? subscription.result
+          : unauthenticated('none', 'No usable Claude subscription token is stored.');
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy, using
@@ -353,13 +370,10 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
 
       // No explicit field: fall back to the Claude subscription token so the
       // banner probe reports "connected" when only a subscription is stored.
+      // Absence of a stored subscription falls through to the generic message.
       if (!field && tool === 'claude-code') {
         const subscription = await verifyStoredSubscription();
-        // Absence of a stored subscription here isn't a rejection of the api key
-        // path — fall through to the generic "nothing usable" message below.
-        if (subscription.hint !== 'No usable Claude subscription token is stored.') {
-          return subscription;
-        }
+        if (subscription.present) return subscription.result;
       }
 
       return unauthenticated(
