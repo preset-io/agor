@@ -34,6 +34,7 @@ import { DEFAULT_GEMINI_MODEL } from './gemini-shared.js';
 export type ModelConfigInput = {
   mode?: 'alias' | 'exact';
   model?: string;
+  notes?: string;
   effort?: EffortLevel;
   advisorModel?: string;
   provider?: string;
@@ -73,6 +74,7 @@ export function resolveModelConfig(
     mode: input.mode ?? 'alias',
     model: input.model,
     updated_at: (opts?.now ?? new Date()).toISOString(),
+    ...(input.notes !== undefined && { notes: input.notes }),
     ...(input.effort !== undefined && { effort: input.effort }),
     ...(input.advisorModel !== undefined && { advisorModel: input.advisorModel }),
     ...(input.provider !== undefined && { provider: input.provider }),

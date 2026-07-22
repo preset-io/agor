@@ -254,7 +254,7 @@ describe('applySessionConfigDefaults', () => {
         agentic_tool: 'codex',
         created_by: ALICE,
         permission_config: { mode: 'acceptEdits' },
-        model_config: { model: 'gpt-5.4' },
+        model_config: { model: 'gpt-5.4', notes: 'Use this model for consistency' },
       },
       users: { [ALICE]: { user_id: ALICE } },
     });
@@ -264,6 +264,7 @@ describe('applySessionConfigDefaults', () => {
     expect(ctx.data?.model_config).toMatchObject({
       mode: 'alias',
       model: 'gpt-5.4',
+      notes: 'Use this model for consistency',
       updated_at: expect.any(String),
     });
   });
