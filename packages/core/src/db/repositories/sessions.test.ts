@@ -993,7 +993,7 @@ describe('SessionRepository.update', () => {
     expect(updated.custom_context).toEqual({ foo: 'baz', newField: 123 });
   });
 
-  dbTest('should clear sdk_session_id when an update sends null', async ({ db }) => {
+  dbTest('should preserve, set, and clear sdk_session_id through updates', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);
     const session = await repo.create(
@@ -1003,11 +1003,18 @@ describe('SessionRepository.update', () => {
       })
     );
 
-    const updated = await repo.update(session.session_id, {
-      sdk_session_id: null as unknown as undefined,
+    const preserved = await repo.update(session.session_id, {
+      sdk_session_id: undefined,
     });
+    expect(preserved.sdk_session_id).toBe('existing-sdk-session-id');
 
-    expect(updated.sdk_session_id).toBeUndefined();
+    const set = await repo.update(session.session_id, {
+      sdk_session_id: 'replacement-sdk-session-id',
+    });
+    expect(set.sdk_session_id).toBe('replacement-sdk-session-id');
+
+    const cleared = await repo.update(session.session_id, { sdk_session_id: null });
+    expect(cleared.sdk_session_id).toBeUndefined();
     expect((await repo.findById(session.session_id))?.sdk_session_id).toBeUndefined();
   });
 

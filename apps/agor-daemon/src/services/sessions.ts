@@ -51,6 +51,7 @@ import type {
   QueryParams,
   Session,
   SessionID,
+  SessionUpdate,
   TaskID,
   UUID,
 } from '@agor/core/types';
@@ -201,7 +202,7 @@ export type SessionArchiveResult = {
 /**
  * Extended sessions service with custom methods
  */
-export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
+export class SessionsService extends DrizzleService<Session, SessionUpdate, SessionParams> {
   private sessionRepo: SessionRepository;
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
@@ -1217,7 +1218,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    */
   async patch(
     id: import('@agor/core/types').NullableId,
-    data: Partial<Session>,
+    data: SessionUpdate,
     params?: SessionParams
   ): Promise<Session | Session[]> {
     let replaceAgenticConfig = false;
@@ -1301,7 +1302,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     return result;
   }
 
-  async update(id: string, data: Partial<Session>, params?: SessionParams): Promise<Session> {
+  async update(id: string, data: SessionUpdate, params?: SessionParams): Promise<Session> {
     return (await this.patch(id, data, params)) as Session;
   }
 

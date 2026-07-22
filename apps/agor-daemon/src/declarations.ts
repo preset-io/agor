@@ -31,6 +31,7 @@ import type {
   RuntimeTelemetryInput,
   SdkHealthFailureInput,
   Session,
+  SessionUpdate,
   Task,
 } from '@agor/core/types';
 import type {
@@ -55,7 +56,16 @@ export type Application = ExpressApplication;
  * This matches the SessionRepository methods exposed via the service adapter
  */
 export interface SessionsServiceImpl
-  extends Service<Session, CreateSessionInput, FeathersParams, Partial<Session>> {
+  extends Omit<
+    Service<Session, CreateSessionInput, FeathersParams, SessionUpdate>,
+    'patch' | 'update'
+  > {
+  patch(
+    id: import('@agor/core/types').NullableId,
+    data: SessionUpdate,
+    params?: FeathersParams
+  ): Promise<Session | Session[]>;
+  update(id: string, data: SessionUpdate, params?: FeathersParams): Promise<Session>;
   fork(
     id: string,
     data: { prompt: string; task_id?: string },

@@ -38,6 +38,7 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
+import { CodexTool } from './codex-tool.js';
 import { CodexPromptService } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
@@ -113,6 +114,7 @@ const mockSessionsRepo = {
 } as any;
 const mockSessionMCPServerRepo = {
   listServers: vi.fn().mockResolvedValue([]),
+  listServersWithMetadata: vi.fn().mockResolvedValue([]),
 } as any;
 const mockBranchesRepo = {
   findById: vi.fn(),
@@ -594,6 +596,88 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         },
       },
     });
+  });
+
+  it('persists a fresh Codex thread after clearing a stale thread for new MCP config', async () => {
+    const sessionCreatedAt = new Date('2026-01-01T00:00:00.000Z');
+    let storedSdkSessionId: string | undefined = 'stale-thread-id';
+    const sessionsRepo = {
+      findById: vi.fn(async () => ({
+        session_id: 'session-fresh-thread',
+        branch_id: 'branch-1',
+        created_at: sessionCreatedAt.toISOString(),
+        last_updated: sessionCreatedAt.toISOString(),
+        sdk_session_id: storedSdkSessionId,
+        permission_config: { codex: {} },
+        model_config: {},
+      })),
+      update: vi.fn(async (_sessionId: string, patch: { sdk_session_id?: string | null }) => {
+        if (patch.sdk_session_id === null) storedSdkSessionId = undefined;
+        else if (patch.sdk_session_id !== undefined) storedSdkSessionId = patch.sdk_session_id;
+        return { sdk_session_id: storedSdkSessionId };
+      }),
+    } as any;
+    const messagesRepo = {
+      findBySessionId: vi.fn().mockResolvedValue([]),
+    } as any;
+    const sessionMCPServerRepo = {
+      listServersWithMetadata: vi.fn().mockResolvedValue([
+        {
+          server: { name: 'new-server' },
+          added_at: sessionCreatedAt.getTime() + 60_000,
+          enabled: true,
+        },
+      ]),
+    } as any;
+    const branchesRepo = {
+      findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }),
+    } as any;
+    const messagesService = {
+      create: vi.fn(async (message) => message),
+    } as any;
+    const tool = new CodexTool(
+      messagesRepo,
+      sessionsRepo,
+      sessionMCPServerRepo,
+      branchesRepo,
+      undefined,
+      'test-api-key',
+      messagesService
+    );
+    const previousStreamEvents = mockStreamEvents;
+    const previousStartThreadId = mockStartThreadId;
+    mockStartThreadId = 'fresh-thread-id';
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    try {
+      await mcpScopingMocks.getMcpServersForSession.withImplementation(
+        vi.fn().mockResolvedValue([]),
+        async () => {
+          await expect(
+            tool.executePromptWithStreaming('session-fresh-thread' as any, 'continue')
+          ).resolves.toBeDefined();
+        }
+      );
+
+      expect(sessionsRepo.update).toHaveBeenNthCalledWith(1, 'session-fresh-thread', {
+        sdk_session_id: null,
+      });
+      expect(sessionsRepo.update).toHaveBeenNthCalledWith(2, 'session-fresh-thread', {
+        sdk_session_id: 'fresh-thread-id',
+      });
+      expect(storedSdkSessionId).toBe('fresh-thread-id');
+    } finally {
+      mockStreamEvents = previousStreamEvents;
+      mockStartThreadId = previousStartThreadId;
+      await fs.rm(path.join(os.tmpdir(), 'agor-codex-instructions-session-fresh-thread.md'), {
+        force: true,
+      });
+    }
   });
 });
 

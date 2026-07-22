@@ -1149,7 +1149,7 @@ export class CodexPromptService {
       );
 
       // Clear SDK session ID to force fresh start with new MCP config
-      await this.sessionsRepo.update(sessionId, { sdk_session_id: undefined });
+      await this.sessionsRepo.update(sessionId, { sdk_session_id: null });
       // Update local session object to reflect the change
       session.sdk_session_id = undefined;
     }
@@ -1241,7 +1241,7 @@ export class CodexPromptService {
       let didStop = false;
       const clearUnsafeResumeState = async () => {
         await this.sessionsRepo.update(sessionId, {
-          sdk_session_id: null as unknown as undefined,
+          sdk_session_id: null,
         });
       };
 
