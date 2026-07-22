@@ -113,8 +113,11 @@
   }
 }
 
-/* Streamdown styling adjustments to match Ant Design theme */
-/* Override Tailwind classes with Ant Design token-based styles */
+/* Streamdown styling adjustments to match Ant Design theme.
+   Streamdown's own Tailwind utilities are compiled (with shadcn tokens
+   bridged to --ant-* variables) into MarkdownRenderer's checked-in
+   streamdown-tailwind.generated.css; only deliberate Agor deviations from
+   the upstream look belong here. */
 [data-streamdown] {
   /* Let Ant Design Typography handle font family */
   font-family: inherit;
@@ -131,7 +134,8 @@
   margin-bottom: 0.5em;
 }
 
-/* Links - inherit primary color from Ant Design */
+/* Links follow AntD's hover convention (Streamdown has no hover change).
+   With link safety enabled, links render as <button> elements. */
 [data-streamdown="link"] {
   color: var(--ant-color-primary);
   text-decoration: underline;
@@ -141,292 +145,11 @@
   color: var(--ant-color-primary-hover);
 }
 
-/* Code blocks - use Ant Design's neutral colors */
-[data-streamdown="inline-code"] {
-  background-color: var(--ant-color-fill-tertiary);
-  padding: 0.2em 0.4em;
-  border-radius: 3px;
-  font-family: "Consolas", "Monaco", "Courier New", monospace;
-}
-
-/* Tables - match Ant Design table styling */
-[data-streamdown="table"] {
-  border-color: var(--ant-color-border);
-}
-
-[data-streamdown="table-header"] {
-  background-color: var(--ant-color-bg-container);
-}
-
-[data-streamdown="table-body"] {
-  background-color: var(--ant-color-bg-layout);
-}
-
-/* Blockquotes - use Ant Design's text colors */
-[data-streamdown="blockquote"] {
-  border-left-color: var(--ant-color-border);
-  color: var(--ant-color-text-secondary);
-}
-
 /* Lists - reduce spacing for better density */
 [data-streamdown="ordered-list"],
 [data-streamdown="unordered-list"] {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
-}
-
-/* Vega-Lite's deliberate legacy code-block header contract. Streamdown's
-   native header/actions use scoped semantic rules in MarkdownRenderer.css. */
-:where([data-streamdown="code-block"]) > [data-code-block-header] {
-  background-color: var(--ant-color-bg-container);
-  border-bottom: 1px solid var(--ant-color-border);
-  padding-top: 0;
-  padding-bottom: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
-/* Copy/Download button styling - override Tailwind classes */
-:where([data-streamdown="code-block"]) > [data-code-block-header] button,
-[data-streamdown="mermaid-block"] button,
-[data-streamdown="table-wrapper"] button,
-[data-streamdown="image-wrapper"] button {
-  /* Override Tailwind text-muted-foreground */
-  color: var(--ant-color-text-secondary);
-  background-color: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  padding: 4px;
-  transition: all 0.2s;
-}
-
-:where([data-streamdown="code-block"]) > [data-code-block-header] button:hover:not(:disabled),
-[data-streamdown="mermaid-block"] button:hover:not(:disabled),
-[data-streamdown="table-wrapper"] button:hover:not(:disabled),
-[data-streamdown="image-wrapper"] button:hover:not(:disabled) {
-  /* Override Tailwind hover:text-foreground */
-  color: var(--ant-color-text);
-  background-color: var(--ant-color-fill-quaternary);
-  border-color: var(--ant-color-border);
-}
-
-:where([data-streamdown="code-block"]) > [data-code-block-header] button:disabled,
-[data-streamdown="mermaid-block"] button:disabled,
-[data-streamdown="table-wrapper"] button:disabled,
-[data-streamdown="image-wrapper"] button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* Replicate Tailwind utility classes used by Streamdown */
-/* Streamdown uses Tailwind utilities which we need to implement manually */
-/* Only minimal utilities needed for layout - let Streamdown handle its own styling */
-
-.flex {
-  display: flex;
-}
-
-.flex-col {
-  flex-direction: column;
-}
-
-.items-center {
-  align-items: center;
-}
-
-.justify-between {
-  justify-content: space-between;
-}
-
-.justify-end {
-  justify-content: flex-end;
-}
-
-.gap-1 {
-  gap: 0.25rem;
-}
-
-.gap-2 {
-  gap: 0.5rem;
-}
-
-.space-y-2 > * + * {
-  margin-top: 0.5rem;
-}
-
-.w-full {
-  width: 100%;
-}
-
-.min-w-full {
-  min-width: 100%;
-}
-
-.overflow-x-auto {
-  overflow-x: auto;
-}
-
-.border-t {
-  border-top-width: 1px;
-}
-
-.my-4 {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
-}
-
-.space-y-4 > * + * {
-  margin-top: 1rem;
-}
-
-.rounded {
-  border-radius: 0.25rem;
-}
-
-.rounded-xl {
-  border-radius: 0.75rem;
-}
-
-.px-1\.5 {
-  padding-left: 0.375rem;
-  padding-right: 0.375rem;
-}
-
-.py-0\.5 {
-  padding-top: 0.125rem;
-  padding-bottom: 0.125rem;
-}
-
-.p-1 {
-  padding: 0.25rem;
-}
-
-.p-3 {
-  padding: 0.75rem;
-}
-
-.p-4 {
-  padding: 1rem;
-}
-
-.px-4 {
-  padding-left: 1rem;
-  padding-right: 1rem;
-}
-
-.py-2 {
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-}
-
-.text-xs {
-  font-size: 0.75rem;
-  line-height: 1rem;
-}
-
-.text-sm {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
-}
-
-.text-2xl {
-  font-size: 1.5rem;
-  line-height: 2rem;
-}
-
-.font-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-.font-semibold {
-  font-weight: 600;
-}
-
-.text-left {
-  text-align: left;
-}
-
-.whitespace-nowrap {
-  white-space: nowrap;
-}
-
-.border {
-  border-width: 1px;
-}
-
-.border-b {
-  border-bottom-width: 1px;
-}
-
-.border-collapse {
-  border-collapse: collapse;
-}
-
-.divide-y > * + * {
-  border-top-width: 1px;
-}
-
-.overflow-hidden {
-  overflow: hidden;
-}
-
-.cursor-pointer {
-  cursor: pointer;
-}
-
-.transition-all {
-  transition-property: all;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
-}
-
-.relative {
-  position: relative;
-}
-
-.ml-1 {
-  margin-left: 0.25rem;
-}
-
-.mt-6 {
-  margin-top: 1.5rem;
-}
-
-.mb-2 {
-  margin-bottom: 0.5rem;
-}
-
-.lowercase {
-  text-transform: lowercase;
-}
-
-.hidden {
-  display: none;
-}
-
-/* Replicate Tailwind dark mode behavior for Streamdown */
-/* Streamdown uses dark:hidden and dark:block which require Tailwind */
-/* Since we don't use Tailwind, manually implement the same behavior */
-
-/* Light mode: hide elements with dark:block class */
-.dark\:block {
-  display: none;
-}
-
-/* Light mode: show elements with dark:hidden class */
-.dark\:hidden {
-  display: block;
-}
-
-/* Dark mode: show elements with dark:block class */
-html.dark .dark\:block {
-  display: block;
-}
-
-/* Dark mode: hide elements with dark:hidden class */
-html.dark .dark\:hidden {
-  display: none;
 }
 
 /* Ant Tree defaults render as a small "well" in dark mode

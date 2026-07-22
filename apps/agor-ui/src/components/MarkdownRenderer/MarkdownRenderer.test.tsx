@@ -89,6 +89,42 @@ describe('MarkdownRenderer', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('confirms external links through an Ant Design modal before opening', async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal('open', openSpy);
+    render(<MarkdownRenderer content={'[Private PR #1](https://github.com/acme/repo/pull/1)'} />);
+
+    const link = await screen.findByRole('button', { name: 'Private PR #1' });
+    expect(link).toHaveAttribute('data-streamdown', 'link');
+    fireEvent.click(link);
+    expect(openSpy).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Open external link?')).toBeInTheDocument();
+    expect(within(dialog).getByText('https://github.com/acme/repo/pull/1')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Open link/ }));
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://github.com/acme/repo/pull/1',
+        '_blank',
+        'noreferrer'
+      )
+    );
+  });
+
+  it('opens same-origin links directly without a confirmation modal', async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal('open', openSpy);
+    const url = `${window.location.origin}/kb/agor-team/some-doc`;
+    render(<MarkdownRenderer content={`[team doc](${url})`} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'team doc' }));
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(url, '_blank', 'noreferrer'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('adds stable ids and self-links when heading anchors are enabled', async () => {
     const { container } = render(<MarkdownRenderer content={'## Foo\n\n## Foo!'} headingAnchors />);
 

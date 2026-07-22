@@ -58,6 +58,8 @@ peerDependencyRules:
   allowedVersions:
     zod: '*'
 allowBuilds:
+  # Prebuilt binaries ship with the package; the build script is only a fallback.
+  '@parcel/watcher': false
   '@scarf/scarf@1.4.0': false
   '@tsparticles/engine@3.9.1': false
   'es5-ext@0.10.64': false

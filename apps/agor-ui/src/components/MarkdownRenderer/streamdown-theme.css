@@ -1,0 +1,68 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: Tailwind codegen input — this file is compiled, never shipped */
+/*
+ * Tailwind v4 input for `pnpm gen:streamdown-css`.
+ *
+ * Streamdown's supported styling contract is "host app compiles our Tailwind
+ * utility classes" (see https://streamdown.ai/en/docs/styling). Agor does not
+ * use Tailwind at runtime, so this file compiles exactly the utilities present
+ * in the installed streamdown dist into the checked-in
+ * `streamdown-tailwind.generated.css`, with Streamdown's shadcn-style color
+ * tokens bridged to Ant Design CSS variables so light/dark/custom themes all
+ * apply without any hard-coded colors.
+ *
+ * Regenerate whenever the streamdown dependency (or its pnpm patch) changes:
+ *   pnpm --filter agor-ui gen:streamdown-css
+ * A vitest coverage check (MarkdownRenderer.generated-css.test.ts) fails when
+ * the generated file drifts out of sync with the installed dist.
+ */
+
+@layer theme, base, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+/* The slice of Tailwind's preflight that Streamdown components rely on,
+ * scoped to Streamdown-rendered elements. Agor deliberately ships no global
+ * preflight, but Streamdown sizes its chrome assuming border-box and
+ * chrome-free buttons. Lives in the `base` layer so utilities still win. */
+@layer base {
+  :where([data-streamdown]),
+  :where([data-streamdown]) :where(*, *::before, *::after) {
+    box-sizing: border-box;
+  }
+
+  :where([data-streamdown]) :where(button),
+  button:where([data-streamdown]) {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+}
+
+/* Only scan Streamdown's shipped code — never Agor sources. */
+@source "../../../node_modules/streamdown/dist/*.js";
+
+/* Agor toggles dark mode with a `dark` class on <html> (see ThemeContext). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Bridge Streamdown's shadcn/ui color tokens to Ant Design semantic tokens.
+ * `inline` makes utilities reference the --ant-* variables directly. */
+@theme inline {
+  --color-background: var(--ant-color-bg-container);
+  --color-foreground: var(--ant-color-text);
+  --color-muted: var(--ant-color-fill-tertiary);
+  --color-muted-foreground: var(--ant-color-text-secondary);
+  --color-border: var(--ant-color-border-secondary);
+  --color-sidebar: var(--ant-color-bg-layout);
+  --color-primary: var(--ant-color-primary);
+  --color-primary-foreground: var(--ant-color-text-light-solid);
+  /* Streamdown's Mermaid error UI uses the Tailwind red scale directly. */
+  --color-red-50: var(--ant-color-error-bg);
+  --color-red-100: var(--ant-color-error-bg-hover);
+  --color-red-600: var(--ant-color-error);
+  --color-red-700: var(--ant-color-error-text);
+  --color-red-800: var(--ant-color-error-text-active);
+}

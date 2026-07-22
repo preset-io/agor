@@ -113,15 +113,13 @@
   text-decoration: none;
 }
 
-/* Streamdown 2.5 exposes semantic code-block parts but expects Tailwind to
-   supply their layout. Keep those compatibility rules local to this renderer. */
+/* Code-block geometry contract, mirrored from Streamdown's own utility
+   classes (compiled in streamdown-tailwind.generated.css). These duplicates
+   exist so the ASCII-layout tests can assert the contract in jsdom, which
+   does not apply @layer rules; values must match upstream's classes. */
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block"] {
   position: relative;
   min-width: 0;
-  margin-top: 0;
-  padding-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-header"] {
@@ -129,7 +127,6 @@
   flex-shrink: 0;
   align-items: center;
   height: 2rem;
-  padding-inline: 0.25rem;
   color: var(--ant-color-text-secondary);
   font-size: 0.75rem;
   line-height: 1rem;
@@ -147,41 +144,6 @@
   height: 2rem;
   margin-top: -2.5rem;
   pointer-events: none;
-}
-
-:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.375rem;
-  border: 1px solid var(--ant-color-border-secondary);
-  border-radius: var(--ant-border-radius);
-  background: var(--ant-color-bg-container);
-  pointer-events: auto;
-}
-
-:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] button {
-  padding: 0.25rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ant-color-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-:is(.markdown-content, .inline-markdown)
-  [data-streamdown="code-block-actions"]
-  button:hover:not(:disabled) {
-  border-color: var(--ant-color-border);
-  background: var(--ant-color-fill-quaternary);
-  color: var(--ant-color-text);
-}
-
-:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] {
