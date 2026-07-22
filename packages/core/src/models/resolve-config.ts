@@ -44,6 +44,13 @@ export type ModelConfigInput = {
  */
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
+/** Whether a model config already has the complete persisted shape. */
+export function isResolvedModelConfig(
+  input: Partial<ResolvedModelConfig> | null | undefined
+): input is ResolvedModelConfig {
+  return Boolean(input?.mode && input.model && input.updated_at);
+}
+
 /**
  * Normalize a partial model-config into the shape persisted on
  * `session.model_config`. Returns `undefined` if no usable `model` was

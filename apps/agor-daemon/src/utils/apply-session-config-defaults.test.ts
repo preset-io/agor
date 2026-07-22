@@ -245,6 +245,29 @@ describe('applySessionConfigDefaults', () => {
     });
   });
 
+  it('normalizes a partial model-only model_config', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+        model_config: { model: 'gpt-5.4' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await hook(ctx);
+
+    expect(ctx.data?.model_config).toMatchObject({
+      mode: 'alias',
+      model: 'gpt-5.4',
+      updated_at: expect.any(String),
+    });
+  });
+
   it('fills a partial advisor-only model_config with the default model and preserves advisorModel', async () => {
     const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
     const ctx = makeContext({

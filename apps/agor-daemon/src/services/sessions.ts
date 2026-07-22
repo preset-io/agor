@@ -36,6 +36,7 @@ import {
 import {
   formatModelToolMismatchWarning,
   formatUnsupportedAgorCodexModelMessage,
+  isResolvedModelConfig,
   isUnsupportedAgorCodexModel,
   lintModelToolMatch,
 } from '@agor/core/models';
@@ -83,14 +84,6 @@ type SessionArchiveTarget = {
   archived: boolean;
   archivedReason: SessionArchiveReason | null;
 };
-
-function isMaterializedModelConfig(
-  modelConfig: CreateSessionInput['model_config']
-): modelConfig is Session['model_config'] {
-  return (
-    modelConfig == null || Boolean(modelConfig.mode && modelConfig.model && modelConfig.updated_at)
-  );
-}
 
 const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
 const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
@@ -324,7 +317,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       };
     } else {
       await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
-      if (!isMaterializedModelConfig(modelConfig)) {
+      if (modelConfig != null && !isResolvedModelConfig(modelConfig)) {
         throw new BadRequest('model_config must be resolved before session creation');
       }
       createData = {
