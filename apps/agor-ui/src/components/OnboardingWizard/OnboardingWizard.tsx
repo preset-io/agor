@@ -9,7 +9,6 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
-  CodexAuthImportResult,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -26,6 +25,7 @@ import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } fr
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 const { Text, Title, Paragraph } = Typography;
@@ -34,7 +34,12 @@ const { useToken } = theme;
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
-type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth' | 'codex-auth-json';
+type AuthMethod =
+  | 'api-key'
+  | 'claude-subscription-token'
+  | 'codex-cli-auth'
+  | 'codex-auth-json'
+  | 'codex-device-auth';
 
 /**
  * Per-agent auth-method toggle entries. Agents absent here have exactly one
@@ -49,7 +54,8 @@ const AUTH_METHOD_OPTIONS: Partial<
   ],
   codex: [
     { label: 'API key', value: 'api-key' },
-    { label: 'ChatGPT login', value: 'codex-auth-json' },
+    { label: 'Sign in with ChatGPT', value: 'codex-device-auth' },
+    { label: 'Import auth.json', value: 'codex-auth-json' },
   ],
 };
 
@@ -363,7 +369,8 @@ function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-k
 
 function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
   if (authMethod === 'claude-subscription-token') return 'Subscription token';
-  if (authMethod === 'codex-auth-json') return 'Codex login file (auth.json)';
+  // Note: the codex-auth-json method renders its own pane (CodexImportAuthJson)
+  // and never reaches this label, so no case is needed for it here.
   switch (agent) {
     case 'claude-code':
       return 'Anthropic API key';
@@ -729,14 +736,22 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
+        // Device sign-in and login-file import both complete inside their own
+        // pane — no typed input to validate. They enable once the daemon
+        // confirms the login (llmAuthVerified flips before the user record
+        // refresh that agentIsVerifiedConnected depends on).
+        if (
+          selectedAgent === 'codex' &&
+          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+        )
+          return llmAuthVerified.codex === true;
         // Key stored, check still in progress — keep enabled so user isn't stuck
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
         if (!apiKey.trim()) return false;
-        // Subscription tokens and pasted auth files have no fixed format —
-        // any non-empty string is accepted (the daemon validates the file)
-        if (authMethod === 'claude-subscription-token' || authMethod === 'codex-auth-json')
-          return true;
+        // Subscription tokens have no fixed format — any non-empty string is
+        // accepted (the daemon validates the token).
+        if (authMethod === 'claude-subscription-token') return true;
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
@@ -767,13 +782,18 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
+        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
+          return llmAuthVerified.codex === true
+            ? null
+            : 'Approve the sign-in code in ChatGPT first';
+        }
+        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
+          return llmAuthVerified.codex === true ? null : 'Import your Codex login to continue';
+        }
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
         if (!apiKey.trim()) {
-          return authMethod === 'codex-auth-json'
-            ? 'Paste your auth.json contents to continue'
-            : 'Enter your API key to continue';
+          return 'Enter your API key to continue';
         }
-        if (authMethod === 'codex-auth-json') return null;
         const err = validateLlmKeyPattern(selectedAgent, apiKey.trim());
         return err ?? null;
       }
@@ -854,6 +874,25 @@ export function OnboardingWizard({
     setCurrentStep(step);
   }, []);
 
+  // Stable handlers for the memoized device sign-in pane — identity-preserving
+  // so its internal timers never force wizard-wide re-renders.
+  const handleCodexDeviceVerified = useCallback(() => {
+    setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+  }, []);
+
+  const handleCodexAuthMethodFallback = useCallback((target: CodexAuthFallback) => {
+    setAuthMethod(target === 'import' ? 'codex-auth-json' : 'api-key');
+    setApiKey('');
+    setLlmError(null);
+  }, []);
+
+  // Login-file import completes inside its own pane; mirror the device flow by
+  // marking codex verified so the primary button advances to the next step.
+  const handleCodexImported = useCallback(() => {
+    setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+    goToStep('workspace');
+  }, [goToStep]);
+
   const handleBack = useCallback(() => {
     if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
   }, [stepIndex, goToStep]);
@@ -878,40 +917,22 @@ export function OnboardingWizard({
           goToStep('workspace');
           return;
         }
+        // Device sign-in and login-file import both complete inside their own
+        // pane; the primary button only ever advances once the attempt
+        // succeeded (button is disabled until then).
+        if (
+          selectedAgent === 'codex' &&
+          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+        ) {
+          if (llmAuthVerified.codex === true) goToStep('workspace');
+          return;
+        }
         // Key stored, auth check still running — proceed optimistically
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
           goToStep('workspace');
           return;
         }
         if (!user || !apiKey.trim()) return;
-        // Pasted auth.json goes to the daemon as-is: it validates the shape,
-        // writes the file 0600 for the right Unix identity, and flips the
-        // user's Codex auth method to subscription. The pasted secret never
-        // touches user records or agent context.
-        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
-          if (!client) return;
-          setLlmSaving(true);
-          setLlmError(null);
-          try {
-            (await client
-              .service('codex-auth/import')
-              .create({ authJson: apiKey })) as CodexAuthImportResult;
-            setLlmAuthVerified((prev) => ({ ...prev, codex: true }));
-            // Drop the pasted token material from React state as soon as the
-            // daemon has it — nothing needs it after a successful import.
-            setApiKey('');
-            goToStep('workspace');
-          } catch (err) {
-            setLlmError(
-              err instanceof Error && err.message
-                ? err.message
-                : 'Could not import the Codex login — try again.'
-            );
-          } finally {
-            setLlmSaving(false);
-          }
-          return;
-        }
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
@@ -1196,6 +1217,13 @@ export function OnboardingWizard({
             const isVerified = llmAuthVerified[option.agent];
             const effectiveHasKey = hasKey && isVerified === true;
             const keyBroken = hasKey && isVerified === false;
+            // Codex "connected" may mean a subscription login (auth.json on
+            // the server), not a stored key — a failed probe then means the
+            // login file is gone, and API-key wording would mislead.
+            const subscriptionBroken =
+              keyBroken &&
+              option.agent === 'codex' &&
+              user?.agentic_auth_methods?.codex === 'subscription';
             const methodOptions = AUTH_METHOD_OPTIONS[option.agent];
             return (
               <div
@@ -1283,7 +1311,7 @@ export function OnboardingWizard({
                           color="error"
                           style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
                         >
-                          Key not working
+                          {subscriptionBroken ? 'Login not found' : 'Key not working'}
                         </Tag>
                       )}
                     </div>
@@ -1365,7 +1393,11 @@ export function OnboardingWizard({
                     {keyBroken && (
                       <Alert
                         type="warning"
-                        message="Key stored but not working - enter a new one."
+                        message={
+                          subscriptionBroken
+                            ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
+                            : 'Key stored but not working - enter a new one.'
+                        }
                         showIcon
                         style={{ marginTop: 12, marginBottom: 8, fontSize: 12 }}
                       />
@@ -1419,64 +1451,40 @@ export function OnboardingWizard({
                       </div>
                     )}
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginTop: !methodOptions && !keyBroken ? 12 : 0,
-                        marginBottom: 8,
-                      }}
-                    >
-                      <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
-                        {getKeyLabel(option.agent, authMethod)}
-                      </Text>
-                      {option.keyLink && authMethod === 'api-key' && (
-                        <Typography.Link
-                          href={option.keyLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: 12, color: PRIMARY }}
-                        >
-                          Get your key at {option.keyLinkLabel} →
-                        </Typography.Link>
-                      )}
-                    </div>
+                    {authMethod !== 'codex-device-auth' && authMethod !== 'codex-auth-json' && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginTop: !methodOptions && !keyBroken ? 12 : 0,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
+                          {getKeyLabel(option.agent, authMethod)}
+                        </Text>
+                        {option.keyLink && authMethod === 'api-key' && (
+                          <Typography.Link
+                            href={option.keyLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 12, color: PRIMARY }}
+                          >
+                            Get your key at {option.keyLinkLabel} →
+                          </Typography.Link>
+                        )}
+                      </div>
+                    )}
 
-                    {authMethod === 'codex-auth-json' ? (
-                      <>
-                        <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: 10, fontSize: 12 }}
-                          message={
-                            <span>
-                              Already signed in to Codex on your laptop? Your login lives in{' '}
-                              <code>~/.codex/auth.json</code> there. Print it with{' '}
-                              <code>cat ~/.codex/auth.json</code> and paste the whole thing below —
-                              this replaces the Codex login already stored on this server, which in
-                              shared setups is one login for the whole server, not one per person.
-                              Prefer a terminal? Run <code>codex login --device-auth</code> from a
-                              branch terminal instead.
-                            </span>
-                          }
-                        />
-                        <Input.Password
-                          aria-label="Codex auth.json contents"
-                          placeholder="Paste the JSON from ~/.codex/auth.json…"
-                          value={apiKey}
-                          onChange={(e) => {
-                            setApiKey(e.target.value);
-                            setLlmError(null);
-                          }}
-                          style={{
-                            background: 'rgba(0,0,0,0.3)',
-                            borderColor: 'rgba(255,255,255,0.12)',
-                            fontFamily: 'monospace',
-                            fontSize: 13,
-                          }}
-                        />
-                      </>
+                    {authMethod === 'codex-device-auth' ? (
+                      <CodexDeviceSignIn
+                        client={client}
+                        onVerified={handleCodexDeviceVerified}
+                        onUseFallback={handleCodexAuthMethodFallback}
+                      />
+                    ) : authMethod === 'codex-auth-json' ? (
+                      <CodexImportAuthJson client={client} onImported={handleCodexImported} />
                     ) : authMethod === 'claude-subscription-token' ? (
                       <>
                         <Alert
