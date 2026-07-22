@@ -3974,6 +3974,9 @@ export function KnowledgePage({
                           }
                           autoComplete="off"
                         />
+                        {/* No `lint` prop: api_key maps to the generic-secret
+                            spec (no prefix/charset), so there's nothing to lint —
+                            only the opt-in cleanup fix applies here. */}
                         <CredentialFieldFeedback
                           fix={knowledgeApiKey.get('api_key').fix}
                           onApplyFix={cleanUpKnowledgeApiKey}

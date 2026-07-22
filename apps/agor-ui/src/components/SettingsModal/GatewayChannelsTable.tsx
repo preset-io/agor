@@ -85,6 +85,7 @@ import {
 } from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { useFormCredential } from '../credentials/useFormCredential';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
@@ -830,6 +831,8 @@ const SlackSetupWizard: React.FC<{
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
+  const botTokenCred = useFormCredential(form, 'bot_token');
+  const appTokenCred = useFormCredential(form, 'app_token');
 
   const appName = (Form.useWatch('slack_app_name', form) as string) ?? '';
   const enableChannels = Form.useWatch('enable_channels', form) ?? false;
@@ -1221,8 +1224,9 @@ const SlackSetupWizard: React.FC<{
           rules={[{ required: true, message: 'Bot token is required' }]}
           tooltip="OAuth & Permissions → Bot User OAuth Token (xoxb-...)"
         >
-          <Input.Password placeholder="xoxb-..." />
+          <Input.Password placeholder="xoxb-..." {...botTokenCred.inputProps} />
         </Form.Item>
+        {botTokenCred.feedback}
 
         <Form.Item
           label="App Token"
@@ -1230,8 +1234,9 @@ const SlackSetupWizard: React.FC<{
           rules={[{ required: true, message: 'App token is required' }]}
           tooltip="Basic Information → App-Level Tokens (xapp-...)"
         >
-          <Input.Password placeholder="xapp-..." />
+          <Input.Password placeholder="xapp-..." {...appTokenCred.inputProps} />
         </Form.Item>
+        {appTokenCred.feedback}
 
         <Button
           icon={<ThunderboltOutlined />}
@@ -1369,6 +1374,9 @@ const ChannelFormFields: React.FC<{
 }) => {
   const { showError } = useThemedMessage();
   const { token } = theme.useToken();
+  const botTokenCred = useFormCredential(form, 'bot_token');
+  const appTokenCred = useFormCredential(form, 'app_token');
+  const teamsPasswordCred = useFormCredential(form, 'teams_app_password');
 
   // Watch message source settings for showing warnings/scope requirements. A
   // watched value is `undefined` while its (lazily-rendered) Collapse panel is
@@ -2016,8 +2024,10 @@ const ChannelFormFields: React.FC<{
                     >
                       <Input.Password
                         placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'}
+                        {...teamsPasswordCred.inputProps}
                       />
                     </Form.Item>
+                    {teamsPasswordCred.feedback}
 
                     <Form.Item
                       label="Tenant ID"
@@ -2527,8 +2537,12 @@ const ChannelFormFields: React.FC<{
                           : 'No token stored yet. Enter the bot token (xoxb-...).'
                       }
                     >
-                      <Input.Password placeholder={botTokenStored ? '••••••••' : 'xoxb-...'} />
+                      <Input.Password
+                        placeholder={botTokenStored ? '••••••••' : 'xoxb-...'}
+                        {...botTokenCred.inputProps}
+                      />
                     </Form.Item>
+                    {botTokenCred.feedback}
 
                     <Form.Item
                       label={
@@ -2544,8 +2558,12 @@ const ChannelFormFields: React.FC<{
                           : 'No token stored yet. Enter the app token (xapp-...).'
                       }
                     >
-                      <Input.Password placeholder={appTokenStored ? '••••••••' : 'xapp-...'} />
+                      <Input.Password
+                        placeholder={appTokenStored ? '••••••••' : 'xapp-...'}
+                        {...appTokenCred.inputProps}
+                      />
                     </Form.Item>
+                    {appTokenCred.feedback}
 
                     <CompactAlert
                       type="info"

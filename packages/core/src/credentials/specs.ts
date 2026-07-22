@@ -190,11 +190,20 @@ const FIELD_TO_SPEC: Record<string, CredentialSpecKey> = {
   private_key: 'pem-private-key',
   // Generic single-line secrets — machine-generated, no stable public format.
   app_password: 'generic-secret',
+  // Teams form field name (config key is `app_password`).
+  teams_app_password: 'generic-secret',
   api_token: 'generic-secret',
   signing_secret: 'generic-secret',
   webhook_secret: 'generic-secret',
   // Semantic-search embedding provider key (KnowledgePage).
   api_key: 'generic-secret',
+  // MCP server auth secrets (MCPServerFormFields). These fields ALSO accept
+  // `{{ user.env.X }}` templates whose whitespace is meaningful — the UI only
+  // offers the opt-in fix when the value is a raw (non-template) secret.
+  auth_token: 'generic-secret',
+  jwt_api_token: 'generic-secret',
+  jwt_api_secret: 'generic-secret',
+  oauth_client_secret: 'generic-secret',
 };
 
 /** Every spec key is also accepted verbatim as a field identifier. */

@@ -20,6 +20,7 @@ import {
 } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { useFormCredential } from '../credentials/useFormCredential';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
 
 const { TextArea } = Input;
@@ -109,6 +110,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const watchedClientId = Form.useWatch('oauth_client_id', form);
   const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
   const watchedOauthMode = Form.useWatch('oauth_mode', form);
+  // Credential feedback for the secret fields — opt-in "Clean it up" for raw
+  // tokens, skipped for `{{ … }}` templates whose whitespace is meaningful.
+  const bearerCred = useFormCredential(form, 'auth_token', { allowTemplates: true });
+  const jwtTokenCred = useFormCredential(form, 'jwt_api_token', { allowTemplates: true });
+  const jwtSecretCred = useFormCredential(form, 'jwt_api_secret', { allowTemplates: true });
+  const oauthSecretCred = useFormCredential(form, 'oauth_client_secret', { allowTemplates: true });
   const watchedEnv = Form.useWatch('env', form);
   const watchedHeaders = Form.useWatch('headers', form);
   const hasEnvConfigured = typeof watchedEnv === 'string' && watchedEnv.trim().length > 0;
@@ -502,14 +509,20 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
 
           {authType === 'bearer' && (
-            <Form.Item
-              label="Token"
-              name="auth_token"
-              rules={[{ required: true, message: 'Please enter a bearer token' }]}
-              tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
-            >
-              <Input.Password placeholder="{{ user.env.API_TOKEN }} or raw token" />
-            </Form.Item>
+            <>
+              <Form.Item
+                label="Token"
+                name="auth_token"
+                rules={[{ required: true, message: 'Please enter a bearer token' }]}
+                tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
+              >
+                <Input.Password
+                  placeholder="{{ user.env.API_TOKEN }} or raw token"
+                  {...bearerCred.inputProps}
+                />
+              </Form.Item>
+              {bearerCred.feedback}
+            </>
           )}
 
           {authType === 'jwt' && (
@@ -528,16 +541,24 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 rules={[{ required: true, message: 'Please enter the API token' }]}
                 tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
               >
-                <Input.Password placeholder="{{ user.env.JWT_TOKEN }} or raw token" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_TOKEN }} or raw token"
+                  {...jwtTokenCred.inputProps}
+                />
               </Form.Item>
+              {jwtTokenCred.feedback}
               <Form.Item
                 label="API Secret"
                 name="jwt_api_secret"
                 rules={[{ required: true, message: 'Please enter the API secret' }]}
                 tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
               >
-                <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_SECRET }} or raw secret"
+                  {...jwtSecretCred.inputProps}
+                />
               </Form.Item>
+              {jwtSecretCred.feedback}
             </>
           )}
         </>
@@ -752,8 +773,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     <Input.Password
                       placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
                       allowClear
+                      {...oauthSecretCred.inputProps}
                     />
                   </Form.Item>
+                  {oauthSecretCred.feedback}
                   <Form.Item
                     label="OAuth Mode"
                     name="oauth_mode"

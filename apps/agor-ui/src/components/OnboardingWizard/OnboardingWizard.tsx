@@ -1488,7 +1488,7 @@ export function OnboardingWizard({
                       Stored securely - never shared or logged.
                     </Text>
                     {(llmFix || llmLint) && (
-                      <div style={{ marginTop: 10 }}>
+                      <div style={{ marginTop: token.marginSM }}>
                         <CredentialFieldFeedback
                           lint={llmLint}
                           fix={llmFix}
