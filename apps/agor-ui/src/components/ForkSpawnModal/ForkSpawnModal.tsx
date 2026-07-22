@@ -199,8 +199,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             spawnConfig.codexSandboxMode = values.codexSandboxMode;
             spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
             spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
-            spawnConfig.mcpServerIds = values.mcpServerIds;
           }
+          // MCP attachments are session-scoped and remain editable regardless
+          // of whether the agent configuration comes from a preset or inline.
+          spawnConfig.mcpServerIds = values.mcpServerIds;
           spawnConfig.extraInstructions = values.extraInstructions;
           // Always send envVarNames in custom preset so the user can
           // explicitly clear inherited selections (empty array = explicit

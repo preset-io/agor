@@ -279,6 +279,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a curated alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
+  useEffect(() => {
+    setPinned(value?.mode === 'exact');
+  }, [value?.mode]);
 
   // OpenCode uses a different UI (2 dropdowns: provider + model)
   if (effectiveTool === 'opencode') {

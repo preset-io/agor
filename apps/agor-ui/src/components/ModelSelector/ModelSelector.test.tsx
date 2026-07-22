@@ -31,6 +31,28 @@ describe('ModelSelector (Claude)', () => {
     expect(screen.queryByText('Pin a specific version…')).not.toBeInTheDocument();
   });
 
+  it('updates pin mode when a controlled value changes', () => {
+    const pinned = 'claude-sonnet-4-6-20260101';
+    const { rerender } = render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+      />
+    );
+
+    rerender(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: pinned }}
+      />
+    );
+
+    expect(screen.getByRole('combobox')).toHaveValue(pinned);
+    expect(screen.getByText('Use a recommended model')).toBeInTheDocument();
+  });
+
   it('switches to exact mode when pinning a version', () => {
     const onChange = vi.fn();
     render(

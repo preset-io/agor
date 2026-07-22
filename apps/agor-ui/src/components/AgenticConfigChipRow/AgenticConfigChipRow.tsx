@@ -174,7 +174,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   // Can the selected source actually resolve to a config? Mirrors the daemon's
   // create logic (assertInlineAgenticConfigurationAllowed / reference resolution).
   const configResolvable = (() => {
-    if (loading) return true; // optimistic until presets load
+    if (loading) return false;
     if (presets.some((preset) => preset.preset_id === source)) return true;
     if (source === USER_DEFAULT_AGENTIC_CONFIGURATION) {
       if (userSelection?.source === 'preset') return true;
@@ -191,9 +191,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       configResolvable,
       configResolvable
         ? undefined
-        : 'This agent requires an admin-managed preset, and none is configured for this workspace'
+        : loading
+          ? 'Loading configuration'
+          : 'This agent requires an admin-managed preset, and none is configured for this workspace'
     );
-  }, [configResolvable, onConfigValidityChange]);
+  }, [configResolvable, loading, onConfigValidityChange]);
 
   // Keep the source valid — mirrors the daemon's resolution precedence.
   useEffect(() => {

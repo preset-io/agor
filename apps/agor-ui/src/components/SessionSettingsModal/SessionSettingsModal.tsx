@@ -319,10 +319,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         ).catch(() => showError('Failed to save your default configuration'));
       }
 
-      if (
-        onUpdateSessionMcpServers &&
-        values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
-      ) {
+      if (onUpdateSessionMcpServers) {
         onUpdateSessionMcpServers(session.session_id, values.mcpServerIds || []);
       }
 

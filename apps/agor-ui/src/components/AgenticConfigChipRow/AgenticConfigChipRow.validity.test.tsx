@@ -32,28 +32,35 @@ vi.mock('../PermissionModeSelector', async () => {
 vi.mock('../EffortSelector', () => ({ EffortSelector: () => null }));
 vi.mock('../MCPServerSelect', () => ({ MCPServerSelect: () => null }));
 
-// No presets and no workspace default.
-const makeClient = () =>
-  ({
-    service: () => ({ find: async () => ({ data: [] }), on: () => {}, off: () => {} }),
-  }) as unknown as AgorClient;
-
 const userNoDefault = { user_id: 'u1', default_agentic_config: {} } as unknown as User;
 
 describe('AgenticConfigChipRow config validity', () => {
   it('reports invalid when inline is disallowed and no preset exists', async () => {
     const onValidity = vi.fn();
+    let resolvePresets: ((value: { data: [] }) => void) | undefined;
+    const presets = new Promise<{ data: [] }>((resolve) => {
+      resolvePresets = resolve;
+    });
+    const client = {
+      service: () => ({ find: () => presets, on: () => {}, off: () => {} }),
+    } as unknown as AgorClient;
     render(
       <Form>
         <AgenticConfigChipRow
           tool="claude-code"
-          client={makeClient()}
+          client={client}
           mcpServerById={new Map()}
           currentUser={userNoDefault}
           onConfigValidityChange={onValidity}
         />
       </Form>
     );
+
+    await waitFor(() => {
+      expect(onValidity).toHaveBeenLastCalledWith(false, 'Loading configuration');
+    });
+
+    resolvePresets?.({ data: [] });
     await waitFor(() => {
       expect(onValidity).toHaveBeenLastCalledWith(false, expect.stringContaining('preset'));
     });

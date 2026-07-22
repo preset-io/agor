@@ -49,6 +49,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
         >
           preset
         </button>
+        <button
+          type="button"
+          data-testid="pick-mcp"
+          onClick={() => form.setFieldValue('mcpServerIds', ['mcp-1'])}
+        >
+          mcp
+        </button>
       </div>
     );
   },
@@ -98,5 +105,26 @@ describe('SessionSettingsModal advisor model', { timeout: 10_000 }, () => {
     // Back to inline → available again.
     fireEvent.click(screen.getByTestId('pick-inline'));
     await screen.findByText('Advisor model');
+  });
+
+  it('persists MCP changes while a preset is selected', async () => {
+    const onUpdateSessionMcpServers = vi.fn();
+    render(
+      <SessionSettingsModal
+        open
+        onClose={vi.fn()}
+        session={{ ...claudeSession, agentic_tool_preset_id: 'preset-1' } as Session}
+        client={null}
+        currentUser={null}
+        onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('pick-mcp'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(onUpdateSessionMcpServers).toHaveBeenCalledWith('s1', ['mcp-1']);
+    });
   });
 });
