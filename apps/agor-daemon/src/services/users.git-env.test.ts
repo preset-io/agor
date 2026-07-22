@@ -119,6 +119,39 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
     expect(env.GITHUB_TOKEN).toBe(`ghp_${'x'.repeat(36)}`);
   });
 
+  dbTest(
+    'at-rest normalization leaves a curly-quoted NON-credential env var untouched',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const userId = await makeUser(service);
+
+      // An unknown env var name is not a credential — the backstop must only
+      // edge-trim + strip zero-width, never convert quotes or collapse internal
+      // whitespace. A curly-quoted value with an internal space must survive.
+      const arbitrary = '“hello world”';
+      await service.patch(userId, { env_vars: { MY_APP_CONFIG: arbitrary } });
+
+      const env = await service.getGitEnvironment({ userId }, {});
+      expect(env.MY_APP_CONFIG).toBe(arbitrary);
+    }
+  );
+
+  dbTest(
+    'at-rest normalization repairs a wrapping-quoted KNOWN credential env var',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const userId = await makeUser(service);
+
+      // GH_TOKEN is a known credential: a value wrapped in quotes gets the quote
+      // pair stripped at rest (isLikelyGitToken would otherwise reject it).
+      const token = `ghp_${'x'.repeat(36)}`;
+      await service.patch(userId, { env_vars: { GH_TOKEN: `"${token}"` } });
+
+      const env = await service.getGitEnvironment({ userId }, {});
+      expect(env.GH_TOKEN).toBe(token);
+    }
+  );
+
   dbTest('returns empty object for nonexistent user', async ({ db }) => {
     const service = new UsersService(db);
     const fakeId = '019e0000-0000-7000-8000-000000000000';
