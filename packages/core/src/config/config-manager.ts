@@ -512,6 +512,42 @@ function validateConfig(config: AgorConfig): void {
     'login_redirect_url',
     'external_launch.login_redirect_url'
   );
+
+  validateExternalLaunchReturnHostParam(config);
+}
+
+/**
+ * Query-parameter name the UI reserves for the relative deep-link it forwards
+ * to the launch-init endpoint (see apps/agor-ui/src/utils/launchInitUrl.ts). The
+ * host param must never reuse this name: the UI sets `return_to` first and then
+ * the host param, so an equal name would overwrite the deep-link with the host.
+ */
+const RESERVED_RETURN_TO_PARAM = 'return_to';
+
+function validateExternalLaunchReturnHostParam(config: AgorConfig): void {
+  const raw = config.external_launch?.return_host_param;
+  if (raw === undefined) return;
+  if (typeof raw !== 'string') {
+    throw new Error('Config error: external_launch.return_host_param must be a string');
+  }
+  // An empty value intentionally falls back to the default (`return_host`) at
+  // resolve time, so it is left untouched here.
+  if (raw === '') return;
+  if (raw === RESERVED_RETURN_TO_PARAM) {
+    throw new Error(
+      `Config error: external_launch.return_host_param must not be "${RESERVED_RETURN_TO_PARAM}" — ` +
+        'that name is reserved for the relative deep-link the UI forwards to the launch-init ' +
+        'endpoint, and reusing it would overwrite the deep-link with the return host.'
+    );
+  }
+  // Conservative query-parameter-name charset: the value becomes a URL query
+  // key, so restrict it to opaque identifier characters and reject separators.
+  if (!/^[A-Za-z0-9_.-]+$/.test(raw)) {
+    throw new Error(
+      'Config error: external_launch.return_host_param may only contain letters, digits, ' +
+        'underscore, hyphen, and dot'
+    );
+  }
 }
 
 function validateOptionalHttpUrl(

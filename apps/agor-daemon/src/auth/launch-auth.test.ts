@@ -587,6 +587,46 @@ describe('one-time launch auth service', () => {
     expect(logged).not.toContain(launchCode);
     expect(logged).not.toContain(serviceCredential);
   });
+
+  it('never logs an unexpected error message carrying a query credential', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const launchCode = 'otc_unexpected_secret_code_4242';
+    // The exchange fetch throws an unexpected (non-Feathers) error whose message
+    // embeds a credential-bearing URL the structural redactor does not match on.
+    // The classifier must keep that free text out of the log entirely.
+    const leakyUrl = 'https://issuer.example.test/exchange?access_token=supersecret';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error(`connect ECONNREFUSED ${leakyUrl}`);
+      })
+    );
+
+    await expect(service().create({ launchCode })).rejects.toBeInstanceOf(NotAuthenticated);
+
+    expect(warn).toHaveBeenCalled();
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain('[auth/launch] unexpected_error');
+    expect(logged).not.toContain('supersecret');
+    expect(logged).not.toContain('access_token');
+    expect(logged).not.toContain(launchCode);
+  });
+
+  it('fails closed before the network call with a static diagnostic on an invalid host', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = mockExchange(signClaims());
+
+    await expect(
+      service(hostConfig()).create({ launchCode: 'code' }, {
+        headers: { host: 'a.example, b.example' },
+      } as never)
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+
+    // No launch code ever leaves the daemon: the exchange fetch is never called.
+    expect(fetchMock).not.toHaveBeenCalled();
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain('[auth/launch] request_host_invalid');
+  });
 });
 
 describe('public one-time launch auth settings', () => {

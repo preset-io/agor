@@ -31,4 +31,24 @@ describe('buildLaunchInitUrl (direct-host entry)', () => {
   it('returns the input unchanged when it is not a valid URL', () => {
     expect(buildLaunchInitUrl('not a url', 'return_host')).toBe('not a url');
   });
+
+  it('keeps return_to intact when the host param has a distinct name', () => {
+    window.history.replaceState({}, '', '/ui/s/session-1/');
+    const href = buildLaunchInitUrl('https://console.example.test/launch-init', 'return_host');
+    const url = new URL(href);
+    expect(url.searchParams.get('return_to')).toBe('/ui/s/session-1/');
+    expect(url.searchParams.get('return_host')).toBe(window.location.host);
+  });
+
+  it('demonstrates the hazard that config validation prevents: a return_to host param clobbers the deep-link', () => {
+    // If the return-host param were allowed to reuse the reserved `return_to`
+    // name, the host set (which runs after return_to) would overwrite the
+    // relative deep-link. Core config validation rejects this name for exactly
+    // this reason; this test pins the hazard the guard prevents.
+    window.history.replaceState({}, '', '/ui/s/session-1/');
+    const href = buildLaunchInitUrl('https://console.example.test/launch-init', 'return_to');
+    const url = new URL(href);
+    expect(url.searchParams.get('return_to')).toBe(window.location.host);
+    expect(url.searchParams.get('return_to')).not.toBe('/ui/s/session-1/');
+  });
 });

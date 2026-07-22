@@ -252,6 +252,10 @@ export interface AgorExternalLaunchSettings {
    * host that has no local session can start the issuer's launch-init flow and
    * be returned to the exact host it came from. The issuer must allow-list this
    * value against its own routing records. Default: `return_host`.
+   *
+   * Must not be `return_to`: that name is reserved for the relative deep-link
+   * the UI forwards to the launch-init endpoint, and reusing it would overwrite
+   * the deep-link with the host. Rejected during config validation.
    */
   return_host_param?: string;
 }
