@@ -13,6 +13,7 @@
 
 import type { AgenticAuthMethod, AuthCheckResult } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useRef } from 'react';
 import { TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from './CodexAuthSettings';
 
@@ -53,10 +54,17 @@ function Harness({
       find: deviceFind ?? vi.fn(async () => ({ phase: 'idle' })),
     },
   };
-  const client = {
-    io: { on: vi.fn(), off: vi.fn() },
-    service: vi.fn((name: string) => services[name] ?? {}),
-  } as never;
+  // Stable client identity across rerenders (mirrors the real modal, where the
+  // client outlives authMethod changes) — so a rerender that flips only
+  // authMethod exercises the method-change path, not a client swap.
+  const clientRef = useRef<unknown>(undefined);
+  if (clientRef.current === undefined) {
+    clientRef.current = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => services[name] ?? {}),
+    };
+  }
+  const client = clientRef.current as never;
 
   return (
     <CodexAuthSettings
@@ -160,6 +168,48 @@ describe('CodexAuthSettings', () => {
     await waitFor(() => expect(checkAuth).toHaveBeenCalled());
     expect(screen.queryByText('Codex is connected')).not.toBeInTheDocument();
     expect(screen.queryByText('A ChatGPT login is active on this server.')).not.toBeInTheDocument();
+  });
+
+  it('drops a stale negative verdict when the method flips (no false "Login not found")', async () => {
+    // An api-key probe rejects; then the method flips to subscription, as a
+    // completed ChatGPT sign-in would. The stale api-key rejection must not be
+    // reinterpreted as a subscription failure — even while the re-probe for the
+    // new method is still in flight (and would persist if that re-probe failed).
+    let releaseSecond: (v: AuthCheckResult) => void = () => {};
+    const checkAuth = vi
+      .fn<[], Promise<AuthCheckResult>>()
+      .mockResolvedValueOnce({ status: 'unauthenticated', authenticated: false, method: 'api-key' })
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthCheckResult>((resolve) => {
+            releaseSecond = resolve;
+          })
+      );
+    const { rerender } = render(
+      <Harness
+        initialMethod="api_key"
+        fieldStatus={{ OPENAI_API_KEY: true }}
+        checkAuth={checkAuth}
+      />
+    );
+    expect(await screen.findByText('Key not working')).toBeInTheDocument();
+
+    // Flip to subscription; the second probe is in flight and unresolved.
+    rerender(
+      <Harness
+        initialMethod="subscription"
+        fieldStatus={{ OPENAI_API_KEY: true }}
+        checkAuth={checkAuth}
+      />
+    );
+    await waitFor(() => expect(checkAuth).toHaveBeenCalledTimes(2));
+    // Neither the stale api-key rejection nor a subscription failure is shown.
+    expect(screen.queryByText('Login not found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Key not working')).not.toBeInTheDocument();
+
+    // Once the new probe resolves under the new method, the correct verdict shows.
+    releaseSecond({ status: 'unauthenticated', authenticated: false, method: 'none' });
+    expect(await screen.findByText('Login not found')).toBeInTheDocument();
   });
 
   it('saves an OpenAI API key through the API-key pane', async () => {

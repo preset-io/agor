@@ -82,13 +82,20 @@ export function CodexAuthSettings({
   // mid-recheck): only the latest request commits its verdict or clears the
   // spinner, so an older response can't land last and mislabel the banner.
   const probeGenRef = useRef(0);
-  // Bump the generation synchronously when the client changes (and on unmount),
-  // before any in-flight probe can resolve. Without this an old client's probe
-  // still owns the current generation in the window before the next probe
-  // starts — and if the replacement client is null, runProbe returns before
-  // incrementing, so the stale request would never be invalidated. Clear the
-  // prior verdict so one identity's status is never shown for another.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: client is the change trigger; the body invalidates rather than reading it.
+  // Bump the generation synchronously when the client OR the effective method
+  // changes (and on unmount), before any in-flight probe can resolve, and clear
+  // the prior verdict. Two reasons a stale verdict must not survive a change:
+  //  - client swap: an old identity's probe still owns the current generation
+  //    in the window before the next probe starts (and if the replacement
+  //    client is null, runProbe returns before incrementing, so the stale
+  //    request would never be invalidated).
+  //  - method flip: a verdict captured under the PREVIOUS method must not be
+  //    re-interpreted by the banner under the new one — e.g. a rejected api-key
+  //    probe becoming a false "Login not found" after a ChatGPT sign-in flips
+  //    the method to subscription (and persisting there if the re-probe then
+  //    fails, since transport failures keep the last verdict). Clearing to null
+  //    means the banner shows nothing until a verdict for the NEW method lands.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client/authMethod are the change triggers; the body invalidates rather than reading them.
   useLayoutEffect(() => {
     probeGenRef.current++;
     setProbe(null);
@@ -99,7 +106,7 @@ export function CodexAuthSettings({
     return () => {
       probeGenRef.current++;
     };
-  }, [client]);
+  }, [client, authMethod]);
   const runProbe = useCallback(async () => {
     if (!client) return;
     const gen = ++probeGenRef.current;
