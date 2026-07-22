@@ -5,16 +5,20 @@ import {
 } from '@agor-live/client';
 import { render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgenticToolConfigurationPicker,
   persistUserDefaultFromForm,
 } from './AgenticToolConfigurationPicker';
 
-// Store: no per-tool override → inline configuration is allowed.
+const storeSettings = vi.hoisted(() => ({ inlineAllowed: true }));
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ agenticToolSettingsByName: new Map() }),
+    selector({
+      agenticToolSettingsByName: new Map([
+        ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+      ]),
+    }),
 }));
 
 // Heavy children irrelevant to selection/labelling behavior.
@@ -59,6 +63,10 @@ const teamPreset = {
   is_default: false,
   configuration: { modelConfig: { model: 'claude-opus-4-8' }, permissionMode: 'auto' },
 };
+
+afterEach(() => {
+  storeSettings.inlineAllowed = true;
+});
 
 function renderPicker(
   currentUser: User,
@@ -143,6 +151,29 @@ describe('AgenticToolConfigurationPicker', () => {
     await waitFor(() =>
       expect(screen.getByText(/My default · Claude Opus 4.8/)).toBeInTheDocument()
     );
+  });
+
+  it('selects an available preset when inline configuration is disabled without a workspace default', async () => {
+    storeSettings.inlineAllowed = false;
+
+    function Harness() {
+      const [form] = Form.useForm();
+      const source = Form.useWatch('agenticToolPresetId', form);
+      return (
+        <Form form={form}>
+          <AgenticToolConfigurationPicker
+            tool="claude-code"
+            client={makeClient([teamPreset])}
+            mcpServerById={new Map()}
+            currentUser={userWithoutDefault}
+          />
+          <output data-testid="selected-source">{source}</output>
+        </Form>
+      );
+    }
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('selected-source')).toHaveTextContent('p1'));
   });
 });
 

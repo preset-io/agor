@@ -13,7 +13,7 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { DEFAULT_CLAUDE_MODEL, getDefaultPermissionMode } from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import { Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
@@ -26,7 +26,6 @@ import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
 export type ForkSpawnAction = 'fork' | 'spawn';
@@ -66,22 +65,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     session?.agentic_tool || 'claude-code'
   );
 
-  const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
-  const isClaude = selectedAgent === 'claude-code' || selectedAgent === 'claude-code-cli';
-  // The advisor override only applies while inline ("Custom") config is active —
-  // the daemon replaces model_config with the resolved preset/default otherwise.
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
-  const setAdvisorModel = (advisorModel: string | undefined) => {
-    const current = form.getFieldValue('modelConfig') as ModelConfig | undefined;
-    form.setFieldValue('modelConfig', {
-      mode: current?.mode ?? 'alias',
-      model: current?.model || DEFAULT_CLAUDE_MODEL,
-      ...(current?.provider ? { provider: current.provider } : {}),
-      advisorModel,
-    });
-  };
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
 
   const getCustomConfigDefaults = useCallback(
@@ -353,21 +339,6 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                   currentUser={currentUser}
                   client={client}
                 />
-
-                {/* Claude advisor-tool model — settable only while inline config
-                    is active (matches NewSessionModal). */}
-                {isClaude && isInlineConfig && (
-                  <Form.Item
-                    label="Advisor model"
-                    tooltip="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings."
-                  >
-                    <AdvisorModelSelect
-                      value={watchedModelConfig?.advisorModel}
-                      onChange={setAdvisorModel}
-                      client={client}
-                    />
-                  </Form.Item>
-                )}
 
                 {selectedAgent === 'codex' && isInlineConfig && (
                   <CodexSettingsForm showHelpText={false} />

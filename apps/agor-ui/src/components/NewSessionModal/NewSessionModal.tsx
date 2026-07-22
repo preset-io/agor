@@ -8,11 +8,7 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import {
-  DEFAULT_CLAUDE_MODEL,
-  getDefaultPermissionMode,
-  mapToCodexPermissionConfig,
-} from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -26,14 +22,17 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
-import { getUserAgenticToolDefault } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import {
+  getUserAgenticToolDefault,
+  getUserDefaultConfigurationSource,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
+import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -126,12 +125,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       : undefined;
   const canCreate = !missingReason;
 
-  const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
-  const isClaudeAgent = selectedAgent === 'claude-code' || selectedAgent === 'claude-code-cli';
-  // The daemon overwrites model_config with the resolved preset/default when a
-  // non-inline configuration is chosen, so the Advanced advisor override only
-  // takes effect (and is only offered) while inline configuration is active.
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
   // Reset form when modal opens, using user defaults if available
@@ -153,9 +147,11 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     // MCP inheritance: branch config > user defaults
     const branchMcpIds = branch?.mcp_server_ids;
 
+    form.resetFields();
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, 'claude-code'),
       // Never carry a checked save-as-default across opens — it could silently
       // overwrite the user's default on a later create.
       saveAsDefault: false,
@@ -177,6 +173,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // MCP inheritance: branch config > user defaults
       form.setFieldsValue({
         ...baseValues,
+        agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, tool),
         // Clear codex fields when switching away from codex
         ...(tool !== 'codex' && {
           codexSandboxMode: undefined,
@@ -276,23 +273,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     onClose();
   };
 
-  const setAdvisorModel = (advisorModel: string | undefined) => {
-    const current = form.getFieldValue('modelConfig') as ModelConfig | undefined;
-    form.setFieldValue('modelConfig', {
-      mode: current?.mode ?? 'alias',
-      model: current?.model || DEFAULT_CLAUDE_MODEL,
-      ...(current?.provider ? { provider: current.provider } : {}),
-      advisorModel,
-    });
-  };
-
-  // Only report the advisor as "on" when it will actually apply (inline config).
-  const advisorOn = isInlineConfig && !!watchedModelConfig?.advisorModel;
   const advancedBits: string[] = [];
   if (envVarNames.length > 0) {
     advancedBits.push(`${envVarNames.length} env var${envVarNames.length === 1 ? '' : 's'}`);
   }
-  if (isClaudeAgent && isInlineConfig && advisorOn) advancedBits.push('advisor on');
   if (selectedAgent === 'codex' && isInlineConfig) advancedBits.push('Codex sandbox');
   const advancedSummary = `Advanced${advancedBits.length > 0 ? ` · ${advancedBits.join(' · ')}` : ''}`;
 
@@ -422,19 +406,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                         client={client}
                         value={envVarNames}
                         onChange={setEnvVarNames}
-                      />
-                    </Form.Item>
-                  )}
-
-                  {isClaudeAgent && isInlineConfig && (
-                    <Form.Item
-                      label="Advisor model"
-                      tooltip="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings."
-                    >
-                      <AdvisorModelSelect
-                        value={watchedModelConfig?.advisorModel}
-                        onChange={setAdvisorModel}
-                        client={client}
                       />
                     </Form.Item>
                   )}

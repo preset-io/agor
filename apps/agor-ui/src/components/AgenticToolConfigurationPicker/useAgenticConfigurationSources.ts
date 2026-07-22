@@ -35,6 +35,14 @@ export function getUserAgenticToolDefault(
   };
 }
 
+export function getUserDefaultConfigurationSource(
+  currentUser: User | null | undefined,
+  tool: AgenticToolName
+): string | undefined {
+  const { selection, configuration } = getUserAgenticToolDefault(currentUser, tool);
+  return selection || configuration ? USER_DEFAULT_AGENTIC_CONFIGURATION : undefined;
+}
+
 export function summarizeAgenticConfiguration(
   tool: AgenticToolName,
   config?: DefaultAgenticToolConfig
@@ -50,6 +58,13 @@ interface Options {
   tool: AgenticToolName;
   client: AgorClient | null;
   currentUser?: User | null;
+}
+
+interface AgenticConfigurationSourceOption {
+  value: string;
+  title: string;
+  summary: string;
+  disabled?: boolean;
 }
 
 /**
@@ -189,17 +204,74 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
       isSourceAllowedByPolicy(source) &&
       (presets.some((preset) => preset.preset_id === source) ||
         (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
-        (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION &&
-          (inlineAllowed || Boolean(workspacePreset))) ||
+        (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION && Boolean(workspacePreset)) ||
         source === INLINE_AGENTIC_CONFIGURATION),
-    [hasUserDefault, inlineAllowed, isSourceAllowedByPolicy, presets, workspacePreset]
+    [hasUserDefault, isSourceAllowedByPolicy, presets, workspacePreset]
   );
 
   const preferredSource = hasUserDefault
     ? USER_DEFAULT_AGENTIC_CONFIGURATION
     : inlineAllowed
       ? INLINE_AGENTIC_CONFIGURATION
-      : WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+      : workspacePreset
+        ? WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+        : presets[0]?.preset_id;
+
+  const sourceOptions = useMemo<AgenticConfigurationSourceOption[]>(
+    () => [
+      ...(hasUserDefault
+        ? [
+            {
+              value: USER_DEFAULT_AGENTIC_CONFIGURATION,
+              title: 'My default',
+              summary: myDefaultSummary,
+            },
+          ]
+        : []),
+      {
+        value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+        title: workspacePreset
+          ? `Workspace default · ${workspacePreset.name}`
+          : 'Workspace default',
+        summary: workspacePreset
+          ? summarizeAgenticConfiguration(canonicalTool, workspacePreset.configuration)
+          : 'not configured',
+        disabled: !workspacePreset,
+      },
+      ...presets.map((preset) => ({
+        value: preset.preset_id as string,
+        title: preset.name,
+        summary: summarizeAgenticConfiguration(canonicalTool, preset.configuration),
+      })),
+      ...(inlineAllowed
+        ? [
+            {
+              value: INLINE_AGENTIC_CONFIGURATION,
+              title: 'Customize for this session…',
+              summary: '',
+            },
+          ]
+        : []),
+    ],
+    [canonicalTool, hasUserDefault, inlineAllowed, myDefaultSummary, presets, workspacePreset]
+  );
+
+  const getSourceError = useCallback(
+    (source: string | undefined): string | undefined => {
+      if (loading) return 'Loading configuration';
+      if (!source) {
+        return loadError ? 'Unable to load configuration presets' : 'Choose a configuration';
+      }
+      if (!isSourceAllowedByPolicy(source)) {
+        return 'This configuration is not allowed by workspace policy';
+      }
+      // A transient request failure cannot prove that an existing preset
+      // disappeared. Preserve it until a successful retry.
+      if (loadError) return undefined;
+      return isValidSource(source) ? undefined : 'This configuration is no longer available';
+    },
+    [isSourceAllowedByPolicy, isValidSource, loadError, loading]
+  );
 
   return {
     canonicalTool,
@@ -218,5 +290,7 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     isSourceAllowedByPolicy,
     isValidSource,
     preferredSource,
+    sourceOptions,
+    getSourceError,
   };
 }

@@ -24,11 +24,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import {
-  DEFAULT_CLAUDE_MODEL,
-  getDefaultPermissionMode,
-  mapToCodexPermissionConfig,
-} from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
@@ -47,7 +43,6 @@ import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
@@ -113,6 +108,7 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
       session.permission_config?.codex?.approvalPolicy ?? codexDefaults.approvalPolicy,
     codexNetworkAccess:
       session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
+    saveAsDefault: false,
     custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,
@@ -209,23 +205,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const sessionMcpServerIds =
     useAgorStore(selectSessionMcpServerIds).get(session.session_id) ?? EMPTY_MCP_SERVER_IDS;
   const [form] = Form.useForm();
-  const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
-  const isClaude =
-    session.agentic_tool === 'claude-code' || session.agentic_tool === 'claude-code-cli';
-  // The advisor override only applies while inline ("Custom") config is active —
-  // the daemon replaces model_config with the resolved preset/default otherwise.
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
-  const setAdvisorModel = (advisorModel: string | undefined) => {
-    const current = form.getFieldValue('modelConfig') as ModelConfig | undefined;
-    form.setFieldValue('modelConfig', {
-      mode: current?.mode ?? 'alias',
-      model: current?.model || DEFAULT_CLAUDE_MODEL,
-      ...(current?.provider ? { provider: current.provider } : {}),
-      advisorModel,
-    });
-  };
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)
   );
@@ -332,6 +314,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         }
       }
 
+      form.setFieldValue('saveAsDefault', false);
       onClose();
     });
   };
@@ -450,21 +433,6 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           client={client ?? null}
           enableSaveAsDefault
         />
-
-        {/* Claude advisor-tool model — settable only while inline config is
-            active (matches NewSessionModal). */}
-        {isClaude && isInlineConfig && (
-          <Form.Item
-            label="Advisor model"
-            tooltip="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings."
-          >
-            <AdvisorModelSelect
-              value={watchedModelConfig?.advisorModel}
-              onChange={setAdvisorModel}
-              client={client}
-            />
-          </Form.Item>
-        )}
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
         <Divider dashed style={{ margin: '8px 0 16px' }} />

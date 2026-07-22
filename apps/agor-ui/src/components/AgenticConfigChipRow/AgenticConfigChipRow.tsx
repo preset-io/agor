@@ -21,11 +21,7 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
   SAVE_AS_DEFAULT_FIELD,
 } from '../AgenticToolConfigurationPicker';
-import {
-  USER_DEFAULT_AGENTIC_CONFIGURATION,
-  useAgenticConfigurationSources,
-  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import { useAgenticConfigurationSources } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { EffortSelector } from '../EffortSelector';
 import { MCPServerSelect } from '../MCPServerSelect';
 import {
@@ -105,18 +101,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const isClaude = CLAUDE_TOOLS.has(tool);
   const {
     inlineAllowed,
-    presets,
     loading,
     loaded,
     loadError,
     retry,
-    workspacePreset,
-    hasUserDefault,
     resolveConfiguration,
-    myDefaultSummary,
-    isSourceAllowedByPolicy,
     isValidSource,
     preferredSource,
+    sourceOptions,
+    getSourceError,
   } = useAgenticConfigurationSources({ tool, client, currentUser });
 
   const source = Form.useWatch(fieldName, form) as string | undefined;
@@ -127,19 +120,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
-  const configError = loading
-    ? 'Loading configuration'
-    : loadError
-      ? !source
-        ? 'Unable to load configuration presets'
-        : isSourceAllowedByPolicy(source)
-          ? undefined
-          : 'This configuration is not allowed by workspace policy'
-      : isValidSource(source)
-        ? undefined
-        : source
-          ? 'This configuration is no longer available'
-          : 'Choose a configuration';
+  const configError = getSourceError(source);
   const configResolvable = !configError;
 
   useEffect(() => {
@@ -212,26 +193,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     else form.setFieldValue(fieldName, value);
   };
 
-  const sourceOptions = [
-    ...(hasUserDefault
-      ? [
-          {
-            value: USER_DEFAULT_AGENTIC_CONFIGURATION,
-            label: `My default${myDefaultSummary ? ` · ${myDefaultSummary}` : ''}`,
-          },
-        ]
-      : []),
-    {
-      value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-      label: workspacePreset
-        ? `Workspace default · ${workspacePreset.name}`
-        : 'Workspace default · not configured',
-      disabled: !workspacePreset,
-    },
-    ...presets.map((preset) => ({ value: preset.preset_id as string, label: preset.name })),
-    ...(inlineAllowed ? [{ value: INLINE_AGENTIC_CONFIGURATION, label: 'Custom' }] : []),
-  ];
-
   const permissionMeta = getPermissionModeMeta(tool, resolvedPermission);
   const permissionColor =
     permissionMeta?.tone === 'warning' ? getPermissionModeColor('warning', token) : undefined;
@@ -266,7 +227,16 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         <Select
           onChange={onSelectSource}
           loading={loading}
-          options={sourceOptions}
+          options={sourceOptions.map((option) => ({
+            value: option.value,
+            disabled: option.disabled,
+            label:
+              option.value === INLINE_AGENTIC_CONFIGURATION
+                ? 'Custom'
+                : option.summary
+                  ? `${option.title} · ${option.summary}`
+                  : option.title,
+          }))}
           style={{ width: '100%' }}
         />
       </Form.Item>
@@ -373,10 +343,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         />
 
         {/* Advisor — only meaningful (and applied) while inline config is active */}
-        {isClaude && isInline && advisorModel && (
+        {isClaude && isInline && (
           <EditableChip
             icon={<InfoCircleOutlined />}
-            label={`Advisor: ${shortModelName(tool, advisorModel)}`}
+            label={advisorModel ? `Advisor: ${shortModelName(tool, advisorModel)}` : 'Advisor: Off'}
             title="Advisor model"
             editable
             width={340}

@@ -7,7 +7,6 @@ import { AgenticToolConfigForm, buildConfigFromFormValues } from '../AgenticTool
 import { SessionMcpServersField } from '../MCPServerSelect';
 import {
   INLINE_AGENTIC_CONFIGURATION,
-  summarizeAgenticConfiguration,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   useAgenticConfigurationSources,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -79,66 +78,22 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
   const {
-    canonicalTool,
     inlineAllowed,
     presets,
     loading,
     loaded,
     loadError,
     retry,
-    workspacePreset,
-    hasUserDefault,
-    myDefaultSummary,
     isValidSource,
     preferredSource,
+    sourceOptions,
+    getSourceError,
   } = useAgenticConfigurationSources({ tool, client, currentUser });
 
   useEffect(() => {
     if (!loaded || isValidSource(selected)) return;
     form.setFieldValue(fieldName, preferredSource);
   }, [fieldName, form, isValidSource, loaded, preferredSource, selected]);
-
-  const options: Array<{
-    value: string;
-    label: React.ReactNode;
-    title: string;
-    summary: string;
-    disabled?: boolean;
-  }> = [];
-
-  if (hasUserDefault) {
-    options.push({
-      value: USER_DEFAULT_AGENTIC_CONFIGURATION,
-      title: 'My default',
-      summary: myDefaultSummary,
-      label: 'My default',
-    });
-  }
-  options.push({
-    value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-    title: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
-    summary: workspacePreset
-      ? summarizeAgenticConfiguration(canonicalTool, workspacePreset.configuration)
-      : 'not configured',
-    label: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
-    disabled: !workspacePreset,
-  });
-  for (const preset of presets) {
-    options.push({
-      value: preset.preset_id,
-      title: preset.name,
-      summary: summarizeAgenticConfiguration(canonicalTool, preset.configuration),
-      label: preset.name,
-    });
-  }
-  if (inlineAllowed) {
-    options.push({
-      value: INLINE_AGENTIC_CONFIGURATION,
-      title: 'Customize for this session…',
-      summary: '',
-      label: 'Customize for this session…',
-    });
-  }
 
   const configurationLabel = (
     <Space size={4}>
@@ -154,13 +109,20 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
       <Form.Item
         name={fieldName}
         label={configurationLabel}
-        rules={[{ required: true, message: 'Choose a preset or inline configuration' }]}
+        rules={[
+          {
+            validator: () => {
+              const error = getSourceError(selected);
+              return error ? Promise.reject(new Error(error)) : Promise.resolve();
+            },
+          },
+        ]}
       >
         <Select
           loading={loading}
           notFoundContent={loading ? <Spin size="small" /> : 'No presets'}
           optionLabelProp="labelText"
-          options={options.map((option) => ({
+          options={sourceOptions.map((option) => ({
             value: option.value,
             disabled: option.disabled,
             // Closed control carries the resolved summary — this replaces the banner.

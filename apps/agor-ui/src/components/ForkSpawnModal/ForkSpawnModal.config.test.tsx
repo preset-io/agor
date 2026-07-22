@@ -1,10 +1,4 @@
-/**
- * Regression tests for ForkSpawnModal after the chip-row migration:
- *  A) the Claude advisor model is settable while inline ("Custom") config is
- *     active (the migration dropped the old advisor Select);
- *  B) user defaults use raw-tool-first lookup with canonical fallback; and
- *  C) changing tools selects the target tool's default rather than inline.
- */
+/** Configuration regressions after the chip-row migration. */
 
 import type { Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -27,9 +21,6 @@ vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
       codex
     </button>
   ),
-}));
-vi.mock('../ModelSelector', () => ({
-  AdvisorModelSelect: () => <div data-testid="advisor-select" />,
 }));
 vi.mock('../CodexSettingsForm', () => ({
   CodexSettingsForm: () => <div data-testid="codex-settings" />,
@@ -57,6 +48,16 @@ vi.mock('../AgenticConfigChipRow', () => ({
         >
           preset
         </button>
+        <button
+          type="button"
+          data-testid="select-preset-mcp"
+          onClick={() => {
+            form.setFieldValue('agenticToolPresetId', 'preset-1');
+            form.setFieldValue('mcpServerIds', ['mcp-1']);
+          }}
+        >
+          select preset and MCP
+        </button>
       </div>
     );
   },
@@ -75,30 +76,7 @@ const codexSession = {
   permission_config: { mode: 'auto' },
 } as unknown as Session;
 
-describe('ForkSpawnModal advisor + canonical defaults', { timeout: 10_000 }, () => {
-  it('shows the advisor control while inline config is active, hidden for a preset', async () => {
-    render(
-      <ForkSpawnModal
-        open
-        action="spawn"
-        session={claudeSession}
-        currentUser={null}
-        onConfirm={vi.fn().mockResolvedValue(undefined)}
-        onCancel={vi.fn()}
-        client={null}
-        userById={new Map()}
-      />
-    );
-
-    // Enter custom config → seeded to inline → advisor available (set from empty).
-    fireEvent.click(screen.getByText('Custom config'));
-    await screen.findByText('Advisor model');
-
-    // A preset hides it (the override would be discarded).
-    fireEvent.click(screen.getByTestId('pick-preset'));
-    await waitFor(() => expect(screen.queryByText('Advisor model')).not.toBeInTheDocument());
-  });
-
+describe('ForkSpawnModal configuration defaults', { timeout: 10_000 }, () => {
   it('reads a claude-code default under the canonical key for a claude-code-cli spawn', async () => {
     const cliSession = {
       session_id: 'parent-cli',
@@ -194,5 +172,41 @@ describe('ForkSpawnModal advisor + canonical defaults', { timeout: 10_000 }, () 
     expect(onConfirm.mock.calls[0][0]).toEqual(
       expect.objectContaining({ agent: 'codex', presetId: '__user_default__' })
     );
+  });
+
+  it('includes MCP servers with a preset-backed custom configuration', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    const currentUser = {
+      user_id: 'u3',
+      default_agentic_config: {},
+      default_mcp_server_ids: [],
+    } as unknown as User;
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={{ ...claudeSession, agentic_tool_preset_id: 'preset-1' } as Session}
+        currentUser={currentUser}
+        initialPrompt="spawn a child"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Custom config'));
+    fireEvent.click(await screen.findByTestId('select-preset-mcp'));
+    fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
+
+    await waitFor(() => {
+      expect(onConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'spawn a child',
+          presetId: 'preset-1',
+          mcpServerIds: ['mcp-1'],
+        })
+      );
+    });
   });
 });

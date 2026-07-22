@@ -1,15 +1,12 @@
-/**
- * Regression: the Claude advisor model must be settable from SessionSettings
- * (the migration to the chip row dropped the old advisor Select). It appears
- * whenever Configuration is inline ("Custom") — even from an empty value — and
- * hides for a preset/default (where the daemon would discard the override).
- */
+/** Session settings configuration regressions. */
 
-import type { Session } from '@agor-live/client';
+import type { AgorClient, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionSettingsModal } from './SessionSettingsModal';
+
+const persistUserDefaultFromForm = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (sel: (s: unknown) => unknown) => sel({}),
@@ -19,12 +16,9 @@ vi.mock('../../store/selectors', () => ({
   selectSessionMcpServerIds: () => new Map(),
 }));
 vi.mock('../../utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
-vi.mock('../ModelSelector', () => ({
-  AdvisorModelSelect: () => <div data-testid="advisor-select" />,
-}));
 vi.mock('../AgenticToolConfigurationPicker', () => ({
   INLINE_AGENTIC_CONFIGURATION: '__inline__',
-  persistUserDefaultFromForm: vi.fn(),
+  persistUserDefaultFromForm,
 }));
 // Chip-row stub that drives the shared `agenticToolPresetId` field.
 vi.mock('../AgenticConfigChipRow', () => ({
@@ -55,6 +49,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
           onClick={() => form.setFieldValue('mcpServerIds', ['mcp-1'])}
         >
           mcp
+        </button>
+        <button
+          type="button"
+          data-testid="save-default"
+          onClick={() => form.setFieldValue('saveAsDefault', true)}
+        >
+          save default
         </button>
       </div>
     );
@@ -89,30 +90,7 @@ const codexSession = {
   agentic_tool: 'codex',
 } as unknown as Session;
 
-describe('SessionSettingsModal advisor model', { timeout: 10_000 }, () => {
-  it('lets the advisor be set from empty while inline, and hides it for a preset', async () => {
-    render(
-      <SessionSettingsModal
-        open
-        onClose={vi.fn()}
-        session={claudeSession}
-        client={null}
-        currentUser={null}
-      />
-    );
-
-    // Inline by default (no preset) → advisor visible even with no advisorModel set.
-    expect(screen.getByText('Advisor model')).toBeInTheDocument();
-
-    // Selecting a preset hides it (the override would be discarded).
-    fireEvent.click(screen.getByTestId('pick-preset'));
-    await waitFor(() => expect(screen.queryByText('Advisor model')).not.toBeInTheDocument());
-
-    // Back to inline → available again.
-    fireEvent.click(screen.getByTestId('pick-inline'));
-    await screen.findByText('Advisor model');
-  });
-
+describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   it('persists MCP changes while a preset is selected', async () => {
     const onUpdateSessionMcpServers = vi.fn();
     render(
@@ -150,5 +128,28 @@ describe('SessionSettingsModal advisor model', { timeout: 10_000 }, () => {
     await waitFor(() =>
       expect(screen.queryByText('Codex Sandbox & Policies')).not.toBeInTheDocument()
     );
+  });
+
+  it('does not repeat save-as-default after a successful close and reopen', async () => {
+    persistUserDefaultFromForm.mockClear();
+    const currentUser = { user_id: 'u1' } as unknown as User;
+    const client = {} as AgorClient;
+    const props = {
+      session: claudeSession,
+      onClose: vi.fn(),
+      currentUser,
+      client,
+    };
+    const { rerender } = render(<SessionSettingsModal {...props} open />);
+
+    fireEvent.click(screen.getByTestId('save-default'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1));
+
+    rerender(<SessionSettingsModal {...props} open={false} />);
+    rerender(<SessionSettingsModal {...props} open />);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(2));
+    expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
   });
 });

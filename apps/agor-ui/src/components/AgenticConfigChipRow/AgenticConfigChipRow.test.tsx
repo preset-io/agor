@@ -1,12 +1,21 @@
 import type { AgorClient, User } from '@agor-live/client';
+import {
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgenticConfigChipRow } from './AgenticConfigChipRow';
 
+const storeSettings = vi.hoisted(() => ({ inlineAllowed: true }));
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ agenticToolSettingsByName: new Map() }),
+    selector({
+      agenticToolSettingsByName: new Map([
+        ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+      ]),
+    }),
 }));
 
 // Stub the heavy popover editors with buttons that fire their onChange.
@@ -23,7 +32,11 @@ vi.mock('../ModelSelector', async () => {
         change model
       </button>
     ),
-    AdvisorModelSelect: () => <div data-testid="advisor-select" />,
+    AdvisorModelSelect: ({ onChange }: { onChange: (value: string) => void }) => (
+      <button type="button" data-testid="advisor-select" onClick={() => onChange('advisor-model')}>
+        choose advisor
+      </button>
+    ),
   };
 });
 vi.mock('../PermissionModeSelector', async () => {
@@ -91,6 +104,10 @@ function Harness({
     </Form>
   );
 }
+
+afterEach(() => {
+  storeSettings.inlineAllowed = true;
+});
 
 describe('AgenticConfigChipRow', () => {
   it('renders a source Select and resolved-value chips (effort resolves to the effective default)', async () => {
@@ -185,5 +202,141 @@ describe('AgenticConfigChipRow', () => {
     expect(state.model).toBe('claude-haiku-4-5');
     // Permission was seeded from the resolved default, not reset.
     expect(state.perm).toBe('acceptEdits');
+  });
+
+  it('owns the advisor control from the empty inline state', async () => {
+    render(<Harness user={{ user_id: 'u2' } as User} initialSource="__inline__" />);
+
+    const chip = await screen.findByRole('button', { name: 'Advisor model: Advisor: Off' });
+    fireEvent.click(chip);
+    fireEvent.click(await screen.findByTestId('advisor-select'));
+
+    await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
+  });
+});
+
+const userWithInlineDefault = {
+  user_id: 'u3',
+  default_agentic_selection: { 'claude-code': { source: 'inline' } },
+  default_agentic_config: { 'claude-code': { permissionMode: 'acceptEdits' } },
+} as unknown as User;
+
+function ValidityHarness({
+  client,
+  onValidity,
+  onValid,
+  onInvalid,
+}: {
+  client: AgorClient;
+  onValidity: (valid: boolean, reason?: string) => void;
+  onValid: () => void;
+  onInvalid: () => void;
+}) {
+  const [form] = Form.useForm();
+  const source = Form.useWatch('agenticToolPresetId', form);
+
+  return (
+    <Form form={form} initialValues={{ agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION }}>
+      <AgenticConfigChipRow
+        tool="claude-code"
+        client={client}
+        mcpServerById={new Map()}
+        currentUser={userWithInlineDefault}
+        onConfigValidityChange={onValidity}
+      />
+      <button
+        type="button"
+        onClick={() => void form.validateFields().then(onValid).catch(onInvalid)}
+      >
+        Validate
+      </button>
+      <output data-testid="source">{source}</output>
+    </Form>
+  );
+}
+
+describe('AgenticConfigChipRow config validity', () => {
+  it('falls back from a disallowed inline user default to the workspace default', async () => {
+    storeSettings.inlineAllowed = false;
+    const onValidity = vi.fn();
+    const onValid = vi.fn();
+    const onInvalid = vi.fn();
+    let resolvePresets: ((value: { data: unknown[] }) => void) | undefined;
+    const presets = new Promise<{ data: unknown[] }>((resolve) => {
+      resolvePresets = resolve;
+    });
+    const client = {
+      service: () => ({ find: () => presets, on: () => {}, off: () => {} }),
+    } as unknown as AgorClient;
+
+    render(
+      <ValidityHarness
+        client={client}
+        onValidity={onValidity}
+        onValid={onValid}
+        onInvalid={onInvalid}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onValidity).toHaveBeenLastCalledWith(false, 'Loading configuration');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledOnce());
+
+    resolvePresets?.({
+      data: [
+        {
+          preset_id: 'workspace-preset',
+          tool: 'claude-code',
+          name: 'Workspace preset',
+          is_default: true,
+          configuration: {},
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('source')).toHaveTextContent(
+        WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+      );
+      expect(onValidity).toHaveBeenLastCalledWith(true, undefined);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledOnce());
+  });
+
+  it('rejects an inline user default disallowed by policy even when loading fails', async () => {
+    storeSettings.inlineAllowed = false;
+    const onValidity = vi.fn();
+    const onValid = vi.fn();
+    const onInvalid = vi.fn();
+    const client = {
+      service: () => ({
+        find: () => Promise.reject(new Error('preset service unavailable')),
+        on: () => {},
+        off: () => {},
+      }),
+    } as unknown as AgorClient;
+
+    render(
+      <ValidityHarness
+        client={client}
+        onValidity={onValidity}
+        onValid={onValid}
+        onInvalid={onInvalid}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onValidity).toHaveBeenLastCalledWith(
+        false,
+        'This configuration is not allowed by workspace policy'
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledOnce());
+    expect(onValid).not.toHaveBeenCalled();
   });
 });
