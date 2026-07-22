@@ -99,6 +99,12 @@ function readHeaderValues(
       values.push(tenantId);
     }
   }
+  if (values.length > 1) {
+    if (new Set(values).size > 1) {
+      throw new TenantResolutionError('Conflicting tenant identities');
+    }
+    throw new TenantResolutionError(`Invalid trusted tenant header ${header}`);
+  }
   return values;
 }
 

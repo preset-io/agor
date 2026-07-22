@@ -673,7 +673,21 @@ describe('POST /mcp with personal API keys', () => {
     );
   });
 
-  it('rejects duplicate on-wire trusted tenant headers before API-key lookup', async () => {
+  it.each([
+    {
+      label: 'conflicting',
+      tenantHeaders: ['tenant-a', 'tenant-b'],
+      errorMessage: 'Conflicting tenant identities',
+    },
+    {
+      label: 'identical',
+      tenantHeaders: ['tenant-a', 'tenant-a'],
+      errorMessage: 'Invalid trusted tenant header x-agor-tenant-id',
+    },
+  ])('rejects $label duplicate on-wire trusted tenant headers before API-key lookup', async ({
+    tenantHeaders,
+    errorMessage,
+  }) => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
     const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
 
@@ -697,7 +711,7 @@ describe('POST /mcp with personal API keys', () => {
                   'Content-Type': 'application/json',
                   'Content-Length': Buffer.byteLength(requestBody),
                   'X-API-Key': 'agor_sk_valid',
-                  'X-Agor-Tenant-Id': ['tenant-a', 'tenant-b'],
+                  'X-Agor-Tenant-Id': tenantHeaders,
                 },
               },
               (res) => {
@@ -716,7 +730,7 @@ describe('POST /mcp with personal API keys', () => {
 
         expect(response.status, response.body).toBe(401);
         expect(JSON.parse(response.body)).toMatchObject({
-          error: { message: 'Conflicting tenant identities' },
+          error: { message: errorMessage },
         });
         expect(verifyKey).not.toHaveBeenCalled();
       },

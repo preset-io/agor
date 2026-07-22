@@ -199,6 +199,32 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/Invalid trusted tenant header/);
   });
 
+  it.each([
+    {
+      label: 'identical multi-valued header',
+      headers: { 'x-agor-tenant-id': ['tenant-a', 'tenant-a'] },
+    },
+    {
+      label: 'identical case-insensitive duplicate keys',
+      headers: {
+        'x-agor-tenant-id': 'tenant-a',
+        'X-Agor-Tenant-Id': 'tenant-a',
+      },
+    },
+  ])('rejects $label because the trusted header is a singleton', ({ headers }) => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        { headers }
+      )
+    ).toThrow(/Invalid trusted tenant header/);
+  });
+
   it('rejects a comma-coalesced trusted header as an ambiguous HTTP list', () => {
     expect(() =>
       resolveTenantContext(
