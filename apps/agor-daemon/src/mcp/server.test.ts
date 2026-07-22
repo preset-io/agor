@@ -812,6 +812,82 @@ describe('POST /mcp with personal API keys', () => {
     });
   });
 
+  it('rejects a stateful MCP request when its personal API key is revoked', async () => {
+    await mockPersonalApiKeyUser();
+    const { UserApiKeysRepository } = await import('@agor/core/db');
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      vi.mocked(UserApiKeysRepository.prototype.verifyKey).mockResolvedValue(null);
+
+      const { resp } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
+      expect(resp.status).toBe(401);
+    });
+  });
+
+  it('rejects a stateful MCP request when credentials are omitted', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'Mcp-Session-Id': mcpSessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 60,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(401);
+    });
+  });
+
+  it('retains and re-authorizes an omitted Agor session binding on later requests', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const mcpSessionId = await initializeStatefulMcp(baseUrl, 'agor_sk_valid', {
+          'X-Agor-Session-Id': 'session-full-id',
+        });
+
+        // Both continuation requests omit X-Agor-Session-Id. The immutable
+        // initialize-time binding is retained and checked through sessions.get.
+        await markStatefulMcpInitialized(baseUrl, mcpSessionId);
+        const { resp, parsed } = await callCurrentUserStatefully(baseUrl, mcpSessionId);
+
+        expect(resp.status).toBe(200);
+        expect(parsed.error).toBeUndefined();
+        expect(getSession).toHaveBeenCalledTimes(3);
+        expect(getSession).toHaveBeenLastCalledWith('session-full-id', expect.any(Object));
+      }
+    );
+  });
+
   it('rejects a stateful MCP request replayed in another tenant for the same user id', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async (id: string) => ({

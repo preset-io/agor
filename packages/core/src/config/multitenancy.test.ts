@@ -109,6 +109,47 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/Conflicting tenant identities/);
   });
 
+  it.each([
+    {
+      label: 'decoded and Feathers authentication payloads',
+      input: {
+        authPayload: { tenant_id: 'tenant-a' },
+        params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
+      },
+    },
+    {
+      label: 'authentication payload and authenticated user',
+      input: {
+        authPayload: { tenant_id: 'tenant-a' },
+        params: { user: { tenant_id: 'tenant-b' } },
+      },
+    },
+  ])('rejects conflicting auth claims from $label', ({ input }) => {
+    expect(() =>
+      resolveTenantContext(
+        { multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' } },
+        input
+      )
+    ).toThrow(/Conflicting tenant identities/);
+  });
+
+  it('rejects conflicting trusted headers from request and Feathers params', () => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        {
+          headers: { 'x-agor-tenant-id': 'tenant-a' },
+          params: { headers: { 'X-Agor-Tenant-Id': 'tenant-b' } },
+        }
+      )
+    ).toThrow(/Conflicting tenant identities/);
+  });
+
   it('fails closed in required_from_auth mode when tenant context is missing', () => {
     expect(() =>
       resolveTenantContext({

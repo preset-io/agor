@@ -117,7 +117,9 @@ In hosted `required_from_auth` deployments:
   queried.
 - Streamable HTTP sessions retain their initialize-time tenant, user, and
   optional Agor-session bindings. Every later GET, POST, or DELETE request is
-  re-authenticated and must reproduce those bindings.
+  re-authenticated. Tenant and user identity must still match; an optional
+  Agor-session binding may be omitted and reused, but cannot be added or
+  replaced, and is re-authorized before each request.
 
 Tenant identity is ambient for the MCP operation, but it does not hold a
 database transaction open. Individual service and repository calls use short

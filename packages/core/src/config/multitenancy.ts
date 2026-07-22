@@ -149,16 +149,20 @@ export function resolveTenantContext(
   if (resolved.mode === 'static') {
     candidates.push({ tenant_id: resolved.static_tenant_id, source: 'static' });
   } else {
-    const claimTenant =
-      readClaim(input.authPayload, resolved.auth_claim) ??
-      readClaim(readAuthenticationPayload(params?.authentication), resolved.auth_claim) ??
-      readClaim(params?.user, resolved.auth_claim);
-    if (claimTenant) candidates.push({ tenant_id: claimTenant, source: 'auth_claim' });
+    for (const tenantId of [
+      readClaim(input.authPayload, resolved.auth_claim),
+      readClaim(readAuthenticationPayload(params?.authentication), resolved.auth_claim),
+      readClaim(params?.user, resolved.auth_claim),
+    ]) {
+      if (tenantId) candidates.push({ tenant_id: tenantId, source: 'auth_claim' });
+    }
 
-    const headerTenant =
-      readHeader(input.headers, resolved.trusted_header) ??
-      readHeader(params?.headers, resolved.trusted_header);
-    if (headerTenant) candidates.push({ tenant_id: headerTenant, source: 'trusted_header' });
+    for (const tenantId of [
+      readHeader(input.headers, resolved.trusted_header),
+      readHeader(params?.headers, resolved.trusted_header),
+    ]) {
+      if (tenantId) candidates.push({ tenant_id: tenantId, source: 'trusted_header' });
+    }
   }
 
   if (candidates.length > 0) {
