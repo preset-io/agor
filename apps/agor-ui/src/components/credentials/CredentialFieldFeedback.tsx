@@ -1,47 +1,52 @@
-import type { CredentialLintResult } from '@agor-live/client';
-import { Alert, Space, Typography, theme } from 'antd';
+import type { CredentialFixSuggestion, CredentialLintResult } from '@agor-live/client';
+import { Alert, Button, Space, Typography, theme } from 'antd';
 
 const { Text } = Typography;
 
-/**
- * Canonical copy for the Layer-1 internal-fix notice. Covers internal-whitespace
- * collapse AND wrapping-quote strips (both flagged as `internalWhitespaceFixed`).
- * Exported so any surface that can't render the component reuses the same words.
- */
-export const CREDENTIAL_INTERNAL_FIX_NOTICE =
-  'We removed spaces, line breaks, or wrapping quotes from this key — a common side effect of copying from a terminal. Check that it verifies below.';
+/** Label for the opt-in one-click cleanup action. */
+export const CREDENTIAL_CLEAN_UP_LABEL = 'Clean it up';
 
 export interface CredentialFieldFeedbackProps {
   /** Layer-2 lint finding for the field, if any. */
   lint?: CredentialLintResult | null;
-  /** Whether the dismissible "we repaired internal whitespace" notice is showing. */
-  internalFixVisible?: boolean;
-  /** Dismiss the internal-fix notice. */
-  onDismissInternalFix?: () => void;
+  /**
+   * Layer-1 opt-in fix suggestion (internal whitespace / wrapping quotes). We
+   * NEVER apply this automatically — the user clicks the action to opt in.
+   */
+  fix?: CredentialFixSuggestion | null;
+  /** Apply the opt-in fix (sets the field to `fix.fixedValue`). */
+  onApplyFix?: () => void;
 }
 
 /**
  * Inline validation messages shared by every credential input surface: the
- * dismissible "we removed spaces/line breaks" notice (Layer 1) and the
- * non-blocking format-lint warning/error (Layer 2). Renders nothing when clean.
+ * opt-in "Clean it up" fix suggestion (Layer 1) and the non-blocking format-lint
+ * warning/error (Layer 2). Renders nothing when clean. The fix is only ever
+ * applied when the user clicks the action — the field's value is never rewritten
+ * behind their back.
  */
 export const CredentialFieldFeedback: React.FC<CredentialFieldFeedbackProps> = ({
   lint,
-  internalFixVisible,
-  onDismissInternalFix,
+  fix,
+  onApplyFix,
 }) => {
   const { token } = theme.useToken();
-  if (!internalFixVisible && !lint) return null;
+  if (!fix && !lint) return null;
 
   return (
     <Space orientation="vertical" size={token.marginXXS} style={{ width: '100%' }}>
-      {internalFixVisible && (
+      {fix && (
         <Alert
           type="warning"
           showIcon
-          closable
-          onClose={onDismissInternalFix}
-          message={CREDENTIAL_INTERNAL_FIX_NOTICE}
+          message={fix.message}
+          action={
+            onApplyFix ? (
+              <Button size="small" type="link" onClick={onApplyFix}>
+                {CREDENTIAL_CLEAN_UP_LABEL}
+              </Button>
+            ) : undefined
+          }
           style={{ fontSize: token.fontSizeSM }}
         />
       )}

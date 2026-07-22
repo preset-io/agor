@@ -21,7 +21,7 @@
  */
 
 import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
-import { hasMinimumRole, normalizeCredential, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLES, sanitizeCredential } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -148,10 +148,11 @@ interface FieldRowProps {
   field: string;
   value: string;
   onChange: (next: string) => void;
-  /** Normalize the current value (blur) or an explicit pasted value (paste). */
-  onNormalize: (raw?: string) => void;
+  /** Sanitize + inspect the current value (blur) or an explicit pasted value (paste). */
+  onInspect: (raw?: string) => void;
+  /** Apply the opt-in fix on explicit user action. */
+  onApplyFix: () => void;
   feedback: CredentialFieldState;
-  onDismissInternalFix: () => void;
   error?: string;
   disabled: boolean;
 }
@@ -160,9 +161,9 @@ const FieldRow: React.FC<FieldRowProps> = ({
   field,
   value,
   onChange,
-  onNormalize,
+  onInspect,
+  onApplyFix,
   feedback,
-  onDismissInternalFix,
   error,
   disabled,
 }) => {
@@ -176,10 +177,10 @@ const FieldRow: React.FC<FieldRowProps> = ({
     value,
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange(e.target.value),
-    onBlur: () => onNormalize(),
+    onBlur: () => onInspect(),
     onPaste: (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       const el = e.currentTarget;
-      window.setTimeout(() => onNormalize(el.value), 0);
+      window.setTimeout(() => onInspect(el.value), 0);
     },
     placeholder: presentation.placeholder,
     disabled,
@@ -263,11 +264,7 @@ const FieldRow: React.FC<FieldRowProps> = ({
           {error}
         </Text>
       ) : null}
-      <CredentialFieldFeedback
-        lint={feedback.lint}
-        internalFixVisible={feedback.showInternalFix}
-        onDismissInternalFix={onDismissInternalFix}
-      />
+      <CredentialFieldFeedback lint={feedback.lint} fix={feedback.fix} onApplyFix={onApplyFix} />
     </Space>
   );
 };
@@ -296,15 +293,19 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const resolvingRef = useRef(false);
   const credentials = useCredentialFields();
 
-  // Silent normalization (paste/blur). Repairs terminal-paste artifacts and
-  // surfaces the internal-fix notice + format lint. `raw` is the DOM value on
-  // paste (state is stale there); on blur we read the committed state value.
-  const normalizeField = (field: string, raw?: string) => {
+  // Paste/blur: apply the always-safe sanitize, surface the opt-in fix + lint.
+  // `raw` is the DOM value on paste (state is stale there); on blur we read state.
+  const inspectField = (field: string, raw?: string) => {
     const source = raw ?? values[field] ?? '';
     if (!source) return;
-    const normalized = credentials.normalizeOnInput(field, source);
-    setValues((prev) => ({ ...prev, [field]: normalized }));
-    credentials.lintOnBlur(field, normalized);
+    const sanitized = credentials.inspect(field, source);
+    setValues((prev) => ({ ...prev, [field]: sanitized }));
+  };
+
+  // "Clean it up" — apply the opt-in fix on explicit user action only.
+  const cleanUpField = (field: string) => {
+    const fixed = credentials.applyFix(field, values[field] ?? '');
+    setValues((prev) => ({ ...prev, [field]: fixed }));
   };
 
   // Resolve the current user's role from the CANONICAL store row (mirrors
@@ -355,8 +356,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     setValidationMessage(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
-    for (const field of fields)
-      tokens[field] = normalizeCredential(field, values[field] ?? '').value;
+    // Save exactly what's shown (minus always-safe edge/invisible cleanup); a
+    // declined opt-in fix is honored rather than silently applied.
+    for (const field of fields) tokens[field] = sanitizeCredential(values[field] ?? '');
     try {
       await post('submit', { tokens });
       setLocalResolution('submitted');
@@ -455,8 +457,8 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
             value={values[field] ?? ''}
             error={fieldErrors[field]}
             feedback={credentials.get(field)}
-            onNormalize={(raw) => normalizeField(field, raw)}
-            onDismissInternalFix={() => credentials.dismissInternalFix(field)}
+            onInspect={(raw) => inspectField(field, raw)}
+            onApplyFix={() => cleanUpField(field)}
             disabled={submitting || dismissing}
             onChange={(next) => {
               setValidationMessage(null);

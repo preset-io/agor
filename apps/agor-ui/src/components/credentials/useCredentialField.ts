@@ -1,19 +1,29 @@
-import { type CredentialLintResult, lintCredential, normalizeCredential } from '@agor-live/client';
+import {
+  applyCredentialFix,
+  type CredentialFixSuggestion,
+  type CredentialLintResult,
+  detectCredentialFix,
+  lintCredential,
+  sanitizeCredential,
+} from '@agor-live/client';
 import { useCallback, useState } from 'react';
 
 export interface CredentialFieldState {
   /** Most recent lint finding (null when clean or not yet linted). */
   lint: CredentialLintResult | null;
-  /** Whether the dismissible internal-whitespace notice should show. */
-  showInternalFix: boolean;
+  /** Opt-in fix suggestion (null when clean). Never applied automatically. */
+  fix: CredentialFixSuggestion | null;
 }
 
-const EMPTY: CredentialFieldState = { lint: null, showInternalFix: false };
+const EMPTY: CredentialFieldState = { lint: null, fix: null };
 
 /**
  * Per-field credential validation state. Timing follows the design contract:
- * `normalizeOnInput` fires on paste/blur (silent repair + internal-fix notice),
- * `lintOnBlur` fires on blur (format warnings). Never call these on keystroke.
+ * `inspect` fires on paste/blur — it applies the always-safe sanitize (edge +
+ * invisible chars) and returns that value for the caller to display, while
+ * detecting (but NOT applying) the opt-in fixes and running the format lint.
+ * `applyFix` runs only when the user clicks "Clean it up". Never call these on
+ * keystroke.
  *
  * Keyed by field id so one hook serves a whole surface (e.g. all agent-tool
  * inputs) without breaking the rules of hooks.
@@ -30,31 +40,39 @@ export function useCredentialFields() {
     setStates((prev) => ({ ...prev, [field]: { ...(prev[field] ?? EMPTY), ...next } }));
   }, []);
 
-  /** Normalize a raw value; surfaces the internal-fix notice when one was applied. */
-  const normalizeOnInput = useCallback(
+  /**
+   * Sanitize a raw value (always-safe edge + invisible-char cleanup), then detect
+   * the opt-in fix + lint on the sanitized value. Returns the sanitized value for
+   * the caller to write back to the field. Does NOT collapse internal whitespace
+   * or unwrap quotes — those are surfaced as an opt-in suggestion only.
+   */
+  const inspect = useCallback(
     (field: string, raw: string): string => {
-      const result = normalizeCredential(field, raw);
-      if (result.internalWhitespaceFixed) patch(field, { showInternalFix: true });
-      return result.value;
+      const sanitized = sanitizeCredential(raw);
+      patch(field, {
+        fix: detectCredentialFix(field, sanitized),
+        lint: lintCredential(field, sanitized),
+      });
+      return sanitized;
     },
     [patch]
   );
 
-  /** Run format lint for a field (call on blur). */
-  const lintOnBlur = useCallback(
-    (field: string, value: string) => {
-      patch(field, { lint: lintCredential(field, value) });
+  /**
+   * Apply the opt-in fix to the current value (user clicked "Clean it up").
+   * Returns the cleaned value and clears the suggestion (re-linting the result).
+   */
+  const applyFix = useCallback(
+    (field: string, currentValue: string): string => {
+      const fixed = applyCredentialFix(field, currentValue);
+      patch(field, { fix: null, lint: lintCredential(field, fixed) });
+      return fixed;
     },
     [patch]
   );
 
-  const dismissInternalFix = useCallback(
-    (field: string) => patch(field, { showInternalFix: false }),
-    [patch]
-  );
-
-  /** Clear all transient state for a field (e.g. after save/clear). */
+  /** Clear all transient state for a field (e.g. on manual edit or after save). */
   const reset = useCallback((field: string) => patch(field, { ...EMPTY }), [patch]);
 
-  return { get, normalizeOnInput, lintOnBlur, dismissInternalFix, reset };
+  return { get, inspect, applyFix, reset };
 }

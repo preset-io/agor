@@ -2,7 +2,7 @@ import {
   ENV_VAR_SCOPES_V05,
   type EnvVarMetadata,
   type EnvVarScope,
-  normalizeCredential,
+  sanitizeCredential,
 } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
@@ -81,19 +81,21 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const credentials = useCredentialFields();
 
-  // Normalize the value against the variable NAME — only known credential names
-  // (e.g. GITHUB_TOKEN) trigger internal-whitespace repair / lint; others are
-  // edge-trimmed only. `credentials` state is keyed by the variable name.
-  const normalizeFor = (name: string, raw: string, setter: (v: string) => void) => {
+  // Paste/blur: apply the always-safe sanitize and surface the opt-in fix + lint
+  // (keyed by the variable NAME — only known credential names get a suggestion).
+  const inspectFor = (name: string, raw: string, setter: (v: string) => void) => {
     if (!raw) return;
-    const normalized = credentials.normalizeOnInput(name, raw);
-    setter(normalized);
-    credentials.lintOnBlur(name, normalized);
+    setter(credentials.inspect(name, raw));
+  };
+
+  // "Clean it up" — apply the opt-in fix on explicit user action only.
+  const cleanUpFor = (name: string, current: string, setter: (v: string) => void) => {
+    setter(credentials.applyFix(name, current));
   };
 
   const handleAdd = async () => {
     const name = newKey.trim();
-    const value = normalizeCredential(name, newValue).value;
+    const value = sanitizeCredential(newValue);
     if (!name || !value) return;
 
     try {
@@ -110,7 +112,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   };
 
   const handleUpdate = async (key: string, scope: EnvVarScope) => {
-    const value = normalizeCredential(key, editingValue).value;
+    const value = sanitizeCredential(editingValue);
     if (!value) return;
 
     try {
@@ -200,9 +202,9 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
                   }}
                   onPaste={(e) => {
                     const el = e.currentTarget;
-                    window.setTimeout(() => normalizeFor(record.key, el.value, setEditingValue), 0);
+                    window.setTimeout(() => inspectFor(record.key, el.value, setEditingValue), 0);
                   }}
-                  onBlur={() => normalizeFor(record.key, editingValue, setEditingValue)}
+                  onBlur={() => inspectFor(record.key, editingValue, setEditingValue)}
                   onPressEnter={() => handleUpdate(record.key, record.scope)}
                   autoFocus
                   disabled={disabled}
@@ -222,8 +224,8 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
               </Space.Compact>
               <CredentialFieldFeedback
                 lint={feedback.lint}
-                internalFixVisible={feedback.showInternalFix}
-                onDismissInternalFix={() => credentials.dismissInternalFix(record.key)}
+                fix={feedback.fix}
+                onApplyFix={() => cleanUpFor(record.key, editingValue, setEditingValue)}
               />
             </Space>
           );
@@ -334,9 +336,9 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
             }}
             onPaste={(e) => {
               const el = e.currentTarget;
-              window.setTimeout(() => normalizeFor(newKey.trim(), el.value, setNewValue), 0);
+              window.setTimeout(() => inspectFor(newKey.trim(), el.value, setNewValue), 0);
             }}
-            onBlur={() => normalizeFor(newKey.trim(), newValue, setNewValue)}
+            onBlur={() => inspectFor(newKey.trim(), newValue, setNewValue)}
             onPressEnter={handleAdd}
             style={{ flex: 1 }}
             disabled={disabled}
@@ -352,8 +354,8 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
         </Space.Compact>
         <CredentialFieldFeedback
           lint={credentials.get(newKey.trim()).lint}
-          internalFixVisible={credentials.get(newKey.trim()).showInternalFix}
-          onDismissInternalFix={() => credentials.dismissInternalFix(newKey.trim())}
+          fix={credentials.get(newKey.trim()).fix}
+          onApplyFix={() => cleanUpFor(newKey.trim(), newValue, setNewValue)}
         />
       </Space>
     </Space>

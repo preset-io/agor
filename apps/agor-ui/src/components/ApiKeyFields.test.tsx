@@ -23,22 +23,28 @@ function renderFields(overrides?: Partial<Parameters<typeof ApiKeyFields>[0]>) {
 const DIRTY = 'sk-ant-api03-abc DEF0123456789';
 const CLEAN = 'sk-ant-api03-abcDEF0123456789';
 
-describe('ApiKeyFields — save-path normalization', () => {
-  it('normalizes a mid-token space before saving when pressing Enter', async () => {
+describe('ApiKeyFields — save honors the displayed value (no silent auto-fix)', () => {
+  it('saves the value WITH the internal space when the user did not opt into the fix', async () => {
     const { onSave } = renderFields();
     const input = screen.getByPlaceholderText('sk-ant-api03-...');
 
     fireEvent.change(input, { target: { value: DIRTY } });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
 
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith('ANTHROPIC_API_KEY', CLEAN));
+    // Not silently cleaned — saved as displayed (only always-safe edge cleanup).
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith('ANTHROPIC_API_KEY', DIRTY));
   });
 
-  it('normalizes before saving when clicking Save', async () => {
+  it('offers "Clean it up" on blur, and after clicking it, Save persists the cleaned value', async () => {
     const { onSave } = renderFields();
     const input = screen.getByPlaceholderText('sk-ant-api03-...');
 
     fireEvent.change(input, { target: { value: DIRTY } });
+    fireEvent.blur(input);
+
+    const cleanBtn = await screen.findByRole('button', { name: /clean it up/i });
+    fireEvent.click(cleanBtn);
+
     const saveButton = screen.getAllByRole('button', { name: /^save$/i })[0];
     fireEvent.click(saveButton);
 

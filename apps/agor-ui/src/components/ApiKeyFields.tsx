@@ -4,7 +4,7 @@ import type {
   AuthCheckResult,
   CredentialSpecKey,
 } from '@agor-live/client';
-import { normalizeCredential, resolveCredentialSpec } from '@agor-live/client';
+import { resolveCredentialSpec, sanitizeCredential } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -300,16 +300,23 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     }
   };
 
-  // Normalize a raw value (paste/blur) and reflect the repair + lint.
-  const normalizeInput = (field: AgenticToolConfigField, raw: string) => {
+  // Paste/blur: apply the always-safe sanitize and surface the opt-in fix + lint.
+  const inspectInput = (field: AgenticToolConfigField, raw: string) => {
     if (!raw) return;
-    const normalized = credentials.normalizeOnInput(field, raw);
-    setInputValues((prev) => ({ ...prev, [field]: normalized }));
-    credentials.lintOnBlur(field, normalized);
+    const sanitized = credentials.inspect(field, raw);
+    setInputValues((prev) => ({ ...prev, [field]: sanitized }));
+  };
+
+  // "Clean it up" — the only place the opt-in fix is applied, on explicit click.
+  const cleanUp = (field: AgenticToolConfigField) => {
+    const fixed = credentials.applyFix(field, inputValues[field] ?? '');
+    setInputValues((prev) => ({ ...prev, [field]: fixed }));
   };
 
   const handleSave = async (field: AgenticToolConfigField) => {
-    const value = normalizeCredential(field, inputValues[field] ?? '').value;
+    // Save exactly what's displayed (minus always-safe edge/invisible cleanup) —
+    // if the user declined the opt-in fix, we honor their value verbatim.
+    const value = sanitizeCredential(inputValues[field] ?? '');
     if (!value) return;
 
     await onSave(field, value);
@@ -411,9 +418,9 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                     // The input's value updates after the paste event; read it
                     // from the DOM on the next tick (state is still stale here).
                     const el = e.currentTarget;
-                    window.setTimeout(() => normalizeInput(field, el.value), 0);
+                    window.setTimeout(() => inspectInput(field, el.value), 0);
                   }}
-                  onBlur={() => normalizeInput(field, inputValues[field] ?? '')}
+                  onBlur={() => inspectInput(field, inputValues[field] ?? '')}
                   onPressEnter={() => handleSave(field)}
                   style={{ flex: 1 }}
                   disabled={disabled}
@@ -429,8 +436,8 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               </Space.Compact>
               <CredentialFieldFeedback
                 lint={feedback.lint}
-                internalFixVisible={feedback.showInternalFix}
-                onDismissInternalFix={() => credentials.dismissInternalFix(field)}
+                fix={feedback.fix}
+                onApplyFix={() => cleanUp(field)}
               />
             </>
           )}

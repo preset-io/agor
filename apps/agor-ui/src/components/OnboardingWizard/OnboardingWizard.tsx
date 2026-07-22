@@ -9,12 +9,19 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
+  CredentialFixSuggestion,
   CredentialLintResult,
   UpdateUserInput,
   User,
   UserPreferences,
 } from '@agor-live/client';
-import { lintCredential, normalizeCredential, TOOL_API_KEY_NAMES } from '@agor-live/client';
+import {
+  applyCredentialFix,
+  detectCredentialFix,
+  lintCredential,
+  sanitizeCredential,
+  TOOL_API_KEY_NAMES,
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -516,25 +523,34 @@ export function OnboardingWizard({
   const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
-  const [llmKeyFixed, setLlmKeyFixed] = useState(false);
+  const [llmFix, setLlmFix] = useState<CredentialFixSuggestion | null>(null);
   const [llmLint, setLlmLint] = useState<CredentialLintResult | null>(null);
   const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
   const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
     {}
   );
 
-  // Silent normalization (paste/blur) for the LLM key inputs. Repairs
-  // terminal-paste artifacts and flags an internal-whitespace fix for the notice.
-  // Lint runs against the ACTUAL field (incl. the subscription-token field) so a
-  // cross-paste — e.g. an API key dropped in the subscription box — is surfaced.
-  // `raw` is the DOM value on paste (state is stale there).
-  const normalizeLlmKey = (raw: string) => {
+  // Paste/blur: apply the always-safe sanitize (edge/invisible) to the displayed
+  // value, then DETECT the opt-in fix + lint on the ACTUAL field (incl. the
+  // subscription-token field, so a cross-paste is still surfaced). The opt-in fix
+  // is never applied automatically. `raw` is the DOM value on paste.
+  const inspectLlmKey = (raw: string) => {
     if (!selectedAgent) return;
     const field = keyNameForAgent(selectedAgent, authMethod);
-    const result = normalizeCredential(field, raw);
-    setApiKey(result.value);
-    if (result.internalWhitespaceFixed) setLlmKeyFixed(true);
-    setLlmLint(lintCredential(field, result.value));
+    const sanitized = sanitizeCredential(raw);
+    setApiKey(sanitized);
+    setLlmFix(detectCredentialFix(field, sanitized));
+    setLlmLint(lintCredential(field, sanitized));
+  };
+
+  // "Clean it up" — apply the opt-in fix on explicit user action only.
+  const cleanUpLlmKey = () => {
+    if (!selectedAgent) return;
+    const field = keyNameForAgent(selectedAgent, authMethod);
+    const fixed = applyCredentialFix(field, apiKey);
+    setApiKey(fixed);
+    setLlmFix(null);
+    setLlmLint(lintCredential(field, fixed));
   };
 
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
@@ -851,7 +867,9 @@ export function OnboardingWizard({
         }
         if (!user || !apiKey.trim()) return;
         const keyField = keyNameForAgent(selectedAgent, authMethod);
-        const normalizedKey = normalizeCredential(keyField, apiKey).value;
+        // Save exactly what's shown (minus always-safe edge/invisible cleanup) —
+        // a declined opt-in fix is honored, and verify will guide them if it fails.
+        const normalizedKey = sanitizeCredential(apiKey);
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
@@ -1422,13 +1440,14 @@ export function OnboardingWizard({
                           onChange={(e) => {
                             setApiKey(e.target.value);
                             setLlmError(null);
-                            setLlmKeyFixed(false);
+                            setLlmFix(null);
+                            setLlmLint(null);
                           }}
                           onPaste={(e) => {
                             const el = e.currentTarget;
-                            window.setTimeout(() => normalizeLlmKey(el.value), 0);
+                            window.setTimeout(() => inspectLlmKey(el.value), 0);
                           }}
-                          onBlur={() => normalizeLlmKey(apiKey)}
+                          onBlur={() => inspectLlmKey(apiKey)}
                           style={{
                             background: 'rgba(0,0,0,0.3)',
                             borderColor: 'rgba(255,255,255,0.12)',
@@ -1446,14 +1465,14 @@ export function OnboardingWizard({
                           // Validate on blur/paste, never on keystroke.
                           setApiKey(e.target.value);
                           setLlmError(null);
-                          setLlmKeyFixed(false);
+                          setLlmFix(null);
                           setLlmLint(null);
                         }}
                         onPaste={(e) => {
                           const el = e.currentTarget;
-                          window.setTimeout(() => normalizeLlmKey(el.value), 0);
+                          window.setTimeout(() => inspectLlmKey(el.value), 0);
                         }}
-                        onBlur={() => normalizeLlmKey(apiKey)}
+                        onBlur={() => inspectLlmKey(apiKey)}
                         style={{
                           background: 'rgba(0,0,0,0.3)',
                           borderColor: 'rgba(255,255,255,0.12)',
@@ -1468,12 +1487,12 @@ export function OnboardingWizard({
                     >
                       Stored securely - never shared or logged.
                     </Text>
-                    {(llmKeyFixed || llmLint) && (
+                    {(llmFix || llmLint) && (
                       <div style={{ marginTop: 10 }}>
                         <CredentialFieldFeedback
                           lint={llmLint}
-                          internalFixVisible={llmKeyFixed}
-                          onDismissInternalFix={() => setLlmKeyFixed(false)}
+                          fix={llmFix}
+                          onApplyFix={cleanUpLlmKey}
                         />
                       </div>
                     )}

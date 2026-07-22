@@ -24,41 +24,45 @@ function Harness() {
         }}
         onPaste={(e) => {
           const el = e.currentTarget;
-          window.setTimeout(() => {
-            const normalized = cred.normalizeOnInput(FIELD, el.value);
-            setValue(normalized);
-            cred.lintOnBlur(FIELD, normalized);
-          }, 0);
+          window.setTimeout(() => setValue(cred.inspect(FIELD, el.value)), 0);
         }}
       />
-      <CredentialFieldFeedback lint={state.lint} internalFixVisible={state.showInternalFix} />
+      <CredentialFieldFeedback
+        lint={state.lint}
+        fix={state.fix}
+        onApplyFix={() => setValue(cred.applyFix(FIELD, value))}
+      />
     </AntApp>
   );
 }
 
-describe('useCredentialFields — paste timing (deferred DOM read)', () => {
+describe('useCredentialFields — paste timing + opt-in fix', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('normalizes the pasted value on the next tick and surfaces the internal-fix notice', () => {
+  it('sanitizes edges on paste but keeps the internal space, then fixes only on click', () => {
     render(<Harness />);
     const input = screen.getByLabelText<HTMLInputElement>('key');
 
-    // Simulate the browser applying the paste (DOM value set) before our
-    // deferred handler reads it. The value carries a mid-token space.
-    input.value = 'sk-ant-api03-abc DEF0123456789';
+    // Browser applies the paste (DOM value set) before our deferred handler reads
+    // it. The value has edge whitespace AND a mid-token space.
+    input.value = '  sk-ant-api03-abc DEF0123456789  ';
     fireEvent.paste(input);
-
-    // Before the timer fires, nothing is normalized yet.
-    expect(screen.queryByText(/we removed/i)).not.toBeInTheDocument();
 
     act(() => {
       vi.runAllTimers();
     });
 
+    // Always-safe cleanup trimmed the edges; the internal space is PRESERVED.
+    expect(input.value).toBe('sk-ant-api03-abc DEF0123456789');
+    // A warning offers the opt-in fix — nothing was rewritten automatically.
+    expect(screen.getByText(/extra spaces or line breaks/i)).toBeInTheDocument();
+
+    // The user opts in.
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: /clean it up/i }));
+    });
     expect(input.value).toBe('sk-ant-api03-abcDEF0123456789');
-    expect(
-      screen.getByText(/we removed spaces, line breaks, or wrapping quotes/i)
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/extra spaces or line breaks/i)).not.toBeInTheDocument();
   });
 });
