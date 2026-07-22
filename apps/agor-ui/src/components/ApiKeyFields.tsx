@@ -52,13 +52,16 @@ const VerifyResultText: React.FC<{
     );
   }
   if (result.status === 'unauthenticated') {
+    // On a definitive rejection the user must see the provider named, so prefer
+    // our provider-attributed copy over the daemon's generic rejection hint.
     return (
       <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
-        {result.hint ??
-          `${provider} rejected this key. It may have been revoked or copied incompletely — regenerate and paste again.`}
+        {`${provider} rejected this key. It may have been revoked or copied incompletely — regenerate and paste again.`}
       </Text>
     );
   }
+  // 'unknown' is a failure to VERIFY (transport/timeout), not a rejection — keep
+  // the daemon's specific hint here.
   return (
     <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
       {result.hint ?? `Couldn't verify with ${provider} right now — try again in a moment.`}

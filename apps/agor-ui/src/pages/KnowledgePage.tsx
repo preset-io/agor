@@ -23,6 +23,7 @@ import {
   validateKnowledgePath as validateSharedKnowledgePath,
 } from '@agor/core/types';
 import type { AgorClient, Group, User } from '@agor-live/client';
+import { normalizeCredential } from '@agor-live/client';
 import {
   ApartmentOutlined,
   ArrowLeftOutlined,
@@ -93,6 +94,8 @@ import {
   kbMentionFromDocument,
 } from '../components/AutocompleteTextarea';
 import { BrandLogo } from '../components/BrandLogo';
+import { CredentialFieldFeedback } from '../components/credentials/CredentialFieldFeedback';
+import { useCredentialFields } from '../components/credentials/useCredentialField';
 import { AgorEmojiPicker } from '../components/EmojiPickerInput';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { HighlightMatch } from '../components/HighlightMatch';
@@ -814,6 +817,16 @@ export function KnowledgePage({
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState('');
+  const knowledgeApiKey = useCredentialFields();
+
+  // Silent normalization (paste/blur) for the embedding API key — repairs the
+  // terminal-paste artifacts (edge/zero-width/wrapping-quote/internal space) that
+  // would otherwise be stored verbatim. `raw` is the DOM value on paste.
+  const normalizeKnowledgeApiKey = (raw: string) => {
+    if (!raw) return;
+    const normalized = knowledgeApiKey.normalizeOnInput('api_key', raw);
+    setSettingsApiKeyDraft(normalized);
+  };
   const [settingsForm] = Form.useForm<KnowledgeSemanticSettings>();
   const [namespaceEditorOpen, setNamespaceEditorOpen] = useState(false);
   const [namespaceEditing, setNamespaceEditing] = useState<KnowledgeNamespace | null>(null);
@@ -1401,7 +1414,8 @@ export function KnowledgePage({
           ...(values.indexing ?? {}),
         },
       };
-      if (settingsApiKeyDraft.trim()) patch.api_key = settingsApiKeyDraft.trim();
+      const normalizedApiKey = normalizeCredential('api_key', settingsApiKeyDraft).value;
+      if (normalizedApiKey) patch.api_key = normalizedApiKey;
       const next = await client.service('kb/settings').create(patch);
       setKnowledgeSettings(next as KnowledgeSemanticSettingsPublic);
       setSettingsApiKeyDraft('');
@@ -3943,13 +3957,25 @@ export function KnowledgePage({
                       <Form.Item label="OpenAI API key">
                         <Input.Password
                           value={settingsApiKeyDraft}
-                          onChange={(event) => setSettingsApiKeyDraft(event.target.value)}
+                          onChange={(event) => {
+                            setSettingsApiKeyDraft(event.target.value);
+                            knowledgeApiKey.reset('api_key');
+                          }}
+                          onPaste={(event) => {
+                            const el = event.currentTarget;
+                            window.setTimeout(() => normalizeKnowledgeApiKey(el.value), 0);
+                          }}
+                          onBlur={() => normalizeKnowledgeApiKey(settingsApiKeyDraft)}
                           placeholder={
                             knowledgeSettings?.api_key_configured
                               ? 'Configured — enter a new key to replace'
                               : 'sk-...'
                           }
                           autoComplete="off"
+                        />
+                        <CredentialFieldFeedback
+                          internalFixVisible={knowledgeApiKey.get('api_key').showInternalFix}
+                          onDismissInternalFix={() => knowledgeApiKey.dismissInternalFix('api_key')}
                         />
                       </Form.Item>
                       <Flex gap={12} wrap="wrap">

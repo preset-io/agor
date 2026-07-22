@@ -3,6 +3,14 @@ import { Alert, Space, Typography, theme } from 'antd';
 
 const { Text } = Typography;
 
+/**
+ * Canonical copy for the Layer-1 internal-fix notice. Covers internal-whitespace
+ * collapse AND wrapping-quote strips (both flagged as `internalWhitespaceFixed`).
+ * Exported so any surface that can't render the component reuses the same words.
+ */
+export const CREDENTIAL_INTERNAL_FIX_NOTICE =
+  'We removed spaces, line breaks, or wrapping quotes from this key — a common side effect of copying from a terminal. Check that it verifies below.';
+
 export interface CredentialFieldFeedbackProps {
   /** Layer-2 lint finding for the field, if any. */
   lint?: CredentialLintResult | null;
@@ -33,7 +41,7 @@ export const CredentialFieldFeedback: React.FC<CredentialFieldFeedbackProps> = (
           showIcon
           closable
           onClose={onDismissInternalFix}
-          message="We removed spaces or line breaks from this key — a common side effect of copying from a terminal. Check that it verifies below."
+          message={CREDENTIAL_INTERNAL_FIX_NOTICE}
           style={{ fontSize: token.fontSizeSM }}
         />
       )}

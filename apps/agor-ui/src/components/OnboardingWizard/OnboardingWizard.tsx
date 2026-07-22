@@ -9,6 +9,7 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
+  CredentialLintResult,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -25,6 +26,7 @@ import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } fr
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import { CredentialFieldFeedback } from '../credentials/CredentialFieldFeedback';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 const { Text, Title, Paragraph } = Typography;
@@ -515,6 +517,7 @@ export function OnboardingWizard({
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
   const [llmKeyFixed, setLlmKeyFixed] = useState(false);
+  const [llmLint, setLlmLint] = useState<CredentialLintResult | null>(null);
   const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
   const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
     {}
@@ -522,6 +525,8 @@ export function OnboardingWizard({
 
   // Silent normalization (paste/blur) for the LLM key inputs. Repairs
   // terminal-paste artifacts and flags an internal-whitespace fix for the notice.
+  // Lint runs against the ACTUAL field (incl. the subscription-token field) so a
+  // cross-paste — e.g. an API key dropped in the subscription box — is surfaced.
   // `raw` is the DOM value on paste (state is stale there).
   const normalizeLlmKey = (raw: string) => {
     if (!selectedAgent) return;
@@ -529,11 +534,7 @@ export function OnboardingWizard({
     const result = normalizeCredential(field, raw);
     setApiKey(result.value);
     if (result.internalWhitespaceFixed) setLlmKeyFixed(true);
-    setLlmError(
-      authMethod === 'claude-subscription-token'
-        ? null
-        : validateLlmKeyPattern(selectedAgent, result.value)
-    );
+    setLlmLint(lintCredential(field, result.value));
   };
 
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
@@ -879,11 +880,12 @@ export function OnboardingWizard({
             // auth check failure is non-fatal — proceed to save anyway
           }
         }
-        const keyName = keyNameForAgent(selectedAgent, authMethod);
         try {
           await onUpdateUser(user.user_id, {
             agentic_tools: {
-              [selectedAgent]: { [keyName]: apiKey.trim() },
+              // Save the normalized value (the client must not rely on the
+              // daemon backstop to repair a terminal-paste artifact).
+              [selectedAgent]: { [keyField]: normalizedKey },
             } as UpdateUserInput['agentic_tools'],
           });
           goToStep('workspace');
@@ -1445,6 +1447,7 @@ export function OnboardingWizard({
                           setApiKey(e.target.value);
                           setLlmError(null);
                           setLlmKeyFixed(false);
+                          setLlmLint(null);
                         }}
                         onPaste={(e) => {
                           const el = e.currentTarget;
@@ -1465,15 +1468,14 @@ export function OnboardingWizard({
                     >
                       Stored securely - never shared or logged.
                     </Text>
-                    {llmKeyFixed && (
-                      <Alert
-                        type="warning"
-                        message="We removed spaces or line breaks from this key — a common side effect of copying from a terminal. Check that it verifies below."
-                        showIcon
-                        closable
-                        onClose={() => setLlmKeyFixed(false)}
-                        style={{ marginTop: 10, fontSize: 12 }}
-                      />
+                    {(llmKeyFixed || llmLint) && (
+                      <div style={{ marginTop: 10 }}>
+                        <CredentialFieldFeedback
+                          lint={llmLint}
+                          internalFixVisible={llmKeyFixed}
+                          onDismissInternalFix={() => setLlmKeyFixed(false)}
+                        />
+                      </div>
                     )}
                     {llmError && (
                       <Alert

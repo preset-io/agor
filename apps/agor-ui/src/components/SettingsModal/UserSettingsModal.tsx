@@ -506,17 +506,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Live-verify a credential (Layer 3). With a value, probe the freshly-entered
-  // key; without one, the daemon resolves the stored key for this tool.
+  // key; without one, the daemon resolves the STORED key for this exact field
+  // (so Verify under the subscription token checks the token, not the API key).
   const handleToolFieldVerify = async (
     tool: AgenticToolName,
-    _field: AgenticToolConfigField,
+    field: AgenticToolConfigField,
     value?: string
   ): Promise<AuthCheckResult> => {
     if (!client) return { status: 'unknown', authenticated: false, method: 'none' };
     try {
       return (await client
         .service('check-auth')
-        .create({ tool, apiKey: value })) as AuthCheckResult;
+        .create({ tool, apiKey: value, field })) as AuthCheckResult;
     } catch {
       return {
         status: 'unknown',

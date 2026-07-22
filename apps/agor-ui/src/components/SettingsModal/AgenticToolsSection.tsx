@@ -240,7 +240,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                                   setSaving((state) => ({ ...state, [field]: false }));
                                 }
                               }}
-                              onVerify={async (_field, value) => {
+                              onVerify={async (field, value) => {
                                 if (!client) {
                                   return {
                                     status: 'unknown',
@@ -252,6 +252,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                                   return (await client.service('check-auth').create({
                                     tool: tool as AgenticToolName,
                                     apiKey: value,
+                                    field,
                                   })) as AuthCheckResult;
                                 } catch {
                                   return {
