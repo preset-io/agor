@@ -1,27 +1,20 @@
-import type {
-  AgenticToolName,
-  AgenticToolPreset,
-  AgorClient,
-  DefaultAgenticToolConfig,
-  MCPServer,
-  User,
-} from '@agor-live/client';
-import {
-  canonicalTenantAgenticTool,
-  USER_DEFAULT_AGENTIC_CONFIGURATION,
-  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-} from '@agor-live/client';
+import type { AgenticToolName, AgorClient, MCPServer, User } from '@agor-live/client';
+import { canonicalTenantAgenticTool } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Checkbox, Form, Select, Space, Spin, Tooltip, Typography } from 'antd';
-import { useEffect, useState } from 'react';
-import { useAgorStore } from '../../store/agorStore';
+import { Alert, Button, Checkbox, Form, Select, Space, Spin, Tooltip, Typography } from 'antd';
+import { useEffect } from 'react';
 import type { AgenticFormValues, AgenticToolConfigFormProps } from '../AgenticToolConfigForm';
 import { AgenticToolConfigForm, buildConfigFromFormValues } from '../AgenticToolConfigForm';
 import { SessionMcpServersField } from '../MCPServerSelect';
-import { getModelDisplayName } from '../ModelSelector';
-import { getPermissionModeLabel } from '../PermissionModeSelector';
+import {
+  INLINE_AGENTIC_CONFIGURATION,
+  summarizeAgenticConfiguration,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  useAgenticConfigurationSources,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from './useAgenticConfigurationSources';
 
-export const INLINE_AGENTIC_CONFIGURATION = '__inline__';
+export { INLINE_AGENTIC_CONFIGURATION } from './useAgenticConfigurationSources';
 
 /** Form field the save-as-default checkbox binds to. Parents read it on submit. */
 export const SAVE_AS_DEFAULT_FIELD = 'saveAsDefault';
@@ -43,15 +36,6 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   renderMcpField?: boolean;
   /** Offer the "Save as my default" checkbox while inline config is active. */
   enableSaveAsDefault?: boolean;
-}
-
-/** One-line "Model · Permission" summary of a concrete config for inline display. */
-function summarizeConfig(tool: AgenticToolName, config?: DefaultAgenticToolConfig): string {
-  if (!config) return '';
-  const parts: string[] = [];
-  if (config.modelConfig?.model) parts.push(getModelDisplayName(tool, config.modelConfig.model));
-  if (config.permissionMode) parts.push(getPermissionModeLabel(tool, config.permissionMode));
-  return parts.join(' · ');
 }
 
 /**
@@ -95,85 +79,25 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
 }) => {
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
-  // Canonicalize the tool key exactly as the daemon does (claude-code-cli →
-  // claude-code) so defaults read/write under one key across both surfaces.
-  const canonicalTool = canonicalTenantAgenticTool(tool);
-  const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(canonicalTool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false;
-  const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const workspacePreset = presets.find((preset) => preset.is_default);
-
-  // The daemon resolves the user default from `default_agentic_selection` first
-  // (preset / workspace_default / inline), falling back to the config blob. Mirror
-  // that here so a preset- or workspace-backed default is still surfaced as
-  // "My default" and reachable — not hidden and force-switched to inline.
-  const userSelection = currentUser?.default_agentic_selection?.[canonicalTool];
-  const userConfigBlob = currentUser?.default_agentic_config?.[canonicalTool];
-  // When no user is provided the picker can't know whether a default exists, so
-  // it preserves the legacy "My default" option.
-  const hasUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
-
-  const myDefaultSummary = (): string => {
-    if (userSelection?.source === 'preset') {
-      const preset = presets.find((p) => p.preset_id === userSelection.preset_id);
-      if (!preset) return 'preset';
-      const summary = summarizeConfig(canonicalTool, preset.configuration);
-      return summary ? `${preset.name} · ${summary}` : preset.name;
-    }
-    if (userSelection?.source === 'workspace_default') {
-      return workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default';
-    }
-    return summarizeConfig(canonicalTool, userConfigBlob);
-  };
+  const {
+    canonicalTool,
+    inlineAllowed,
+    presets,
+    loading,
+    loaded,
+    loadError,
+    retry,
+    workspacePreset,
+    hasUserDefault,
+    myDefaultSummary,
+    isValidSource,
+    preferredSource,
+  } = useAgenticConfigurationSources({ tool, client, currentUser });
 
   useEffect(() => {
-    if (!client) {
-      setPresets([]);
-      setLoading(false);
-      return undefined;
-    }
-    let active = true;
-    setLoading(true);
-    const service = client.service('agentic-tool-presets');
-    const refresh = () =>
-      service
-        .find({ query: { tool: canonicalTool } })
-        .then((result) => {
-          if (active) setPresets(Array.isArray(result) ? result : result.data);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    void refresh();
-    service.on('created', refresh);
-    service.on('patched', refresh);
-    service.on('removed', refresh);
-    return () => {
-      active = false;
-      service.off('created', refresh);
-      service.off('patched', refresh);
-      service.off('removed', refresh);
-    };
-  }, [canonicalTool, client]);
-
-  useEffect(() => {
-    if (loading) return;
-    const validSelection =
-      presets.some((preset) => preset.preset_id === selected) ||
-      (selected === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
-      selected === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION ||
-      (inlineAllowed && selected === INLINE_AGENTIC_CONFIGURATION);
-    if (validSelection) return;
-    // No stored default → don't fabricate one; start from an editable config.
-    const preferred = hasUserDefault
-      ? USER_DEFAULT_AGENTIC_CONFIGURATION
-      : inlineAllowed
-        ? INLINE_AGENTIC_CONFIGURATION
-        : WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
-    form.setFieldValue(fieldName, preferred);
-  }, [fieldName, form, hasUserDefault, inlineAllowed, loading, presets, selected]);
+    if (!loaded || isValidSource(selected)) return;
+    form.setFieldValue(fieldName, preferredSource);
+  }, [fieldName, form, isValidSource, loaded, preferredSource, selected]);
 
   const options: Array<{
     value: string;
@@ -187,7 +111,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     options.push({
       value: USER_DEFAULT_AGENTIC_CONFIGURATION,
       title: 'My default',
-      summary: myDefaultSummary(),
+      summary: myDefaultSummary,
       label: 'My default',
     });
   }
@@ -195,7 +119,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
     title: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
     summary: workspacePreset
-      ? summarizeConfig(canonicalTool, workspacePreset.configuration)
+      ? summarizeAgenticConfiguration(canonicalTool, workspacePreset.configuration)
       : 'not configured',
     label: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
     disabled: !workspacePreset,
@@ -204,7 +128,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     options.push({
       value: preset.preset_id,
       title: preset.name,
-      summary: summarizeConfig(canonicalTool, preset.configuration),
+      summary: summarizeAgenticConfiguration(canonicalTool, preset.configuration),
       label: preset.name,
     });
   }
@@ -258,7 +182,20 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
         />
       </Form.Item>
 
-      {!inlineAllowed && presets.length === 0 && !loading && (
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          title="Unable to load configuration presets"
+          action={
+            <Button size="small" onClick={retry}>
+              Retry
+            </Button>
+          }
+        />
+      )}
+
+      {!inlineAllowed && presets.length === 0 && loaded && (
         <Alert type="error" showIcon title="No administrator-managed preset is available" />
       )}
 

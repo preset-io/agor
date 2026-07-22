@@ -58,13 +58,21 @@ const userWithDefault = {
   },
 } as unknown as User;
 
-function Harness({ user }: { user: User }) {
+function Harness({
+  user,
+  client = makeClient(),
+  initialSource,
+}: {
+  user: User;
+  client?: AgorClient;
+  initialSource?: string;
+}) {
   const [form] = Form.useForm();
   return (
-    <Form form={form}>
+    <Form form={form} initialValues={{ agenticToolPresetId: initialSource }}>
       <AgenticConfigChipRow
         tool="claude-code"
-        client={makeClient()}
+        client={client}
         mcpServerById={new Map()}
         currentUser={user}
         enableSaveAsDefault
@@ -96,6 +104,54 @@ describe('AgenticConfigChipRow', () => {
     expect(screen.getByTestId('permission-chip')).toHaveTextContent('Accept edits');
     expect(screen.getByTestId('effort-chip')).toHaveTextContent('Effort: High');
     expect(screen.getByTestId('effort-chip')).not.toHaveTextContent('default');
+  });
+
+  it('uses semantic, focusable buttons for popover chips', async () => {
+    render(<Harness user={userWithDefault} />);
+    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8' });
+
+    modelChip.focus();
+    expect(modelChip).toHaveFocus();
+
+    fireEvent.click(modelChip);
+    expect(await screen.findByTestId('model-change')).toBeInTheDocument();
+    expect(modelChip).toHaveAttribute('aria-expanded', 'true');
+
+    const responsiveContainer = screen.getByTestId('model-change').parentElement;
+    expect(responsiveContainer?.style.width).toBe('440px');
+    expect(responsiveContainer?.style.maxWidth).toContain('100vw');
+    expect(responsiveContainer?.style.minWidth).toBe('');
+  });
+
+  it('preserves the selected preset and offers retry when preset loading fails', async () => {
+    const find = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        data: [
+          {
+            preset_id: 'preset-1',
+            name: 'Team preset',
+            tool: 'claude-code',
+            configuration: {},
+          },
+        ],
+      });
+    const client = {
+      service: () => ({ find, on: () => {}, off: () => {} }),
+    } as unknown as AgorClient;
+
+    render(<Harness user={userWithDefault} client={client} initialSource="preset-1" />);
+
+    expect(await screen.findByText('Unable to load configuration presets')).toBeInTheDocument();
+    expect(JSON.parse(screen.getByTestId('state').textContent || '{}').src).toBe('preset-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText('Unable to load configuration presets')).not.toBeInTheDocument()
+    );
+    expect(JSON.parse(screen.getByTestId('state').textContent || '{}').src).toBe('preset-1');
   });
 
   it('flips the Select to Custom (seeded from resolved values) when a chip is edited', async () => {

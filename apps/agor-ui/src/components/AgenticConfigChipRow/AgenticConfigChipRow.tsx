@@ -1,6 +1,5 @@
 import type {
   AgenticToolName,
-  AgenticToolPreset,
   AgorClient,
   DefaultAgenticToolConfig,
   EffortLevel,
@@ -8,27 +7,25 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import {
-  canonicalTenantAgenticTool,
-  getDefaultModelForTool,
-  getDefaultPermissionMode,
-  USER_DEFAULT_AGENTIC_CONFIGURATION,
-  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-} from '@agor-live/client';
+import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
 import {
   ApiOutlined,
   ExperimentOutlined,
   InfoCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Checkbox, Flex, Form, Popover, Select, Typography, theme } from 'antd';
+import { Alert, Button, Checkbox, Flex, Form, Popover, Select, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
-import { useAgorStore } from '../../store/agorStore';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   SAVE_AS_DEFAULT_FIELD,
 } from '../AgenticToolConfigurationPicker';
+import {
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  useAgenticConfigurationSources,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { EffortSelector } from '../EffortSelector';
 import { MCPServerSelect } from '../MCPServerSelect';
 import {
@@ -43,7 +40,6 @@ import {
   getPermissionModeMeta,
   PermissionModeSelector,
 } from '../PermissionModeSelector';
-import { Tag } from '../Tag';
 
 export interface AgenticConfigChipRowProps {
   tool: AgenticToolName;
@@ -83,15 +79,6 @@ const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']
  */
 const HiddenField: React.FC<{ value?: unknown; onChange?: (value: unknown) => void }> = () => null;
 
-/** "Model · Permission" summary of a concrete config, for the source options. */
-function summarize(tool: AgenticToolName, config?: DefaultAgenticToolConfig): string {
-  if (!config) return '';
-  const parts: string[] = [];
-  if (config.modelConfig?.model) parts.push(getModelDisplayName(tool, config.modelConfig.model));
-  if (config.permissionMode) parts.push(getPermissionModeLabel(tool, config.permissionMode));
-  return parts.join(' · ');
-}
-
 /** Short model name for a chip ("Claude Opus 4.8" → "Opus 4.8"). */
 function shortModelName(tool: AgenticToolName, modelId: string): string {
   return getModelDisplayName(tool, modelId).replace(/^Claude\s+/, '');
@@ -116,48 +103,22 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 }) => {
   const { token } = theme.useToken();
   const form = Form.useFormInstance();
-  const canonicalTool = canonicalTenantAgenticTool(tool);
-  const settings = useAgorStore((state) => state.agenticToolSettingsByName?.get(canonicalTool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false;
   const isClaude = CLAUDE_TOOLS.has(tool);
-
-  const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!client) {
-      setPresets([]);
-      setLoading(false);
-      return undefined;
-    }
-    let active = true;
-    setLoading(true);
-    const service = client.service('agentic-tool-presets');
-    const refresh = () =>
-      service
-        .find({ query: { tool: canonicalTool } })
-        .then((result: unknown) => {
-          if (active) {
-            const list = Array.isArray(result)
-              ? result
-              : ((result as { data: AgenticToolPreset[] }).data ?? []);
-            setPresets(list as AgenticToolPreset[]);
-          }
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    void refresh();
-    service.on('created', refresh);
-    service.on('patched', refresh);
-    service.on('removed', refresh);
-    return () => {
-      active = false;
-      service.off('created', refresh);
-      service.off('patched', refresh);
-      service.off('removed', refresh);
-    };
-  }, [canonicalTool, client]);
+  const {
+    inlineAllowed,
+    presets,
+    loading,
+    loaded,
+    loadError,
+    retry,
+    workspacePreset,
+    userSelection,
+    hasUserDefault,
+    resolveConfiguration,
+    myDefaultSummary,
+    isValidSource,
+    preferredSource,
+  } = useAgenticConfigurationSources({ tool, client, currentUser });
 
   const source = Form.useWatch(fieldName, form) as string | undefined;
   const formModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
@@ -165,16 +126,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const formPermission = Form.useWatch('permissionMode', form) as PermissionMode | undefined;
   const formMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
 
-  const userSelection = currentUser?.default_agentic_selection?.[canonicalTool];
-  const userConfigBlob = currentUser?.default_agentic_config?.[canonicalTool];
-  const hasUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
-  const workspacePreset = presets.find((preset) => preset.is_default);
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
   // Can the selected source actually resolve to a config? Mirrors the daemon's
   // create logic (assertInlineAgenticConfigurationAllowed / reference resolution).
   const configResolvable = (() => {
     if (loading) return false;
+    if (loadError) return Boolean(source);
     if (presets.some((preset) => preset.preset_id === source)) return true;
     if (source === USER_DEFAULT_AGENTIC_CONFIGURATION) {
       if (userSelection?.source === 'preset') return true;
@@ -193,44 +151,24 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         ? undefined
         : loading
           ? 'Loading configuration'
-          : 'This agent requires an admin-managed preset, and none is configured for this workspace'
+          : loadError
+            ? 'Unable to load configuration presets'
+            : 'This agent requires an admin-managed preset, and none is configured for this workspace'
     );
-  }, [configResolvable, loading, onConfigValidityChange]);
+  }, [configResolvable, loadError, loading, onConfigValidityChange]);
 
-  // Keep the source valid — mirrors the daemon's resolution precedence.
+  // Normalize only after a successful load. A transient service failure must
+  // never rewrite a stored preset/default while an unrelated setting is saved.
   useEffect(() => {
-    if (loading) return;
-    const valid =
-      presets.some((preset) => preset.preset_id === source) ||
-      (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
-      source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION ||
-      (inlineAllowed && source === INLINE_AGENTIC_CONFIGURATION);
-    if (valid) return;
-    form.setFieldValue(
-      fieldName,
-      hasUserDefault
-        ? USER_DEFAULT_AGENTIC_CONFIGURATION
-        : inlineAllowed
-          ? INLINE_AGENTIC_CONFIGURATION
-          : WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-    );
-  }, [fieldName, form, hasUserDefault, inlineAllowed, loading, presets, source]);
+    if (!loaded || isValidSource(source)) return;
+    form.setFieldValue(fieldName, preferredSource);
+  }, [fieldName, form, isValidSource, loaded, preferredSource, source]);
 
   const configForSource = (src: string | undefined): DefaultAgenticToolConfig => {
-    if (src === INLINE_AGENTIC_CONFIGURATION) {
-      return { modelConfig: formModelConfig, permissionMode: formPermission };
-    }
-    if (src === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
-      return workspacePreset?.configuration ?? {};
-    if (src === USER_DEFAULT_AGENTIC_CONFIGURATION) {
-      if (userSelection?.source === 'preset') {
-        return presets.find((p) => p.preset_id === userSelection.preset_id)?.configuration ?? {};
-      }
-      if (userSelection?.source === 'workspace_default')
-        return workspacePreset?.configuration ?? {};
-      return userConfigBlob ?? {};
-    }
-    return presets.find((p) => p.preset_id === src)?.configuration ?? {};
+    return resolveConfiguration(src, {
+      modelConfig: formModelConfig,
+      permissionMode: formPermission,
+    });
   };
 
   const resolved = configForSource(source);
@@ -239,17 +177,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const resolvedEffort = (isInline ? formEffort : resolved.modelConfig?.effort) ?? DEFAULT_EFFORT;
   const advisorModel = isInline ? formModelConfig?.advisorModel : undefined;
   const mcpCount = formMcp?.length ?? 0;
-
-  // Summary of what "My default" resolves to, for the Select option label.
-  const myDefaultSummary = (): string => {
-    if (userSelection?.source === 'preset') {
-      return presets.find((p) => p.preset_id === userSelection.preset_id)?.name ?? 'preset';
-    }
-    if (userSelection?.source === 'workspace_default') {
-      return workspacePreset?.name ?? 'workspace default';
-    }
-    return summarize(canonicalTool, userConfigBlob);
-  };
 
   // Seed inline fields from the currently-resolved config, then flip to Custom.
   const seedCustom = () => {
@@ -301,7 +228,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       ? [
           {
             value: USER_DEFAULT_AGENTIC_CONFIGURATION,
-            label: `My default${myDefaultSummary() ? ` · ${myDefaultSummary()}` : ''}`,
+            label: `My default${myDefaultSummary ? ` · ${myDefaultSummary}` : ''}`,
           },
         ]
       : []),
@@ -351,6 +278,20 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         />
       </Form.Item>
 
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          title="Unable to load configuration presets"
+          action={
+            <Button size="small" onClick={retry}>
+              Retry
+            </Button>
+          }
+          style={{ marginBottom: token.marginSM }}
+        />
+      )}
+
       <Flex gap={token.marginXS} align="center" wrap="wrap">
         {resolvedModel && (
           <EditableChip
@@ -359,7 +300,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             title="Model"
             editable={inlineAllowed}
             managedNote={managedNote}
-            minWidth={440}
+            width={440}
             testid="model-chip"
             renderContent={() => (
               <ModelSelector
@@ -380,7 +321,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           editable={inlineAllowed}
           managedNote={managedNote}
           color={permissionColor}
-          minWidth={340}
+          width={340}
           testid="permission-chip"
           renderContent={(close) => (
             <PermissionModeSelector
@@ -402,7 +343,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             title="Reasoning effort"
             editable={inlineAllowed}
             managedNote={managedNote}
-            minWidth={300}
+            width={300}
             testid="effort-chip"
             renderContent={(close) => (
               <EffortSelector
@@ -425,7 +366,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           }
           title="MCP servers"
           editable
-          minWidth={360}
+          width={360}
           testid="mcp-chip"
           renderContent={() => (
             <MCPServerSelect
@@ -445,7 +386,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             label={`Advisor: ${shortModelName(tool, advisorModel)}`}
             title="Advisor model"
             editable
-            minWidth={340}
+            width={340}
             testid="advisor-chip"
             renderContent={() => (
               <AdvisorModelSelect value={advisorModel} onChange={onAdvisorChange} client={client} />
@@ -472,7 +413,7 @@ interface EditableChipProps {
   editable: boolean;
   managedNote?: React.ReactNode;
   color?: string;
-  minWidth: number;
+  width: number;
   testid: string;
   /** Receives a `close` callback so single-value pickers can dismiss on select. */
   renderContent: (close: () => void) => React.ReactNode;
@@ -486,32 +427,39 @@ const EditableChip: React.FC<EditableChipProps> = ({
   editable,
   managedNote,
   color,
-  minWidth,
+  width,
   testid,
   renderContent,
 }) => {
+  const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
 
   const chip = (
-    <Tag
+    <Button
+      htmlType="button"
+      size="small"
       icon={icon}
-      color="default"
       style={{
-        cursor: editable ? 'pointer' : 'default',
-        height: 22,
-        display: 'inline-flex',
-        alignItems: 'center',
         color,
       }}
       data-testid={testid}
+      aria-label={`${title}: ${label}`}
+      aria-expanded={open}
     >
       {label}
-    </Tag>
+    </Button>
   );
 
   if (!editable) {
     return (
-      <Popover trigger="click" placement="bottomLeft" title={title} content={managedNote}>
+      <Popover
+        open={open}
+        onOpenChange={setOpen}
+        trigger="click"
+        placement="bottomLeft"
+        title={title}
+        content={managedNote}
+      >
         {chip}
       </Popover>
     );
@@ -525,7 +473,9 @@ const EditableChip: React.FC<EditableChipProps> = ({
       placement="bottomLeft"
       title={title}
       content={
-        <div style={{ minWidth, maxWidth: '90vw' }}>{renderContent(() => setOpen(false))}</div>
+        <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
+          {renderContent(() => setOpen(false))}
+        </div>
       }
     >
       {chip}
