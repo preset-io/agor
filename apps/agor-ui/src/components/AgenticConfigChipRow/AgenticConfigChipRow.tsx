@@ -51,9 +51,8 @@ export interface AgenticConfigChipRowProps {
   /** Offer "Save as my default" under the chips while Custom is active. */
   enableSaveAsDefault?: boolean;
   /**
-   * Reports whether the current source can actually resolve to a session
-   * configuration. It only becomes false in the admin edge where inline config
-   * is disallowed and no preset/default is available. `reason` explains why.
+   * Reports the same source validity enforced by the registered form field so
+   * callers can disable submission proactively. `reason` explains why.
    */
   onConfigValidityChange?: (valid: boolean, reason?: string) => void;
 }
@@ -112,7 +111,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     loadError,
     retry,
     workspacePreset,
-    userSelection,
     hasUserDefault,
     resolveConfiguration,
     myDefaultSummary,
@@ -128,34 +126,22 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
-  // Can the selected source actually resolve to a config? Mirrors the daemon's
-  // create logic (assertInlineAgenticConfigurationAllowed / reference resolution).
-  const configResolvable = (() => {
-    if (loading) return false;
-    if (loadError) return Boolean(source);
-    if (presets.some((preset) => preset.preset_id === source)) return true;
-    if (source === USER_DEFAULT_AGENTIC_CONFIGURATION) {
-      if (userSelection?.source === 'preset') return true;
-      if (userSelection?.source === 'workspace_default') return inlineAllowed || !!workspacePreset;
-      return inlineAllowed; // inline user default
-    }
-    if (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
-      return inlineAllowed || !!workspacePreset;
-    return inlineAllowed; // inline / not-yet-resolved source
-  })();
+  const configError = loading
+    ? 'Loading configuration'
+    : loadError
+      ? source
+        ? undefined
+        : 'Unable to load configuration presets'
+      : isValidSource(source)
+        ? undefined
+        : source
+          ? 'This configuration is no longer available'
+          : 'Choose a configuration';
+  const configResolvable = !configError;
 
   useEffect(() => {
-    onConfigValidityChange?.(
-      configResolvable,
-      configResolvable
-        ? undefined
-        : loading
-          ? 'Loading configuration'
-          : loadError
-            ? 'Unable to load configuration presets'
-            : 'This agent requires an admin-managed preset, and none is configured for this workspace'
-    );
-  }, [configResolvable, loadError, loading, onConfigValidityChange]);
+    onConfigValidityChange?.(configResolvable, configError);
+  }, [configError, configResolvable, onConfigValidityChange]);
 
   // Normalize only after a successful load. A transient service failure must
   // never rewrite a stored preset/default while an unrelated setting is saved.
@@ -256,21 +242,25 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   return (
     <div style={{ marginBottom: token.marginLG }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
-      {['agenticToolPresetId', 'modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map(
-        (name) => (
-          <Form.Item key={name} name={name === 'agenticToolPresetId' ? fieldName : name} noStyle>
-            <HiddenField />
-          </Form.Item>
-        )
-      )}
+      {['modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map((name) => (
+        <Form.Item key={name} name={name} noStyle>
+          <HiddenField />
+        </Form.Item>
+      ))}
 
       <Form.Item
+        name={fieldName}
         label="Configuration"
         tooltip="Presets are admin-managed configs; “My default” is your personal setup. Edit any chip below to override just this session."
         style={{ marginBottom: token.marginSM }}
+        rules={[
+          {
+            validator: () =>
+              configError ? Promise.reject(new Error(configError)) : Promise.resolve(),
+          },
+        ]}
       >
         <Select
-          value={source}
           onChange={onSelectSource}
           loading={loading}
           options={sourceOptions}
