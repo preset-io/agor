@@ -33,10 +33,38 @@ describe('normalizeCredential', () => {
     expect(r.internalWhitespaceFixed).toBe(false);
   });
 
-  it('replaces smart/curly quotes with straight quotes', () => {
+  it('strips smart quotes wrapping the whole value and flags an internal fix', () => {
     const r = normalizeCredential('ANTHROPIC_BASE_URL', '“https://api.example.com”');
-    expect(r.value).toBe('"https://api.example.com"');
-    expect(r.changes.fixedQuotes).toBe(true);
+    expect(r.value).toBe('https://api.example.com');
+    expect(r.changes.strippedWrappingQuotes).toBe(true);
+    expect(r.internalWhitespaceFixed).toBe(true);
+  });
+
+  it('strips ASCII double quotes wrapping a token (no quote char left behind)', () => {
+    const r = normalizeCredential('ANTHROPIC_API_KEY', '"sk-ant-api03-abcDEF0123456789abcDEF"');
+    expect(r.value).toBe('sk-ant-api03-abcDEF0123456789abcDEF');
+    expect(r.changes.strippedWrappingQuotes).toBe(true);
+    expect(r.internalWhitespaceFixed).toBe(true);
+  });
+
+  it('strips wrapping backticks', () => {
+    const r = normalizeCredential('OPENAI_API_KEY', '`sk-proj-abcdefghijklmnopqrstuv`');
+    expect(r.value).toBe('sk-proj-abcdefghijklmnopqrstuv');
+    expect(r.changes.strippedWrappingQuotes).toBe(true);
+  });
+
+  it('leaves a quote in the MIDDLE of the value untouched (charset lint owns it)', () => {
+    const r = normalizeCredential('OPENAI_API_KEY', 'sk-proj-abc"def0123456789012');
+    expect(r.value).toBe('sk-proj-abc"def0123456789012');
+    expect(r.changes.strippedWrappingQuotes).toBe(false);
+    expect(lintCredential('OPENAI_API_KEY', r.value)?.code).toBe('charset');
+  });
+
+  it('does NOT strip wrapping quotes for unknown fields (arbitrary values preserved)', () => {
+    const r = normalizeCredential('SOME_RANDOM_VAR', '“hello world”');
+    expect(r.value).toBe('“hello world”');
+    expect(r.changed).toBe(false);
+    expect(r.internalWhitespaceFixed).toBe(false);
   });
 
   it('leaves a clean token untouched', () => {
@@ -123,8 +151,33 @@ describe('resolveCredentialSpec', () => {
     expect(resolveCredentialSpec('UNKNOWN')).toBeUndefined();
   });
 
+  it('maps generic single-line secrets (gateway secrets + embedding api_key)', () => {
+    for (const field of [
+      'app_password',
+      'api_token',
+      'signing_secret',
+      'webhook_secret',
+      'api_key',
+    ]) {
+      expect(resolveCredentialSpec(field)?.key).toBe('generic-secret');
+    }
+  });
+
   it('reports known-credential fields for the env editor', () => {
     expect(isKnownCredentialField('COPILOT_GITHUB_TOKEN')).toBe(true);
     expect(isKnownCredentialField('MY_APP_FLAG')).toBe(false);
+  });
+});
+
+describe('generic-secret specs (gateway secrets + embedding api_key)', () => {
+  it('collapses an internal space and flags the fix, without any lint', () => {
+    const r = normalizeCredential('signing_secret', 'abc def12345678');
+    expect(r.value).toBe('abcdef12345678');
+    expect(r.internalWhitespaceFixed).toBe(true);
+    expect(lintCredential('signing_secret', r.value)).toBeNull();
+  });
+
+  it('does not prefix- or charset-lint a generic embedding api_key', () => {
+    expect(lintCredential('api_key', 'anything-goes_here.123')).toBeNull();
   });
 });

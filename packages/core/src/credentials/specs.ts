@@ -20,7 +20,8 @@ export type CredentialSpecKey =
   | 'slack-bot-token'
   | 'slack-app-token'
   | 'pem-private-key'
-  | 'base-url';
+  | 'base-url'
+  | 'generic-secret';
 
 export interface CredentialSpec {
   key: CredentialSpecKey;
@@ -151,6 +152,17 @@ export const CREDENTIAL_SPECS: Record<CredentialSpecKey, CredentialSpec> = {
     prefixes: [],
     singleLine: true,
   },
+  'generic-secret': {
+    // Machine-generated single-line secret with no stable public format
+    // (semantic-search embedding key, gateway signing/webhook secrets, Teams
+    // app password, Shortcut API token). Gets full single-line repair
+    // (edge/zero-width/wrapping-quote/internal collapse) but no prefix or
+    // charset lint, since the shape is provider-defined and unknown to us.
+    key: 'generic-secret',
+    provider: '',
+    prefixes: [],
+    singleLine: true,
+  },
 };
 
 /**
@@ -176,6 +188,13 @@ const FIELD_TO_SPEC: Record<string, CredentialSpecKey> = {
   bot_token: 'slack-bot-token',
   app_token: 'slack-app-token',
   private_key: 'pem-private-key',
+  // Generic single-line secrets — machine-generated, no stable public format.
+  app_password: 'generic-secret',
+  api_token: 'generic-secret',
+  signing_secret: 'generic-secret',
+  webhook_secret: 'generic-secret',
+  // Semantic-search embedding provider key (KnowledgePage).
+  api_key: 'generic-secret',
 };
 
 /** Every spec key is also accepted verbatim as a field identifier. */

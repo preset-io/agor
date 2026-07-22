@@ -2,31 +2,34 @@
  * Silent credential normalization (Layer 1).
  *
  * Repairs the artifacts of copying a token through a terminal or rich-text
- * editor: edge whitespace, zero-width characters, and smart/curly quotes are
- * always removed. For single-line tokens, internal whitespace/newlines are also
- * stripped — but that fix is flagged (`internalWhitespaceFixed`) so the UI can
- * warn, since it could otherwise mask a truncated paste. Multi-line values (PEM
- * private keys) get edge-trim only; their internal newlines are structural.
+ * editor. Every value gets edge whitespace and zero-width characters removed.
+ * For KNOWN credential fields we also strip a quote pair (smart/ASCII/backtick)
+ * that wraps the entire value, and — for single-line tokens — collapse internal
+ * whitespace/newlines. Both of those are flagged (`internalWhitespaceFixed`) so
+ * the UI surfaces a dismissible notice, since either could mask a truncated
+ * paste. Unknown fields (arbitrary env vars) get edge-trim + zero-width strip
+ * ONLY — never quote or internal rewriting — so we don't silently mangle a value
+ * we don't understand. Multi-line values (PEM keys) keep their internal newlines.
  */
 
 import { resolveCredentialSpec } from './specs.js';
 
 // Codepoints kept as \u escapes so the (invisible / look-alike) characters never
-// appear as literals in source. Zero-width space, ZWNJ, ZWJ, word joiner, BOM \u2014
+// appear as literals in source. Zero-width space, ZWNJ, ZWJ, word joiner, BOM —
 // written as an alternation (not a char class) since a ZWJ in a class trips
 // biome's noMisleadingCharacterClass.
-const ZERO_WIDTH = /\u200B|\u200C|\u200D|\u2060|\uFEFF/g;
-// Curly/smart double quotes + prime → straight ASCII double quote.
-const SMART_DOUBLE_QUOTE = /[\u201C\u201D\u201E\u201F\u2033]/g;
-// Curly/smart single quotes + prime → straight ASCII single quote.
-const SMART_SINGLE_QUOTE = /[\u2018\u2019\u201A\u201B\u2032]/g;
+const ZERO_WIDTH = /​|‌|‍|⁠|﻿/g;
+// A single quote character: ASCII double/single/backtick + smart/curly variants
+// and primes. Used to detect a quote pair wrapping the whole value.
+const QUOTE_CHAR = /["'`‘’‚‛′“”„‟″]/;
 const INTERNAL_WHITESPACE = /\s+/g;
 
 export interface CredentialNormalizationChanges {
   edgeTrimmed: boolean;
   strippedZeroWidth: boolean;
-  fixedQuotes: boolean;
-  /** Internal whitespace/newlines were removed (single-line tokens only). */
+  /** A quote pair wrapping the entire value was removed (known fields only). */
+  strippedWrappingQuotes: boolean;
+  /** Internal whitespace/newlines were removed (single-line known fields only). */
   collapsedInternal: boolean;
 }
 
@@ -36,49 +39,57 @@ export interface NormalizeCredentialResult {
   changed: boolean;
   changes: CredentialNormalizationChanges;
   /**
-   * True when an internal fix was applied. The UI must surface a dismissible
-   * warning: the fix is usually correct, but could hide a truncated copy.
+   * True when an internal fix was applied (internal-whitespace collapse or a
+   * wrapping-quote strip). The UI must surface a dismissible warning: the fix is
+   * usually correct, but could hide a truncated copy.
    */
   internalWhitespaceFixed: boolean;
 }
 
-/**
- * Normalize a credential value for a given field. Safe to call on every paste
- * and blur. Unknown fields get the conservative path (edge/zero-width/quotes,
- * never internal collapsing) since we can't assume they are single-line.
- */
+const isQuote = (ch: string): boolean => QUOTE_CHAR.test(ch);
+
 export function normalizeCredential(field: string, value: string): NormalizeCredentialResult {
   const spec = resolveCredentialSpec(field);
   const singleLine = spec?.singleLine ?? false;
 
   const withoutZeroWidth = value.replace(ZERO_WIDTH, '');
-  const withStraightQuotes = withoutZeroWidth
-    .replace(SMART_DOUBLE_QUOTE, '"')
-    .replace(SMART_SINGLE_QUOTE, "'");
-  const edgeTrimmed = withStraightQuotes.trim();
+  const trimmed = withoutZeroWidth.trim();
 
-  let normalized = edgeTrimmed;
+  let working = trimmed;
+
+  // Known credential fields only: strip a quote pair that wraps the whole value
+  // (a paste artifact — a real token never starts and ends with a quote). Loop
+  // to handle nested wrappers, re-trimming inside each layer. Any quote left in
+  // the middle is intentionally NOT touched — the charset lint flags it instead.
+  let strippedWrappingQuotes = false;
+  if (spec) {
+    while (working.length >= 2 && isQuote(working[0]) && isQuote(working[working.length - 1])) {
+      working = working.slice(1, -1).trim();
+      strippedWrappingQuotes = true;
+    }
+  }
+
   let collapsedInternal = false;
   if (singleLine) {
-    const withoutInternal = edgeTrimmed.replace(INTERNAL_WHITESPACE, '');
-    if (withoutInternal !== edgeTrimmed) {
-      normalized = withoutInternal;
+    const withoutInternal = working.replace(INTERNAL_WHITESPACE, '');
+    if (withoutInternal !== working) {
+      working = withoutInternal;
       collapsedInternal = true;
     }
   }
 
   const changes: CredentialNormalizationChanges = {
-    edgeTrimmed: edgeTrimmed !== withStraightQuotes,
+    edgeTrimmed: trimmed !== withoutZeroWidth,
     strippedZeroWidth: withoutZeroWidth !== value,
-    fixedQuotes: withStraightQuotes !== withoutZeroWidth,
+    strippedWrappingQuotes,
     collapsedInternal,
   };
 
   return {
-    value: normalized,
+    value: working,
     original: value,
-    changed: normalized !== value,
+    changed: working !== value,
     changes,
-    internalWhitespaceFixed: collapsedInternal,
+    internalWhitespaceFixed: collapsedInternal || strippedWrappingQuotes,
   };
 }
