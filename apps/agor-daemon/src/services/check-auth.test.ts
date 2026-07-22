@@ -119,6 +119,14 @@ describe('check-auth Claude subscription tokens', () => {
 
     expect(result.status).toBe('unknown');
   });
+
+  it('treats the SDK tokenSource "none" sentinel as unknown', async () => {
+    mockClaudeAccount({ tokenSource: 'none' });
+
+    const result = await service().create({ tool: 'claude-code', apiKey: 'sk-ant-oat01-test' });
+
+    expect(result.status).toBe('unknown');
+  });
 });
 
 // Round-3 — honest tri-state / fail-safe distinctions layered on top of #1867.

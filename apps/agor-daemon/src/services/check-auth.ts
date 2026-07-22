@@ -33,6 +33,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import { isRealAuthSource } from './check-auth-helpers.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -151,7 +152,7 @@ async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheck
   // valid subscription sessions initialize without returning account metadata.
   // Only positive account metadata proves auth; absence is inconclusive and
   // must not drive the persistent "credentials aren't working" banner.
-  return probe.account?.tokenSource ? 'authenticated' : 'unknown';
+  return isRealAuthSource(probe.account?.tokenSource) ? 'authenticated' : 'unknown';
 }
 
 /**

@@ -5,6 +5,7 @@
  * Messages are stored in a normalized table and referenced by tasks via message_range.
  */
 
+import type { AgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { WidgetMessageMetadata } from './widget';
 
@@ -277,6 +278,27 @@ export interface Message {
      * prompt back to the originating widget for audit / debugging.
      */
     widget_id?: MessageID;
+
+    /** Generic structural marker set by the executor on the message it emits
+     * for any task failure (i.e. the SDK call threw). Lets downstream consumers
+     * identify a failure message without type/role guessing. Note the
+     * credential-classification hook itself keys off the more specific
+     * `is_missing_credential_failure` / `is_zero_turn_result` flags, not this one. */
+    is_task_failure?: boolean;
+
+    /** Set only when the executor's scoped credential preflight fails. */
+    is_missing_credential_failure?: boolean;
+
+    /** Marks the synthesized message from a zero-turn success (no real model call). */
+    is_zero_turn_result?: boolean;
+
+    /**
+     * Set server-side when a task failure resolves to "no credential for this
+     * session's provider". Drives the Connect-AI empty state instead of the
+     * raw error; `tool` names the provider that needs a credential.
+     */
+    error_kind?: 'missing_credential';
+    tool?: AgenticToolName;
 
     /** Additional agent-specific fields */
     [key: string]: unknown;

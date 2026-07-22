@@ -48,6 +48,11 @@ export function isTaskScopedExecutorRequest(context: HookContext, taskId: string
   return scopedPayload(context)?.task_id === taskId;
 }
 
+/** Whether this request carries a validated executor-session scope. */
+export function hasExecutorRuntimeScope(context: HookContext): boolean {
+  return scopedPayload(context) !== null;
+}
+
 function expectClaim(claim: string | undefined, label: string): string {
   if (!claim) {
     throw new Forbidden(`Executor token is missing ${label} scope`);

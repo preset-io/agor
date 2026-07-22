@@ -27,6 +27,7 @@ import {
   ScheduleRepository,
   type SessionRepository,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
@@ -68,6 +69,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  AGENTIC_TOOL_DISPLAY_NAMES,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
@@ -85,6 +87,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
@@ -547,6 +550,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     sessionsRepository,
   } = ctx;
 
+  // Used by classifyMissingCredentialFailure to look up the acting user for
+  // a failed task (no service-layer equivalent already in ctx).
+  const taskRepository = new TaskRepository(db);
+
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
     try {
@@ -864,6 +871,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        // Detect "no credential resolved for this session's provider"
+        // structurally, never by matching raw provider error text. Drives the
+        // Connect-AI empty state instead of a raw "/login" message.
+        classifyMissingCredentialFailure(
+          db,
+          taskRepository,
+          sessionsRepository,
+          AGENTIC_TOOL_DISPLAY_NAMES
+        ),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),

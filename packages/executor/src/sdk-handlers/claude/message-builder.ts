@@ -176,7 +176,8 @@ export async function createAssistantMessage(
   messagesService: MessagesService,
   tasksService?: TasksService,
   parentToolUseId?: string | null,
-  tokenUsage?: TokenUsage
+  tokenUsage?: TokenUsage,
+  isZeroTurnResult?: boolean
 ): Promise<Message> {
   // Extract text content for preview
   const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
@@ -195,7 +196,10 @@ export async function createAssistantMessage(
     tool_uses: toolUses,
     task_id: taskId,
     parent_tool_use_id: parentToolUseId || undefined,
-    metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
+    metadata: {
+      ...buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
+      ...(isZeroTurnResult ? { is_zero_turn_result: true } : {}),
+    },
   };
 
   await messagesService.create(message);

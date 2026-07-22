@@ -1,6 +1,6 @@
 import { Tabs } from 'nextra/components';
 
-<Tabs items={['npm (Recommended)', 'Homebrew']} defaultIndex={0}>
+<Tabs items={['npm (Recommended)', 'Homebrew', 'Docker Compose']} defaultIndex={0}>
   <Tabs.Tab>
     Most users should start here. It's the most universal path, and it's the one the rest of the docs assume.
 
@@ -49,6 +49,30 @@ import { Tabs } from 'nextra/components';
     > accepts DFSG-compatible licenses, so BUSL projects (Agor, HashiCorp's
     > Terraform/Vault, CockroachDB, Sentry, …) ship via their own taps
     > instead. The tap install path is the supported, long-term solution.
+
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+    Evaluate Agor in a container — no Node install required. Runs the daemon (serving both the API and the UI) from the published `agor-live` npm package.
+
+    Requires **Docker** and **Docker Compose** ([install Docker](https://docs.docker.com/get-docker/)).
+
+    ```bash
+    git clone https://github.com/preset-io/agor.git
+    cd agor
+
+    # Set an admin password before first boot.
+    # Start from docker/.env.prod.example for the full list of options.
+    echo "AGOR_ADMIN_PASSWORD=replace-with-a-long-random-password" > .env.prod
+
+    docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+    ```
+
+    Open [http://localhost:3030](http://localhost:3030) and log in as `admin@agor.live` (health check: `curl http://localhost:3030/health`).
+
+    > **Skipped the password?** Agor generates one on first boot and writes it to `/home/agor/.agor/admin-credentials` inside the container — retrieve it with `docker compose -f docker-compose.prod.yml exec agor-prod cat /home/agor/.agor/admin-credentials`. Either way, this bootstrap only runs once, against an empty database; setting `AGOR_ADMIN_PASSWORD` later won't reset an existing user's password.
+
+    > For hot-reload dev environments, multi-branch setups, and PostgreSQL, see `docker/README.md` and the [Development Guide](/guide/development). For Kubernetes-style executor isolation, see [Containerized Execution](/guide/containerized-execution).
 
   </Tabs.Tab>
 </Tabs>

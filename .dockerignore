@@ -18,6 +18,7 @@ build
 .env
 .env.local
 .env.*.local
+.env.prod
 
 # IDE
 .vscode
