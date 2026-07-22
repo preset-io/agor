@@ -9,8 +9,6 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
-  CodexAuthImportResult,
-  CodexDeviceAuthStatus,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -24,18 +22,10 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import {
-  Fragment,
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 const { Text, Title, Paragraph } = Typography;
@@ -379,7 +369,8 @@ function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-k
 
 function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
   if (authMethod === 'claude-subscription-token') return 'Subscription token';
-  if (authMethod === 'codex-auth-json') return 'Codex login file (auth.json)';
+  // Note: the codex-auth-json method renders its own pane (CodexImportAuthJson)
+  // and never reaches this label, so no case is needed for it here.
   switch (agent) {
     case 'claude-code':
       return 'Anthropic API key';
@@ -470,272 +461,6 @@ const PARTICLE_DIRS = [
   [-72, 0],
   [-51, -51],
 ] as const;
-
-// ─── Codex device-code sign-in pane ──────────────────────────────────────────
-
-const DEVICE_STATUS_POLL_MS = 2000;
-
-function formatCountdown(remainingMs: number): string {
-  const totalSeconds = Math.max(Math.floor(remainingMs / 1000), 0);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-interface CodexDeviceSignInProps {
-  client: AgorClient | null;
-  /** Fired once the daemon confirms tokens were saved for this user. */
-  onVerified: () => void;
-  /** Switch to another codex auth method (gated-account fallback). */
-  onUseFallback: (method: AuthMethod) => void;
-}
-
-/**
- * Self-contained device-code pane: requests a code, shows it with the
- * verification link and a countdown, and polls the daemon for approval.
- * Memoized with its own state so the 1s countdown and 2s status polls
- * re-render only this pane, never the whole wizard.
- */
-const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
-  client,
-  onVerified,
-  onUseFallback,
-}: CodexDeviceSignInProps) {
-  const { token } = useToken();
-  const [status, setStatus] = useState<CodexDeviceAuthStatus>({ phase: 'idle' });
-  const [starting, setStarting] = useState(false);
-  const [remainingMs, setRemainingMs] = useState<number | null>(null);
-
-  const deviceService = useMemo(
-    () =>
-      client
-        ? (client.service('codex-auth/device') as unknown as {
-            create(data: Record<string, never>): Promise<unknown>;
-            find(): Promise<unknown>;
-          })
-        : null,
-    [client]
-  );
-
-  // Tracks the service the pane currently talks to, so an in-flight
-  // requestCode issued against a swapped-out client can't land its state
-  // updates over the replacement's. A layout effect syncs the identity
-  // before paint and before the passive effects below; resetting `starting`
-  // here matters because a stale request's guarded finally deliberately
-  // won't clear it, and a replacement that ADOPTS an attempt never calls
-  // requestCode — without the reset the spinner would cover a live code.
-  const latestServiceRef = useRef(deviceService);
-  useLayoutEffect(() => {
-    latestServiceRef.current = deviceService;
-    setStarting(false);
-  }, [deviceService]);
-
-  const requestCode = useCallback(async () => {
-    if (!deviceService) return;
-    setStarting(true);
-    try {
-      const next = (await deviceService.create({})) as CodexDeviceAuthStatus;
-      if (latestServiceRef.current !== deviceService) return;
-      setStatus(next);
-    } catch (err) {
-      if (latestServiceRef.current !== deviceService) return;
-      setStatus({
-        phase: 'error',
-        hint:
-          err instanceof Error && err.message
-            ? err.message
-            : 'Could not start the ChatGPT sign-in — try again.',
-      });
-    } finally {
-      if (latestServiceRef.current === deviceService) setStarting(false);
-    }
-  }, [deviceService]);
-
-  // On mount (and on client swap), adopt a still-live attempt (user toggled
-  // away and back) instead of burning a fresh code; otherwise request one.
-  // The cancellation guard makes this StrictMode-safe — a superseded run
-  // never fires its requestCode/setStatus continuation.
-  useEffect(() => {
-    if (!deviceService) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (cancelled) return;
-        if (existing.phase === 'pending' || existing.phase === 'success') {
-          setStatus(existing);
-          return;
-        }
-      } catch {
-        // No adoptable attempt — fall through to a fresh request.
-      }
-      if (!cancelled) await requestCode();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [deviceService, requestCode]);
-
-  // Poll while pending; terminal phases stop the loop. A self-scheduling
-  // timeout (next poll armed only after the previous response lands) keeps
-  // slow responses from overlapping and regressing a terminal phase with an
-  // out-of-order pending. Identity-preserving setState keeps unchanged polls
-  // from re-rendering even this pane.
-  useEffect(() => {
-    if (status.phase !== 'pending' || !deviceService) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      try {
-        const next = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (cancelled) return;
-        setStatus((prev) =>
-          prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
-            ? prev
-            : next
-        );
-      } catch {
-        // Transient — keep polling until the code expires.
-      }
-      if (!cancelled) timer = setTimeout(tick, DEVICE_STATUS_POLL_MS);
-    };
-    timer = setTimeout(tick, DEVICE_STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [status.phase, deviceService]);
-
-  // 1s countdown while a code is live.
-  useEffect(() => {
-    if (status.phase !== 'pending' || !status.expiresAt) {
-      setRemainingMs(null);
-      return;
-    }
-    const expiresAtMs = Date.parse(status.expiresAt);
-    const update = () => setRemainingMs(Math.max(expiresAtMs - Date.now(), 0));
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [status.phase, status.expiresAt]);
-
-  useEffect(() => {
-    if (status.phase === 'success') onVerified();
-  }, [status.phase, onVerified]);
-
-  if (starting || status.phase === 'idle') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' }}>
-        <LoadingOutlined style={{ color: token.colorTextTertiary, fontSize: 14 }} />
-        <Text style={{ color: token.colorTextTertiary, fontSize: 13 }}>
-          {client ? 'Getting your sign-in code…' : 'Waiting for the server connection…'}
-        </Text>
-      </div>
-    );
-  }
-
-  if (status.phase === 'pending') {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
-        <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>
-          Open the link below, sign in to ChatGPT, and enter this one-time code:
-        </Text>
-        <Text
-          copyable
-          aria-label="ChatGPT sign-in code"
-          style={{
-            color: token.colorText,
-            fontFamily: 'monospace',
-            fontSize: 26,
-            fontWeight: 600,
-            letterSpacing: 4,
-          }}
-        >
-          {status.userCode}
-        </Text>
-        {status.verificationUrl && (
-          <Typography.Link
-            href={status.verificationUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 13 }}
-          >
-            Open {status.verificationUrl} →
-          </Typography.Link>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <LoadingOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
-          <Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
-            Waiting for approval — we finish automatically once you approve.
-            {remainingMs !== null && ` Code expires in ${formatCountdown(remainingMs)}.`}
-          </Text>
-        </div>
-      </div>
-    );
-  }
-
-  if (status.phase === 'success') {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' }}>
-        <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: 14 }} />
-        <Text style={{ color: token.colorSuccess, fontSize: 13 }}>
-          {status.hint ?? 'Signed in with ChatGPT.'}
-        </Text>
-      </div>
-    );
-  }
-
-  if (status.phase === 'unavailable') {
-    return (
-      <Alert
-        type="warning"
-        showIcon
-        style={{ fontSize: 12 }}
-        message="Device sign-in is turned off for this ChatGPT account"
-        description={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span>
-              Personal accounts: enable it under ChatGPT Settings → Security → “Device code
-              authorization for Codex”, then try again. Workspace accounts: a workspace admin has to
-              enable it. Either way, the two options below work right now.
-            </span>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              <Button size="small" onClick={() => onUseFallback('codex-auth-json')}>
-                Paste a login file
-              </Button>
-              <Button size="small" onClick={() => onUseFallback('api-key')}>
-                Use an API key
-              </Button>
-              <Button size="small" type="text" onClick={requestCode}>
-                Try again
-              </Button>
-            </div>
-          </div>
-        }
-      />
-    );
-  }
-
-  // expired / error
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
-      <Alert
-        type={status.phase === 'expired' ? 'warning' : 'error'}
-        showIcon
-        style={{ fontSize: 12 }}
-        message={
-          status.hint ??
-          (status.phase === 'expired' ? 'The sign-in code expired.' : 'The ChatGPT sign-in failed.')
-        }
-      />
-      <div>
-        <Button size="small" onClick={requestCode}>
-          Get a new code
-        </Button>
-      </div>
-    </div>
-  );
-});
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -1011,19 +736,22 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
-        // Device sign-in has no typed input — it enables once the daemon
+        // Device sign-in and login-file import both complete inside their own
+        // pane — no typed input to validate. They enable once the daemon
         // confirms the login (llmAuthVerified flips before the user record
         // refresh that agentIsVerifiedConnected depends on).
-        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth')
+        if (
+          selectedAgent === 'codex' &&
+          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+        )
           return llmAuthVerified.codex === true;
         // Key stored, check still in progress — keep enabled so user isn't stuck
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
         if (!apiKey.trim()) return false;
-        // Subscription tokens and pasted auth files have no fixed format —
-        // any non-empty string is accepted (the daemon validates the file)
-        if (authMethod === 'claude-subscription-token' || authMethod === 'codex-auth-json')
-          return true;
+        // Subscription tokens have no fixed format — any non-empty string is
+        // accepted (the daemon validates the token).
+        if (authMethod === 'claude-subscription-token') return true;
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
@@ -1059,13 +787,13 @@ export function OnboardingWizard({
             ? null
             : 'Approve the sign-in code in ChatGPT first';
         }
+        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
+          return llmAuthVerified.codex === true ? null : 'Import your Codex login to continue';
+        }
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
         if (!apiKey.trim()) {
-          return authMethod === 'codex-auth-json'
-            ? 'Paste your auth.json contents to continue'
-            : 'Enter your API key to continue';
+          return 'Enter your API key to continue';
         }
-        if (authMethod === 'codex-auth-json') return null;
         const err = validateLlmKeyPattern(selectedAgent, apiKey.trim());
         return err ?? null;
       }
@@ -1152,11 +880,18 @@ export function OnboardingWizard({
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
   }, []);
 
-  const handleCodexAuthMethodFallback = useCallback((method: AuthMethod) => {
-    setAuthMethod(method);
+  const handleCodexAuthMethodFallback = useCallback((target: CodexAuthFallback) => {
+    setAuthMethod(target === 'import' ? 'codex-auth-json' : 'api-key');
     setApiKey('');
     setLlmError(null);
   }, []);
+
+  // Login-file import completes inside its own pane; mirror the device flow by
+  // marking codex verified so the primary button advances to the next step.
+  const handleCodexImported = useCallback(() => {
+    setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+    goToStep('workspace');
+  }, [goToStep]);
 
   const handleBack = useCallback(() => {
     if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
@@ -1182,9 +917,13 @@ export function OnboardingWizard({
           goToStep('workspace');
           return;
         }
-        // Device sign-in completes daemon-side; the primary button only ever
-        // advances once the attempt succeeded (button is disabled until then).
-        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
+        // Device sign-in and login-file import both complete inside their own
+        // pane; the primary button only ever advances once the attempt
+        // succeeded (button is disabled until then).
+        if (
+          selectedAgent === 'codex' &&
+          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+        ) {
           if (llmAuthVerified.codex === true) goToStep('workspace');
           return;
         }
@@ -1194,34 +933,6 @@ export function OnboardingWizard({
           return;
         }
         if (!user || !apiKey.trim()) return;
-        // Pasted auth.json goes to the daemon as-is: it validates the shape,
-        // writes the file 0600 for the right Unix identity, and flips the
-        // user's Codex auth method to subscription. The pasted secret never
-        // touches user records or agent context.
-        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
-          if (!client) return;
-          setLlmSaving(true);
-          setLlmError(null);
-          try {
-            (await client
-              .service('codex-auth/import')
-              .create({ authJson: apiKey })) as CodexAuthImportResult;
-            setLlmAuthVerified((prev) => ({ ...prev, codex: true }));
-            // Drop the pasted token material from React state as soon as the
-            // daemon has it — nothing needs it after a successful import.
-            setApiKey('');
-            goToStep('workspace');
-          } catch (err) {
-            setLlmError(
-              err instanceof Error && err.message
-                ? err.message
-                : 'Could not import the Codex login — try again.'
-            );
-          } finally {
-            setLlmSaving(false);
-          }
-          return;
-        }
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
@@ -1740,7 +1451,7 @@ export function OnboardingWizard({
                       </div>
                     )}
 
-                    {authMethod !== 'codex-device-auth' && (
+                    {authMethod !== 'codex-device-auth' && authMethod !== 'codex-auth-json' && (
                       <div
                         style={{
                           display: 'flex',
@@ -1773,39 +1484,7 @@ export function OnboardingWizard({
                         onUseFallback={handleCodexAuthMethodFallback}
                       />
                     ) : authMethod === 'codex-auth-json' ? (
-                      <>
-                        <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: 10, fontSize: 12 }}
-                          message={
-                            <span>
-                              Already use Codex on your own machine? Its credential file lives there
-                              at <code>~/.codex/auth.json</code>. On that machine, print it with{' '}
-                              <code>cat ~/.codex/auth.json</code> and paste the whole thing below —
-                              this replaces the Codex login already stored on this server, which in
-                              shared setups is one login for the whole server, not one per person.
-                              Or skip the copy-paste entirely: open a branch terminal on this server
-                              and run <code>codex login --device-auth</code>.
-                            </span>
-                          }
-                        />
-                        <Input.Password
-                          aria-label="Codex auth.json contents"
-                          placeholder="Paste the JSON from ~/.codex/auth.json…"
-                          value={apiKey}
-                          onChange={(e) => {
-                            setApiKey(e.target.value);
-                            setLlmError(null);
-                          }}
-                          style={{
-                            background: 'rgba(0,0,0,0.3)',
-                            borderColor: 'rgba(255,255,255,0.12)',
-                            fontFamily: 'monospace',
-                            fontSize: 13,
-                          }}
-                        />
-                      </>
+                      <CodexImportAuthJson client={client} onImported={handleCodexImported} />
                     ) : authMethod === 'claude-subscription-token' ? (
                       <>
                         <Alert
