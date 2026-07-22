@@ -1,21 +1,28 @@
 /**
  * Codex Auth Logout Service
  *
- * Removes the current user's Codex ChatGPT login: best-effort revokes the OAuth
- * tokens (like `codex logout`), deletes the `auth.json` from the Codex home of
- * the Unix identity that runs Codex for this user, and clears the stored
- * `agentic_auth_methods.codex` so executors stop resolving native auth and the
- * UI re-probes to a disconnected state (the `patched` event drives that).
+ * Removes the current user's Codex ChatGPT login from THIS server: deletes the
+ * `auth.json` from the Codex home of the Unix identity that runs Codex for this
+ * user, and clears the stored `agentic_auth_methods.codex` so executors stop
+ * resolving native auth and the UI re-probes to a disconnected state (the
+ * `patched` event drives that).
+ *
+ * DELETE-ONLY BY DESIGN: this is an Agor-scoped action, mirroring the API-key
+ * "Clear" precedent — it signs Codex out on THIS server only and does NOT revoke
+ * the OAuth tokens. The server's auth.json is frequently a transplant of the
+ * user's own laptop login, so a global token revocation would be a footgun
+ * (it would sign them out everywhere). Authoritative revocation lives in
+ * ChatGPT's security settings or `codex logout` on a machine where they're
+ * signed in.
  *
  * SECURITY CONTRACT:
  * - Acts ONLY on the caller's own login — the target identity is always derived
  *   from the authenticated user, never from request data.
- * - Token material is read transiently to revoke and is never logged or
- *   returned; only a class-level revocation outcome is reported.
- * - Removal is idempotent and is NEVER blocked by a revocation failure.
+ * - Removal is idempotent; a genuine delete failure surfaces and does NOT clear
+ *   the stored method (a login we couldn't remove keeps working).
  * - Refuses hosted multi-tenant mode, exactly like import/device: there the
  *   auth.json is the daemon's own server-global file, so a tenant user must not
- *   be able to delete/revoke it. (It is NOT gated on the tool-enabled check —
+ *   be able to delete it. (It is NOT gated on the tool-enabled check —
  *   cleaning up a login must stay possible even after Codex is disabled.)
  */
 
@@ -33,8 +40,7 @@ import type {
   CodexAuthLogoutResult,
   UserID,
 } from '@agor/core/types';
-import { deleteCodexAuthFile, readCodexAuthFile } from '../utils/codex-auth-file.js';
-import { revokeCodexChatgptTokens } from '../utils/codex-auth-revoke.js';
+import { deleteCodexAuthFile } from '../utils/codex-auth-file.js';
 import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-import.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
@@ -57,7 +63,7 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
 
       // Refuse hosted multi-tenant mode, like import/device: there the Codex
       // auth.json is the daemon's server-global file, so no tenant user may
-      // delete or globally-revoke it via this endpoint.
+      // delete it via this endpoint.
       if (loadConfigSync().multi_tenancy?.mode === 'required_from_auth') {
         throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
       }
@@ -74,18 +80,10 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      // Capture the current login (if any) to revoke its tokens, then delete it
-      // IMMEDIATELY — before the network revoke — so a concurrent connect/refresh
-      // can't be clobbered by a delete that waited on the multi-second revoke
-      // round-trip. In shared-identity Unix modes the auth.json is a single
-      // server-wide file, so connects/deletes are inherently last-writer-wins;
-      // deleting before the revoke keeps logout's window to two back-to-back
-      // filesystem ops rather than a network-length one.
-      const existing = readCodexAuthFile(identity.unixUser);
-
-      // Delete the local login (idempotent). A genuine delete failure is a real
-      // server problem worth surfacing — and we do NOT revoke in that case, so a
-      // login we could not remove keeps working. Log the error class only.
+      // Delete the local login (idempotent — a missing file is success). A
+      // genuine delete failure is a real server problem worth surfacing, and we
+      // do NOT clear the method in that case so a login we couldn't remove keeps
+      // working. Log the error class only — never token bytes.
       try {
         deleteCodexAuthFile(identity.unixUser);
       } catch (err) {
@@ -98,17 +96,6 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
           'Could not remove the Codex credentials file on the server. Check daemon logs and sudo configuration.'
         );
       }
-
-      // Best-effort revoke the tokens we just removed (server-side; independent
-      // of the now-deleted file). Never blocks — network/expired/already-revoked
-      // all proceed. `not-found` is genuinely nothing to revoke (`skipped`); an
-      // `unreadable` file may hold a real login we couldn't read to revoke, so
-      // report `failed` rather than pretend there was nothing (the UI warns).
-      const revoked: CodexAuthLogoutResult['revoked'] = existing.ok
-        ? await revokeCodexChatgptTokens(existing.content)
-        : existing.reason === 'unreadable'
-          ? 'failed'
-          : 'skipped';
 
       // Clear the stored method via the users SERVICE (not a direct db write) so
       // the Feathers `patched` event fires and the settings pane + board banners
@@ -126,7 +113,7 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         { user: authUser, authenticated: true }
       );
 
-      return { status: 'removed', revoked };
+      return { status: 'removed' };
     },
   };
 }

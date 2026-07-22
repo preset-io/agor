@@ -56,7 +56,7 @@ function Harness({
       find: deviceFind ?? vi.fn(async () => ({ phase: 'idle' })),
     },
     'codex-auth/logout': {
-      create: logoutCreate ?? vi.fn(async () => ({ status: 'removed', revoked: 'revoked' })),
+      create: logoutCreate ?? vi.fn(async () => ({ status: 'removed' })),
     },
   };
   // Stable client identity across rerenders (mirrors the real modal, where the
@@ -375,7 +375,7 @@ describe('CodexAuthSettings', () => {
   });
 
   it('removes the login via a confirm and returns the card to the disconnected state', async () => {
-    const logoutCreate = vi.fn(async () => ({ status: 'removed', revoked: 'revoked' }));
+    const logoutCreate = vi.fn(async () => ({ status: 'removed' }));
     const checkAuth = vi.fn(
       async (): Promise<AuthCheckResult> => ({
         status: 'authenticated',
@@ -390,11 +390,11 @@ describe('CodexAuthSettings', () => {
 
     // The confirm's destructive action calls the daemon logout endpoint (no
     // token material crosses this boundary — the request body is empty). The
-    // copy must disclose the global (every-machine) scope of the revocation.
+    // copy is server-scoped (delete-only) and points at ChatGPT settings /
+    // `codex logout` for true, everywhere revocation.
     clickText('Remove login');
-    expect(
-      await screen.findByText(/signs the account out of Codex on every machine/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/your other devices stay signed in/i)).toBeInTheDocument();
+    expect(screen.getByText(/codex logout/i)).toBeInTheDocument();
     fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
     await waitFor(() => expect(logoutCreate).toHaveBeenCalledWith({}));
 
@@ -406,19 +406,6 @@ describe('CodexAuthSettings', () => {
     expect(await screen.findByPlaceholderText('sk-proj-...')).toBeInTheDocument();
     expect(screen.queryByText('A ChatGPT login is active on this server.')).not.toBeInTheDocument();
     expect(screen.queryByText('Remove login')).not.toBeInTheDocument();
-  });
-
-  it('warns when the login is removed but token revocation could not be confirmed', async () => {
-    const logoutCreate = vi.fn(async () => ({ status: 'removed', revoked: 'failed' }));
-    render(<Harness initialMethod="subscription" logoutCreate={logoutCreate} />);
-
-    clickText('Remove login');
-    fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
-
-    // A failed provider-side revocation must not be silently reported as a
-    // confirmed global sign-out.
-    expect(await screen.findByText('Revocation not confirmed')).toBeInTheDocument();
-    expect(screen.getByText(/token revocation could not be confirmed/i)).toBeInTheDocument();
   });
 
   it('surfaces a daemon error when removal fails, without crashing', async () => {
