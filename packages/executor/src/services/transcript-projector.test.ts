@@ -8,6 +8,14 @@ function serializedBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) deepFreeze(nested);
+  }
+  return value;
+}
+
 describe('projectTranscriptRequestData', () => {
   it('passes request data at the byte budget through by identity', () => {
     const data = {
@@ -47,19 +55,7 @@ describe('projectTranscriptRequestData', () => {
       content: [{ type: 'text', text: 'unchanged' }, originalResult],
     };
     const before = JSON.stringify(data);
-    Object.freeze(originalResult.metadata.nested);
-    Object.freeze(originalResult.metadata);
-    Object.freeze(originalResult.diff.structuredPatch[0]);
-    Object.freeze(originalResult.diff.structuredPatch);
-    Object.freeze(originalResult.diff.files[0].structuredPatch[0]);
-    Object.freeze(originalResult.diff.files[0].structuredPatch);
-    Object.freeze(originalResult.diff.files[0]);
-    Object.freeze(originalResult.diff.files);
-    Object.freeze(originalResult.diff);
-    Object.freeze(originalResult.provider_extension);
-    Object.freeze(originalResult);
-    Object.freeze(data.content);
-    Object.freeze(data);
+    deepFreeze(data);
 
     const projected = projectTranscriptRequestData(data, {
       path: 'messages',
@@ -118,12 +114,7 @@ describe('projectTranscriptRequestData', () => {
       content: [{ type: 'tool_result', tool_use_id: 'tool-structured', content }],
     };
     const before = JSON.stringify(data);
-    Object.freeze(content[0]);
-    Object.freeze(content[1]);
-    Object.freeze(content);
-    Object.freeze(data.content[0]);
-    Object.freeze(data.content);
-    Object.freeze(data);
+    deepFreeze(data);
 
     const projected = projectTranscriptRequestData(data, {
       path: 'messages',

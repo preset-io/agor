@@ -3,6 +3,7 @@ import {
   type Task,
   TaskStatus,
   type ToolResultContentBlock,
+  type ToolUse,
 } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,12 @@ const projection = {
   persisted_content_bytes: 800_000,
 };
 const notice = 'Result truncated for transcript storage; showing 781.3 KB of 976.6 KB.';
+const genericToolUse: ToolUse = { id: 'tool-1', name: 'UnknownTool', input: {} };
+const editToolUse: ToolUse = {
+  id: 'tool-1',
+  name: 'Edit',
+  input: { file_path: 'src/file.ts', old_string: 'old', new_string: 'new' },
+};
 
 function projectedResult(overrides: Partial<ToolResultContentBlock> = {}): ToolResultContentBlock {
   return {
@@ -45,10 +52,7 @@ function message(content: Message['content'], role: 'assistant' | 'user' = 'user
 describe('transcript projection notice', () => {
   it('renders the same notice around generic and custom tool results without hiding content or diff state', () => {
     const generic = render(
-      <ToolUseRenderer
-        toolUse={{ type: 'tool_use', id: 'tool-1', name: 'UnknownTool', input: {} }}
-        toolResult={projectedResult({ is_error: true })}
-      />
+      <ToolUseRenderer toolUse={genericToolUse} toolResult={projectedResult({ is_error: true })} />
     );
     expect(screen.getByText(notice)).toBeInTheDocument();
     const errorResult = screen.getByText(/HEAD/);
@@ -58,12 +62,7 @@ describe('transcript projection notice', () => {
 
     render(
       <ToolUseRenderer
-        toolUse={{
-          type: 'tool_use',
-          id: 'tool-1',
-          name: 'Edit',
-          input: { file_path: 'src/file.ts', old_string: 'old', new_string: 'new' },
-        }}
+        toolUse={editToolUse}
         toolResult={projectedResult({
           diff: {
             structuredPatch: [
@@ -113,25 +112,12 @@ describe('transcript projection notice', () => {
   it('omits the notice from every result path', () => {
     const completeResult = projectedResult({ transcript_projection: undefined });
     const generic = render(
-      <ToolUseRenderer
-        toolUse={{ type: 'tool_use', id: 'tool-1', name: 'UnknownTool', input: {} }}
-        toolResult={completeResult}
-      />
+      <ToolUseRenderer toolUse={genericToolUse} toolResult={completeResult} />
     );
     expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
     generic.unmount();
 
-    const custom = render(
-      <ToolUseRenderer
-        toolUse={{
-          type: 'tool_use',
-          id: 'tool-1',
-          name: 'Edit',
-          input: { file_path: 'src/file.ts', old_string: 'old', new_string: 'new' },
-        }}
-        toolResult={completeResult}
-      />
-    );
+    const custom = render(<ToolUseRenderer toolUse={editToolUse} toolResult={completeResult} />);
     expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
     custom.unmount();
 

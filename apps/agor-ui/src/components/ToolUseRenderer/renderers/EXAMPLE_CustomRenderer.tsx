@@ -13,6 +13,7 @@
 import { theme } from 'antd';
 import type React from 'react';
 import { TEXT_TRUNCATION } from '../../../constants/ui';
+import { toolResultToDisplayText } from '../../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../../CollapsibleText';
 import type { ToolRendererProps } from './index';
 
@@ -28,29 +29,10 @@ export const ExampleCustomRenderer: React.FC<ToolRendererProps> = ({
 }) => {
   const { token } = theme.useToken();
 
-  // Extract text content from result
-  const getResultText = (): string => {
-    if (!result) return '';
-
-    if (typeof result.content === 'string') {
-      return result.content;
-    }
-
-    if (Array.isArray(result.content)) {
-      const blocks: unknown[] = result.content;
-      return blocks
-        .filter(
-          (block: unknown): block is { type: 'text'; text: string } =>
-            typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
-        )
-        .map((block) => block.text)
-        .join('\n\n');
-    }
-
-    return '';
-  };
-
-  const resultText = getResultText();
+  const resultText =
+    result && (typeof result.content === 'string' || Array.isArray(result.content))
+      ? toolResultToDisplayText(result.content)
+      : '';
   const isError = result?.is_error;
 
   return (

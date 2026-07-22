@@ -18,6 +18,7 @@ import {
   PermissionStatus,
   shortId,
   type ToolResultContentBlock,
+  type ToolUse,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -53,13 +54,6 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
 import { WidgetBlock } from './WidgetBlock';
-
-interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
 
 interface TextBlock {
   type: 'text';
@@ -98,7 +92,7 @@ interface MessageBlockProps {
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
-function getToolDescription(toolUse: ToolUseBlock): string | undefined {
+function getToolDescription(toolUse: ToolUse): string | undefined {
   const { name, input } = toolUse;
   if (typeof input.description === 'string') return input.description;
   switch (name) {
@@ -524,14 +518,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const getContentBlocks = (): {
     thinkingBlocks: string[];
     textBeforeTools: string[];
-    toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultContentBlock }[];
+    toolBlocks: { toolUse: ToolUse; toolResult?: ToolResultContentBlock }[];
     textAfterTools: string[];
     standaloneProjectedResults: ToolResultContentBlock[];
   } => {
     const thinkingBlocks: string[] = [];
     const textBeforeTools: string[] = [];
     const textAfterTools: string[] = [];
-    const toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultContentBlock }[] = [];
+    const toolBlocks: { toolUse: ToolUse; toolResult?: ToolResultContentBlock }[] = [];
     const standaloneProjectedResults: ToolResultContentBlock[] = [];
 
     // Handle string content
@@ -549,7 +543,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
     // Handle array of content blocks
     if (Array.isArray(message.content)) {
-      const toolUseMap = new Map<string, ToolUseBlock>();
+      const toolUseMap = new Map<string, ToolUse>();
       const toolResultMap = new Map<string, ToolResultContentBlock>();
       let hasSeenTool = false;
 
@@ -572,7 +566,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             textBeforeTools.push(text);
           }
         } else if (block.type === 'tool_use') {
-          const toolUse = block as unknown as ToolUseBlock;
+          const toolUse = block as unknown as ToolUse;
 
           // Special handling: Task tools display as text, not tool blocks
           if (toolUse.name === 'Task') {

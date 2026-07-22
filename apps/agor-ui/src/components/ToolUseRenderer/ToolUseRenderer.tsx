@@ -13,7 +13,7 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
-import type { ToolResultContentBlock } from '@agor-live/client';
+import type { ToolResultContentBlock, ToolUse } from '@agor-live/client';
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
@@ -24,18 +24,11 @@ import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
 import { TranscriptProjectionNotice } from '../TranscriptProjectionNotice';
 import { getToolRenderer } from './renderers';
 
-interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
 interface ToolUseRendererProps {
   /**
    * Tool use block with invocation details
    */
-  toolUse: ToolUseBlock;
+  toolUse: ToolUse;
 
   /**
    * Optional tool result block
@@ -104,12 +97,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
 
   // Otherwise, use default generic renderer
   // Extract text content from tool result
-  const getResultText = (): string => {
-    if (!toolResult) return '';
-    return toolResultToDisplayText(toolResult.content);
-  };
-
-  const resultText = getResultText();
+  const resultText = toolResult ? toolResultToDisplayText(toolResult.content) : '';
   const hasContent = resultText.trim().length > 0;
 
   // Detect if we should use ANSI rendering for this tool output

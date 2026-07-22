@@ -10,6 +10,7 @@
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../../utils/ansi';
+import { toolResultToDisplayText } from '../../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../../CollapsibleText';
 import { CollapsibleAnsiText } from '../../CollapsibleText/CollapsibleAnsiText';
 import { ThemedSyntaxHighlighter } from '../../ThemedSyntaxHighlighter';
@@ -20,29 +21,10 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
   const command = input.command != null ? String(input.command) : undefined;
   const isError = result?.is_error;
 
-  // Extract text content from result
-  const getResultText = (): string => {
-    if (!result) return '';
-
-    if (typeof result.content === 'string') {
-      return result.content;
-    }
-
-    if (Array.isArray(result.content)) {
-      const blocks: unknown[] = result.content;
-      return blocks
-        .filter((block): block is { type: 'text'; text: string } => {
-          const b = block as { type: string; text?: string };
-          return b.type === 'text';
-        })
-        .map((block) => block.text)
-        .join('\n\n');
-    }
-
-    return '';
-  };
-
-  const resultText = getResultText();
+  const resultText =
+    result && (typeof result.content === 'string' || Array.isArray(result.content))
+      ? toolResultToDisplayText(result.content)
+      : '';
   const hasContent = resultText.trim().length > 0;
   const useAnsi = shouldUseAnsiRendering('Bash', resultText);
 

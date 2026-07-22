@@ -16,6 +16,7 @@
 import type {
   Message,
   ToolResultContentBlock,
+  ToolUse,
   TranscriptContentProjection,
 } from '@agor-live/client';
 import {
@@ -57,13 +58,6 @@ import {
 import { ToolUseRenderer } from '../ToolUseRenderer';
 import { TranscriptProjectionNotice } from '../TranscriptProjectionNotice';
 
-interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
 interface TextBlock {
   type: 'text';
   text: string;
@@ -82,7 +76,7 @@ interface AgentChainProps {
 
 interface ChainItem {
   type: 'thought' | 'tool';
-  content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultContentBlock };
+  content: string | { toolUse: ToolUse; toolResult?: ToolResultContentBlock };
   message: Message;
   projection?: TranscriptContentProjection;
 }
@@ -156,7 +150,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               const toolResult = block as unknown as ToolResultContentBlock;
               globalToolResultMap.set(toolResult.tool_use_id, toolResult);
             } else if (block.type === 'tool_use') {
-              globalToolUseIds.add((block as unknown as ToolUseBlock).id);
+              globalToolUseIds.add((block as unknown as ToolUse).id);
             }
           }
         }
@@ -202,7 +196,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           }
         }
 
-        const toolUseMap = new Map<string, ToolUseBlock>();
+        const toolUseMap = new Map<string, ToolUse>();
         const textBlocksBeforeTools: string[] = [];
         const textBlocksAfterTools: string[] = [];
 
@@ -220,7 +214,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               }
             }
           } else if (block.type === 'tool_use') {
-            const toolUse = block as unknown as ToolUseBlock;
+            const toolUse = block as unknown as ToolUse;
             toolUseMap.set(toolUse.id, toolUse);
             hasSeenTool = true;
           }
@@ -276,7 +270,7 @@ export const AgentChain = React.memo<AgentChainProps>(
         } else {
           toolCount++;
           const { toolUse, toolResult } = item.content as {
-            toolUse: ToolUseBlock;
+            toolUse: ToolUse;
             toolResult?: ToolResultContentBlock;
           };
 
@@ -311,7 +305,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     }, [chainItems]);
 
     // Generate smart description for tool
-    const getToolDescription = (toolUse: ToolUseBlock): string | null => {
+    const getToolDescription = (toolUse: ToolUse): string | null => {
       const { name, input } = toolUse;
 
       if (typeof input.description === 'string') {
@@ -393,7 +387,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     };
 
     // Resolve the display name for a tool (handles MCP proxy tools)
-    const resolveDisplayName = (toolUse: ToolUseBlock): string => {
+    const resolveDisplayName = (toolUse: ToolUse): string => {
       return getToolDisplayName(toolUse.name, toolUse.input);
     };
 
@@ -447,7 +441,7 @@ export const AgentChain = React.memo<AgentChainProps>(
 
       // Tool use
       const { toolUse, toolResult } = item.content as {
-        toolUse: ToolUseBlock;
+        toolUse: ToolUse;
         toolResult?: ToolResultContentBlock;
       };
       const isError = toolResult?.is_error;
