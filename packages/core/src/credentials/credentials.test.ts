@@ -1,90 +1,99 @@
 import { describe, expect, it } from 'vitest';
 import { lintCredential } from './lint.js';
-import { normalizeCredential } from './normalize.js';
+import { applyCredentialFix, detectCredentialFix, sanitizeCredential } from './normalize.js';
 import { isKnownCredentialField, resolveCredentialSpec } from './specs.js';
 
-describe('normalizeCredential', () => {
+describe('sanitizeCredential (always-safe automatic cleanup)', () => {
   it('strips edge whitespace and newlines', () => {
-    const r = normalizeCredential('ANTHROPIC_API_KEY', '  sk-ant-api03-abcDEF123456  \n');
-    expect(r.value).toBe('sk-ant-api03-abcDEF123456');
-    expect(r.changed).toBe(true);
-    expect(r.internalWhitespaceFixed).toBe(false);
+    expect(sanitizeCredential('  sk-ant-api03-abcDEF123456  \n')).toBe('sk-ant-api03-abcDEF123456');
   });
 
-  it('removes a mid-token space and flags the internal fix (the terminal-paste bug)', () => {
-    const r = normalizeCredential('ANTHROPIC_API_KEY', 'sk-ant-api03-abc DEF123456');
-    expect(r.value).toBe('sk-ant-api03-abcDEF123456');
-    expect(r.internalWhitespaceFixed).toBe(true);
-    expect(r.changes.collapsedInternal).toBe(true);
-  });
-
-  it('removes a mid-token newline and flags the internal fix', () => {
-    const r = normalizeCredential('OPENAI_API_KEY', 'sk-proj-abc\ndef123456789012345');
-    expect(r.value).toBe('sk-proj-abcdef123456789012345');
-    expect(r.internalWhitespaceFixed).toBe(true);
-  });
-
-  it('strips zero-width characters without flagging an internal fix', () => {
+  it('strips zero-width / invisible characters', () => {
     const zwsp = '​';
     const bom = '﻿';
-    const r = normalizeCredential('GEMINI_API_KEY', `AIza${zwsp}abcdef${bom}123456`);
-    expect(r.value).toBe('AIzaabcdef123456');
-    expect(r.changes.strippedZeroWidth).toBe(true);
-    expect(r.internalWhitespaceFixed).toBe(false);
+    expect(sanitizeCredential(`AIza${zwsp}abcdef${bom}123456`)).toBe('AIzaabcdef123456');
   });
 
-  it('strips smart quotes wrapping the whole value and flags an internal fix', () => {
-    const r = normalizeCredential('ANTHROPIC_BASE_URL', '“https://api.example.com”');
-    expect(r.value).toBe('https://api.example.com');
-    expect(r.changes.strippedWrappingQuotes).toBe(true);
-    expect(r.internalWhitespaceFixed).toBe(true);
+  it('NEVER collapses internal whitespace (the user keeps what they typed)', () => {
+    expect(sanitizeCredential('sk-ant-api03-abc DEF123456')).toBe('sk-ant-api03-abc DEF123456');
   });
 
-  it('strips ASCII double quotes wrapping a token (no quote char left behind)', () => {
-    const r = normalizeCredential('ANTHROPIC_API_KEY', '"sk-ant-api03-abcDEF0123456789abcDEF"');
-    expect(r.value).toBe('sk-ant-api03-abcDEF0123456789abcDEF');
-    expect(r.changes.strippedWrappingQuotes).toBe(true);
-    expect(r.internalWhitespaceFixed).toBe(true);
-  });
-
-  it('strips wrapping backticks', () => {
-    const r = normalizeCredential('OPENAI_API_KEY', '`sk-proj-abcdefghijklmnopqrstuv`');
-    expect(r.value).toBe('sk-proj-abcdefghijklmnopqrstuv');
-    expect(r.changes.strippedWrappingQuotes).toBe(true);
-  });
-
-  it('leaves a quote in the MIDDLE of the value untouched (charset lint owns it)', () => {
-    const r = normalizeCredential('OPENAI_API_KEY', 'sk-proj-abc"def0123456789012');
-    expect(r.value).toBe('sk-proj-abc"def0123456789012');
-    expect(r.changes.strippedWrappingQuotes).toBe(false);
-    expect(lintCredential('OPENAI_API_KEY', r.value)?.code).toBe('charset');
-  });
-
-  it('does NOT strip wrapping quotes for unknown fields (arbitrary values preserved)', () => {
-    const r = normalizeCredential('SOME_RANDOM_VAR', '“hello world”');
-    expect(r.value).toBe('“hello world”');
-    expect(r.changed).toBe(false);
-    expect(r.internalWhitespaceFixed).toBe(false);
+  it('NEVER unwraps quotes', () => {
+    expect(sanitizeCredential('"sk-ant-api03-token"')).toBe('"sk-ant-api03-token"');
+    expect(sanitizeCredential('“https://api.example.com”')).toBe('“https://api.example.com”');
   });
 
   it('leaves a clean token untouched', () => {
-    const r = normalizeCredential('ANTHROPIC_API_KEY', 'sk-ant-api03-cleanTOKEN0123456789');
-    expect(r.changed).toBe(false);
-    expect(r.value).toBe('sk-ant-api03-cleanTOKEN0123456789');
+    expect(sanitizeCredential('sk-ant-api03-cleanTOKEN0123456789')).toBe(
+      'sk-ant-api03-cleanTOKEN0123456789'
+    );
+  });
+});
+
+describe('detectCredentialFix (opt-in — never applied automatically)', () => {
+  it('detects a mid-token space on a known field', () => {
+    const fix = detectCredentialFix('ANTHROPIC_API_KEY', 'sk-ant-api03-abc DEF123456');
+    expect(fix?.kinds).toContain('internal-whitespace');
+    expect(fix?.fixedValue).toBe('sk-ant-api03-abcDEF123456');
+    expect(fix?.message).toMatch(/spaces or line breaks/i);
   });
 
-  it('edge-trims a PEM private key but never touches internal newlines', () => {
+  it('detects a mid-token newline', () => {
+    const fix = detectCredentialFix('OPENAI_API_KEY', 'sk-proj-abc\ndef123456789012345');
+    expect(fix?.kinds).toContain('internal-whitespace');
+    expect(fix?.fixedValue).toBe('sk-proj-abcdef123456789012345');
+  });
+
+  it('detects wrapping quotes (ASCII, smart, backtick)', () => {
+    expect(detectCredentialFix('ANTHROPIC_API_KEY', '"sk-ant-api03-token0000"')?.kinds).toEqual([
+      'wrapping-quotes',
+    ]);
+    expect(detectCredentialFix('ANTHROPIC_BASE_URL', '“https://api.example.com”')?.fixedValue).toBe(
+      'https://api.example.com'
+    );
+    expect(detectCredentialFix('OPENAI_API_KEY', '`sk-proj-token00000`')?.fixedValue).toBe(
+      'sk-proj-token00000'
+    );
+  });
+
+  it('reports both kinds when the value is quoted AND has internal whitespace', () => {
+    const fix = detectCredentialFix('ANTHROPIC_API_KEY', '"sk-ant-api03-abc DEF"');
+    expect(fix?.kinds).toEqual(['wrapping-quotes', 'internal-whitespace']);
+    expect(fix?.fixedValue).toBe('sk-ant-api03-abcDEF');
+    expect(fix?.message).toMatch(/wrapping quotes/i);
+  });
+
+  it('returns null for a clean known token', () => {
+    expect(detectCredentialFix('ANTHROPIC_API_KEY', 'sk-ant-api03-clean0123456789')).toBeNull();
+  });
+
+  it('returns null for unknown fields (arbitrary values are never touched)', () => {
+    expect(detectCredentialFix('SOME_RANDOM_VAR', 'a b c')).toBeNull();
+    expect(detectCredentialFix('SOME_RANDOM_VAR', '“hello world”')).toBeNull();
+  });
+
+  it('returns null for multi-line PEM fields', () => {
     const pem = '-----BEGIN PRIVATE KEY-----\nLINE1\nLINE2\n-----END PRIVATE KEY-----';
-    const r = normalizeCredential('private_key', `\n  ${pem}  \n`);
-    expect(r.value).toBe(pem);
-    expect(r.internalWhitespaceFixed).toBe(false);
-    expect(r.changes.collapsedInternal).toBe(false);
+    expect(detectCredentialFix('private_key', pem)).toBeNull();
   });
 
-  it('does not collapse internal whitespace for unknown fields', () => {
-    const r = normalizeCredential('SOME_RANDOM_VAR', 'a b c');
-    expect(r.value).toBe('a b c');
-    expect(r.internalWhitespaceFixed).toBe(false);
+  it('ignores invisible/edge noise (only genuine internal issues trigger it)', () => {
+    const bom = '﻿';
+    expect(detectCredentialFix('GEMINI_API_KEY', `  AIzaClean0123456789${bom}  `)).toBeNull();
+  });
+});
+
+describe('applyCredentialFix (only invoked on explicit user action)', () => {
+  it('collapses internal whitespace and unwraps quotes for known single-line fields', () => {
+    expect(applyCredentialFix('ANTHROPIC_API_KEY', '"sk-ant-api03-abc DEF"')).toBe(
+      'sk-ant-api03-abcDEF'
+    );
+  });
+
+  it('is edge/invisible-only (no-op beyond sanitize) for unknown or PEM fields', () => {
+    expect(applyCredentialFix('SOME_RANDOM_VAR', '“a b c”')).toBe('“a b c”');
+    const pem = '-----BEGIN KEY-----\nA B\n-----END KEY-----';
+    expect(applyCredentialFix('private_key', `  ${pem}  `)).toBe(pem);
   });
 });
 
@@ -170,11 +179,11 @@ describe('resolveCredentialSpec', () => {
 });
 
 describe('generic-secret specs (gateway secrets + embedding api_key)', () => {
-  it('collapses an internal space and flags the fix, without any lint', () => {
-    const r = normalizeCredential('signing_secret', 'abc def12345678');
-    expect(r.value).toBe('abcdef12345678');
-    expect(r.internalWhitespaceFixed).toBe(true);
-    expect(lintCredential('signing_secret', r.value)).toBeNull();
+  it('offers an opt-in internal-space fix without any lint', () => {
+    const fix = detectCredentialFix('signing_secret', 'abc def12345678');
+    expect(fix?.fixedValue).toBe('abcdef12345678');
+    expect(fix?.kinds).toContain('internal-whitespace');
+    expect(lintCredential('signing_secret', 'abc def12345678')).toBeNull();
   });
 
   it('does not prefix- or charset-lint a generic embedding api_key', () => {

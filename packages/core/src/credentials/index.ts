@@ -3,7 +3,11 @@
  * by every credential surface (agent tools, onboarding, gateway, MCP, env vars)
  * and the daemon's at-rest normalization backstop.
  *
- * - Layer 1 (`normalizeCredential`): silent repair, safe on paste/blur/write.
+ * - Layer 1a (`sanitizeCredential`): always-safe automatic cleanup (edge +
+ *   invisible chars), safe on paste/blur/write and as a daemon backstop.
+ * - Layer 1b (`detectCredentialFix` / `applyCredentialFix`): opt-in cleanup
+ *   (internal whitespace, wrapping quotes) — detected automatically, applied only
+ *   on explicit user action. Never rewritten silently.
  * - Layer 2 (`lintCredential`): non-blocking format warnings.
  * - Layer 3 (live verify) is provided per-surface via the check-auth service.
  */
@@ -14,9 +18,11 @@ export {
   lintCredential,
 } from './lint.js';
 export {
-  type CredentialNormalizationChanges,
-  type NormalizeCredentialResult,
-  normalizeCredential,
+  applyCredentialFix,
+  type CredentialFixKind,
+  type CredentialFixSuggestion,
+  detectCredentialFix,
+  sanitizeCredential,
 } from './normalize.js';
 export {
   CREDENTIAL_SPECS,
