@@ -4,7 +4,7 @@ import type {
   AgorClient,
   AuthCheckResult,
 } from '@agor-live/client';
-import { Alert, Button, Segmented, Space, Typography, theme } from 'antd';
+import { Alert, Button, Popconfirm, Segmented, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
@@ -67,6 +67,8 @@ export function CodexAuthSettings({
   const [view, setView] = useState<CodexMethodView>(() => viewForMethod(authMethod, 'chatgpt'));
   const [probe, setProbe] = useState<AuthCheckResult | null>(null);
   const [probing, setProbing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // Keep the visible sub-pane in step with the persisted method (e.g. a
   // successful device/import flips it to subscription), while preserving which
@@ -136,6 +138,27 @@ export function CodexAuthSettings({
   const handleAuthenticated = useCallback(() => {
     void runProbe();
   }, [runProbe]);
+
+  // Remove the Codex ChatGPT login. The daemon revokes the tokens, deletes the
+  // auth.json, and clears the stored method — which arrives as a user patch that
+  // flips authMethod to the api_key default, so the pane re-syncs to the
+  // disconnected state and re-probes on its own (no local state to reset here).
+  const handleRemoveLogin = useCallback(async () => {
+    if (!client) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await client.service('codex-auth/logout').create({});
+    } catch (err) {
+      setRemoveError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Could not remove the Codex login — try again.'
+      );
+    } finally {
+      setRemoving(false);
+    }
+  }, [client]);
 
   // Selecting a method is a pure view switch — it never persists the auth
   // method. Persisting on selection is destructive in BOTH directions: choosing
@@ -225,18 +248,55 @@ export function CodexAuthSettings({
         Personal credentials are encrypted at rest and injected only into the agent runtime.
       </Text>
 
-      {connectionBanner && (
+      {(connectionBanner || authMethod === 'subscription') && (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           {connectionBanner}
-          <Button
-            type="link"
-            size="small"
-            loading={probing}
-            onClick={() => void runProbe()}
-            style={{ paddingInline: 0 }}
-          >
-            Recheck connection
-          </Button>
+          <Space size="middle" wrap>
+            <Button
+              type="link"
+              size="small"
+              loading={probing}
+              onClick={() => void runProbe()}
+              style={{ paddingInline: 0 }}
+            >
+              Recheck connection
+            </Button>
+            {/* Removal applies only to a ChatGPT login; API keys use ApiKeyFields' Clear. */}
+            {authMethod === 'subscription' && (
+              <Popconfirm
+                title="Remove Codex login?"
+                description={
+                  <div style={{ maxWidth: 300 }}>
+                    Signs out the Codex ChatGPT login and revokes its tokens. In shared-identity
+                    setups this is one login for the whole server — removing it signs Codex out for
+                    everyone here, not just you.
+                  </div>
+                }
+                okText="Remove"
+                okButtonProps={{ danger: true, loading: removing }}
+                cancelText="Keep login"
+                onConfirm={handleRemoveLogin}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  danger
+                  loading={removing}
+                  style={{ paddingInline: 0 }}
+                >
+                  Remove login
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+          {removeError && (
+            <Alert
+              type="error"
+              showIcon
+              message={removeError}
+              style={{ fontSize: token.fontSizeSM }}
+            />
+          )}
         </Space>
       )}
 
