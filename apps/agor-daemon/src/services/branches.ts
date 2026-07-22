@@ -713,7 +713,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Override create to inject config-driven branch defaults.
+   * Override create to inject board permission defaults.
    */
   async create(
     data: Partial<Branch> | Partial<Branch>[],
