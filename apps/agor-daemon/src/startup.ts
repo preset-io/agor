@@ -695,10 +695,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     const multiTenancy = resolveMultiTenancyConfig(config);
     const startGateway =
       multiTenancy.mode === 'static'
-        ? runWithTenantContext(multiTenancy.static_tenant_id, async () => {
-            await gatewayService.refreshChannelState();
-            await gatewayService.startListeners();
-          })
+        ? runWithTenantContext(multiTenancy.static_tenant_id, () => gatewayService.startListeners())
         : gatewayService.startListenersAcrossTenants();
     void startGateway.catch((error: unknown) => {
       console.error('[gateway] Failed to start listeners:', error);

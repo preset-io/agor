@@ -72,28 +72,6 @@ describe('GatewayChannelRepository', () => {
     expect(channel.mcp_server_ids).toEqual(['mcp-one']);
   });
 
-  dbTest('discovers only enabled listener refs in static SQLite mode', async ({ db }) => {
-    const branch = await seedBranch(db);
-    const repo = new GatewayChannelRepository(db);
-    const enabled = await repo.create({
-      name: 'Enabled Slack',
-      created_by: generateId() as UUID,
-      target_branch_id: branch.branch_id as UUID,
-      channel_type: 'slack',
-      enabled: true,
-      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
-    });
-    await repo.create({
-      name: 'Disabled Slack',
-      created_by: generateId() as UUID,
-      target_branch_id: branch.branch_id as UUID,
-      channel_type: 'slack',
-      enabled: false,
-    });
-
-    expect(await repo.findEnabledRefs()).toEqual([{ channel_id: enabled.id }]);
-  });
-
   describe('enabled requires secrets invariant', () => {
     dbTest('creates a disabled channel without secrets', async ({ db }) => {
       const branch = await seedBranch(db);

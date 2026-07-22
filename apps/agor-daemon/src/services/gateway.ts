@@ -16,6 +16,7 @@ import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
+  GatewayListenerDiscoveryRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
   getHiddenTenantId,
@@ -2777,7 +2778,7 @@ export class GatewayService {
     const refs = await runWithSystemDatabaseScope(
       this.db,
       'gateway listener discovery',
-      (systemDb) => new GatewayChannelRepository(systemDb).findEnabledRefs(),
+      (systemDb) => new GatewayListenerDiscoveryRepository(systemDb).findEnabledTenantRefs(),
       { capability: 'gateway_listener_discovery' }
     );
 
@@ -2787,12 +2788,6 @@ export class GatewayService {
     }
 
     for (const ref of refs) {
-      if (!ref.tenant_id) {
-        console.error(
-          `[gateway] Refusing to start channel ${ref.channel_id}: discovery row has no tenant identity`
-        );
-        continue;
-      }
       const tenantId = ref.tenant_id;
 
       try {

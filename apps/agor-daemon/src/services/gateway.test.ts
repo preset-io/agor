@@ -1,7 +1,7 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
-  GatewayChannelRepository,
+  GatewayListenerDiscoveryRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
@@ -242,8 +242,8 @@ describe('GatewayService multi-tenant process state', () => {
       [];
     const startedInTenants: Array<string | undefined> = [];
     const handledInTenants: Array<string | undefined> = [];
-    const findEnabledRefs = vi
-      .spyOn(GatewayChannelRepository.prototype, 'findEnabledRefs')
+    const findEnabledTenantRefs = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
       .mockResolvedValue([
         { channel_id: 'same-channel' as never, tenant_id: 'tenant-a' },
         { channel_id: 'same-channel' as never, tenant_id: 'tenant-b' },
@@ -287,14 +287,44 @@ describe('GatewayService multi-tenant process state', () => {
       callbacks[1]({ threadId: 'thread-b', text: 'b', userId: 'user-b' });
       await vi.waitFor(() => expect(handledInTenants).toEqual(['tenant-a', 'tenant-b']));
     } finally {
-      findEnabledRefs.mockRestore();
+      findEnabledTenantRefs.mockRestore();
     }
+  });
+
+  it('starts static-tenant listeners and refreshes the fast path with one channel scan', async () => {
+    const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+    const channel = attachHiddenTenant(
+      {
+        ...slackChannel,
+        id: 'static-channel' as never,
+        config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      },
+      { tenant_id: 'static-tenant' }
+    );
+    const channelRepo = { findAll: vi.fn(async () => [channel]) };
+    (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    const startListening = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({
+      startListening,
+      sendMessage: vi.fn(async () => 'sent'),
+    });
+
+    await runWithTenantContext('static-tenant', () => service.startListeners());
+
+    expect(channelRepo.findAll).toHaveBeenCalledOnce();
+    expect(startListening).toHaveBeenCalledOnce();
+    expect(
+      (service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants
+    ).toEqual(new Set(['static-tenant']));
+    expect([
+      ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
+    ]).toEqual(['static-tenant\0static-channel']);
   });
 
   it('fails closed on a discovered tenant mismatch while continuing other tenants', async () => {
     const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
-    const findEnabledRefs = vi
-      .spyOn(GatewayChannelRepository.prototype, 'findEnabledRefs')
+    const findEnabledTenantRefs = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledTenantRefs')
       .mockResolvedValue([
         { channel_id: 'forged-channel' as never, tenant_id: 'tenant-a' },
         { channel_id: 'valid-channel' as never, tenant_id: 'tenant-b' },
@@ -329,7 +359,7 @@ describe('GatewayService multi-tenant process state', () => {
       expect(error.mock.calls.flat().join(' ')).toMatch(/tenant mismatch/i);
     } finally {
       error.mockRestore();
-      findEnabledRefs.mockRestore();
+      findEnabledTenantRefs.mockRestore();
     }
   });
 });
