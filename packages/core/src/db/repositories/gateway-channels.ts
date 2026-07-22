@@ -20,7 +20,7 @@ import {
   prefixToLikePattern,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
-import { normalizeCredential } from '../../credentials/index.js';
+import { sanitizeCredential } from '../../credentials/index.js';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -43,8 +43,10 @@ function encryptConfig(config: Record<string, unknown>): Record<string, unknown>
     if (typeof encrypted[field] === 'string' && encrypted[field]) {
       const raw = encrypted[field] as string;
       // Skip the redaction sentinel (an unchanged secret on patch); otherwise
-      // normalize terminal-paste artifacts at rest before encrypting.
-      const value = raw === GATEWAY_REDACTED_SENTINEL ? raw : normalizeCredential(field, raw).value;
+      // apply only the always-safe cleanup (edge whitespace + invisible chars).
+      // Internal whitespace / wrapping quotes are the user's choice — never
+      // rewritten at rest (opt-in cleanup lives in the UI).
+      const value = raw === GATEWAY_REDACTED_SENTINEL ? raw : sanitizeCredential(raw);
       encrypted[field] = encryptApiKey(value);
     }
   }

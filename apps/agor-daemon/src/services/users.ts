@@ -17,7 +17,7 @@ import {
   type StoredEnvVar,
   validateEnvVar,
 } from '@agor/core/config';
-import { normalizeCredential } from '@agor/core/credentials';
+import { sanitizeCredential } from '@agor/core/credentials';
 import {
   and,
   compare,
@@ -185,10 +185,11 @@ function applyAgenticToolsPatch(
         delete bucket[field];
       } else {
         try {
-          // At-rest normalization backstop: repair terminal-paste artifacts
-          // (edge/zero-width/quote/internal whitespace) regardless of client.
-          const normalized = normalizeCredential(field, value).value;
-          bucket[field] = encryptApiKey(normalized);
+          // At-rest safety net: strip only edge whitespace + invisible chars.
+          // The daemon must NOT rewrite internal whitespace or unwrap quotes —
+          // that content is the user's choice (opt-in cleanup lives in the UI).
+          const sanitized = sanitizeCredential(value);
+          bucket[field] = encryptApiKey(sanitized);
           console.log(`🔐 Encrypted user agentic_tools.${tool}.${field}`);
         } catch (err) {
           console.error(`Failed to encrypt agentic_tools.${tool}.${field}:`, err);
@@ -528,12 +529,12 @@ export class UsersService {
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
 
-          // Normalize credential-shaped values at rest (terminal-paste repair)
-          // before any format check, so a stray space is fixed, not rejected.
+          // At-rest safety net: strip only edge whitespace + invisible chars.
+          // We do NOT collapse internal whitespace or unwrap quotes here — a
+          // value the user chose to keep is stored as-is (the UI offers opt-in
+          // cleanup). A genuinely malformed git token is still rejected below.
           const value =
-            rawValue === null || rawValue === undefined
-              ? rawValue
-              : normalizeCredential(key, rawValue).value;
+            rawValue === null || rawValue === undefined ? rawValue : sanitizeCredential(rawValue);
 
           // Git tokens are embedded into a git-credentials file and a clone URL
           // at runtime. Reject at ingest anything that doesn't match the

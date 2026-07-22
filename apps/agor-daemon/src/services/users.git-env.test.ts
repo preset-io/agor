@@ -120,14 +120,13 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
   });
 
   dbTest(
-    'at-rest normalization leaves a curly-quoted NON-credential env var untouched',
+    'at-rest backstop leaves a curly-quoted NON-credential env var untouched',
     async ({ db }) => {
       const service = new UsersService(db);
       const userId = await makeUser(service);
 
-      // An unknown env var name is not a credential — the backstop must only
-      // edge-trim + strip zero-width, never convert quotes or collapse internal
-      // whitespace. A curly-quoted value with an internal space must survive.
+      // An unknown env var name is not a credential — the backstop only edge-trims
+      // + strips zero-width, never unwraps quotes or collapses internal whitespace.
       const arbitrary = '“hello world”';
       await service.patch(userId, { env_vars: { MY_APP_CONFIG: arbitrary } });
 
@@ -137,18 +136,21 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
   );
 
   dbTest(
-    'at-rest normalization repairs a wrapping-quoted KNOWN credential env var',
+    'at-rest backstop stores a KNOWN credential with internal whitespace byte-for-byte (declined fix)',
     async ({ db }) => {
       const service = new UsersService(db);
       const userId = await makeUser(service);
 
-      // GH_TOKEN is a known credential: a value wrapped in quotes gets the quote
-      // pair stripped at rest (isLikelyGitToken would otherwise reject it).
-      const token = `ghp_${'x'.repeat(36)}`;
-      await service.patch(userId, { env_vars: { GH_TOKEN: `"${token}"` } });
+      // OPENAI_API_KEY is a known credential, but the daemon must NOT collapse the
+      // internal space — if the user declined the opt-in "Clean it up" action, we
+      // store exactly what they saved (aside from always-safe edge cleanup).
+      const withInternalSpace = 'sk-proj-abc def0123456789';
+      await service.patch(userId, {
+        env_vars: { OPENAI_API_KEY: `  ${withInternalSpace}  ` },
+      });
 
       const env = await service.getGitEnvironment({ userId }, {});
-      expect(env.GH_TOKEN).toBe(token);
+      expect(env.OPENAI_API_KEY).toBe(withInternalSpace);
     }
   );
 
