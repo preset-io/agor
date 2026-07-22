@@ -62,7 +62,6 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
   const { token } = theme.useToken();
   const [checking, setChecking] = useState(true);
   const [authResult, setAuthResult] = useState<AuthCheckResult | null>(null);
-  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,8 +85,6 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool] ?? tool;
   const keyCreationUrl = AGENTIC_TOOL_KEY_CREATION_URL[tool];
   const nativeAuthHint = NATIVE_AUTH_HINT[tool];
-
-  if (dismissed) return null;
 
   if (checking) {
     return (
@@ -181,14 +178,6 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
                 {nativeAuthHint}
               </Text>
             )}
-            <Button
-              type="text"
-              size="small"
-              onClick={() => setDismissed(true)}
-              style={{ paddingLeft: 0, fontSize: 12, color: token.colorTextTertiary }}
-            >
-              Not right now
-            </Button>
           </Space>
         </div>
       }
