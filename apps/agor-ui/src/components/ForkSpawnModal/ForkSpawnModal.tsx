@@ -13,15 +13,15 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import {
-  canonicalTenantAgenticTool,
-  DEFAULT_CLAUDE_MODEL,
-  getDefaultPermissionMode,
-} from '@agor-live/client';
+import { DEFAULT_CLAUDE_MODEL, getDefaultPermissionMode } from '@agor-live/client';
 import { Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
+import {
+  getUserAgenticToolDefault,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -86,9 +86,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
   const getCustomConfigDefaults = useCallback(
     (agentTool: AgenticToolName) => {
-      // Defaults are stored under the canonical key (claude-code-cli → claude-code).
-      const userDefaults =
-        currentUser?.default_agentic_config?.[canonicalTenantAgenticTool(agentTool)];
+      const { selection: userSelection, configuration: userDefaults } = getUserAgenticToolDefault(
+        currentUser,
+        agentTool
+      );
       const sameToolAsParent = agentTool === session?.agentic_tool;
       const modelConfig =
         userDefaults?.modelConfig ?? (sameToolAsParent ? session?.model_config : undefined);
@@ -99,7 +100,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         // parent's actual config, mirroring SessionSettingsModal.
         agenticToolPresetId: sameToolAsParent
           ? (session?.agentic_tool_preset_id ?? INLINE_AGENTIC_CONFIGURATION)
-          : INLINE_AGENTIC_CONFIGURATION,
+          : userSelection || userDefaults
+            ? USER_DEFAULT_AGENTIC_CONFIGURATION
+            : undefined,
         permissionMode:
           userDefaults?.permissionMode ||
           (sameToolAsParent ? session?.permission_config?.mode : undefined) ||

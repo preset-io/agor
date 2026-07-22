@@ -83,6 +83,12 @@ const claudeSession = {
   created_by: 'u1',
 } as unknown as Session;
 
+const codexSession = {
+  ...claudeSession,
+  session_id: 's-codex',
+  agentic_tool: 'codex',
+} as unknown as Session;
+
 describe('SessionSettingsModal advisor model', { timeout: 10_000 }, () => {
   it('lets the advisor be set from empty while inline, and hides it for a preset', async () => {
     render(
@@ -126,5 +132,23 @@ describe('SessionSettingsModal advisor model', { timeout: 10_000 }, () => {
     await waitFor(() => {
       expect(onUpdateSessionMcpServers).toHaveBeenCalledWith('s1', ['mcp-1']);
     });
+  });
+
+  it('only offers Codex sandbox and policy controls for inline configuration', async () => {
+    render(
+      <SessionSettingsModal
+        open
+        onClose={vi.fn()}
+        session={codexSession}
+        client={null}
+        currentUser={null}
+      />
+    );
+
+    expect(screen.getByText('Codex Sandbox & Policies')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pick-preset'));
+    await waitFor(() =>
+      expect(screen.queryByText('Codex Sandbox & Policies')).not.toBeInTheDocument()
+    );
   });
 });

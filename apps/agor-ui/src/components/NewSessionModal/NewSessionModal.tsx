@@ -9,7 +9,6 @@ import type {
   User,
 } from '@agor-live/client';
 import {
-  canonicalTenantAgenticTool,
   DEFAULT_CLAUDE_MODEL,
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
@@ -27,6 +26,7 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
+import { getUserAgenticToolDefault } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
@@ -147,7 +147,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     clearAttachments();
 
     // Get default config for the selected agent
-    const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
+    const agentDefaults = getUserAgenticToolDefault(currentUser, 'claude-code').configuration;
     const baseValues = getFormValuesFromConfig('claude-code', agentDefaults);
 
     // MCP inheritance: branch config > user defaults
@@ -171,8 +171,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (selectedAgent) {
       const tool = selectedAgent as AgenticToolName;
-      // Defaults are stored under the canonical key (claude-code-cli → claude-code).
-      const agentDefaults = currentUser?.default_agentic_config?.[canonicalTenantAgenticTool(tool)];
+      const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
       const baseValues = getFormValuesFromConfig(tool, agentDefaults);
 
       // MCP inheritance: branch config > user defaults
@@ -196,10 +195,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       setIsCreating(true);
 
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
-      const agentDefaults =
-        currentUser?.default_agentic_config?.[
-          canonicalTenantAgenticTool(selectedAgent as AgenticToolName)
-        ];
+      const agentDefaults = getUserAgenticToolDefault(
+        currentUser,
+        selectedAgent as AgenticToolName
+      ).configuration;
 
       // MCP fallback must respect branch > user defaults (same as open-reset effect)
       const branchMcpIds = branch?.mcp_server_ids;

@@ -346,7 +346,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // Build secondary (collapsed) sections
   const secondaryItems: NonNullable<CollapseProps['items']> = [];
 
-  if (isCodex) {
+  if (isCodex && isInlineConfig) {
     secondaryItems.push({
       key: 'codex-settings',
       label: (

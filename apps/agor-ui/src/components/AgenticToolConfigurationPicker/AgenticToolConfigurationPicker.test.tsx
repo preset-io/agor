@@ -128,19 +128,40 @@ describe('AgenticToolConfigurationPicker', () => {
     await waitFor(() => expect(screen.getByText(/My default/)).toBeInTheDocument());
     expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
   });
+
+  it('prefers a claude-code-cli default over the canonical fallback', async () => {
+    const user = {
+      user_id: 'u5',
+      default_agentic_config: {
+        'claude-code': { modelConfig: { model: 'claude-sonnet-5' } },
+        'claude-code-cli': { modelConfig: { model: 'claude-opus-4-8' } },
+      },
+    } as unknown as User;
+
+    renderPicker(user, 'claude-code-cli');
+
+    await waitFor(() =>
+      expect(screen.getByText(/My default · Claude Opus 4.8/)).toBeInTheDocument()
+    );
+  });
 });
 
 describe('persistUserDefaultFromForm', () => {
-  it('writes the config + inline selection under the canonical tool key', async () => {
+  it('writes the config + inline selection under the selected tool key', async () => {
     const patch = vi.fn().mockResolvedValue({});
     const client = { service: () => ({ patch }) } as unknown as AgorClient;
     const user = {
       user_id: 'u9',
-      default_agentic_config: { codex: { permissionMode: 'auto' } },
-      default_agentic_selection: { codex: { source: 'inline' } },
+      default_agentic_config: {
+        codex: { permissionMode: 'auto' },
+        'claude-code': { permissionMode: 'plan' },
+      },
+      default_agentic_selection: {
+        codex: { source: 'inline' },
+        'claude-code': { source: 'workspace_default' },
+      },
     } as unknown as User;
 
-    // claude-code-cli must canonicalize to claude-code for both writes.
     await persistUserDefaultFromForm(client, user, 'claude-code-cli', {
       permissionMode: 'acceptEdits',
     });
@@ -148,14 +169,18 @@ describe('persistUserDefaultFromForm', () => {
     expect(patch).toHaveBeenCalledTimes(1);
     const [userId, payload] = patch.mock.calls[0];
     expect(userId).toBe('u9');
-    expect(payload.default_agentic_config['claude-code']).toEqual({
+    expect(payload.default_agentic_config['claude-code-cli']).toEqual({
       modelConfig: undefined,
       permissionMode: 'acceptEdits',
     });
-    expect(payload.default_agentic_selection['claude-code']).toEqual({ source: 'inline' });
+    expect(payload.default_agentic_selection['claude-code-cli']).toEqual({ source: 'inline' });
     // Existing per-tool entries are preserved.
     expect(payload.default_agentic_config.codex).toEqual({ permissionMode: 'auto' });
     expect(payload.default_agentic_selection.codex).toEqual({ source: 'inline' });
+    expect(payload.default_agentic_config['claude-code']).toEqual({ permissionMode: 'plan' });
+    expect(payload.default_agentic_selection['claude-code']).toEqual({
+      source: 'workspace_default',
+    });
   });
 });
 

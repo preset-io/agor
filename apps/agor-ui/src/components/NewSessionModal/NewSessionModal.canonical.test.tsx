@@ -1,7 +1,6 @@
 /**
- * Regression: user defaults are read under the canonical tool key, so a
- * claude-code-cli session picks up a default saved under claude-code (the
- * daemon stores/reads both under the canonical key).
+ * Regression: user defaults use the daemon's raw-tool-first lookup, with the
+ * canonical key retained as a fallback for claude-code-cli.
  */
 
 import type { User } from '@agor-live/client';

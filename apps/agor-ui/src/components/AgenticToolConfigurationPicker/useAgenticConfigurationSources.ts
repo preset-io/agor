@@ -19,6 +19,22 @@ export const INLINE_AGENTIC_CONFIGURATION = '__inline__';
 
 export { USER_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION };
 
+/** Match the daemon's raw-tool-first lookup while retaining canonical fallback. */
+export function getUserAgenticToolDefault(
+  currentUser: User | null | undefined,
+  tool: AgenticToolName
+) {
+  const canonicalTool = canonicalTenantAgenticTool(tool);
+  return {
+    selection:
+      currentUser?.default_agentic_selection?.[tool] ??
+      currentUser?.default_agentic_selection?.[canonicalTool],
+    configuration:
+      currentUser?.default_agentic_config?.[tool] ??
+      currentUser?.default_agentic_config?.[canonicalTool],
+  };
+}
+
 export function summarizeAgenticConfiguration(
   tool: AgenticToolName,
   config?: DefaultAgenticToolConfig
@@ -106,8 +122,10 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
 
   const retry = useCallback(() => retryRef.current(), []);
   const workspacePreset = presets.find((preset) => preset.is_default);
-  const userSelection = currentUser?.default_agentic_selection?.[canonicalTool];
-  const userConfigBlob = currentUser?.default_agentic_config?.[canonicalTool];
+  const { selection: userSelection, configuration: userConfigBlob } = getUserAgenticToolDefault(
+    currentUser,
+    tool
+  );
   const hasUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
 
   const resolveConfiguration = useCallback(

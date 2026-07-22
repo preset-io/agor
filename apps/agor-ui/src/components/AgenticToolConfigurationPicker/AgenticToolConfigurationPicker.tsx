@@ -1,5 +1,4 @@
 import type { AgenticToolName, AgorClient, MCPServer, User } from '@agor-live/client';
-import { canonicalTenantAgenticTool } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Form, Select, Space, Spin, Tooltip, Typography } from 'antd';
 import { useEffect } from 'react';
@@ -43,10 +42,11 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
  * invoke this from their own submit handler when the save-as-default checkbox
  * is checked, then create/update the session as usual.
  *
- * Writes under the canonical tool key (claude-code-cli → claude-code, matching
- * the daemon resolver) and also sets `default_agentic_selection[tool]` to
+ * Writes under the selected tool key and also sets
+ * `default_agentic_selection[tool]` to
  * `{ source: 'inline' }` — otherwise a user whose selection points at a preset
  * or the workspace default would save a config blob the daemon never resolves.
+ * The daemon reads this raw key before falling back to the canonical tool key.
  */
 export async function persistUserDefaultFromForm(
   client: AgorClient,
@@ -54,13 +54,12 @@ export async function persistUserDefaultFromForm(
   tool: AgenticToolName,
   values: AgenticFormValues
 ): Promise<void> {
-  const canonical = canonicalTenantAgenticTool(tool);
-  const config = buildConfigFromFormValues(canonical, values);
+  const config = buildConfigFromFormValues(tool, values);
   await client.service('users').patch(user.user_id, {
-    default_agentic_config: { ...user.default_agentic_config, [canonical]: config },
+    default_agentic_config: { ...user.default_agentic_config, [tool]: config },
     default_agentic_selection: {
       ...user.default_agentic_selection,
-      [canonical]: { source: 'inline' as const },
+      [tool]: { source: 'inline' as const },
     },
   });
 }

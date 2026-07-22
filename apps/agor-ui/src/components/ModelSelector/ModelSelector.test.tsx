@@ -53,11 +53,12 @@ describe('ModelSelector (Claude)', () => {
     expect(screen.getByText('Use a recommended model')).toBeInTheDocument();
   });
 
-  it('switches to exact mode when pinning a version', () => {
+  it('switches to exact mode only after a specific version is entered', () => {
     const onChange = vi.fn();
     render(
       <ModelSelector
         agentic_tool="claude-code"
+        showAdvisor={false}
         value={{ mode: 'alias', model: 'claude-sonnet-5' }}
         onChange={onChange}
       />
@@ -66,7 +67,15 @@ describe('ModelSelector (Claude)', () => {
     pinButton.focus();
     expect(pinButton).toHaveFocus();
     fireEvent.click(pinButton);
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ mode: 'exact' }));
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'claude-sonnet-4-6-20260101' },
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      mode: 'exact',
+      model: 'claude-sonnet-4-6-20260101',
+    });
   });
 
   it('wraps option descriptions instead of truncating them', () => {

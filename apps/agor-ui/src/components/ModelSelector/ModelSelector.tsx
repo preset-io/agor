@@ -334,7 +334,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const enablePin = () => {
     setPinned(true);
-    selectPinned(currentModel);
   };
   const disablePin = () => {
     setPinned(false);

@@ -2,8 +2,8 @@
  * Regression tests for ForkSpawnModal after the chip-row migration:
  *  A) the Claude advisor model is settable while inline ("Custom") config is
  *     active (the migration dropped the old advisor Select);
- *  B) user defaults are read under the canonical tool key, so a claude-code-cli
- *     spawn still picks up a default saved under claude-code.
+ *  B) user defaults use raw-tool-first lookup with canonical fallback; and
+ *  C) changing tools selects the target tool's default rather than inline.
  */
 
 import type { Session, User } from '@agor-live/client';
@@ -22,7 +22,11 @@ vi.mock('../AutocompleteTextarea', () => ({
   ),
 }));
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => <div data-testid="agent-grid" />,
+  AgentSelectionGrid: ({ onSelect }: { onSelect: (id: string) => void }) => (
+    <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
+      codex
+    </button>
+  ),
 }));
 vi.mock('../ModelSelector', () => ({
   AdvisorModelSelect: () => <div data-testid="advisor-select" />,
@@ -157,5 +161,38 @@ describe('ForkSpawnModal advisor + canonical defaults', { timeout: 10_000 }, () 
 
     fireEvent.click(screen.getByTestId('pick-preset'));
     await waitFor(() => expect(screen.queryByTestId('codex-settings')).not.toBeInTheDocument());
+  });
+
+  it("uses the target agent's default when changing agents", async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    const currentUser = {
+      user_id: 'u2',
+      default_agentic_selection: {
+        codex: { source: 'preset', preset_id: 'codex-default' },
+      },
+    } as unknown as User;
+
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={claudeSession}
+        currentUser={currentUser}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('prompt-textarea'), { target: { value: 'go' } });
+    fireEvent.click(screen.getByText('Custom config'));
+    fireEvent.click(screen.getByTestId('pick-codex'));
+    fireEvent.click(screen.getByRole('button', { name: /Spawn Session/i }));
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    expect(onConfirm.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ agent: 'codex', presetId: '__user_default__' })
+    );
   });
 });
