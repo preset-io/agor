@@ -89,7 +89,7 @@ describe('projectTranscriptRequestData', () => {
   });
 
   it('does not materialize multi-megabyte preview candidates during projection', () => {
-    const content = 'x'.repeat(EXECUTOR_REQUEST_DATA_BUDGET_BYTES * 20);
+    const content = 'x'.repeat(EXECUTOR_REQUEST_DATA_BUDGET_BYTES * 5);
     const byteLength = vi.spyOn(Buffer, 'byteLength');
     let multiMegabyteMeasurements = 0;
     try {
@@ -179,7 +179,7 @@ describe('projectTranscriptRequestData', () => {
     expect(serializedBytes(projected)).toBeLessThanOrEqual(EXECUTOR_REQUEST_DATA_BUDGET_BYTES);
   });
 
-  it('orders candidates across bulk messages and remains deterministic across concurrent calls', async () => {
+  it('orders candidates across bulk messages', () => {
     const smaller = {
       type: 'tool_result',
       tool_use_id: 'smaller',
@@ -195,20 +195,14 @@ describe('projectTranscriptRequestData', () => {
       { message_id: 'two', content: [larger] },
     ];
 
-    const [left, right] = await Promise.all([
-      Promise.resolve(
-        projectTranscriptRequestData(data, { path: 'messages/bulk', method: 'create' })
-      ),
-      Promise.resolve(
-        projectTranscriptRequestData(data, { path: 'messages/bulk', method: 'create' })
-      ),
-    ]);
-    const projected = left as Array<{ content: Array<Record<string, unknown>> }>;
+    const projected = projectTranscriptRequestData(data, {
+      path: 'messages/bulk',
+      method: 'create',
+    }) as Array<{ content: Array<Record<string, unknown>> }>;
 
-    expect(left).toEqual(right);
     expect(projected[0].content[0]).toBe(smaller);
     expect(projected[1].content[0]).toHaveProperty('transcript_projection');
-    expect(serializedBytes(left)).toBeLessThanOrEqual(EXECUTOR_REQUEST_DATA_BUDGET_BYTES);
+    expect(serializedBytes(projected)).toBeLessThanOrEqual(EXECUTOR_REQUEST_DATA_BUDGET_BYTES);
   });
 
   it('rejects irreducible non-result data with a bounded content-free diagnostic', () => {

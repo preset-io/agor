@@ -1,6 +1,7 @@
 export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = 800_000;
 
 const TRANSCRIPT_PROJECTION_MARKER = '\n\n[Middle omitted from transcript storage]\n\n';
+const TRANSCRIPT_PROJECTION_MARKER_BYTES = Buffer.byteLength(TRANSCRIPT_PROJECTION_MARKER, 'utf8');
 
 interface TranscriptRequestContext {
   path: string;
@@ -10,7 +11,6 @@ interface TranscriptRequestContext {
 interface Candidate {
   messageIndex: number | null;
   blockIndex: number;
-  encounterOrder: number;
   source: string;
   originalContentBytes: number;
 }
@@ -21,6 +21,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
+}
+
+function codePointBytes(codePoint: string): number {
+  const value = codePoint.codePointAt(0);
+  if (value === undefined) return 0;
+  if (value <= 0x7f) return 1;
+  if (value <= 0x7ff) return 2;
+  return value <= 0xffff ? 3 : 4;
 }
 
 function serializeRequest(data: unknown, context: TranscriptRequestContext): string {
@@ -50,7 +58,7 @@ function takeHead(source: string, budget: number): string {
   let end = 0;
   let used = 0;
   for (const codePoint of source) {
-    const size = byteLength(codePoint);
+    const size = codePointBytes(codePoint);
     if (used + size > budget) break;
     used += size;
     end += codePoint.length;
@@ -69,7 +77,7 @@ function takeTail(source: string, budget: number): string {
       if (previous >= 0xd800 && previous <= 0xdbff) nextStart -= 1;
     }
     const codePoint = source.slice(nextStart, start);
-    const size = byteLength(codePoint);
+    const size = codePointBytes(codePoint);
     if (used + size > budget) break;
     used += size;
     start = nextStart;
@@ -78,8 +86,7 @@ function takeTail(source: string, budget: number): string {
 }
 
 function previewContent(source: string, byteBudget: number): string {
-  const markerBytes = byteLength(TRANSCRIPT_PROJECTION_MARKER);
-  const remaining = Math.max(0, byteBudget - markerBytes);
+  const remaining = Math.max(0, byteBudget - TRANSCRIPT_PROJECTION_MARKER_BYTES);
   const headBudget = Math.floor(remaining / 2);
   const tailBudget = remaining - headBudget;
   return `${takeHead(source, headBudget)}${TRANSCRIPT_PROJECTION_MARKER}${takeTail(source, tailBudget)}`;
@@ -88,7 +95,6 @@ function previewContent(source: string, byteBudget: number): string {
 function collectCandidates(data: unknown): Candidate[] {
   const messages = Array.isArray(data) ? data : [data];
   const candidates: Candidate[] = [];
-  let encounterOrder = 0;
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
     const message = messages[messageIndex];
@@ -107,19 +113,13 @@ function collectCandidates(data: unknown): Candidate[] {
       candidates.push({
         messageIndex: Array.isArray(data) ? messageIndex : null,
         blockIndex,
-        encounterOrder,
         source,
         originalContentBytes: byteLength(source),
       });
-      encounterOrder += 1;
     }
   }
 
-  return candidates.sort(
-    (left, right) =>
-      right.originalContentBytes - left.originalContentBytes ||
-      left.encounterOrder - right.encounterOrder
-  );
+  return candidates.sort((left, right) => right.originalContentBytes - left.originalContentBytes);
 }
 
 function replaceCandidate(data: unknown, candidate: Candidate, content: string): unknown {
@@ -160,12 +160,12 @@ export function projectTranscriptRequestData(
     const markerOnly = replaceCandidate(
       projected,
       candidate,
-      previewContent(candidate.source, byteLength(TRANSCRIPT_PROJECTION_MARKER))
+      previewContent(candidate.source, TRANSCRIPT_PROJECTION_MARKER_BYTES)
     );
     const markerOnlyBytes = requestBytes(markerOnly, context);
 
     if (markerOnlyBytes <= EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
-      let low = byteLength(TRANSCRIPT_PROJECTION_MARKER);
+      let low = TRANSCRIPT_PROJECTION_MARKER_BYTES;
       let high = Math.max(
         low,
         Math.min(candidate.originalContentBytes - 1, EXECUTOR_REQUEST_DATA_BUDGET_BYTES)

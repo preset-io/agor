@@ -4,7 +4,7 @@ import { theme } from 'antd';
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 
-export function formatTranscriptBytes(bytes: number): string {
+function formatTranscriptBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
 
   let value = bytes;
