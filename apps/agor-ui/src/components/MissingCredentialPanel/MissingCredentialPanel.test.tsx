@@ -72,6 +72,26 @@ describe('MissingCredentialPanel', () => {
     expect(onOpen).toHaveBeenCalledWith('claude-code');
   });
 
+  it('renders the key-console link and dismiss action at the 12px helper-text size', async () => {
+    const { client } = makeClient({
+      status: 'unauthenticated',
+      authenticated: false,
+      method: 'none',
+    });
+
+    renderPanel(client);
+
+    // Ant's Typography.Link/Button apply their own font-size, so both actions
+    // must carry an explicit inline 12px to match the adjacent helper text.
+    const consoleLink = await screen.findByRole('link', {
+      name: /Get one from Claude Code's console/i,
+    });
+    expect(consoleLink).toHaveStyle({ fontSize: '12px' });
+
+    const dismiss = screen.getByRole('button', { name: /^Not right now$/i });
+    expect(dismiss).toHaveStyle({ fontSize: '12px' });
+  });
+
   it('deduplicates concurrent checks for the same client and tool', async () => {
     let resolveCheck!: (result: AuthCheckResult) => void;
     const pending = new Promise<AuthCheckResult>((resolve) => {

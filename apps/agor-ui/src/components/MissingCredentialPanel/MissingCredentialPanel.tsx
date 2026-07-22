@@ -166,7 +166,12 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
             {keyCreationUrl && (
               <Text type="secondary" style={{ fontSize: 12 }}>
                 Don't have a key yet?{' '}
-                <Link href={keyCreationUrl} target="_blank" rel="noopener noreferrer">
+                <Link
+                  href={keyCreationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: 12 }}
+                >
                   Get one from {displayName}'s console →
                 </Link>
               </Text>
