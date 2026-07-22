@@ -44,7 +44,7 @@ import {
   isUnsupportedAgorCodexModel,
 } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
-import type { AgenticToolName, HookContext, Session, User } from '@agor/core/types';
+import type { AgenticToolName, CreateSessionInput, HookContext, User } from '@agor/core/types';
 
 interface UsersService {
   get: (id: string, params?: unknown) => Promise<User | null | undefined>;
@@ -68,7 +68,7 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       // Bulk create not supported for sessions; bail rather than guessing.
       return context;
     }
-    const data = context.data as Partial<Session> | undefined;
+    const data = context.data as CreateSessionInput | undefined;
     if (!data) return context;
 
     const hasPermission = data.permission_config != null;

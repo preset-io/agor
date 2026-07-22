@@ -41,10 +41,10 @@ import {
 } from '@agor/core/models';
 import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
-  AgenticToolConfigurationReference,
   AuthenticatedParams,
   Branch,
   BranchPermissionLevel,
+  CreateSessionInput,
   MCPServerID,
   Paginated,
   QueryParams,
@@ -77,16 +77,20 @@ interface InheritableSessionConfig {
   model_config?: Session['model_config'];
 }
 
-type SessionCreateData = Omit<Partial<Session>, 'agentic_tool_preset_id'> & {
-  agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
-};
-
 type SessionArchiveReason = NonNullable<Session['archived_reason']>;
 type SessionArchiveTarget = {
   session: Session;
   archived: boolean;
   archivedReason: SessionArchiveReason | null;
 };
+
+function isMaterializedModelConfig(
+  modelConfig: CreateSessionInput['model_config']
+): modelConfig is Session['model_config'] {
+  return (
+    modelConfig == null || Boolean(modelConfig.mode && modelConfig.model && modelConfig.updated_at)
+  );
+}
 
 const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
 const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
@@ -283,13 +287,13 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
   }
 
-  async create(data: SessionCreateData, params?: SessionParams): Promise<Session>;
+  async create(data: CreateSessionInput, params?: SessionParams): Promise<Session>;
   async create(
     data: Partial<Session> | Partial<Session>[],
     params?: SessionParams
   ): Promise<Session | Session[]>;
   async create(
-    data: SessionCreateData | Partial<Session>[],
+    data: CreateSessionInput | Partial<Session>[],
     params?: SessionParams
   ): Promise<Session | Session[]> {
     if (Array.isArray(data)) {
@@ -299,7 +303,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
-    const { agentic_tool_preset_id: configurationReference, ...sessionData } = data;
+    const {
+      agentic_tool_preset_id: configurationReference,
+      model_config: modelConfig,
+      ...sessionData
+    } = data;
     let createData: Partial<Session>;
     if (configurationReference) {
       const resolved = await resolveAgenticConfigurationReference(
@@ -316,7 +324,14 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       };
     } else {
       await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
-      createData = { ...sessionData, agentic_tool_preset_id: configurationReference };
+      if (!isMaterializedModelConfig(modelConfig)) {
+        throw new BadRequest('model_config must be resolved before session creation');
+      }
+      createData = {
+        ...sessionData,
+        agentic_tool_preset_id: configurationReference,
+        model_config: modelConfig,
+      };
     }
     const created = await super.create(createData, params);
     if (Array.isArray(created)) {

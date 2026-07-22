@@ -512,6 +512,15 @@ export interface Session {
   };
 }
 
+/** Session data accepted before defaults and configuration references are materialized. */
+export type CreateSessionInput = Omit<
+  Partial<Session>,
+  'agentic_tool_preset_id' | 'model_config'
+> & {
+  agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
+  model_config?: Partial<NonNullable<Session['model_config']>> | null;
+};
+
 /**
  * Minimal persisted session state needed to decide whether a new task can
  * start immediately.

@@ -18,6 +18,7 @@ import type {
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
   HookContext as CoreHookContext,
+  CreateSessionInput,
   Params as FeathersParams,
   Message,
   Repo,
@@ -45,7 +46,8 @@ export type Application = ExpressApplication;
  * Sessions service with custom methods (server-side implementation)
  * This matches the SessionRepository methods exposed via the service adapter
  */
-export interface SessionsServiceImpl extends Service<Session, Partial<Session>, FeathersParams> {
+export interface SessionsServiceImpl
+  extends Service<Session, CreateSessionInput, FeathersParams, Partial<Session>> {
   fork(
     id: string,
     data: { prompt: string; task_id?: string },
