@@ -86,6 +86,57 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
   });
 
+  it('contains a terminal task before releasing its tracked executor', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(task(TaskStatus.COMPLETED), 'terminal');
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.COMPLETED },
+    });
+    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(containExecutorProcess.mock.invocationCallOrder[0]).toBeLessThan(
+      untrackExecutorProcess.mock.invocationCallOrder[0]
+    );
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
+  it('keeps a terminal task tracked when containment is unverified', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
+    const state = appDouble();
+    state.claim(task(TaskStatus.COMPLETED), 'terminal');
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'unverified',
+      task: { status: TaskStatus.COMPLETED },
+      reason: 'EPERM',
+    });
+    expect(state.settleTermination).not.toHaveBeenCalled();
+    expect(untrackExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not signal a terminal task when absence is already verified', async () => {
+    const state = appDouble();
+    state.claim(task(TaskStatus.COMPLETED), 'terminal');
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'heartbeat_lost',
+        errorMessage: 'heartbeat_lost failure',
+        absenceVerified: true,
+      })
+    ).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.COMPLETED },
+    });
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+  });
+
   it('does not claim or signal when provider context cannot be loaded', async () => {
     const state = appDouble();
     state.sessionGet.mockRejectedValue(new Error('session unavailable'));
@@ -112,6 +163,24 @@ describe('termination coordinator', () => {
     expect(state.settleTermination).not.toHaveBeenCalled();
     release();
     await vi.waitFor(() => expect(state.settleTermination).toHaveBeenCalledOnce());
+  });
+
+  it('contains a terminal SDK-health race in the background', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(task(TaskStatus.COMPLETED), 'terminal');
+
+    const result = await beginExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'sdk_health_failure',
+      errorMessage: 'SDK stalled',
+    });
+
+    expect(result.status).toBe(TaskStatus.COMPLETED);
+    await vi.waitFor(() => expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId));
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+    expect(state.settleTermination).not.toHaveBeenCalled();
   });
 
   it('deduplicates containment while persisted cause precedence changes', async () => {
@@ -152,6 +221,20 @@ describe('termination coordinator', () => {
       status: 'unverified',
       task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
     });
+  });
+
+  it('keeps tracking when unverified containment races with terminal settlement', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
+    const state = appDouble();
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(task(TaskStatus.COMPLETED), 'terminal');
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'unverified',
+      task: { status: TaskStatus.COMPLETED },
+      reason: 'EPERM',
+    });
+    expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
   it('does not infer OpenCode provider quiescence from local process absence', async () => {

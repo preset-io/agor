@@ -8,7 +8,7 @@ import type {
   TaskID,
   TerminationCause,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import { containExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
 
@@ -84,6 +84,13 @@ async function runContainment(
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
     : await containExecutorProcess(requested.session_id, requested.task_id);
+  if (isTerminalTaskStatus(requested.status)) {
+    if (containment.status === 'unverified') {
+      return { status: 'unverified', task: requested, reason: containment.reason };
+    }
+    untrackExecutorProcess(requested.session_id, requested.task_id);
+    return { status: 'terminal', task: requested };
+  }
   const providerUnverified = tool === 'opencode';
   if (containment.status === 'unverified' || providerUnverified) {
     const reason =
@@ -109,8 +116,7 @@ async function runContainment(
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
     );
     if (settlement.outcome === 'terminal') {
-      untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id);
-      return { status: 'terminal', task: settlement.task };
+      return { status: 'unverified', task: settlement.task, reason };
     }
     if (settlement.outcome === 'condition_changed') {
       return { status: 'condition_changed', task: settlement.task };
@@ -138,7 +144,7 @@ export async function requestExecutorTermination(
 ): Promise<TerminationResult> {
   const tool = await loadAgenticTool(input);
   const claim = await claimRequest(input);
-  if (claim.outcome === 'terminal') {
+  if (claim.outcome === 'terminal' && input.absenceVerified) {
     untrackExecutorProcess(claim.task.session_id, claim.task.task_id);
     return { status: 'terminal', task: claim.task };
   }
@@ -170,7 +176,11 @@ function startContainment(
 export async function beginExecutorTermination(input: TerminationInput): Promise<Task> {
   const tool = await loadAgenticTool(input);
   const claim = await claimRequest(input);
-  if (claim.outcome === 'terminal' || claim.outcome === 'condition_changed') return claim.task;
+  if (claim.outcome === 'terminal' && input.absenceVerified) {
+    untrackExecutorProcess(claim.task.session_id, claim.task.task_id);
+    return claim.task;
+  }
+  if (claim.outcome === 'condition_changed') return claim.task;
   if (!operations.has(claim.task.task_id)) startContainment(input, claim.task, tool);
   return claim.task;
 }
