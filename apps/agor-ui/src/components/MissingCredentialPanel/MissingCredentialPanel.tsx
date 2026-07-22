@@ -180,7 +180,7 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
               type="text"
               size="small"
               onClick={() => setDismissed(true)}
-              style={{ paddingLeft: 0, color: token.colorTextTertiary }}
+              style={{ paddingLeft: 0, fontSize: 12, color: token.colorTextTertiary }}
             >
               Not right now
             </Button>
