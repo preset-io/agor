@@ -163,7 +163,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       archived_reason: session.archived_reason ?? null,
       data: {
         agentic_tool_version: session.agentic_tool_version,
-        sdk_session_id: session.sdk_session_id, // Preserve SDK session ID for conversation continuity
+        // Explicit null is the deepMerge clear signal; omit the cleared value from stored JSON.
+        sdk_session_id: session.sdk_session_id ?? undefined,
         mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
         title: session.title,
         description: session.description,
@@ -764,6 +765,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         }
 
         const insertData = this.sessionToInsert(merged);
+        merged.sdk_session_id = insertData.data.sdk_session_id;
 
         // STEP 3: Write merged session (within same transaction)
         // Pass all columns via insertData (matches branch repo pattern).

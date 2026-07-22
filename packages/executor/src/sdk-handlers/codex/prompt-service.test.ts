@@ -1251,7 +1251,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
-  it('propagates top-level stream error events (message field) as failures', async () => {
+  it('clears resume state on a fatal stream error even when the session started fresh', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1298,6 +1298,10 @@ describe('CodexPromptService - tool payload mapping', () => {
         }
       })()
     ).rejects.toThrow('Codex stream error: stream exploded');
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
   });
 });
 
@@ -1310,7 +1314,7 @@ describe('CodexPromptService - tool payload mapping', () => {
 // running until the daemon safety-net (~15 min later) marked it failed.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('CodexPromptService - event_msg terminal handling (issue #1749)', () => {
-  function makeStreamingService() {
+  function makeStreamingService(sdkSessionId: string | null = null) {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1333,7 +1337,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       session_id: 'session-1',
       branch_id: 'branch-1',
       created_at: new Date().toISOString(),
-      sdk_session_id: null,
+      sdk_session_id: sdkSessionId,
       permission_config: { codex: {} },
       model_config: {},
       mcp_token: 'test-token',
@@ -1651,8 +1655,67 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
+  it('ignores reconnect progress until turn.completed and preserves the existing thread', async () => {
+    const service = makeStreamingService('existing-thread-id');
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    const reconnectMessage =
+      'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
+    mockStreamEvents = [
+      { type: 'error', message: reconnectMessage },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(emitted.some((event) => event.type === 'complete')).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(reconnectMessage));
+    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('lets turn.failed remain authoritative after reconnect progress and preserves the thread', async () => {
+    const service = makeStreamingService('existing-thread-id');
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'error', message: 'Reconnecting... 2/5' },
+      { type: 'turn.failed', error: { message: 'provider rejected the turn' } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      (async () => {
+        for await (const _event of service.promptSessionStreaming('session-1' as any, 'go')) {
+          // drain
+        }
+      })()
+    ).rejects.toThrow('provider rejected the turn');
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Reconnecting... 2/5'));
+    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('throws a clear actionable error when stream ends without any terminal event', async () => {
-    const service = makeStreamingService();
+    const service = makeStreamingService('existing-thread-id');
     const serviceWithPrivates = service as any;
     await serviceWithPrivates.ensureCodexClient({
       model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
@@ -1674,6 +1737,10 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         }
       })()
     ).rejects.toThrow('Codex stream ended without a terminal completion event');
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
   });
 
   it('does not throw when stream ends after a user-requested stop', async () => {

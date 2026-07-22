@@ -1239,6 +1239,11 @@ export class CodexPromptService {
 
       let eventCount = 0;
       let didStop = false;
+      const clearUnsafeResumeState = async () => {
+        await this.sessionsRepo.update(sessionId, {
+          sdk_session_id: null as unknown as undefined,
+        });
+      };
 
       for await (const event of events) {
         eventCount++;
@@ -1528,9 +1533,19 @@ export class CodexPromptService {
             throw new Error(`Codex execution failed: ${errorMessage}`);
           }
 
-          case 'error':
+          case 'error': {
+            const streamErrorMessage = (event as { message?: unknown }).message;
+            if (
+              typeof streamErrorMessage === 'string' &&
+              /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+\b/.test(streamErrorMessage)
+            ) {
+              console.warn(`⚠️  [Codex] ${streamErrorMessage}`);
+              break;
+            }
+
             // Fatal stream-level error from Codex SDK.
             // Surface this as a task failure so users see it in the conversation.
+            await clearUnsafeResumeState();
             throw new Error(
               `Codex stream error: ${
                 (event as { message?: unknown; error?: unknown }).message ||
@@ -1538,6 +1553,7 @@ export class CodexPromptService {
                 'unknown'
               }`
             );
+          }
 
           default:
             // Ignore other event types silently
@@ -1550,6 +1566,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        await clearUnsafeResumeState();
         throw new Error(
           'Codex stream ended without a terminal completion event (turn.completed, task_complete, or turn_complete). ' +
             'The Codex process may have exited unexpectedly (check the executor logs for exit code 0 clues). ' +

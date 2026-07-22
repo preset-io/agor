@@ -993,6 +993,24 @@ describe('SessionRepository.update', () => {
     expect(updated.custom_context).toEqual({ foo: 'baz', newField: 123 });
   });
 
+  dbTest('should clear sdk_session_id when an update sends null', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const session = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        sdk_session_id: 'existing-sdk-session-id',
+      })
+    );
+
+    const updated = await repo.update(session.session_id, {
+      sdk_session_id: null as unknown as undefined,
+    });
+
+    expect(updated.sdk_session_id).toBeUndefined();
+    expect((await repo.findById(session.session_id))?.sdk_session_id).toBeUndefined();
+  });
+
   dbTest('should update last_updated timestamp', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);
