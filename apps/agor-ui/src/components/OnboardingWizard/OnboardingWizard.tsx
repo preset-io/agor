@@ -369,7 +369,8 @@ function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-k
 
 function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
   if (authMethod === 'claude-subscription-token') return 'Subscription token';
-  if (authMethod === 'codex-auth-json') return 'Codex login file (auth.json)';
+  // Note: the codex-auth-json method renders its own pane (CodexImportAuthJson)
+  // and never reaches this label, so no case is needed for it here.
   switch (agent) {
     case 'claude-code':
       return 'Anthropic API key';

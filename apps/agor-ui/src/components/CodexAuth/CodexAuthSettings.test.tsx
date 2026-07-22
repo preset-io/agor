@@ -13,7 +13,6 @@
 
 import type { AgenticAuthMethod, AuthCheckResult } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
 import { TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from './CodexAuthSettings';
 
@@ -28,12 +27,12 @@ interface HarnessOptions {
   deviceFind?: ReturnType<typeof vi.fn>;
   onSaveField?: ReturnType<typeof vi.fn>;
   onClearField?: ReturnType<typeof vi.fn>;
-  onAuthMethodChange?: ReturnType<typeof vi.fn>;
 }
 
-// A stateful host so onAuthMethodChange actually flips the persisted method,
-// exactly as the real settings modal does — the pane's method/probe logic
-// depends on that round-trip.
+// The pane never mutates the persisted method itself — the method is a
+// consequence of the credential the user configures (a key save / a completed
+// device sign-in or import), which the real settings modal drives — so the
+// harness holds authMethod fixed and asserts selection stays non-destructive.
 function Harness({
   initialMethod = 'api_key',
   fieldStatus = {},
@@ -43,9 +42,7 @@ function Harness({
   deviceFind,
   onSaveField,
   onClearField,
-  onAuthMethodChange,
 }: HarnessOptions) {
-  const [method, setMethod] = useState<AgenticAuthMethod>(initialMethod);
   const services: Record<string, unknown> = {
     'check-auth': { create: checkAuth ?? vi.fn(async () => UNKNOWN) },
     'codex-auth/import': {
@@ -64,11 +61,7 @@ function Harness({
   return (
     <CodexAuthSettings
       client={client}
-      authMethod={method}
-      onAuthMethodChange={(next) => {
-        onAuthMethodChange?.(next);
-        setMethod(next);
-      }}
+      authMethod={initialMethod}
       apiKeyFields={TOOL_FIELD_CONFIGS.codex}
       fieldStatus={fieldStatus}
       onSaveField={onSaveField ?? vi.fn(async () => undefined)}
@@ -189,24 +182,74 @@ describe('CodexAuthSettings', () => {
     expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
   });
 
-  it('does not deactivate a working API key when merely opening a subscription sign-in view', async () => {
-    // Selecting "Sign in with ChatGPT" / "Import login file" is a local view
-    // choice — the daemon flips the method to subscription only on success.
-    // Persisting it here would break a still-working API-key configuration.
-    const onAuthMethodChange = vi.fn();
-    render(<Harness initialMethod="api_key" onAuthMethodChange={onAuthMethodChange} />);
+  it('switches methods as a pure view — no selection persists a credential', async () => {
+    // Selecting a tab is never destructive: the method follows the credential
+    // you configure, so no key-save/clear is triggered by mere navigation.
+    const onSaveField = vi.fn(async () => undefined);
+    const onClearField = vi.fn(async () => undefined);
+    render(
+      <Harness initialMethod="api_key" onSaveField={onSaveField} onClearField={onClearField} />
+    );
 
     clickText('Sign in with ChatGPT');
     expect(await screen.findByText(/Sign in with your ChatGPT account/i)).toBeInTheDocument();
-    expect(onAuthMethodChange).not.toHaveBeenCalled();
-
     clickText('Import login file');
     expect(await screen.findByLabelText('Codex auth.json contents')).toBeInTheDocument();
-    expect(onAuthMethodChange).not.toHaveBeenCalled();
-
-    // Deliberately choosing the API-key method is the only selection that persists.
     clickText('API key');
-    expect(onAuthMethodChange).not.toHaveBeenCalled(); // already api_key — no redundant write
+    expect(await screen.findByPlaceholderText('sk-proj-...')).toBeInTheDocument();
+
+    expect(onSaveField).not.toHaveBeenCalled();
+    expect(onClearField).not.toHaveBeenCalled();
+  });
+
+  it('opening the API-key tab from a subscription login is non-destructive (no silent break)', async () => {
+    // Regression guard: a user with a working ChatGPT login who clicks "API key"
+    // to look at the fields must not have their login deactivated. The pane
+    // exposes no method-flip callback, and selection triggers no persistence.
+    const onSaveField = vi.fn(async () => undefined);
+    const checkAuth = vi.fn(
+      async (): Promise<AuthCheckResult> => ({
+        status: 'authenticated',
+        authenticated: true,
+        method: 'native',
+      })
+    );
+    render(
+      <Harness initialMethod="subscription" checkAuth={checkAuth} onSaveField={onSaveField} />
+    );
+
+    expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
+    expect(screen.getByText('A ChatGPT login is active on this server.')).toBeInTheDocument();
+
+    clickText('API key');
+    expect(await screen.findByPlaceholderText('sk-proj-...')).toBeInTheDocument();
+    // The login banner is unaffected — nothing was persisted or re-probed away.
+    expect(screen.getByText('Codex is connected')).toBeInTheDocument();
+    expect(onSaveField).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt a stale success in settings — re-signing-in stays reachable', async () => {
+    // A device sign-in that succeeded within the daemon's adopt-TTL must not
+    // wall off the management surface: the deliberate-start button remains.
+    const deviceFind = vi.fn(async () => ({ phase: 'success', hint: 'Signed in with ChatGPT.' }));
+    const deviceCreate = vi.fn(async () => ({
+      phase: 'pending',
+      userCode: 'WXYZ-9876',
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    }));
+    render(
+      <Harness initialMethod="subscription" deviceFind={deviceFind} deviceCreate={deviceCreate} />
+    );
+
+    clickText('Sign in with ChatGPT');
+    // Success is not adopted (autoStart=false) — the restart button shows instead.
+    expect(await screen.findByText('Get a sign-in code')).toBeInTheDocument();
+    expect(screen.queryByText('Signed in with ChatGPT.')).not.toBeInTheDocument();
+
+    clickText('Get a sign-in code');
+    await waitFor(() => expect(deviceCreate).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('WXYZ-9876')).toBeInTheDocument();
   });
 
   it('imports a pasted login file and re-probes the connection', async () => {

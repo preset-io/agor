@@ -28,10 +28,14 @@ function viewForMethod(method: AgenticAuthMethod, prev: CodexMethodView): CodexM
 
 export interface CodexAuthSettingsProps {
   client: AgorClient | null;
-  /** Persisted Codex auth method for this user. */
+  /**
+   * Persisted Codex auth method for this user. Read-only here: the method is a
+   * consequence of the credential you configure (saving an OpenAI key flips it
+   * to `api_key`; a completed device sign-in / import flips it to
+   * `subscription` daemon-side), never of merely selecting a tab — so switching
+   * views can't silently deactivate a working login.
+   */
   authMethod: AgenticAuthMethod;
-  /** Persist a new auth method (flips `agentic_auth_methods.codex`). */
-  onAuthMethodChange: (method: AgenticAuthMethod) => void | Promise<void>;
   /** Codex credential field definitions (OpenAI key + base URL). */
   apiKeyFields: AgenticToolFieldConfig[];
   /** Per-field set/unset flags for the API-key pane. */
@@ -52,7 +56,6 @@ export interface CodexAuthSettingsProps {
 export function CodexAuthSettings({
   client,
   authMethod,
-  onAuthMethodChange,
   apiKeyFields,
   fieldStatus,
   onSaveField,
@@ -127,30 +130,20 @@ export function CodexAuthSettings({
     void runProbe();
   }, [runProbe]);
 
-  const handleFallback = useCallback(
-    (target: CodexAuthFallback) => {
-      if (target === 'import') {
-        setView('import');
-        return;
-      }
-      setView('api_key');
-      if (authMethod !== 'api_key') void onAuthMethodChange('api_key');
-    },
-    [authMethod, onAuthMethodChange]
-  );
+  // Selecting a method is a pure view switch — it never persists the auth
+  // method. Persisting on selection is destructive in BOTH directions: choosing
+  // a subscription view would deactivate a working API key before a ChatGPT
+  // login exists, and choosing "API key" would deactivate a working ChatGPT
+  // login before any key is stored (a silent, non-undoable break). The method
+  // instead follows the credential you actually configure — saving a key flips
+  // it to api_key; a completed device/import flips it to subscription.
+  const handleFallback = useCallback((target: CodexAuthFallback) => {
+    setView(target === 'import' ? 'import' : 'api_key');
+  }, []);
 
-  const handleSelect = useCallback(
-    (next: CodexMethodView) => {
-      setView(next);
-      // "Sign in with ChatGPT" and "Import login file" are local views only —
-      // the daemon device/import flows persist `subscription` themselves once
-      // they succeed. Persisting it on mere selection would deactivate a working
-      // API key before any ChatGPT login exists (surfacing a false "Login not
-      // found"). Only deliberately choosing the API-key method flips it back.
-      if (next === 'api_key' && authMethod !== 'api_key') void onAuthMethodChange('api_key');
-    },
-    [authMethod, onAuthMethodChange]
-  );
+  const handleSelect = useCallback((next: CodexMethodView) => {
+    setView(next);
+  }, []);
 
   const connectionBanner = (() => {
     if (!probe) return null;
@@ -161,9 +154,11 @@ export function CodexAuthSettings({
           showIcon
           message="Codex is connected"
           description={
-            authMethod === 'subscription'
-              ? 'A ChatGPT login is active on this server.'
-              : 'Your OpenAI API key is working.'
+            // Describe what was actually probed, not the currently-selected tab,
+            // so a method flip can't momentarily mislabel a stale verdict.
+            probe.method === 'api-key'
+              ? 'Your OpenAI API key is working.'
+              : 'A ChatGPT login is active on this server.'
           }
         />
       );

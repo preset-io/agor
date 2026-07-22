@@ -1156,7 +1156,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               <CodexAuthSettings
                 client={client}
                 authMethod={authMethod ?? 'api_key'}
-                onAuthMethodChange={(method) => handleAuthMethodChange('codex', method)}
                 apiKeyFields={allToolFields}
                 fieldStatus={fieldStatus}
                 onSaveField={(field, value) =>

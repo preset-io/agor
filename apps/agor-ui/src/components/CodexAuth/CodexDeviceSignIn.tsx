@@ -33,8 +33,12 @@ export interface CodexDeviceSignInProps {
    * this pane only on an explicit "Sign in with ChatGPT" choice, so eager start
    * is right there. A management surface (settings) mounts it as one tab among
    * several, so it defaults to a deliberate button press instead of firing an
-   * OpenAI device request every time the tab is viewed. A still-live attempt is
-   * always adopted regardless of this flag.
+   * OpenAI device request every time the tab is viewed. A still-live *pending*
+   * attempt is always adopted regardless of this flag; a terminal *success* is
+   * adopted only when autoStart is true (the wizard, which reflects the verified
+   * state after toggling away and back). A management surface tells its
+   * connection story via a separate probe, so it must not adopt a stale success
+   * — that would wall off re-signing-in until the daemon prunes the attempt.
    */
   autoStart?: boolean;
 }
@@ -122,7 +126,9 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       try {
         const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
         if (!stillCurrent()) return;
-        if (existing.phase === 'pending' || existing.phase === 'success') {
+        // Adopt a live pending attempt always; adopt a terminal success only for
+        // eager (wizard) mounts — a management surface must stay able to restart.
+        if (existing.phase === 'pending' || (existing.phase === 'success' && autoStart)) {
           setStatus(existing);
           return;
         }
