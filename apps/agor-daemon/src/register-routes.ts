@@ -3772,13 +3772,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
           webTerminal: config.execution?.allow_web_terminal !== false,
-          // Legacy managed-environment minimum-role value retained for
-          // compatibility with older clients. Current environment control
-          // authorization is enforced by the branches service from effective
-          // branch `all` permission or admin access.
-          // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
-          // Defaults to 'member' when unset.
-          managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.

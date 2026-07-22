@@ -3,17 +3,9 @@
  */
 
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
-import type { BranchPermissionLevel } from '../types/branch';
-import type { UserRole } from '../types/user';
 
 export type { ManagedEnvExecutionMode };
 export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
-
-/**
- * Minimum role allowed to trigger managed environment commands
- * (start/stop/nuke/logs). `'none'` disables the feature entirely.
- */
-export type ManagedEnvsMinimumRole = 'none' | UserRole;
 
 /**
  * Type for user-provided JSON data where structure is unknown or dynamic
@@ -483,28 +475,6 @@ export interface AgorExecutionSettings {
   required_user_env_vars?: string[];
 
   /**
-   * Minimum role required to *trigger* managed environment commands
-   * (start/stop/nuke/logs) for a branch.
-   *
-   * - `'none'` — disables triggers for everyone (kill switch; authoring is still allowed)
-   * - `'viewer'` — any authenticated user
-   * - `'member'` — default; members and above
-   * - `'admin'` — admins and superadmins only
-   * - `'superadmin'` — superadmins only
-   *
-   * Default: `'member'`.
-   *
-   * Note: *authoring* env commands (`start_command`, `stop_command`, …, or
-   * `environment_config` on repos) is always gated to admins via
-   * `requireAdminForEnvConfig`. This flag is orthogonal and controls who can
-   * *trigger* those admin-authored commands.
-   *
-   * Branch-level RBAC (`others_can` on each branch) still applies on top
-   * of this flag when `branch_rbac: true`.
-   */
-  managed_envs_minimum_role?: ManagedEnvsMinimumRole;
-
-  /**
    * Managed environment lifecycle execution policy.
    *
    * - `'hybrid'` — default/backwards-compatible mode. Rendered lifecycle
@@ -908,40 +878,6 @@ export interface AgorAnalyticsModulePluginSettings {
   };
 }
 
-/**
- * Branch-level defaults.
- *
- * Top-level `branches:` section (not under `execution:`) because these
- * settings shape *how branches are created*, not how sessions execute.
- * Ignored when `execution.branch_rbac: false` (open-access mode has no
- * per-branch ACL to default).
- */
-export interface AgorBranchesSettings {
-  /**
-   * Default value for a new branch's `others_can` when the caller doesn't
-   * specify one. Controls what non-owners can do on the branch.
-   *
-   * - `'none'`  — private to owners
-   * - `'view'`  — read-only access
-   * - `'session'` (default) — can create own sessions
-   * - `'prompt'` — can prompt others' sessions (inherits their OS identity)
-   * - `'all'`   — full control
-   *
-   * Default: `'session'` (matches current repository-layer default).
-   */
-  others_can_default?: BranchPermissionLevel;
-
-  /**
-   * Default filesystem access tier for non-owners on new branches.
-   * Only meaningful in `unix_user_mode: insulated` or `strict`.
-   *
-   * - `'none'`  — no filesystem access
-   * - `'read'`  (default) — read-only via branch group
-   * - `'write'` — full write access via branch group
-   */
-  others_fs_access_default?: 'none' | 'read' | 'write';
-}
-
 /** Operator-owned defaults for creating AI teammates. */
 export interface AgorTeammateSettings {
   /** Repository cloned by the onboarding wizard when creating the first teammate. */
@@ -1053,9 +989,6 @@ export interface AgorConfig {
   /** Security headers & CORS (CSP extras/override, CORS mode/origins, etc.) */
   security?: AgorSecuritySettings;
 
-  /** Branch-level defaults (others_can_default, others_fs_access_default) */
-  branches?: AgorBranchesSettings;
-
   /** Operator-owned teammate bootstrap settings. */
   teammates?: AgorTeammateSettings;
 
@@ -1095,7 +1028,6 @@ export type ConfigKey =
   | `external_launch.${keyof AgorExternalLaunchSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
-  | `branches.${keyof AgorBranchesSettings}`
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`

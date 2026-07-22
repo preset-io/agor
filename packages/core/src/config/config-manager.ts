@@ -23,8 +23,11 @@ import {
 } from './types';
 
 export const RETIRED_CONFIG_KEYS = {
+  daemon: ['allowAnonymous', 'requireAuth'],
   defaults: ['board', 'agent'],
   display: ['tableStyle', 'colorOutput', 'shortIdLength'],
+  execution: ['managed_envs_minimum_role'],
+  branches: ['others_can_default', 'others_fs_access_default'],
   onboarding: ['teammatePending', 'assistantPending', 'persistedAgentPending'],
 } as const;
 
@@ -35,8 +38,11 @@ export const RETIRED_CONFIG_PATHS = new Set<string>(
 );
 
 type LegacyConfig = AgorConfig & {
+  daemon?: AgorConfig['daemon'] & Record<string, unknown>;
   defaults?: Record<string, unknown>;
   display?: Record<string, unknown>;
+  execution?: AgorConfig['execution'] & Record<string, unknown>;
+  branches?: Record<string, unknown>;
   onboarding?: Record<string, unknown>;
 };
 
@@ -304,8 +310,7 @@ function validateConfig(config: AgorConfig): void {
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
-    'allowAnonymous',
-    'requireAuth',
+    ...RETIRED_CONFIG_KEYS.daemon,
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.external_launch, 'external_launch', [
@@ -370,7 +375,7 @@ function validateConfig(config: AgorConfig): void {
     'stateless_fs_mode',
     'executor_command_template',
     'required_user_env_vars',
-    'managed_envs_minimum_role',
+    ...RETIRED_CONFIG_KEYS.execution,
     'managed_envs_execution_mode',
     'branch_storage',
   ]);
@@ -409,7 +414,7 @@ function validateConfig(config: AgorConfig): void {
     'extras',
     'override',
   ]);
-  only(config.branches, 'branches', ['others_can_default', 'others_fs_access_default']);
+  only(legacyConfig.branches, 'branches', RETIRED_CONFIG_KEYS.branches);
   only(config.teammates, 'teammates', ['framework_repo_url']);
   only(config.paths, 'paths', ['data_home']);
   only(config.analytics, 'analytics', ['enabled', 'client', 'filters', 'plugins']);
@@ -711,21 +716,30 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
   const {
     defaults: _retiredDefaults,
     display: _retiredDisplay,
+    branches: _retiredBranches,
     onboarding: _retiredOnboarding,
     ...activeConfig
   } = config as AgorConfig & {
     defaults?: unknown;
     display?: unknown;
+    branches?: unknown;
     onboarding?: unknown;
   };
+  const {
+    allowAnonymous: _retiredAllowAnonymous,
+    requireAuth: _retiredRequireAuth,
+    ...activeDaemon
+  } = (config.daemon ?? {}) as NonNullable<AgorConfig['daemon']> & Record<string, unknown>;
+  const { managed_envs_minimum_role: _retiredManagedEnvsMinimumRole, ...activeExecution } =
+    (config.execution ?? {}) as NonNullable<AgorConfig['execution']> & Record<string, unknown>;
 
   // Merge config with defaults (deep merge for sections)
   const merged = {
     ...defaults,
     ...activeConfig,
-    daemon: { ...defaults.daemon, ...config.daemon },
+    daemon: { ...defaults.daemon, ...activeDaemon },
     ui: { ...defaults.ui, ...config.ui },
-    execution: { ...defaults.execution, ...config.execution },
+    execution: { ...defaults.execution, ...activeExecution },
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },
     telemetry: { ...defaults.telemetry, ...config.telemetry },

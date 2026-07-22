@@ -674,19 +674,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return withDefaults;
     }
 
-    const config = await loadConfig();
-    const defaults = config.branches;
-    if (!defaults) return withDefaults;
-
-    if (defaults.others_can_default !== undefined && withDefaults.others_can === undefined) {
-      withDefaults.others_can = defaults.others_can_default;
-    }
-    if (
-      defaults.others_fs_access_default !== undefined &&
-      withDefaults.others_fs_access === undefined
-    ) {
-      withDefaults.others_fs_access = defaults.others_fs_access_default;
-    }
     return withDefaults;
   }
 
