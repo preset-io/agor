@@ -368,7 +368,8 @@ describe('MarkdownRenderer', () => {
       String(fullscreenTheme.token.zIndexPopupBase)
     );
     expect(markdownRendererStyles).toContain(
-      `[data-streamdown="table-fullscreen"] {\n  z-index: var(${STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE});`
+      // biome-ignore lint/plugin/noDirectAntCssVar: asserting the contents of the non-React CSS portal contract
+      `body > [data-streamdown="table-fullscreen"] {\n  z-index: var(${STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE});\n  background: var(--ant-color-bg-container);`
     );
   });
 

@@ -296,9 +296,13 @@
 }
 
 /* Unlike Mermaid, Streamdown portals table fullscreen views directly to body.
-   StreamdownPortalApp mirrors the active Ant semantic variables there. */
-[data-streamdown="table-fullscreen"] {
+   StreamdownPortalApp mirrors the active Ant semantic variables there. Keep
+   this selector more specific than Streamdown's later [data-streamdown]
+   font-family reset, and own the opaque surface instead of relying solely on
+   the generated bg-background utility. */
+body > [data-streamdown="table-fullscreen"] {
   z-index: var(--streamdown-fullscreen-z-index);
+  background: var(--ant-color-bg-container);
   color: var(--ant-color-text);
   font-family: var(--ant-font-family);
 }
