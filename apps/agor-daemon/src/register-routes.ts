@@ -144,6 +144,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -355,6 +356,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ...options,
       around: [tenantIdentityAround, ...(options.around ?? [])],
     });
+
+  // Long routes carry tenant identity without holding a route-wide database
+  // transaction. Bind direct repository dependencies to short units of work;
+  // hooked service calls establish their own scopes.
+  const stopRouteRepositories = bindStopRouteRepositories(db, {
+    taskRepo: new TaskRepository(db),
+    branchRepo: branchRepository,
+  });
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
@@ -2270,7 +2279,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const userId = params.user?.user_id;
             const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
             const isOwner =
-              !!userId && (await branchRepository.isOwner(session.branch_id, userId as UUID));
+              !!userId &&
+              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
             if (!isAdmin && !isOwner) {
               throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
             }
@@ -2298,7 +2308,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stopSessionPreserveQueue(
             {
               app,
-              taskRepo: new TaskRepository(db),
+              taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
             },
             id as SessionID,

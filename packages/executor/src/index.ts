@@ -29,15 +29,10 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
-import {
-  getSdkActivityVersion,
-  isSdkHealthAbort,
-  markSdkHealthAbort,
-  SdkWatchdog,
-} from './sdk-watchdog.js';
+import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
-import { markCoordinatorTerminationAbort } from './termination-state.js';
+import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
 
@@ -85,7 +80,7 @@ export class AgorExecutor {
     status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
     errorMessage?: string
   ): Promise<void> {
-    if (!this.client || isSdkHealthAbort(this.abortController)) return;
+    if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
     await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
   }
 

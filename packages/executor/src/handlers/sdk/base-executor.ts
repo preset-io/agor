@@ -27,9 +27,8 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
-import { isSdkHealthAbort } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { isCoordinatorTerminationAbort } from '../../termination-state.js';
+import { isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -421,9 +420,7 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
-  const coordinatorOwnsTerminality = () =>
-    isSdkHealthAbort(params.abortController) ||
-    isCoordinatorTerminationAbort(params.abortController);
+  const daemonOwnsTerminality = () => isDaemonOwnedAbort(params.abortController);
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
@@ -505,6 +502,10 @@ export async function executeToolTask(params: {
     // Handle race condition: if signal is already aborted, call handler immediately
     if (params.abortController.signal.aborted) {
       await abortHandler();
+      // Cancellation may arrive during git setup or credential resolution,
+      // before the provider has registered any active work for stopTask().
+      // Never launch fresh SDK work after that durable cancellation.
+      return;
     }
 
     // Listen for abort signal
@@ -522,7 +523,7 @@ export async function executeToolTask(params: {
       params.messageSource
     );
 
-    if (coordinatorOwnsTerminality()) return;
+    if (daemonOwnsTerminality()) return;
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
@@ -633,7 +634,7 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    if (coordinatorOwnsTerminality()) return;
+    if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
     console.error(`[${toolName}] Execution failed:`, err);
 

@@ -123,6 +123,7 @@ import { createSessionMCPServersService } from './services/session-mcp-servers.j
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
+import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
@@ -267,7 +268,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //      task.
     //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
     //      the executor for live tool/thinking visualization.
-    events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
+    events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;

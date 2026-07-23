@@ -61,6 +61,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -1184,6 +1185,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `Task ${shortId(data.task_id)} has no matching active termination request`
       );
     }
+    const terminationRequest = task.termination_request;
 
     emitServiceEvent(this.app, {
       path: 'tasks',
@@ -1195,19 +1197,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Do not await containment here. A local executor must receive this RPC
     // response before it can exit, while the coordinator verifies that process
-    // group only after the wrapper exits. The durable quiescence timestamp
-    // wakes an existing coordinator and also makes this restart/retry safe.
-    void requestExecutorTermination({
-      app: this.app,
-      taskId: task.task_id,
-      cause: task.termination_request.cause,
-      errorMessage: task.termination_request.error_message ?? 'Executor stopped cooperatively.',
-      params: { ...(params ?? {}), provider: undefined },
-    }).catch((error) =>
-      console.error(
-        `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,
-        error
-      )
+    // group only after the wrapper exits. Start recovery after this service
+    // transaction commits and outside its ALS database scope; the durable
+    // quiescence timestamp makes the deferred recovery restart/retry safe.
+    const coordinatorParams = { ...(params ?? {}), provider: undefined };
+    deferWithTenantContext(
+      params,
+      () =>
+        requestExecutorTermination({
+          app: this.app,
+          taskId: task.task_id,
+          cause: terminationRequest.cause,
+          errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
+          params: coordinatorParams,
+        }).then(() => undefined),
+      (error) =>
+        console.error(
+          `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,
+          error
+        )
     );
 
     return task;

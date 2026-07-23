@@ -1,10 +1,25 @@
-const coordinatorTerminationAborts = new WeakSet<AbortController>();
+export type AgorAbortCause = 'coordinator_termination' | 'sdk_health_failure';
 
-/** Mark an abort whose terminal task transition is owned by the daemon. */
+const abortCauses = new WeakMap<AbortController, AgorAbortCause>();
+
+export function markAgorAbortCause(controller: AbortController, cause: AgorAbortCause): void {
+  abortCauses.set(controller, cause);
+}
+
+export function hasAgorAbortCause(controller: AbortController, cause: AgorAbortCause): boolean {
+  return abortCauses.get(controller) === cause;
+}
+
+/** Mark an abort whose terminal task transition is owned by the daemon coordinator. */
 export function markCoordinatorTerminationAbort(controller: AbortController): void {
-  coordinatorTerminationAborts.add(controller);
+  markAgorAbortCause(controller, 'coordinator_termination');
 }
 
 export function isCoordinatorTerminationAbort(controller: AbortController): boolean {
-  return coordinatorTerminationAborts.has(controller);
+  return hasAgorAbortCause(controller, 'coordinator_termination');
+}
+
+/** Whether a daemon workflow, rather than the executor fail-safe, owns terminality. */
+export function isDaemonOwnedAbort(controller: AbortController): boolean {
+  return abortCauses.has(controller);
 }
