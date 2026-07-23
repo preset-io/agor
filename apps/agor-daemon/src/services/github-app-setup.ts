@@ -79,16 +79,23 @@ async function authenticateRequest(
       | undefined;
     if (!user?.user_id) return null;
     const authentication = result?.authentication as { payload?: unknown } | undefined;
-    const tenant = resolveTenantContext(config, {
-      params: {
-        ...authParams,
-        user,
-        authentication: authentication ?? authParams.authentication,
+    // The authentication service has already validated and resolved
+    // `params.tenant`; treat that signed identity as authoritative. Re-running
+    // resolution with the raw request headers would turn a conflicting trusted
+    // header into a 401 even though authentication succeeded (and could allow
+    // request metadata to influence the authenticated identity).
+    const tenant =
+      authParams.tenant ??
+      resolveTenantContext(config, {
+        params: {
+          ...authParams,
+          user,
+          authentication: authentication ?? authParams.authentication,
+          headers,
+        },
+        authPayload: authentication?.payload,
         headers,
-      },
-      authPayload: authentication?.payload,
-      headers,
-    });
+      });
     return { user_id: user.user_id, role: user.role, tenantId: tenant.tenant_id };
   } catch {
     return null;
