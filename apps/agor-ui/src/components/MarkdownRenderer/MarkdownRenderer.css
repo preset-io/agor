@@ -282,7 +282,7 @@
 [data-streamdown="mermaid-fullscreen"] {
   position: fixed;
   inset: 0;
-  z-index: var(--streamdown-mermaid-z-index);
+  z-index: var(--streamdown-fullscreen-z-index);
   box-sizing: border-box;
   display: flex;
   width: 100vw;
@@ -293,6 +293,14 @@
   background: color-mix(in srgb, var(--ant-color-bg-elevated) 95%, transparent);
   color: var(--ant-color-text);
   backdrop-filter: blur(var(--ant-size-xxs));
+}
+
+/* Unlike Mermaid, Streamdown portals table fullscreen views directly to body.
+   StreamdownPortalApp mirrors the active Ant semantic variables there. */
+[data-streamdown="table-fullscreen"] {
+  z-index: var(--streamdown-fullscreen-z-index);
+  color: var(--ant-color-text);
+  font-family: var(--ant-font-family);
 }
 
 [data-streamdown="mermaid-fullscreen"] > [role="presentation"],

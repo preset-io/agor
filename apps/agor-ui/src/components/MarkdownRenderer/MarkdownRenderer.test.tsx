@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { ConfigProvider } from 'antd';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  STREAMDOWN_MERMAID_Z_INDEX_VARIABLE,
+  STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE,
   STREAMDOWN_PORTAL_ROOT_CLASS_NAME,
   StreamdownPortalApp,
 } from '../StreamdownPortalApp';
@@ -49,7 +49,9 @@ const fenced = (language: string, lines: string[], closed = true) =>
 
 const fullscreenTheme = {
   token: {
+    colorBgContainer: '#234567',
     colorBgElevated: '#123456',
+    fontFamily: 'Portal Test Sans',
     zIndexPopupBase: 4321,
   },
 };
@@ -303,7 +305,7 @@ describe('MarkdownRenderer', () => {
     expect(portalRootStyle.getPropertyValue('--ant-color-bg-elevated').trim()).toBe(
       fullscreenTheme.token.colorBgElevated
     );
-    expect(portalRootStyle.getPropertyValue(STREAMDOWN_MERMAID_Z_INDEX_VARIABLE).trim()).toBe(
+    expect(portalRootStyle.getPropertyValue(STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE).trim()).toBe(
       String(fullscreenTheme.token.zIndexPopupBase)
     );
     await waitFor(() => expect(document.body.style.overflow).toBe('hidden'));
@@ -340,6 +342,34 @@ describe('MarkdownRenderer', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(document.body.style.overflow).toBe('');
+  });
+
+  it('themes body-portaled table fullscreen views and stacks them above the app', async () => {
+    render(
+      <ConfigProvider theme={fullscreenTheme}>
+        <StreamdownPortalApp>
+          <MarkdownRenderer content={'| Name | Value |\n| --- | ---: |\n| Alpha | 1 |'} />
+        </StreamdownPortalApp>
+      </ConfigProvider>
+    );
+
+    fireEvent.click(await screen.findByTitle('View fullscreen'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'View fullscreen' });
+    expect(dialog).toHaveAttribute('data-streamdown', 'table-fullscreen');
+    expect(document.body).toContainElement(dialog);
+    expect(document.body.style.getPropertyValue('--ant-color-bg-container')).toBe(
+      fullscreenTheme.token.colorBgContainer
+    );
+    expect(document.body.style.getPropertyValue('--ant-font-family')).toBe(
+      fullscreenTheme.token.fontFamily
+    );
+    expect(document.body.style.getPropertyValue(STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE)).toBe(
+      String(fullscreenTheme.token.zIndexPopupBase)
+    );
+    expect(markdownRendererStyles).toContain(
+      `[data-streamdown="table-fullscreen"] {\n  z-index: var(${STREAMDOWN_FULLSCREEN_Z_INDEX_VARIABLE});`
+    );
   });
 
   it('keeps an incomplete Vega-Lite fence as copyable code while streaming', async () => {
