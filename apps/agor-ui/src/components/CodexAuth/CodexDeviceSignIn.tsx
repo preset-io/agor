@@ -1,7 +1,13 @@
 import type { AgorClient, CodexDeviceAuthStatus } from '@agor-live/client';
-import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
-import { Alert, Button, Typography, theme } from 'antd';
+import {
+  CheckCircleOutlined,
+  CheckOutlined,
+  CopyOutlined,
+  LoadingOutlined,
+} from '@ant-design/icons';
+import { Alert, Button, Flex, Tooltip, Typography, theme } from 'antd';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCopyToClipboard } from '../../utils/clipboard';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -59,6 +65,11 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   const [status, setStatus] = useState<CodexDeviceAuthStatus>({ phase: 'idle' });
   const [starting, setStarting] = useState(false);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
+  // Use the app's clipboard util, not AntD's `copyable`: on HTTP/local-network
+  // dev URLs (non-secure context) AntD awaits navigator.clipboard's rejection
+  // first, which consumes the click's user activation and makes its execCommand
+  // fallback fail too. copyToClipboard tries execCommand first when insecure.
+  const [codeCopied, copyCode] = useCopyToClipboard();
 
   const deviceService = useMemo(
     () =>
@@ -223,19 +234,30 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
         <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>
           Open the link below, sign in to ChatGPT, and enter this one-time code:
         </Text>
-        <Text
-          copyable
-          aria-label="ChatGPT sign-in code"
-          style={{
-            color: token.colorText,
-            fontFamily: 'monospace',
-            fontSize: 26,
-            fontWeight: 600,
-            letterSpacing: 4,
-          }}
-        >
-          {status.userCode}
-        </Text>
+        <Flex align="center" gap={8}>
+          <Text
+            aria-label="ChatGPT sign-in code"
+            style={{
+              color: token.colorText,
+              fontFamily: 'monospace',
+              fontSize: 26,
+              fontWeight: 600,
+              letterSpacing: 4,
+            }}
+          >
+            {status.userCode}
+          </Text>
+          <Tooltip title={codeCopied ? 'Copied' : 'Copy code'}>
+            <Button
+              type="text"
+              aria-label="Copy sign-in code"
+              icon={codeCopied ? <CheckOutlined /> : <CopyOutlined />}
+              onClick={() => {
+                if (status.userCode) void copyCode(status.userCode);
+              }}
+            />
+          </Tooltip>
+        </Flex>
         {status.verificationUrl && (
           <Typography.Link
             href={status.verificationUrl}

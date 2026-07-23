@@ -664,6 +664,18 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
   };
 
+  // Without tenant columns (SQLite / single-tenant), tenant-owned services skip
+  // the full RLS-transaction hooks — but they must still carry ambient tenant
+  // identity so tenant-aware call sites (e.g. MCP session-token minting in
+  // mcp/tokens.ts) can resolve the active tenant instead of throwing "missing
+  // active tenant context". Identity only: no data stamping or DB transaction,
+  // which are Postgres tenant-column mechanics.
+  const registerTenantIdentityForOwnedServices = (): void => {
+    for (const path of tenantOwnedServicePaths) {
+      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
+    }
+  };
+
   const realtimeAccessCache = new RealtimeAccessCache({
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
     sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
@@ -3465,6 +3477,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // resolution in required_from_auth mode.
   if (tenantColumnsEnabled) {
     registerTenantHooks();
+  } else {
+    registerTenantIdentityForOwnedServices();
   }
   registerTenantIdentityHooks();
 }
