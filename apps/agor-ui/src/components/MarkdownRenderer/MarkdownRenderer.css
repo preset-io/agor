@@ -116,10 +116,19 @@
 /* Code-block geometry contract, mirrored from Streamdown's own utility
    classes (compiled in streamdown-tailwind.generated.css). These duplicates
    exist so the ASCII-layout tests can assert the contract in jsdom, which
-   does not apply @layer rules; values must match upstream's classes. */
+   does not apply @layer rules; values must match upstream's classes.
+
+   Streamdown ships a "frame in a frame": a tinted outer panel (bg-sidebar,
+   border, rounded, padding) wrapping a second bordered/rounded body box. We
+   collapse that to one container — the outer panel is the single surface, and
+   the inner body/table box below is neutralized (transparent, no border, no
+   radius) so it merges in. */
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block"] {
   position: relative;
   min-width: 0;
+  gap: 0;
+  padding: 0;
+  background: var(--ant-color-bg-container);
 }
 
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-header"] {
@@ -127,6 +136,7 @@
   flex-shrink: 0;
   align-items: center;
   height: 2rem;
+  padding-inline: var(--ant-padding-sm);
   color: var(--ant-color-text-secondary);
   font-size: 0.75rem;
   line-height: 1rem;
@@ -142,20 +152,67 @@
   align-items: center;
   justify-content: flex-end;
   height: 2rem;
-  margin-top: -2.5rem;
+  margin-top: -2rem;
+  padding-inline: var(--ant-padding-xs);
+  box-sizing: border-box;
   pointer-events: none;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="code-block-actions"] {
+  height: 2rem;
+  box-sizing: border-box;
 }
 
 :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] {
   min-width: 0;
   overflow-x: auto;
+  padding: 0 var(--ant-padding) var(--ant-padding);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Same single-container treatment for GFM tables: neutralize the inner
+   bordered box so the outer table-wrapper panel is the only surface. */
+:is(.markdown-content, .inline-markdown) [data-streamdown="table-wrapper"] {
+  gap: 0;
+  padding: 0;
+  background: var(--ant-color-bg-container);
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="table-wrapper"] > div {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Keep control chrome comfortably inside the single outer frame. The table
+   toolbar is Streamdown's first anonymous child; the code toolbar's anonymous
+   sticky wrapper is handled above. */
+:is(.markdown-content, .inline-markdown) [data-streamdown="table-wrapper"] > div:first-child {
+  padding: var(--ant-padding-xs);
+  box-sizing: border-box;
+}
+
+:is(.markdown-content, .inline-markdown) [data-streamdown="table-wrapper"] table {
+  /* Compact markdown normally adds block margins to tables. Inside
+     Streamdown's framed wrapper those margins look like stray inner padding. */
+  margin: 0;
 }
 
 .ant-typography :is(.markdown-content, .inline-markdown) [data-streamdown="code-block-body"] pre {
   width: max-content;
   min-width: 100%;
   margin-top: 0;
-  padding-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  /* Shiki supplies a theme background on the pre itself. Once the body border
+     is removed, retaining it recreates a dark rectangle inside the outer
+     frame; use the Ant-themed container surface while preserving token colors. */
+  /* biome-ignore lint/complexity/noImportantStyles: override Shiki's inline theme background */
+  background: transparent !important;
   /* Ant Typography injects pre-wrap at render time. */
   /* biome-ignore lint/complexity/noImportantStyles: this narrow third-party override must survive runtime injection order */
   white-space: pre !important;

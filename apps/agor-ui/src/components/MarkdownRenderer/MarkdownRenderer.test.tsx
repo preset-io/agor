@@ -89,39 +89,17 @@ describe('MarkdownRenderer', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('confirms external links through an Ant Design modal before opening', async () => {
-    const openSpy = vi.fn();
-    vi.stubGlobal('open', openSpy);
+  it('renders links as new-tab anchors without a confirmation interstitial', async () => {
     render(<MarkdownRenderer content={'[Private PR #1](https://github.com/acme/repo/pull/1)'} />);
 
-    const link = await screen.findByRole('button', { name: 'Private PR #1' });
-    expect(link).toHaveAttribute('data-streamdown', 'link');
+    // Link safety is disabled, so links are plain anchors (not <button>s) that
+    // open in a new tab — no modal, no click interception.
+    const link = await screen.findByRole('link', { name: 'Private PR #1' });
+    expect(link).toHaveAttribute('href', 'https://github.com/acme/repo/pull/1');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+
     fireEvent.click(link);
-    expect(openSpy).not.toHaveBeenCalled();
-
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Open external link?')).toBeInTheDocument();
-    expect(within(dialog).getByText('https://github.com/acme/repo/pull/1')).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /Open link/ }));
-    await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith(
-        'https://github.com/acme/repo/pull/1',
-        '_blank',
-        'noreferrer'
-      )
-    );
-  });
-
-  it('opens same-origin links directly without a confirmation modal', async () => {
-    const openSpy = vi.fn();
-    vi.stubGlobal('open', openSpy);
-    const url = `${window.location.origin}/kb/agor-team/some-doc`;
-    render(<MarkdownRenderer content={`[team doc](${url})`} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'team doc' }));
-
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(url, '_blank', 'noreferrer'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -167,7 +145,7 @@ describe('MarkdownRenderer', () => {
     expect(actions?.parentElement).toHaveStyle({
       display: 'flex',
       height: '2rem',
-      marginTop: '-2.5rem',
+      marginTop: '-2rem',
     });
     expect(body).toHaveStyle({ overflowX: 'auto' });
     expect(markdownRendererStyles).toContain('white-space: pre !important');

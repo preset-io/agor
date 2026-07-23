@@ -17,7 +17,6 @@ import { defaultRehypePlugins, type LinkSafetyConfig, Streamdown } from 'streamd
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
-import { MarkdownLinkSafetyModal } from './MarkdownLinkSafetyModal';
 import {
   streamdownRemarkPlugins,
   streamdownRichContentPlugins,
@@ -72,21 +71,12 @@ interface MarkdownRendererProps {
 
 const MAX_VEGA_LITE_CHARTS_PER_DOCUMENT = 4;
 
-// Streamdown enables link safety by default (links render as buttons and ask
-// for confirmation before opening). Keep the behavior — agent-generated links
-// deserve a phishing speed bump — but render the dialog with AntD, and let
-// same-origin links (Agor's own URLs) open without interrogation.
-const LINK_SAFETY: LinkSafetyConfig = {
-  enabled: true,
-  onLinkCheck: (url) => {
-    try {
-      return new URL(url, window.location.origin).origin === window.location.origin;
-    } catch {
-      return false;
-    }
-  },
-  renderModal: (props) => <MarkdownLinkSafetyModal {...props} />,
-};
+// Disable Streamdown's default link-safety interstitial. It renders every link
+// as a <button> that pops a "you're about to visit an external site" modal —
+// sensible for a public chatbot, but heavy friction in a tool where users read
+// their own agents' output. With it off, links render as ordinary anchors that
+// open in a new tab (Streamdown still sets rel="noreferrer" target="_blank").
+const LINK_SAFETY: LinkSafetyConfig = { enabled: false };
 
 // Memoized: Streamdown does meaningful per-render work (syntax highlighting,
 // Mermaid, KaTeX) and this component is rendered once per text block in every
