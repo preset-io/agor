@@ -1240,7 +1240,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
 
   const stopTooltip = stopRequestInFlight
-    ? 'Sending stop request...'
+    ? 'Stopping...'
     : isStopping
       ? 'Stopping... (Click again to retry if stuck)'
       : 'Stop Execution';
@@ -1607,7 +1607,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   danger
                   size="small"
                   icon={
-                    isStopping && !stopRequestInFlight ? <Spin size="small" /> : <StopOutlined />
+                    stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
                   onClick={onStop}
                   disabled={!isRunning || stopRequestInFlight}

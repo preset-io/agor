@@ -130,6 +130,16 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('shows stopping feedback immediately while the Stop request is in flight', () => {
+    const { container } = render(
+      <SessionFooter {...baseProps} isRunning={true} stopRequestInFlight={true} />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
+    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
+  });
+
   it('Model chip is hidden when no model is present', () => {
     render(
       <SessionFooter

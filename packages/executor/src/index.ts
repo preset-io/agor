@@ -4,8 +4,12 @@
  * Ephemeral executor that:
  * 1. Connects to daemon via Feathers/WebSocket
  * 2. Executes exactly one task
- * 3. Listens for stop events while running
+ * 3. Receives realtime permission resolutions while running
  * 4. Exits when task completes
+ *
+ * User Stop is delivered out-of-band via Unix process-group signals. The
+ * authenticated WebSocket carries task telemetry and service events, not a
+ * cancellation command.
  */
 
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
