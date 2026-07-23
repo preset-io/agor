@@ -48,10 +48,12 @@ const checks = [
       // Claude CLI launch and Stop target only the owning user's terminal room.
       'apps/agor-daemon/src/services/claude-cli-integration.ts': 4,
       // The tenant-aware realtime facade: tenant/session channel join, the
-      // publish handler, session-stream join, the existence-gated room lookup
-      // (existingChannel — used by publish + leave paths so they never
-      // materialize a room), and leave-all all live here on purpose.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 7,
+      // publish handler, session-stream and tenant+task executor-control joins,
+      // the existence-gated room lookup (existingChannel — used by publish +
+      // leave paths so they never materialize a room), and both leave-all
+      // helpers live here on purpose. Executor control rooms are explicitly
+      // tenant-namespaced and can only be joined from a verified scoped JWT.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 9,
       'apps/agor-daemon/src/setup/socketio.ts': 17,
     },
   },
