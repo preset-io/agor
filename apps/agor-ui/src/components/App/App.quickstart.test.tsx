@@ -1,8 +1,8 @@
 import type { Board, Branch, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { forwardRef } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -25,15 +25,51 @@ vi.mock('../SessionCanvas', () => ({
   ),
 }));
 // The picker renders in place of the session panel when a tool can't be
-// resolved. A lightweight stand-in lets us assert it did (or did not) appear.
+// resolved. The stand-in exposes the tile as a button wired to `onChoose` so
+// tests can drive the create flow.
 vi.mock('../SessionPanel/PendingToolChoicePanel', () => ({
-  PendingToolChoicePanel: () => <div data-testid="tool-picker" />,
+  PendingToolChoicePanel: ({ onChoose }: { onChoose: (tool: string) => void }) => (
+    <button type="button" data-testid="tool-picker" onClick={() => onChoose('claude-code')}>
+      tool picker
+    </button>
+  ),
 }));
 
 vi.mock('../AppHeader', () => ({ AppHeader: () => null }));
 vi.mock('../BoardTeammatePanel', () => ({ BoardTeammatePanel: () => null }));
 vi.mock('../HomePage', () => ({ HomePage: () => null }));
-vi.mock('../SessionPanel', () => ({ SessionPanel: () => null }));
+// SessionPanel is mocked to surface both its identity (`session-panel`) and the
+// in-drawer "Switch tool" affordance, which drives `onChooseAgenticTool` with a
+// `replacingSessionId` — the second entry point into the create→store handoff.
+vi.mock('../SessionPanel', async () => {
+  const { useAppActions } = await import('../../contexts/AppActionsContext');
+  return {
+    SessionPanel: ({
+      session,
+      onClose,
+    }: {
+      session?: { session_id?: string } | null;
+      onClose: () => void;
+    }) => {
+      const { onChooseAgenticTool } = useAppActions();
+      return (
+        <div data-testid="session-panel">
+          <button
+            type="button"
+            data-testid="switch-tool"
+            onClick={() => onChooseAgenticTool?.('wt-1', 'codex', session?.session_id)}
+          >
+            switch tool
+          </button>
+          <button type="button" data-testid="session-close" onClick={onClose}>
+            close
+          </button>
+          <span data-testid="session-id">{session?.session_id}</span>
+        </div>
+      );
+    },
+  };
+});
 vi.mock('../EventStreamPanel', () => ({ EventStreamPanel: () => null }));
 vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({ SettingsModal: () => null, UserSettingsModal: () => null }));
@@ -73,6 +109,48 @@ const AVAILABLE_AGENTS = [
   { id: 'codex', name: 'Codex', icon: '💻', description: '' },
 ] as never[];
 
+const USER = {
+  user_id: 'u1',
+  name: 'User',
+  email: 'u@example.test',
+  preferences: {},
+} as unknown as User;
+
+// Hex UUIDs so a session URL's short id resolves back to it once seeded
+// (short-id matching is hex-only).
+const SESSION_A = '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f';
+const SESSION_B = '01944f5b-8c9a-7d46-b907-ae3f2d5c6b7a';
+
+/** Additive insert into `sessionById`, mirroring the real create seam: the
+ *  authoritative row (via `sessionCreated`) is in the store before the id is
+ *  returned, so URL→store selection resolves with no propagation gap. */
+function insertSession(sessionId: string) {
+  const next = new Map(agorStore.getState().sessionById);
+  next.set(sessionId, { session_id: sessionId, branch_id: 'wt-1', board_id: BOARD_ID } as never);
+  agorStore.setState({ sessionById: next as never });
+}
+
+/** Remove a session from the store, modelling the realtime `removed` event that
+ *  lands after the switch-tool RPC (production ordering: after navigation). */
+function removeSession(sessionId: string) {
+  const next = new Map(agorStore.getState().sessionById);
+  next.delete(sessionId);
+  agorStore.setState({ sessionById: next as never });
+}
+
+/** onCreateSession stand-in: optimistically inserts each id then returns it,
+ *  exactly like the production create seam. Repeats the last id if called more
+ *  times than ids given. */
+function optimisticCreate(...ids: string[]) {
+  let call = 0;
+  return vi.fn(async () => {
+    const id = ids[Math.min(call, ids.length - 1)];
+    call += 1;
+    insertSession(id);
+    return id;
+  });
+}
+
 function seedStore() {
   agorStore.setState({
     ...EMPTY_MAPS,
@@ -84,24 +162,40 @@ function seedStore() {
   });
 }
 
-function renderShell(user: User, onCreateSession = vi.fn(async () => 'new-session-id')) {
+// Captures the router's navigate so tests can simulate browser Back.
+let testNavigate: ReturnType<typeof useNavigate> | null = null;
+function NavProbe() {
+  testNavigate = useNavigate();
+  return null;
+}
+
+function renderShell(
+  user: User,
+  onCreateSession = vi.fn(async () => 'new-session-id'),
+  client: unknown = null
+) {
+  // Mirror the real router: the same App element is mounted at the board,
+  // session, and branch paths, so navigating between them preserves App state
+  // instead of remounting. Without the session route, goToSession would leave
+  // no matching route and unmount App entirely.
+  const appElement = (
+    <App
+      client={client as never}
+      user={user}
+      connected={true}
+      availableAgents={AVAILABLE_AGENTS}
+      initialBoardId={BOARD_ID}
+      onCreateSession={onCreateSession}
+    />
+  );
   render(
     <AntApp>
       <MemoryRouter initialEntries={[`/b/${BOARD_ID}/`]}>
+        <NavProbe />
         <Routes>
-          <Route
-            path="/b/:boardParam/*"
-            element={
-              <App
-                client={null}
-                user={user}
-                connected={true}
-                availableAgents={AVAILABLE_AGENTS}
-                initialBoardId={BOARD_ID}
-                onCreateSession={onCreateSession}
-              />
-            }
-          />
+          <Route path="/b/:boardParam/" element={appElement} />
+          <Route path="/s/:sessionShortId/" element={appElement} />
+          <Route path="/w/:branchShortId/" element={appElement} />
         </Routes>
       </MemoryRouter>
     </AntApp>
@@ -115,17 +209,121 @@ describe('App quick-start — always shows the tool picker', () => {
   });
 
   it('opens the tile picker without creating a session', async () => {
-    const user = {
-      user_id: 'u1',
-      name: 'User',
-      email: 'u@example.test',
-      preferences: {},
-    } as unknown as User;
-    const { onCreateSession } = renderShell(user);
+    const { onCreateSession } = renderShell(USER);
 
     fireEvent.click(await screen.findByTestId('quick-start'));
 
     await waitFor(() => expect(screen.getByTestId('tool-picker')).toBeInTheDocument());
     expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('opens the created session immediately when a tool is picked', async () => {
+    // The create seam inserts the session into the store before returning, so
+    // navigation resolves it on the next render — SessionPanel shows with no
+    // blank/loading frame in between.
+    const onCreateSession = optimisticCreate(SESSION_A);
+    renderShell(USER, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+
+    await waitFor(() => expect(screen.getByTestId('session-panel')).toBeInTheDocument());
+    expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('tool-picker')).not.toBeInTheDocument();
+  });
+
+  it('does not resurrect the picker on Back after the session is shown', async () => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    renderShell(USER, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(screen.getByTestId('session-panel')).toBeInTheDocument());
+
+    // Pending is cleared at create; nothing shadow-holds a picker. Back drops
+    // the session URL segment → the drawer just closes, no phantom picker.
+    await act(async () => {
+      testNavigate?.(-1);
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('tool-picker')).not.toBeInTheDocument();
+  });
+
+  it('hands off from the replaced session to the new one on switch-tool', async () => {
+    const removeCalls: string[] = [];
+    const client = {
+      service: () => ({
+        remove: (id: string) => {
+          removeCalls.push(id);
+          return Promise.resolve();
+        },
+      }),
+    };
+    const onCreateSession = optimisticCreate(SESSION_A, SESSION_B);
+    renderShell(USER, onCreateSession, client);
+
+    // Open session A via the picker.
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A));
+
+    // Switch tools (replacingSessionId = A). B is inserted + selected before
+    // remove(A) is awaited, so the drawer never loses its SessionPanel.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('switch-tool'));
+    });
+    await waitFor(() => expect(removeCalls).toEqual([SESSION_A]));
+    expect(screen.getByTestId('session-panel')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_B));
+
+    // The replaced session's removal event lands after navigation (production
+    // ordering). B is already selected, so the drawer stays on SessionPanel.
+    act(() => {
+      removeSession(SESSION_A);
+    });
+    expect(screen.getByTestId('session-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_B);
+  });
+
+  it('shows the picker when Add session is used while a session is open', async () => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    renderShell(USER, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(screen.getByTestId('session-panel')).toBeInTheDocument());
+
+    // Add session routes away from the open session, then shows the picker.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('quick-start'));
+    });
+    await waitFor(() => expect(screen.getByTestId('tool-picker')).toBeInTheDocument());
+    expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument();
+  });
+
+  it('keeps the picker interactive when create fails', async () => {
+    // createSession returns null → no session, no navigation. Pending stays set
+    // so the picker remains for a retry.
+    const onCreateSession = vi.fn(async () => null);
+    renderShell(USER, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByTestId('tool-picker')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument();
   });
 });

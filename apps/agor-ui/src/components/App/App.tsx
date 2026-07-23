@@ -882,6 +882,14 @@ export const App: React.FC<AppProps> = ({
       );
       if (!sessionId) return null;
 
+      // The create seam optimistically inserts the new session into the store,
+      // so `goToSession` selects it on the very next render — no propagation
+      // gap, nothing to hold the drawer open. Navigate BEFORE awaiting removal
+      // of the replaced session (switch-tool path): the new session already
+      // wins the ternary, so removing the old one can't blank the drawer.
+      setPendingToolChoiceBranchId(null);
+      navigation.goToSession(sessionId);
+
       if (replacingSessionId && client) {
         try {
           // `_swapReplace` tells the daemon this is a switch-tool swap, not a
@@ -901,11 +909,6 @@ export const App: React.FC<AppProps> = ({
         }
       }
 
-      // Clear the pending picker before navigating: without this the state
-      // lingers and resurrects a phantom "pick a tool" screen (for an already
-      // created session) the next time selection clears — e.g. browser Back.
-      setPendingToolChoiceBranchId(null);
-      navigation.goToSession(sessionId);
       return sessionId;
     },
     [user, onCreateSession, currentBoardId, client, navigation, showError]
@@ -1677,8 +1680,7 @@ export const App: React.FC<AppProps> = ({
                           branch={pendingToolChoiceBranch}
                           availableAgents={availableAgents}
                           onChoose={async (tool) => {
-                            const id = await chooseAgenticTool(pendingToolChoiceBranchId, tool);
-                            if (id) setPendingToolChoiceBranchId(null);
+                            await chooseAgenticTool(pendingToolChoiceBranchId, tool);
                           }}
                           onClose={handleCloseSessionPanel}
                           onAdvancedSetup={() => {
