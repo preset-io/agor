@@ -1582,12 +1582,10 @@ export class CodexPromptService {
         );
       }
     } catch (error) {
-      // Check if this is an AbortError from AbortController.abort()
-      // This is EXPECTED during stop - the SDK throws AbortError when cancelled
-      if (
-        error instanceof Error &&
-        (error.name === 'AbortError' || error.message.includes('abort'))
-      ) {
+      const wasCancelled =
+        abortController?.signal.aborted === true ||
+        (error instanceof Error && error.name === 'AbortError');
+      if (wasCancelled) {
         console.log(
           `🛑 [Stop] Codex query aborted for session ${shortId(sessionId)} - this is expected`
         );

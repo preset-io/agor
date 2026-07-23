@@ -1496,10 +1496,18 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     return { service, codex: internals.codex };
   }
 
-  async function drain(service: CodexPromptService) {
-    for await (const _event of service.promptSessionStreaming(testSessionId, 'go')) {
-      // drain
+  async function drain(service: CodexPromptService, abortController?: AbortController) {
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming(
+      testSessionId,
+      'go',
+      undefined,
+      undefined,
+      abortController
+    )) {
+      emitted.push(event as Record<string, unknown>);
     }
+    return emitted;
   }
 
   beforeEach(() => {
@@ -1905,7 +1913,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       run: vi.fn(),
       runStreamed:
         failurePoint === 'before event iteration'
-          ? vi.fn().mockRejectedValue(new Error('runStreamed rejected'))
+          ? vi.fn().mockRejectedValue(new Error('runStreamed aborted unexpectedly'))
           : vi.fn().mockResolvedValue({
               events: (async function* () {
                 yield { type: 'turn.started' };
@@ -1920,7 +1928,9 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     }
 
     await expect(drain(service)).rejects.toThrow(
-      failurePoint === 'before event iteration' ? 'runStreamed rejected' : 'event iterator failed'
+      failurePoint === 'before event iteration'
+        ? 'runStreamed aborted unexpectedly'
+        : 'event iterator failed'
     );
 
     if (sdkSessionId === null) {
@@ -1930,6 +1940,25 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     } else {
       expect(mockSessionsRepo.update).not.toHaveBeenCalled();
     }
+  });
+
+  it('treats an actually aborted controller as stopped and preserves the established thread', async () => {
+    const { service, codex } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    abortController.abort();
+    codex.resumeThread = vi.fn(() => ({
+      id: 'existing-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockRejectedValue(new Error('transport failed after cancellation')),
+    }));
+
+    const emitted = await drain(service, abortController);
+
+    expect(emitted).toContainEqual({
+      type: 'stopped',
+      threadId: 'existing-thread-id',
+    });
+    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
   });
 
   it('does not throw when stream ends after a user-requested stop', async () => {
