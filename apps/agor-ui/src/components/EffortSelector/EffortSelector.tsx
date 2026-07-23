@@ -55,7 +55,7 @@ const EFFORT_OPTIONS: {
 ];
 
 /**
- * EffortSelector - Dropdown for selecting Claude reasoning effort level
+ * EffortSelector - Dropdown for selecting reasoning effort level
  */
 export const EffortSelector: React.FC<EffortSelectorProps> = ({
   value = 'high',

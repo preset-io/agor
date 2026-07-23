@@ -91,20 +91,17 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       >
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
       </Form.Item>
-
-      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
-        <Form.Item
-          name="effort"
-          label="Reasoning Effort"
-          help={
-            showHelpText
-              ? 'Control how much reasoning Claude applies (low = fast, high = thorough, max = Opus only)'
-              : undefined
-          }
-        >
-          <EffortSelector />
-        </Form.Item>
-      )}
+      <Form.Item
+        name="effort"
+        label="Reasoning Effort"
+        help={
+          showHelpText
+            ? 'Control reasoning depth (low = fast, high = thorough, max = model-dependent)'
+            : undefined
+        }
+      >
+        <EffortSelector />
+      </Form.Item>
 
       {showCodexFields && (
         <Form.Item

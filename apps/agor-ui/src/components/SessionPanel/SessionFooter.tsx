@@ -277,41 +277,39 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       </div>
 
-      {/* Effort — only for claude-code */}
-      {session.agentic_tool === 'claude-code' && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <PercentageOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+      {/* Effort */}
+      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+        <PercentageOutlined
+          style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+        />
+        <Typography.Text
+          style={{
+            fontSize: 12,
+            flex: 1,
+            color: token.colorTextSecondary,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}
+        >
+          Effort
+        </Typography.Text>
+        <div
+          style={{
+            pointerEvents: managedByPreset ? 'none' : undefined,
+            opacity: managedByPreset ? 0.65 : undefined,
+          }}
+        >
+          <EffortSelector
+            value={effortLevel}
+            onChange={onEffortChange}
+            size="small"
+            compact
+            plain
           />
-          <Typography.Text
-            style={{
-              fontSize: 12,
-              flex: 1,
-              color: token.colorTextSecondary,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Effort
-          </Typography.Text>
-          <div
-            style={{
-              pointerEvents: managedByPreset ? 'none' : undefined,
-              opacity: managedByPreset ? 0.65 : undefined,
-            }}
-          >
-            <EffortSelector
-              value={effortLevel}
-              onChange={onEffortChange}
-              size="small"
-              compact
-              plain
-            />
-          </div>
         </div>
-      )}
+      </div>
 
       {/* Permissions */}
       <div style={{ ...overflowRowStyle, cursor: 'default' }}>

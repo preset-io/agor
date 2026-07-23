@@ -1277,15 +1277,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleEffortChange = (newEffort: EffortLevel) => {
     setEffortLevel(newEffort);
 
-    if (session && onUpdateSession) {
-      if (session.model_config) {
-        onUpdateSession(session.session_id, {
-          model_config: {
-            ...session.model_config,
-            effort: newEffort,
-          },
-        });
-      }
+    const currentModelConfig = session?.model_config;
+    if (onUpdateSession && currentModelConfig?.mode && currentModelConfig.model) {
+      onUpdateSession(session.session_id, {
+        model_config: {
+          ...currentModelConfig,
+          mode: currentModelConfig.mode,
+          model: currentModelConfig.model,
+          effort: newEffort,
+          updated_at: new Date().toISOString(),
+        },
+      });
     }
   };
 
