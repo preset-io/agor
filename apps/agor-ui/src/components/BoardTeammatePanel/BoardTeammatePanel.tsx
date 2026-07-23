@@ -1,4 +1,11 @@
-import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  PaginatedResult,
+  Repo,
+  SpawnConfig,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -187,13 +194,20 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       return;
     }
     let cancelled = false;
+    // Cap to a single bounded page on purpose: `findAll` would auto-paginate
+    // over every non-archived branch in the instance, and there is no
+    // server-side teammate filter, so we fetch one page and filter client-side.
     client
       .service('branches')
-      .findAll({ query: { archived: false, $limit: 200 } })
-      .then((branches: Branch[]) => {
-        if (!cancelled) setAllTeammateBranches(branches.filter((b) => isTeammate(b)));
+      .find({ query: { archived: false, $limit: 200 } })
+      .then((res: PaginatedResult<Branch> | Branch[]) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res) ? res : res.data;
+        setAllTeammateBranches(rows.filter((b) => isTeammate(b)));
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('Failed to load teammate branches', err);
+      });
     return () => {
       cancelled = true;
     };
@@ -202,7 +216,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const teammateOptions = useMemo(() => {
     if (!needsTeammateList) return [];
 
-    return allTeammateBranches
+    return [...allTeammateBranches]
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
