@@ -1,10 +1,11 @@
 import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
   Button,
+  Divider,
   Empty,
   Select,
   Skeleton,
@@ -74,6 +75,7 @@ interface BoardTeammatePanelProps {
   onCollapse?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
+  onCreateTeammate?: () => void;
   client: AgorClient | null;
 }
 
@@ -102,6 +104,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   onCollapse,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
+  onCreateTeammate,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -176,11 +179,30 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  const teammateOptions = useMemo(() => {
-    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
+  const [allTeammateBranches, setAllTeammateBranches] = useState<Branch[]>([]);
+  const needsTeammateList = !primaryTeammateBranch && !primaryTeammateInaccessible;
+  useEffect(() => {
+    if (!needsTeammateList || !client) {
+      setAllTeammateBranches([]);
+      return;
+    }
+    let cancelled = false;
+    client
+      .service('branches')
+      .findAll({ query: { archived: false, $limit: 200 } })
+      .then((branches: Branch[]) => {
+        if (!cancelled) setAllTeammateBranches(branches.filter((b) => isTeammate(b)));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [needsTeammateList, client]);
 
-    return Array.from(branchById.values())
-      .filter((branch) => isTeammate(branch) && !branch.archived)
+  const teammateOptions = useMemo(() => {
+    if (!needsTeammateList) return [];
+
+    return allTeammateBranches
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -198,7 +220,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
+  }, [allTeammateBranches, needsTeammateList, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -215,7 +237,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const handleAssignTeammate = async () => {
     if (!board || !client || !selectedTeammateId) return;
 
-    const teammate = branchById.get(selectedTeammateId);
+    const teammate =
+      branchById.get(selectedTeammateId) ??
+      allTeammateBranches.find((b) => b.branch_id === selectedTeammateId);
     if (!teammate) return;
 
     setAssigningTeammate(true);
@@ -385,6 +409,14 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           style={{ padding: '24px 0 16px' }}
         />
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          {onCreateTeammate && (
+            <>
+              <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate} block>
+                Create teammate
+              </Button>
+              <Divider style={{ margin: 0 }}>or</Divider>
+            </>
+          )}
           <Typography.Text strong>Assign an existing teammate</Typography.Text>
           <Select
             showSearch

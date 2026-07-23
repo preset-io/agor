@@ -96,4 +96,46 @@ describe('createTeammateBranch', () => {
     });
     expect(onUpdateBranch).not.toHaveBeenCalled();
   });
+
+  it('reuses the provided boardId instead of creating a new board', async () => {
+    const repo = makeRepo();
+    const branch = makeBranch({ board_id: 'existing-board' });
+    const onCreateBranch = vi.fn().mockResolvedValue(branch);
+    const onUpdateBranch = vi.fn();
+    const boardsService = {
+      create: vi.fn(),
+      ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
+      setPrimaryTeammate: vi.fn().mockResolvedValue({}),
+    };
+    const client = {
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    };
+
+    await createTeammateBranch(
+      {
+        displayName: 'Board Buddy',
+        repoId: repo.repo_id,
+        boardId: 'existing-board',
+      },
+      {
+        client: client as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch,
+      }
+    );
+
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({ boardId: 'existing-board' })
+    );
+    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
+      boardId: 'existing-board',
+      branchId: branch.branch_id,
+    });
+  });
 });

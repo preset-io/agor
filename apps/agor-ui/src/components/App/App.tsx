@@ -999,6 +999,7 @@ export const App: React.FC<AppProps> = ({
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
+        boardId: currentBoardId || undefined,
       },
       { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
     );
@@ -1350,6 +1351,10 @@ export const App: React.FC<AppProps> = ({
     onSendComment?.(currentBoardId || '', content)
   );
   const handleTeammateCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+  const handlePanelCreateTeammate = useStableCallback(() => {
+    setCreateDialogDefaultTab('teammate');
+    setCreateDialogOpen(true);
+  });
 
   // Identity-stable branch actions for EventStreamPanel (previously an inline
   // object literal whose identity flipped on every shell render).
@@ -1509,6 +1514,7 @@ export const App: React.FC<AppProps> = ({
                   onCollapse={handleTeammateCollapse}
                   deferSessionDetails={homeExitPanelDetailsDeferred}
                   onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
+                  onCreateTeammate={handlePanelCreateTeammate}
                 />
               )}
             </Panel>
