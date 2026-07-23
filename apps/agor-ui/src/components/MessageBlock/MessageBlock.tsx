@@ -728,6 +728,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 }
                 variant={isUser || isCallback ? 'filled' : 'outlined'}
                 styles={{
+                  // Bubble.body defaults to min-width:auto. A wide intrinsic
+                  // child (notably Streamdown's max-content code <pre>) can
+                  // therefore make an end-aligned user bubble wider than the
+                  // conversation viewport and push its left edge off-screen.
+                  // Bound the whole row (including avatar) and allow the body
+                  // to shrink; the code body then owns horizontal scrolling.
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
                   content: {
                     backgroundColor: isCallback
                       ? token.colorWarningBg
@@ -856,15 +864,17 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   </CopyableContent>
                 }
                 variant={isCallback ? 'filled' : 'outlined'}
-                styles={
-                  isCallback
+                styles={{
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
+                  ...(isCallback
                     ? {
                         content: {
                           backgroundColor: token.colorWarningBg,
                         },
                       }
-                    : undefined
-                }
+                    : {}),
+                }}
               />
             </div>
           );
