@@ -1,769 +1,1575 @@
-/**
- * OpenCodeTool Tests
- *
- * Tests for:
- * - Directory-scoped client caching
- * - MCP server injection (Agor + user-defined)
- * - Session context management (branch path, MCP token)
- * - Capabilities reflecting MCP support
- */
-
+import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
+import { inspect } from 'node:util';
+import { PermissionScope } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { isOpenCodeSessionEvent, OpenCodeTool } from './opencode-tool.js';
+import { PermissionService } from '../../permissions/permission-service.js';
+import type { StreamingCallbacks } from '../base/index.js';
+import { OpenCodeTool, resolvePackagedOpenCodeBinary } from './opencode-tool.js';
 
-// Track client creation calls
-let clientCreateCount = 0;
-const createdClients: Array<{ baseUrl: string; directory?: string }> = [];
-
-// Mock MCP add calls per client
-const mockMcpAddCalls: Array<{ name: string; config: unknown }> = [];
-const mockSessionAbort = vi.fn();
-
-// Create a mock client factory
-function createMockClient(opts: { baseUrl: string; directory?: string }) {
-  clientCreateCount++;
-  createdClients.push(opts);
-
-  return {
-    session: {
-      list: vi.fn().mockResolvedValue({ data: [] }),
-      create: vi.fn().mockResolvedValue({ data: { id: 'mock-session-id' } }),
-      get: vi.fn().mockResolvedValue({ data: {} }),
-      prompt: vi.fn().mockResolvedValue({ data: { parts: [], info: {} } }),
-      messages: vi.fn().mockResolvedValue({ data: [] }),
-      abort: mockSessionAbort,
-    },
-    event: {
-      subscribe: vi.fn().mockResolvedValue({ stream: [] }),
-    },
-    mcp: {
-      add: vi
-        .fn()
-        .mockImplementation(async (params: { body: { name: string; config: unknown } }) => {
-          mockMcpAddCalls.push({ name: params.body.name, config: params.body.config });
-          return { data: {} };
-        }),
-    },
-  };
-}
-
-// Mock @opencode-ai/sdk
-vi.mock('@opencode-ai/sdk', () => ({
-  createOpencodeClient: (config: { baseUrl: string; directory?: string }) =>
-    createMockClient(config),
-}));
-
-// Mock getDaemonUrl
 vi.mock('../../config.js', () => ({
-  getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
+  getDaemonUrl: vi.fn().mockResolvedValue('http://127.0.0.1:3030'),
 }));
 
-// Mock MCP scoping
 vi.mock('../base/mcp-scoping.js', () => ({
   getMcpServersForSession: vi.fn().mockResolvedValue([]),
 }));
 
-// Mock repositories
-const mockMessagesService = {
-  create: vi.fn().mockResolvedValue({ message_id: 'mock-msg-id' }),
-} as any;
+type SpawnCall = {
+  executable: string;
+  args: readonly string[];
+  options: {
+    cwd?: string;
+    detached?: boolean;
+    env?: NodeJS.ProcessEnv;
+    stdio?: readonly string[];
+  };
+};
 
-const mockSessionMCPRepo = {
-  listServers: vi.fn().mockResolvedValue([]),
-} as any;
+class FakeChild extends EventEmitter {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly kills: NodeJS.Signals[] = [];
+  exitCode: number | null = null;
 
-const mockMCPServerRepo = {
-  findAll: vi.fn().mockResolvedValue([]),
-} as any;
+  constructor(private readonly exitOn: NodeJS.Signals | undefined = 'SIGTERM') {
+    super();
+  }
 
-describe('OpenCodeTool', () => {
-  beforeEach(() => {
-    clientCreateCount = 0;
-    createdClients.length = 0;
-    mockMcpAddCalls.length = 0;
-    vi.clearAllMocks();
-    mockSessionAbort.mockResolvedValue({ data: true });
+  ready(url: string): void {
+    queueMicrotask(() => this.stdout.write(`opencode server listening on ${url}\n`));
+  }
+
+  exit(code = 1): void {
+    this.exitCode = code;
+    this.emit('exit', code, null);
+  }
+
+  kill(signal: NodeJS.Signals): boolean {
+    this.kills.push(signal);
+    if (signal === this.exitOn) queueMicrotask(() => this.exit(0));
+    return true;
+  }
+}
+
+function createClient(overrides?: {
+  create?: ReturnType<typeof vi.fn>;
+  get?: ReturnType<typeof vi.fn>;
+  prompt?: ReturnType<typeof vi.fn>;
+  messages?: ReturnType<typeof vi.fn>;
+  subscribe?: ReturnType<typeof vi.fn>;
+  abort?: ReturnType<typeof vi.fn>;
+  sessionId?: string;
+}) {
+  const sessionId = overrides?.sessionId ?? 'oc-new';
+  const messages =
+    overrides?.messages ??
+    vi
+      .fn()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValue({
+        data: [
+          {
+            info: {
+              id: 'assistant-1',
+              sessionID: sessionId,
+              role: 'assistant',
+              time: { created: 1 },
+            },
+            parts: [
+              {
+                id: 'part-1',
+                sessionID: sessionId,
+                messageID: 'assistant-1',
+                type: 'text',
+                text: 'done',
+              },
+            ],
+          },
+        ],
+      });
+  return {
+    session: {
+      create: overrides?.create ?? vi.fn().mockResolvedValue({ data: { id: 'oc-new' } }),
+      get: overrides?.get ?? vi.fn().mockResolvedValue({ data: { id: 'oc-existing' } }),
+      prompt:
+        overrides?.prompt ??
+        vi.fn().mockResolvedValue({
+          data: {
+            info: { id: 'assistant-1' },
+            parts: [{ id: 'part-1', type: 'text', text: 'done' }],
+          },
+        }),
+      messages,
+      abort: overrides?.abort ?? vi.fn().mockResolvedValue({ data: true }),
+    },
+    event: {
+      subscribe:
+        overrides?.subscribe ??
+        vi.fn().mockResolvedValue({
+          stream: [
+            {
+              type: 'message.updated',
+              properties: {
+                info: { id: 'assistant-1', sessionID: sessionId, role: 'assistant' },
+              },
+            },
+            {
+              type: 'session.idle',
+              properties: { sessionID: sessionId },
+            },
+          ],
+        }),
+    },
+    postSessionIdPermissionsPermissionId: vi.fn().mockResolvedValue({ data: true }),
+  };
+}
+
+function makeTool(options?: {
+  client?: ReturnType<typeof createClient>;
+  child?: FakeChild;
+  spawnCalls?: SpawnCall[];
+  spawn?: (executable: string, args: readonly string[], options: SpawnCall['options']) => FakeChild;
+  resolveInvocationConfig?: ReturnType<typeof vi.fn>;
+  useDefaultInvocationConfig?: boolean;
+  sessionMCPRepo?: object;
+  mcpServerRepo?: object;
+  readinessTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  permissionService?: object;
+  messagesRepo?: object;
+  messagesService?: object;
+  tasksService?: object;
+  sessionsService?: object;
+  randomBytes?: ReturnType<typeof vi.fn>;
+}) {
+  const client = options?.client ?? createClient();
+  const child = options?.child ?? new FakeChild();
+  const spawnCalls = options?.spawnCalls ?? [];
+  const createClientSpy = vi.fn().mockReturnValue(client);
+  const sequence = makeToolSequence++;
+  const uniqueSecret = Buffer.from(`unique-secret-material-${sequence}`);
+
+  const tool = new OpenCodeTool({
+    sessionMCPRepo: options?.sessionMCPRepo as never,
+    mcpServerRepo: options?.mcpServerRepo as never,
+    resolveBinary: vi.fn().mockResolvedValue('/package/opencode-ai/bin/.opencode'),
+    spawn: ((executable: string, args: readonly string[], spawnOptions: SpawnCall['options']) => {
+      if (options?.spawn) return options.spawn(executable, args, spawnOptions);
+      spawnCalls.push({ executable, args, options: spawnOptions });
+      child.ready(`http://127.0.0.1:${54_000 + sequence}`);
+      return child;
+    }) as never,
+    createClient: createClientSpy as never,
+    resolveInvocationConfig: options?.useDefaultInvocationConfig
+      ? undefined
+      : (options?.resolveInvocationConfig ?? vi.fn().mockResolvedValue({ mcp: {} })),
+    randomBytes: (options?.randomBytes ?? vi.fn().mockReturnValue(uniqueSecret)) as never,
+    readinessTimeoutMs: options?.readinessTimeoutMs ?? 50,
+    shutdownTimeoutMs: options?.shutdownTimeoutMs ?? 10,
+    permissionService: options?.permissionService as never,
+    messagesRepo: options?.messagesRepo as never,
+    messagesService: options?.messagesService as never,
+    tasksService: options?.tasksService as never,
+    sessionsService: options?.sessionsService as never,
   });
 
-  describe('Event session ownership', () => {
-    it.each([
-      [{ type: 'session.status', properties: { sessionID: 'session-1' } }, 'session-1'],
-      [{ type: 'message.updated', properties: { info: { sessionID: 'session-2' } } }, 'session-2'],
-      [
-        { type: 'message.part.updated', properties: { part: { sessionID: 'session-3' } } },
-        'session-3',
+  return { tool, child, client, spawnCalls, createClientSpy };
+}
+
+let makeToolSequence = 1;
+
+function input(overrides: Record<string, unknown> = {}) {
+  return {
+    agorSessionId: '00000000-0000-7000-8000-000000000001',
+    taskId: '00000000-0000-7000-8000-000000000002',
+    prompt: 'Do the work',
+    agorAssistantMessageId: '00000000-0000-7000-8000-000000000004',
+    title: 'Managed turn',
+    directory: '/worktree',
+    mcpToken: 'mcp-secret',
+    signal: new AbortController().signal,
+    persistOpenCodeSessionId: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function makePermissionTurn(options: {
+  decision?: Record<string, unknown>;
+  permissionMode?: string;
+  requests?: Array<Record<string, unknown>>;
+  withDependencies?: boolean;
+}) {
+  const permissionService = {
+    emitRequest: vi.fn().mockResolvedValue(undefined),
+    waitForDecision: vi.fn().mockResolvedValue(
+      options.decision ?? {
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        allow: true,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'user-1',
+      }
+    ),
+    cancelPendingRequests: vi.fn(),
+  };
+  const messages: unknown[] = [];
+  const messagesRepo = { findBySessionId: vi.fn(async () => messages) };
+  const messagesService = {
+    create: vi.fn(async (message) => {
+      messages.push(message);
+      return message;
+    }),
+    patch: vi.fn().mockResolvedValue({}),
+  };
+  const tasksService = { patch: vi.fn().mockResolvedValue({}) };
+  const sessionsService = { patch: vi.fn().mockResolvedValue({}) };
+  const requests = options.requests ?? [
+    {
+      type: 'permission.asked',
+      properties: {
+        id: 'oc-permission',
+        sessionID: 'oc-new',
+        permission: 'bash',
+        patterns: ['git status'],
+        metadata: { command: 'git status' },
+      },
+    },
+  ];
+  const client = createClient({
+    subscribe: vi.fn().mockResolvedValue({
+      stream: [
+        ...requests,
+        {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+          },
+        },
+        { type: 'session.idle', properties: { sessionID: 'oc-new' } },
       ],
-      [{ type: 'session.updated', properties: { info: { id: 'session-4' } } }, 'session-4'],
-      [{ type: 'server.connected', properties: {} }, undefined],
-    ])('accepts only the owning session from %j', (event, expected) => {
-      expect(isOpenCodeSessionEvent(event as never, expected ?? 'session-1')).toBe(
-        expected !== undefined
-      );
-      if (expected) expect(isOpenCodeSessionEvent(event as never, 'other-session')).toBe(false);
+    }),
+  });
+  const withDependencies = options.withDependencies ?? true;
+  const made = makeTool({
+    client,
+    ...(withDependencies
+      ? {
+          permissionService,
+          messagesRepo,
+          messagesService,
+          tasksService,
+          sessionsService,
+          sessionMCPRepo: { listServers: vi.fn().mockResolvedValue([]) },
+          mcpServerRepo: {},
+        }
+      : {}),
+  });
+  return {
+    ...made,
+    client,
+    permissionService,
+    messagesService,
+    tasksService,
+    sessionsService,
+    turnInput: input({ permissionMode: options.permissionMode ?? 'default' }),
+  };
+}
+
+describe('OpenCodeTool managed turn', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('pins the SDK and packaged CLI as the exact 1.14.33 pair', async () => {
+    const executorPackage = JSON.parse(
+      await readFile(new URL('../../../package.json', import.meta.url), 'utf8')
+    );
+    const corePackage = JSON.parse(
+      await readFile(new URL('../../../../core/package.json', import.meta.url), 'utf8')
+    );
+    const publishedPackage = JSON.parse(
+      await readFile(new URL('../../../../agor-live/package.json', import.meta.url), 'utf8')
+    );
+    const publishedLock = JSON.parse(
+      await readFile(new URL('../../../../agor-live/package-lock.json', import.meta.url), 'utf8')
+    );
+
+    expect(executorPackage.dependencies).toMatchObject({
+      '@opencode-ai/sdk': '1.14.33',
+      'opencode-ai': '1.14.33',
     });
+    expect(corePackage.dependencies['@opencode-ai/sdk']).toBe('1.14.33');
+    expect(publishedPackage.dependencies).toMatchObject({
+      '@opencode-ai/sdk': '1.14.33',
+      'opencode-ai': '1.14.33',
+    });
+    expect(publishedLock.packages['node_modules/@opencode-ai/sdk'].version).toBe('1.14.33');
+    expect(publishedLock.packages['node_modules/opencode-ai'].version).toBe('1.14.33');
   });
 
-  describe('Constructor', () => {
-    it('should accept MCP repository dependencies', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
-
-      expect(tool).toBeDefined();
-      expect(tool.toolType).toBe('opencode');
-      expect(tool.name).toBe('OpenCode');
+  it('streams real deltas around prompt settlement but returns transcript truth', async () => {
+    let resolvePrompt!: (value: unknown) => void;
+    let promptResolved = false;
+    const prompt = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolvePrompt = resolve;
+        })
+    );
+    const observed: string[] = [];
+    const subscribe = vi.fn().mockResolvedValue({
+      stream: (async function* () {
+        yield {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+          },
+        };
+        yield {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'part-1',
+              sessionID: 'oc-new',
+              messageID: 'assistant-1',
+              type: 'text',
+              text: 'first second',
+            },
+          },
+        };
+        yield {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: 'oc-new',
+            messageID: 'assistant-1',
+            partID: 'part-1',
+            field: 'text',
+            delta: 'first ',
+          },
+        };
+        yield {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: 'oc-new',
+            messageID: 'assistant-1',
+            partID: 'part-1',
+            field: 'text',
+            delta: 'second',
+          },
+        };
+        promptResolved = true;
+        resolvePrompt({ data: { info: {}, parts: [{ type: 'text', text: 'truncated' }] } });
+        await new Promise((resolve) => setImmediate(resolve));
+        yield {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: 'oc-new',
+            messageID: 'assistant-1',
+            partID: 'part-1',
+            field: 'text',
+            delta: ' final',
+          },
+        };
+        yield { type: 'session.idle', properties: { sessionID: 'oc-new' } };
+      })(),
     });
-
-    it('should work without optional MCP repos (backward compat)', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      expect(tool).toBeDefined();
-    });
-  });
-
-  describe('Stopping', () => {
-    it('aborts the mapped provider session in its branch directory', async () => {
-      const tool = new OpenCodeTool({ enabled: true, serverUrl: 'http://localhost:4096' });
-      tool.setSessionContext('agor-session', 'opencode-session', undefined, undefined, '/branch');
-
-      await expect(tool.stopTask('agor-session')).resolves.toEqual({ success: true });
-      expect(mockSessionAbort).toHaveBeenCalledWith({
-        path: { id: 'opencode-session' },
-        query: { directory: '/branch' },
+    const messages = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValue({
+        data: [
+          {
+            info: {
+              id: 'assistant-1',
+              sessionID: 'oc-new',
+              role: 'assistant',
+              time: { created: 1 },
+            },
+            parts: [
+              {
+                id: 'part-1',
+                sessionID: 'oc-new',
+                messageID: 'assistant-1',
+                type: 'text',
+                text: 'authoritative transcript',
+              },
+            ],
+          },
+        ],
       });
-    });
+    const client = createClient({ prompt, subscribe, messages });
+    const { tool } = makeTool({ client });
+    const prePromptResolutionChunks: string[] = [];
+    const postPromptResolutionChunks: string[] = [];
+    const callbacks = {
+      onStreamStart: vi.fn(async (id) => observed.push(`start:${id}`)),
+      onStreamChunk: vi.fn(async (_id, chunk) => {
+        observed.push(chunk);
+        (promptResolved ? postPromptResolutionChunks : prePromptResolutionChunks).push(chunk);
+      }),
+      onStreamEnd: vi.fn(async (id) => observed.push(`end:${id}`)),
+      onStreamError: vi.fn(),
+    } satisfies StreamingCallbacks;
 
-    it('reports provider abort failures without claiming quiescence', async () => {
-      mockSessionAbort.mockRejectedValueOnce(new Error('server unavailable'));
-      const tool = new OpenCodeTool({ enabled: true, serverUrl: 'http://localhost:4096' });
-      tool.setSessionContext('agor-session', 'opencode-session');
+    const result = await tool.runTurn(input(), callbacks);
 
-      await expect(tool.stopTask('agor-session')).resolves.toEqual({
-        success: false,
-        reason: 'server unavailable',
-      });
+    expect(observed).toEqual([
+      'start:00000000-0000-7000-8000-000000000004',
+      'first ',
+      'second',
+      ' final',
+      'end:00000000-0000-7000-8000-000000000004',
+    ]);
+    expect(result.finalMessage).toMatchObject({
+      content: 'authoritative transcript',
+      contentBlocks: [{ type: 'text', text: 'authoritative transcript' }],
     });
+    expect(prePromptResolutionChunks).toEqual(['first ', 'second']);
+    expect(postPromptResolutionChunks).toEqual([' final']);
+    expect(subscribe.mock.invocationCallOrder[0]).toBeLessThan(prompt.mock.invocationCallOrder[0]);
+    expect(messages).toHaveBeenCalledTimes(2);
   });
 
-  describe('Capabilities', () => {
-    it('should report supportsChildSpawn as true (via Agor MCP)', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const caps = tool.getCapabilities();
-      expect(caps.supportsChildSpawn).toBe(true);
+  it('fails when the event stream closes before terminal evidence', async () => {
+    const client = createClient({
+      subscribe: vi.fn().mockResolvedValue({
+        stream: [
+          {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          },
+        ],
+      }),
     });
+    const permissionService = {
+      emitRequest: vi.fn(),
+      waitForDecision: vi.fn(),
+      cancelPendingRequests: vi.fn(),
+    };
+    const { tool, child } = makeTool({ client, permissionService });
 
-    it('should report all expected capabilities', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const caps = tool.getCapabilities();
-      expect(caps.supportsSessionCreate).toBe(true);
-      expect(caps.supportsLiveExecution).toBe(true);
-      expect(caps.supportsStreaming).toBe(true);
-      expect(caps.supportsSessionImport).toBe(false);
-      expect(caps.supportsSessionFork).toBe(false);
-      expect(caps.supportsGitState).toBe(false);
-    });
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'event stream closed before the active turn became idle'
+    );
+    expect(client.session.abort).toHaveBeenCalledOnce();
+    expect(permissionService.cancelPendingRequests).toHaveBeenCalledOnce();
+    expect(child.kills).toEqual(['SIGTERM']);
   });
 
-  describe('Session Context', () => {
-    it('should store and retrieve session context with branch path and MCP token', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      tool.setSessionContext(
-        'agor-session-1',
-        'opencode-session-1',
-        'claude-sonnet-4-6',
-        'anthropic',
-        '/path/to/branch',
-        'mcp-token-abc'
-      );
-
-      // Access private method via type assertion
-      const ctx = (tool as any).getSessionContext('agor-session-1');
-      expect(ctx).toBeDefined();
-      expect(ctx.opencodeSessionId).toBe('opencode-session-1');
-      expect(ctx.model).toBe('claude-sonnet-4-6');
-      expect(ctx.provider).toBe('anthropic');
-      expect(ctx.branchPath).toBe('/path/to/branch');
-      expect(ctx.mcpToken).toBe('mcp-token-abc');
+  it('continues local cleanup when the provider abort request fails', async () => {
+    const client = createClient({
+      abort: vi.fn().mockRejectedValue(new Error('provider unavailable')),
+      subscribe: vi.fn().mockResolvedValue({ stream: [] }),
     });
+    const { tool, child } = makeTool({ client });
 
-    it('should handle missing optional fields', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      tool.setSessionContext('agor-session-2', 'opencode-session-2');
-
-      const ctx = (tool as any).getSessionContext('agor-session-2');
-      expect(ctx).toBeDefined();
-      expect(ctx.opencodeSessionId).toBe('opencode-session-2');
-      expect(ctx.model).toBeUndefined();
-      expect(ctx.provider).toBeUndefined();
-      expect(ctx.branchPath).toBeUndefined();
-      expect(ctx.mcpToken).toBeUndefined();
-    });
-
-    it('should return undefined for unknown session', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const ctx = (tool as any).getSessionContext('nonexistent');
-      expect(ctx).toBeUndefined();
-    });
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'event stream closed before the active turn became idle'
+    );
+    expect(client.session.abort).toHaveBeenCalledOnce();
+    expect(child.kills).toEqual(['SIGTERM']);
   });
 
-  describe('Directory-Scoped Client Caching', () => {
-    it('should create default client when no directory provided', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const client1 = (tool as any).getClientForDirectory(undefined);
-      expect(clientCreateCount).toBe(1);
-      expect(createdClients[0].baseUrl).toBe('http://localhost:4096');
-      expect(createdClients[0].directory).toBeUndefined();
-
-      // Same call should reuse cached client
-      const client2 = (tool as any).getClientForDirectory(undefined);
-      expect(clientCreateCount).toBe(1); // Still 1 - reused
-      expect(client1).toBe(client2);
+  it('routes an interactive one-time approval through Agor and replies once', async () => {
+    const permissionService = {
+      emitRequest: vi.fn().mockResolvedValue(undefined),
+      waitForDecision: vi.fn().mockResolvedValue({
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        allow: true,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'user-1',
+      }),
+      cancelPendingRequests: vi.fn(),
+    };
+    const messagesRepo = { findBySessionId: vi.fn().mockResolvedValue([]) };
+    const messagesService = {
+      create: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+    };
+    const tasksService = { patch: vi.fn().mockResolvedValue({}) };
+    const sessionsService = { patch: vi.fn().mockResolvedValue({}) };
+    const client = createClient({
+      subscribe: vi.fn().mockResolvedValue({
+        stream: [
+          {
+            type: 'permission.asked',
+            properties: {
+              id: 'oc-permission',
+              sessionID: 'oc-new',
+              permission: 'bash',
+              patterns: ['git status'],
+              metadata: { command: 'git status' },
+            },
+          },
+          {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'oc-new' } },
+        ],
+      }),
     });
-
-    it('should create directory-scoped client with directory option', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      (tool as any).getClientForDirectory('/path/to/branch');
-      expect(clientCreateCount).toBe(1);
-      expect(createdClients[0].directory).toBe('/path/to/branch');
+    const { tool } = makeTool({
+      client,
+      permissionService,
+      messagesRepo,
+      messagesService,
+      tasksService,
+      sessionsService,
+      sessionMCPRepo: { listServers: vi.fn().mockResolvedValue([]) },
+      mcpServerRepo: {},
     });
+    const abortController = new AbortController();
 
-    it('should cache directory-scoped clients by path', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
+    await tool.runTurn(input({ signal: abortController.signal, permissionMode: 'default' }));
 
-      const client1 = (tool as any).getClientForDirectory('/path/a');
-      const client2 = (tool as any).getClientForDirectory('/path/a');
-
-      expect(clientCreateCount).toBe(1); // Reused
-      expect(client1).toBe(client2);
+    expect(permissionService.waitForDecision).toHaveBeenCalledWith(
+      expect.any(String),
+      '00000000-0000-7000-8000-000000000002',
+      '00000000-0000-7000-8000-000000000001',
+      abortController.signal
+    );
+    expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith({
+      path: { id: 'oc-new', permissionID: 'oc-permission' },
+      query: { directory: '/worktree' },
+      body: { response: 'once' },
     });
-
-    it('should create separate clients for different directories', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      (tool as any).getClientForDirectory('/path/a');
-      (tool as any).getClientForDirectory('/path/b');
-
-      expect(clientCreateCount).toBe(2);
-      expect(createdClients[0].directory).toBe('/path/a');
-      expect(createdClients[1].directory).toBe('/path/b');
-    });
-
-    it('should keep default and directory clients separate', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const defaultClient = (tool as any).getClientForDirectory(undefined);
-      const dirClient = (tool as any).getClientForDirectory('/path/a');
-
-      expect(clientCreateCount).toBe(2);
-      expect(defaultClient).not.toBe(dirClient);
-    });
-
-    it('getClient() should delegate to getClientForDirectory(undefined)', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const fromGetClient = (tool as any).getClient();
-      const fromGetClientForDir = (tool as any).getClientForDirectory(undefined);
-
-      expect(fromGetClient).toBe(fromGetClientForDir);
-      expect(clientCreateCount).toBe(1); // Same client reused
-    });
+    expect(messagesService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'permission_request' })
+    );
+    expect(messagesService.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        content: expect.objectContaining({ status: 'approved' }),
+      })
+    );
   });
 
-  describe('MCP Server Injection', () => {
-    it('should inject Agor MCP server when mcpToken is provided', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
-
-      const client = (tool as any).getClientForDirectory(undefined);
-
-      await (tool as any).ensureMcpServers('session-1', client, 'test-token');
-
-      // Should have called client.mcp.add with Agor MCP config
-      // MCP name format: agor_${shortId(sessionId)} — shortId strips hyphens,
-      // so 'session-1' becomes 'session1' (under the canonical-length cap).
-      expect(mockMcpAddCalls.length).toBeGreaterThanOrEqual(1);
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_session1');
-      expect(agorCall).toBeDefined();
-      expect(agorCall!.config).toEqual({
-        type: 'remote',
-        url: 'http://localhost:3030/mcp',
-        enabled: true,
-        headers: { Authorization: 'Bearer test-token' },
-      });
+  it('maps an automatic allow-all mode to once without prompting', async () => {
+    const permissionService = {
+      emitRequest: vi.fn(),
+      waitForDecision: vi.fn(),
+      cancelPendingRequests: vi.fn(),
+    };
+    const client = createClient({
+      subscribe: vi.fn().mockResolvedValue({
+        stream: [
+          {
+            type: 'permission.updated',
+            properties: {
+              id: 'oc-permission',
+              sessionID: 'oc-new',
+              type: 'bash',
+              pattern: 'git status',
+              metadata: {},
+            },
+          },
+          {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'oc-new' } },
+        ],
+      }),
+    });
+    const { tool } = makeTool({
+      client,
+      permissionService,
+      messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) },
+      messagesService: { create: vi.fn(), patch: vi.fn() },
+      tasksService: { patch: vi.fn() },
+      sessionsService: { patch: vi.fn() },
+      sessionMCPRepo: { listServers: vi.fn().mockResolvedValue([]) },
+      mcpServerRepo: {},
     });
 
-    it('should NOT inject Agor MCP server when mcpToken is undefined', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await tool.runTurn(input({ permissionMode: 'bypassPermissions' }));
 
-      const client = (tool as any).getClientForDirectory(undefined);
+    expect(permissionService.waitForDecision).not.toHaveBeenCalled();
+    expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'once' } })
+    );
+  });
 
-      await (tool as any).ensureMcpServers('session-1', client, undefined);
-
-      // Should NOT have injected Agor MCP
-      const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
-      expect(agorCall).toBeUndefined();
+  it('replies reject and fails the turn when Agor denies the permission', async () => {
+    const scenario = makePermissionTurn({
+      decision: {
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        allow: false,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'user-1',
+      },
     });
 
-    it('should skip re-injection of user-defined MCP servers when config hash unchanged', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(
+      'OpenCode permission was rejected'
+    );
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'reject' } })
+    );
+    expect(scenario.messagesService.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        content: expect.objectContaining({ status: 'denied' }),
+      })
+    );
+    expect(scenario.tasksService.patch).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: 'failed' })
+    );
+    expect(scenario.sessionsService.patch).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: 'idle' })
+    );
+  });
 
-      const client = (tool as any).getClientForDirectory(undefined);
-
-      // First call - injects Agor MCP
-      await (tool as any).ensureMcpServers('session-1', client, 'token-1');
-      const callsAfterFirst = mockMcpAddCalls.length;
-
-      // Second call with same config - Agor MCP is re-injected each time (by design),
-      // but user-defined MCP servers should be skipped (hash-based caching)
-      await (tool as any).ensureMcpServers('session-1', client, 'token-1');
-      // Only 1 new call for re-injected Agor MCP, no user-defined servers re-added
-      expect(mockMcpAddCalls.length).toBe(callsAfterFirst + 1);
+  it('maps an applicable remembered approval with a stable pattern to always', async () => {
+    const scenario = makePermissionTurn({
+      decision: {
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        allow: true,
+        remember: true,
+        scope: PermissionScope.PROJECT,
+        decidedBy: 'user-1',
+      },
     });
 
-    it('should re-inject when config hash changes', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await scenario.tool.runTurn(scenario.turnInput);
 
-      const client = (tool as any).getClientForDirectory(undefined);
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'always' } })
+    );
+  });
 
-      // First call
-      await (tool as any).ensureMcpServers('session-1', client, 'token-1');
-      const callsAfterFirst = mockMcpAddCalls.length;
-
-      // Second call with different token - should re-inject
-      await (tool as any).ensureMcpServers('session-1', client, 'token-2');
-      expect(mockMcpAddCalls.length).toBeGreaterThan(callsAfterFirst);
-    });
-
-    it('should inject user-defined MCP servers via getMcpServersForSession', async () => {
-      // Import the mock to control its return value
-      const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
-      const mockGetMcp = vi.mocked(getMcpServersForSession);
-
-      // Set up mock to return user-defined servers
-      mockGetMcp.mockResolvedValueOnce([
+  it('does not persist a remembered approval without a stable OpenCode pattern', async () => {
+    const scenario = makePermissionTurn({
+      decision: {
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        allow: true,
+        remember: true,
+        scope: PermissionScope.PROJECT,
+        decidedBy: 'user-1',
+      },
+      requests: [
         {
-          server: {
-            mcp_server_id: 'server-1',
-            name: 'My Custom MCP',
-            transport: 'stdio',
-            command: '/usr/bin/node',
-            args: ['server.js'],
-            env: { NODE_ENV: 'production' },
-            scope: 'global',
-            enabled: true,
-          } as any,
-          source: 'global',
+          type: 'permission.asked',
+          properties: {
+            id: 'oc-permission',
+            sessionID: 'oc-new',
+            permission: 'bash',
+            patterns: [],
+            metadata: {},
+          },
         },
-        {
-          server: {
-            mcp_server_id: 'server-2',
-            name: 'Remote API',
-            transport: 'http',
-            url: 'https://api.example.com/mcp',
-            auth: { type: 'bearer', token: 'bearer-token' },
-            scope: 'session',
-            enabled: true,
-          } as any,
-          source: 'session-assigned',
-        },
-      ]);
-
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
-
-      const client = (tool as any).getClientForDirectory(undefined);
-
-      await (tool as any).ensureMcpServers('session-1', client, 'test-token');
-
-      // Should have called getMcpServersForSession
-      expect(mockGetMcp).toHaveBeenCalledWith('session-1', {
-        sessionMCPRepo: mockSessionMCPRepo,
-        mcpServerRepo: mockMCPServerRepo,
-      });
-
-      // Should have injected stdio server as local
-      const stdioCall = mockMcpAddCalls.find((c) => c.name === 'my_custom_mcp');
-      expect(stdioCall).toBeDefined();
-      expect(stdioCall!.config).toEqual({
-        type: 'local',
-        command: ['/usr/bin/node', 'server.js'],
-        environment: { NODE_ENV: 'production' },
-        enabled: true,
-      });
-
-      // Should have injected http server as remote
-      const httpCall = mockMcpAddCalls.find((c) => c.name === 'remote_api');
-      expect(httpCall).toBeDefined();
-      expect(httpCall!.config).toEqual({
-        type: 'remote',
-        url: 'https://api.example.com/mcp',
-        enabled: true,
-        headers: { Authorization: 'Bearer bearer-token' },
-      });
+      ],
     });
 
-    it('should sanitize MCP server names to lowercase alphanumeric', async () => {
-      const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
-      const mockGetMcp = vi.mocked(getMcpServersForSession);
+    await scenario.tool.runTurn(scenario.turnInput);
 
-      mockGetMcp.mockResolvedValueOnce([
-        {
-          server: {
-            mcp_server_id: 'server-1',
-            name: 'My Custom MCP Server!',
-            transport: 'sse',
-            url: 'https://example.com/sse',
-            scope: 'global',
-            enabled: true,
-          } as any,
-          source: 'global',
-        },
-      ]);
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'once' } })
+    );
+  });
 
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
-
-      const client = (tool as any).getClientForDirectory(undefined);
-      await (tool as any).ensureMcpServers('session-sanitize', client, 'token');
-
-      // Name should be sanitized: "My Custom MCP Server!" -> "my_custom_mcp_server_"
-      const call = mockMcpAddCalls.find((c) => c.name === 'my_custom_mcp_server_');
-      expect(call).toBeDefined();
+  it.each([
+    {
+      name: 'timeout',
+      decision: {
+        allow: false,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'system',
+        timedOut: true,
+      },
+      status: 'timed_out',
+    },
+    {
+      name: 'cancellation',
+      decision: {
+        allow: false,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'system',
+        reason: 'Cancelled',
+      },
+      status: 'denied',
+    },
+  ])('maps $name to reject and patches the existing request state', async ({
+    decision,
+    status,
+  }) => {
+    const scenario = makePermissionTurn({
+      decision: {
+        requestId: 'agor-request',
+        taskId: '00000000-0000-7000-8000-000000000002',
+        ...decision,
+      },
     });
 
-    it('should handle MCP injection errors gracefully', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(
+      'OpenCode permission was rejected'
+    );
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'reject' } })
+    );
+    expect(scenario.messagesService.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        content: expect.objectContaining({ status }),
+      })
+    );
+  });
 
-      // Create a client whose mcp.add throws
-      const client = (tool as any).getClientForDirectory(undefined);
-      client.mcp.add = vi.fn().mockRejectedValue(new Error('Network error'));
-
-      // Should not throw - errors are caught and logged
-      await expect(
-        (tool as any).ensureMcpServers('session-err', client, 'token')
-      ).resolves.not.toThrow();
+  it('fails closed in headless mode even when configured to allow all', async () => {
+    const scenario = makePermissionTurn({
+      permissionMode: 'bypassPermissions',
+      withDependencies: false,
     });
 
-    it('should skip user MCP injection when repos not provided', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-        // No sessionMCPRepo or mcpServerRepo
-      );
+    await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(
+      'OpenCode permission was rejected'
+    );
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'reject' } })
+    );
+    expect(scenario.permissionService.waitForDecision).not.toHaveBeenCalled();
+  });
 
-      const client = (tool as any).getClientForDirectory(undefined);
-      await (tool as any).ensureMcpServers('session-no-repos', client, 'token');
-
-      // Only Agor MCP should be injected (if token provided), no user MCP calls
-      const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
-      expect(getMcpServersForSession).not.toHaveBeenCalled();
+  it('uses the task AbortSignal to cancel an in-flight Agor permission wait', async () => {
+    const abortController = new AbortController();
+    const permissionService = new PermissionService(async (event) => {
+      if (event === 'permission:request') abortController.abort('User Stop');
+    }, 100);
+    const client = createClient({
+      subscribe: vi.fn().mockResolvedValue({
+        stream: [
+          {
+            type: 'permission.asked',
+            properties: {
+              id: 'oc-permission',
+              sessionID: 'oc-new',
+              permission: 'bash',
+              patterns: ['git status'],
+              metadata: {},
+            },
+          },
+        ],
+      }),
+    });
+    const { tool } = makeTool({
+      client,
+      permissionService,
+      messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) },
+      messagesService: {
+        create: vi.fn().mockResolvedValue({}),
+        patch: vi.fn().mockResolvedValue({}),
+      },
+      tasksService: { patch: vi.fn().mockResolvedValue({}) },
+      sessionsService: { patch: vi.fn().mockResolvedValue({}) },
+      sessionMCPRepo: { listServers: vi.fn().mockResolvedValue([]) },
+      mcpServerRepo: {},
     });
 
-    it('should pass the MCP token in the Authorization header, never in the URL', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await expect(
+      tool.runTurn(input({ signal: abortController.signal, permissionMode: 'default' }))
+    ).rejects.toThrow('OpenCode turn was aborted');
+    expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { response: 'reject' } })
+    );
+    expect(client.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: abortController.signal })
+    );
+  });
 
-      const client = (tool as any).getClientForDirectory(undefined);
-      const tokenWithSpecialChars = 'token with spaces & special=chars';
-
-      await (tool as any).ensureMcpServers('session-encode', client, tokenWithSpecialChars);
-
-      // shortId('session-encode') strips the hyphen → 'sessionencode'
-      const agorCall = mockMcpAddCalls.find((c) => c.name === 'agor_sessionencode');
-      expect(agorCall).toBeDefined();
-      const config = agorCall!.config as {
-        url: string;
-        headers?: Record<string, string>;
+  it('serializes concurrent permission events and patches each request message', async () => {
+    const request = (id: string, pattern: string) => ({
+      type: 'permission.asked',
+      properties: {
+        id,
+        sessionID: 'oc-new',
+        permission: 'bash',
+        patterns: [pattern],
+        metadata: { command: pattern },
+      },
+    });
+    const scenario = makePermissionTurn({
+      requests: [request('oc-first', 'git status'), request('oc-second', 'git diff')],
+    });
+    let active = 0;
+    let maxActive = 0;
+    scenario.permissionService.waitForDecision.mockImplementation(async (requestId, taskId) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active--;
+      return {
+        requestId,
+        taskId,
+        allow: true,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'user-1',
       };
-      // URL must not contain the token as a query parameter.
-      expect(config.url).toBe('http://localhost:3030/mcp');
-      expect(config.url).not.toContain('sessionToken');
-      expect(config.url).not.toContain(encodeURIComponent(tokenWithSpecialChars));
-      // Token travels via the Authorization header instead.
-      expect(config.headers).toEqual({
-        Authorization: `Bearer ${tokenWithSpecialChars}`,
-      });
+    });
+
+    await scenario.tool.runTurn(scenario.turnInput);
+
+    expect(maxActive).toBe(1);
+    expect(scenario.messagesService.create).toHaveBeenCalledTimes(2);
+    expect(scenario.messagesService.patch).toHaveBeenCalledTimes(2);
+    expect(scenario.client.postSessionIdPermissionsPermissionId.mock.calls).toEqual([
+      [expect.objectContaining({ path: expect.objectContaining({ permissionID: 'oc-first' }) })],
+      [expect.objectContaining({ path: expect.objectContaining({ permissionID: 'oc-second' }) })],
+    ]);
+  });
+
+  it('settles collector cancellation before returning a reconciled turn', async () => {
+    let collectorSettled = false;
+    const subscribe = vi.fn(async (options: { signal?: AbortSignal }) => ({
+      stream: (async function* () {
+        try {
+          yield {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          };
+          yield { type: 'session.idle', properties: { sessionID: 'oc-new' } };
+          await new Promise<void>((resolve) => {
+            options.signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+        } finally {
+          collectorSettled = true;
+        }
+      })(),
+    }));
+    const { tool } = makeTool({ client: createClient({ subscribe }) });
+
+    await expect(tool.runTurn(input())).resolves.toMatchObject({ sessionWasCreated: true });
+    expect(collectorSettled).toBe(true);
+  });
+
+  it('still terminates the managed child when collector shutdown fails', async () => {
+    let index = 0;
+    const rawCleanupError = new Error('collector shutdown failed with mcp-secret');
+    Object.assign(rawCleanupError, {
+      response: { headers: { authorization: 'Bearer mcp-secret' } },
+    });
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      async next() {
+        const events = [
+          {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'oc-new' } },
+        ];
+        const value = events[index++];
+        return value ? { done: false as const, value } : { done: true as const, value: undefined };
+      },
+      async return() {
+        throw rawCleanupError;
+      },
+    };
+    const { tool, child } = makeTool({
+      client: createClient({ subscribe: vi.fn().mockResolvedValue({ stream }) }),
+    });
+
+    let rejection: unknown;
+    try {
+      await tool.runTurn(input());
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(rawCleanupError);
+    expect(inspect(rejection, { depth: null })).not.toContain('mcp-secret');
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('bounds a never-settling iterator return and collector before closing the child', async () => {
+    let index = 0;
+    const never = new Promise<never>(() => undefined);
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      async next() {
+        const events = [
+          {
+            type: 'message.updated',
+            properties: {
+              info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'oc-new' } },
+        ];
+        const value = events[index++];
+        return value ? { done: false as const, value } : never;
+      },
+      return() {
+        return never;
+      },
+    };
+    const { tool, child } = makeTool({
+      client: createClient({ subscribe: vi.fn().mockResolvedValue({ stream }) }),
+      shutdownTimeoutMs: 5,
+    });
+
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'OpenCode event collector did not settle within the shutdown timeout'
+    );
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('fails rather than using prompt parts when the final transcript has no assistant output', async () => {
+    const messages = vi.fn().mockResolvedValueOnce({ data: [] }).mockResolvedValue({ data: [] });
+    const { tool } = makeTool({ client: createClient({ messages }) });
+
+    await expect(tool.runTurn(input())).rejects.toThrow('no new assistant output');
+  });
+
+  it('resolves the executable only from the packaged CLI native binary', async () => {
+    const binary = await resolvePackagedOpenCodeBinary();
+
+    expect(binary).toMatch(/opencode-ai@1\.14\.33.+opencode-ai[/\\]bin[/\\]\.opencode$/);
+  });
+
+  it('starts only the packaged native binary on loopback port zero inside the executor group', async () => {
+    const { tool, spawnCalls } = makeTool();
+
+    await tool.runTurn(input(), undefined as unknown as StreamingCallbacks);
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toMatchObject({
+      executable: '/package/opencode-ai/bin/.opencode',
+      args: ['serve', '--hostname=127.0.0.1', '--port=0'],
+      options: {
+        cwd: '/worktree',
+        detached: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    });
+    expect(spawnCalls[0].options.env?.PATH).toBe(process.env.PATH);
+  });
+
+  it('uses independent server credentials and authenticated clients for concurrent turns', async () => {
+    const calls: SpawnCall[] = [];
+    const first = makeTool({ spawnCalls: calls });
+    const second = makeTool({ spawnCalls: calls });
+
+    await Promise.all([first.tool.runTurn(input()), second.tool.runTurn(input())]);
+
+    const firstPassword = calls[0].options.env?.OPENCODE_SERVER_PASSWORD;
+    const secondPassword = calls[1].options.env?.OPENCODE_SERVER_PASSWORD;
+    expect(firstPassword).toBeTruthy();
+    expect(secondPassword).toBeTruthy();
+    expect(firstPassword).not.toBe(secondPassword);
+    expect(first.createClientSpy.mock.calls[0][0].headers.Authorization).toMatch(/^Basic /);
+    expect(second.createClientSpy.mock.calls[0][0].headers.Authorization).toMatch(/^Basic /);
+    expect(first.createClientSpy.mock.calls[0][0].headers.Authorization).not.toBe(
+      second.createClientSpy.mock.calls[0][0].headers.Authorization
+    );
+    expect(first.createClientSpy.mock.calls[0][0].baseUrl).not.toBe(
+      second.createClientSpy.mock.calls[0][0].baseUrl
+    );
+  });
+
+  it('resolves invocation MCP configuration before spawn and prompt', async () => {
+    const order: string[] = [];
+    const resolveInvocationConfig = vi.fn(async () => {
+      order.push('mcp');
+      return { mcp: { agor_test: { type: 'remote', url: 'http://daemon/mcp' } } };
+    });
+    const client = createClient({
+      prompt: vi.fn(async () => {
+        order.push('prompt');
+        return { data: { info: {}, parts: [{ type: 'text', text: 'done' }] } };
+      }),
+    });
+    const { tool, spawnCalls } = makeTool({ client, resolveInvocationConfig });
+    const turnInput = input({
+      persistOpenCodeSessionId: vi.fn(async () => order.push('persist')),
+    });
+
+    await tool.runTurn(turnInput);
+
+    expect(order).toEqual(['mcp', 'persist', 'prompt']);
+    expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
+      mcp: { agor_test: { type: 'remote', url: 'http://daemon/mcp' } },
+      permission: { '*': 'ask', bash: 'ask', edit: 'ask' },
     });
   });
 
-  describe('executeTask Integration', () => {
-    it('should use directory-scoped client based on session branch path', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
-
-      // Set context with a branch path
-      tool.setSessionContext(
-        'session-wt',
-        'oc-session-1',
-        'model',
-        'provider',
-        '/branch/path',
-        'token'
-      );
-
-      // Call executeTask (no streaming callbacks for simpler test)
-      await tool.executeTask?.('session-wt', 'test prompt', 'task-1');
-
-      // Should have created a client with directory = /branch/path
-      const dirClient = createdClients.find((c) => c.directory === '/branch/path');
-      expect(dirClient).toBeDefined();
+  it('forces invocation-scoped permission interception over permissive project configuration', async () => {
+    const { tool, spawnCalls, client } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
     });
 
-    it('should call ensureMcpServers before sending prompt', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await tool.runTurn(input());
 
-      tool.setSessionContext(
-        'session-mcp',
-        'oc-session-2',
-        undefined,
-        undefined,
-        undefined,
-        'my-token'
-      );
+    expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
+      permission: { '*': 'ask' },
+      agent: {
+        'agor-managed': {
+          mode: 'primary',
+          permission: { '*': 'ask', bash: 'ask', edit: 'ask' },
+        },
+      },
+    });
+    expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_PERMISSION ?? '')).toMatchObject({
+      '*': 'ask',
+      bash: 'ask',
+      edit: 'ask',
+    });
+    expect(client.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ agent: 'agor-managed' }) })
+    );
+  });
 
-      await tool.executeTask?.('session-mcp', 'test prompt', 'task-2');
-
-      // Should have injected Agor MCP (name format: agor_${shortId(sessionId)})
-      const agorCall = mockMcpAddCalls.find((c) => c.name.startsWith('agor_'));
-      expect(agorCall).toBeDefined();
+  it('requires the built-in Agor MCP token before spawn', async () => {
+    const { tool, spawnCalls, client } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
     });
 
-    it('should throw if session context is not set', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
+    await expect(tool.runTurn(input({ mcpToken: undefined }))).rejects.toThrow(
+      'OpenCode requires the built-in Agor MCP token'
+    );
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
 
-      // Don't call setSessionContext
-      const result = await tool.executeTask?.('unknown-session', 'test', 'task-3');
+  it('places the required Agor and attached MCP servers in invocation config before spawn', async () => {
+    const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        source: 'session-assigned',
+        server: {
+          mcp_server_id: '00000000-0000-7000-8000-000000000099',
+          name: 'Local tools',
+          transport: 'stdio',
+          command: '/usr/bin/local-mcp',
+          args: ['--safe'],
+          env: { MODE: 'managed' },
+        },
+      } as never,
+    ]);
+    const sessionMCPRepo = {};
+    const mcpServerRepo = {};
+    const { tool, spawnCalls } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo,
+      mcpServerRepo,
+    });
 
-      // Should return failed status (errors are caught internally)
-      expect(result?.status).toBe('failed');
+    await tool.runTurn(input());
+
+    expect(getMcpServersForSession).toHaveBeenCalledWith(
+      '00000000-0000-7000-8000-000000000001',
+      expect.objectContaining({ sessionMCPRepo, mcpServerRepo, mode: 'strict' })
+    );
+    expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
+      permission: { '*': 'ask', bash: 'ask', edit: 'ask' },
+      mcp: {
+        agor_000000000000700080000000: {
+          type: 'remote',
+          url: 'http://127.0.0.1:3030/mcp',
+          enabled: true,
+          headers: { Authorization: 'Bearer mcp-secret' },
+        },
+        agor_000000000000700080000000_000000000000700080000000_local_tools: {
+          type: 'local',
+          command: ['/usr/bin/local-mcp', '--safe'],
+          environment: { MODE: 'managed' },
+          enabled: true,
+        },
+      },
     });
   });
 
-  describe('Response content mapping', () => {
-    it('should treat reasoning-only responses as regular text blocks', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const result = (tool as any).buildContentBlocksFromParts([
-        {
-          type: 'reasoning',
-          text: 'Final answer from model',
+  it('places authenticated remote MCP headers in invocation config before spawn', async () => {
+    const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        source: 'session-assigned',
+        server: {
+          mcp_server_id: '00000000-0000-7000-8000-000000000099',
+          name: 'Remote tools',
+          transport: 'http',
+          url: 'http://127.0.0.1:4100/mcp',
+          auth: { type: 'bearer', token: 'attached-bearer-token' },
         },
-      ]);
-
-      expect(result.contentBlocks).toEqual([
-        {
-          type: 'text',
-          text: 'Final answer from model',
-        },
-      ]);
+      } as never,
+    ]);
+    const { tool, spawnCalls } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
     });
 
-    it('should keep reasoning as thinking when text blocks exist', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
+    await tool.runTurn(input());
 
-      const result = (tool as any).buildContentBlocksFromParts([
-        {
-          type: 'reasoning',
-          text: 'Internal reasoning',
+    expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
+      mcp: {
+        agor_000000000000700080000000_000000000000700080000000_remote_tools: {
+          type: 'remote',
+          url: 'http://127.0.0.1:4100/mcp',
+          headers: { Authorization: 'Bearer attached-bearer-token' },
         },
-        {
-          type: 'text',
-          text: 'User-visible answer',
-        },
-      ]);
-
-      expect(result.contentBlocks).toEqual([
-        {
-          type: 'thinking',
-          text: 'Internal reasoning',
-        },
-        {
-          type: 'text',
-          text: 'User-visible answer',
-        },
-      ]);
-    });
-
-    it('should prefer text parts for display text and fall back to reasoning', () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      const withText = (tool as any).extractDisplayTextFromParts([
-        { type: 'reasoning', text: 'Reasoning text' },
-        { type: 'text', text: 'Final response text' },
-      ]);
-      expect(withText).toBe('Final response text');
-
-      const reasoningOnly = (tool as any).extractDisplayTextFromParts([
-        { type: 'reasoning', text: 'Reasoning as fallback output' },
-      ]);
-      expect(reasoningOnly).toBe('Reasoning as fallback output');
+      },
     });
   });
 
-  describe('createSession with workingDirectory', () => {
-    it('should use directory-scoped client when workingDirectory is provided', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
-
-      await tool.createSession?.({
-        title: 'Test Session',
-        workingDirectory: '/path/to/branch',
-      });
-
-      // Should have created a client with directory set
-      const dirClient = createdClients.find((c) => c.directory === '/path/to/branch');
-      expect(dirClient).toBeDefined();
+  it('fails closed before spawn if strict resolution returns required remote auth without a header', async () => {
+    const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        source: 'session-assigned',
+        server: {
+          mcp_server_id: '00000000-0000-7000-8000-000000000099',
+          name: 'Missing bearer',
+          transport: 'http',
+          url: 'http://127.0.0.1:4100/mcp',
+          auth: { type: 'bearer' },
+        },
+      } as never,
+    ]);
+    const { tool, spawnCalls, client } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
     });
 
-    it('should use default client when workingDirectory is not provided', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService
-      );
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'Attached MCP server Missing bearer did not resolve a usable Authorization header'
+    );
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
 
-      await tool.createSession?.({
-        title: 'Test Session',
-      });
-
-      // Should have created a client without directory
-      expect(createdClients.length).toBe(1);
-      expect(createdClients[0].directory).toBeUndefined();
+  it('fails closed before spawn when required remote JWT authentication fails', async () => {
+    const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        source: 'session-assigned',
+        server: {
+          mcp_server_id: '00000000-0000-7000-8000-000000000099',
+          name: 'Rejected JWT',
+          transport: 'http',
+          url: 'http://127.0.0.1:4100/mcp',
+          auth: {
+            type: 'jwt',
+            api_url: 'http://127.0.0.1:4101/token',
+            api_token: 'jwt-client',
+            api_secret: 'jwt-secret',
+          },
+        },
+      } as never,
+    ]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => 'rejected jwt-secret',
+    } as Response);
+    const { tool, spawnCalls, client } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
     });
 
-    it('should reuse cached directory client across createSession and executeTask', async () => {
-      const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
-        mockMessagesService,
-        mockSessionMCPRepo,
-        mockMCPServerRepo
-      );
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'Attached MCP server Rejected JWT authentication failed'
+    );
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
 
-      // Create session with directory
-      const result = await tool.createSession?.({
-        title: 'Test',
-        workingDirectory: '/shared/path',
-      });
-
-      // Set context with same directory
-      tool.setSessionContext(
-        'session-shared',
-        result!.sessionId,
-        undefined,
-        undefined,
-        '/shared/path'
-      );
-
-      // Execute task - should reuse the same client
-      await tool.executeTask?.('session-shared', 'test', 'task-shared');
-
-      // Only 1 client should have been created for /shared/path
-      const dirClients = createdClients.filter((c) => c.directory === '/shared/path');
-      expect(dirClients.length).toBe(1);
+  it('does not spawn or prompt when required MCP resolution fails', async () => {
+    const client = createClient();
+    const { tool, spawnCalls } = makeTool({
+      client,
+      resolveInvocationConfig: vi.fn().mockRejectedValue(new Error('attached MCP unavailable')),
     });
+
+    await expect(tool.runTurn(input())).rejects.toThrow('attached MCP unavailable');
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('normalizes invocation-resolution failures before fatal rethrow', async () => {
+    const rawError = new Error('attached MCP unavailable: mcp-secret');
+    Object.assign(rawError, {
+      response: {
+        headers: { authorization: 'Bearer mcp-secret' },
+        nested: { token: 'mcp-secret' },
+      },
+    });
+    const client = createClient();
+    const { tool, spawnCalls } = makeTool({
+      client,
+      resolveInvocationConfig: vi.fn().mockRejectedValue(rawError),
+    });
+
+    let rejection: unknown;
+    try {
+      await tool.runTurn(input());
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(rawError);
+    expect(Object.keys(rejection as Error)).toEqual([]);
+    expect(inspect(rejection, { depth: null })).not.toContain('mcp-secret');
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('normalizes managed spawn failures before fatal rethrow', async () => {
+    const password = Buffer.alloc(32, 88).toString('base64url');
+    let rawError: Error | undefined;
+    const client = createClient();
+    const { tool, spawnCalls } = makeTool({
+      client,
+      randomBytes: vi.fn().mockReturnValue(Buffer.alloc(32, 88)),
+      spawn: (_executable, _args, options) => {
+        rawError = new Error(`spawn failed with ${options.env?.OPENCODE_SERVER_PASSWORD}`);
+        Object.assign(rawError, {
+          response: {
+            headers: { authorization: `Basic ${password}` },
+            nested: { token: 'mcp-secret' },
+          },
+        });
+        throw rawError;
+      },
+    });
+
+    let rejection: unknown;
+    try {
+      await tool.runTurn(input());
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(rawError);
+    expect(Object.keys(rejection as Error)).toEqual([]);
+    const formatted = inspect(rejection, { depth: null });
+    expect(formatted).not.toContain(password);
+    expect(formatted).not.toContain('mcp-secret');
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before spawn when an attached MCP server is incomplete', async () => {
+    const { getMcpServersForSession } = await import('../base/mcp-scoping.js');
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        source: 'session-assigned',
+        server: {
+          mcp_server_id: '00000000-0000-7000-8000-000000000099',
+          name: 'Broken tools',
+          transport: 'stdio',
+        },
+      } as never,
+    ]);
+    const { tool, spawnCalls, client } = makeTool({
+      useDefaultInvocationConfig: true,
+      sessionMCPRepo: {},
+      mcpServerRepo: {},
+    });
+
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'Attached MCP server Broken tools is missing its command'
+    );
+    expect(spawnCalls).toHaveLength(0);
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('persists a newly created session before submitting its first prompt', async () => {
+    const order: string[] = [];
+    const client = createClient({
+      sessionId: 'oc-created',
+      create: vi.fn(async () => {
+        order.push('create');
+        return { data: { id: 'oc-created' } };
+      }),
+      prompt: vi.fn(async () => {
+        order.push('prompt');
+        return { data: { info: {}, parts: [{ type: 'text', text: 'done' }] } };
+      }),
+    });
+    const persistOpenCodeSessionId = vi.fn(async () => order.push('persist'));
+    const { tool } = makeTool({ client });
+
+    const result = await tool.runTurn(input({ persistOpenCodeSessionId }));
+
+    expect(order).toEqual(['create', 'persist', 'prompt']);
+    expect(persistOpenCodeSessionId).toHaveBeenCalledWith('oc-created');
+    expect(result).toMatchObject({ openCodeSessionId: 'oc-created', sessionWasCreated: true });
+  });
+
+  it('validates a stored session and fails without replacement when it cannot resume', async () => {
+    const client = createClient({
+      get: vi.fn().mockResolvedValue({ error: { name: 'NotFoundError' } }),
+    });
+    const { tool, child } = makeTool({ client });
+
+    await expect(tool.runTurn(input({ existingOpenCodeSessionId: 'oc-missing' }))).rejects.toThrow(
+      'Unable to resume stored OpenCode session oc-missing'
+    );
+    expect(client.session.get).toHaveBeenCalledWith({
+      path: { id: 'oc-missing' },
+      query: { directory: '/worktree' },
+    });
+    expect(client.session.create).not.toHaveBeenCalled();
+    expect(client.session.prompt).not.toHaveBeenCalled();
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('redacts generated credentials from bounded readiness failures', async () => {
+    const child = new FakeChild();
+    const spawnCalls: SpawnCall[] = [];
+    const attachedSecret = 'attached-provider-secret';
+    const { tool } = makeTool({
+      child,
+      spawnCalls,
+      readinessTimeoutMs: 50,
+      resolveInvocationConfig: vi.fn().mockResolvedValue({
+        mcp: {
+          attached: {
+            type: 'local',
+            command: ['/bin/mcp'],
+            environment: { UNUSUAL_CREDENTIAL_NAME: attachedSecret },
+          },
+        },
+      }),
+      spawn: (executable: string, args: readonly string[], options: SpawnCall['options']) => {
+        spawnCalls.push({ executable, args, options });
+        queueMicrotask(() => {
+          child.stderr.write(
+            `failed with ${options.env?.OPENCODE_SERVER_PASSWORD}, mcp-secret, and ${attachedSecret}\n`
+          );
+          child.exit(1);
+        });
+        return child;
+      },
+    });
+
+    const promise = tool.runTurn(input());
+    await expect(promise).rejects.toThrow('[REDACTED]');
+    await expect(promise).rejects.not.toThrow(
+      spawnCalls[0].options.env?.OPENCODE_SERVER_PASSWORD ?? 'missing-secret'
+    );
+    await expect(promise).rejects.not.toThrow('mcp-secret');
+    await expect(promise).rejects.not.toThrow(attachedSecret);
+  });
+
+  it('normalizes post-readiness failures into fresh safe errors before callbacks and rethrow', async () => {
+    const providerSecret = 'provider-post-readiness-secret';
+    const attachedMcpSecret = 'attached-mcp-post-readiness-secret';
+    const password = Buffer.alloc(32, 77).toString('base64url');
+    const rawFailure = [password, 'mcp-secret', providerSecret, attachedMcpSecret].join(' :: ');
+    const rawCause = new Error(`nested cause ${providerSecret}`);
+    Object.assign(rawCause, {
+      response: { headers: { authorization: `Bearer ${attachedMcpSecret}` } },
+    });
+    const rawError = new Error(rawFailure, { cause: rawCause });
+    Object.assign(rawError, {
+      response: {
+        headers: { authorization: `Basic ${password}` },
+        nested: { providerKey: providerSecret, mcpToken: 'mcp-secret' },
+      },
+    });
+    const client = createClient({
+      subscribe: vi.fn().mockResolvedValue({
+        stream: {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: 'message.updated',
+              properties: {
+                info: { id: 'assistant-1', sessionID: 'oc-new', role: 'assistant' },
+              },
+            };
+            yield {
+              type: 'message.part.updated',
+              properties: {
+                part: {
+                  id: 'part-1',
+                  sessionID: 'oc-new',
+                  messageID: 'assistant-1',
+                  type: 'text',
+                },
+              },
+            };
+            yield {
+              type: 'message.part.delta',
+              properties: {
+                sessionID: 'oc-new',
+                messageID: 'assistant-1',
+                partID: 'part-1',
+                field: 'text',
+                delta: 'started',
+              },
+            };
+            throw rawError;
+          },
+        },
+      }),
+    });
+    const onStreamError = vi.fn();
+    const { tool } = makeTool({
+      client,
+      randomBytes: vi.fn().mockReturnValue(Buffer.alloc(32, 77)),
+      resolveInvocationConfig: vi.fn().mockResolvedValue({
+        mcp: {
+          attached: {
+            type: 'remote',
+            url: 'http://127.0.0.1/mcp',
+            headers: { Authorization: `Bearer ${attachedMcpSecret}` },
+          },
+        },
+        provider: { proof: { options: { apiKey: providerSecret } } },
+      }),
+    });
+
+    let rejection: unknown;
+    try {
+      await tool.runTurn(input(), {
+        onStreamStart: vi.fn(),
+        onStreamChunk: vi.fn(),
+        onStreamEnd: vi.fn(),
+        onStreamError,
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(rawError);
+    const callbackFailure = onStreamError.mock.calls[0]?.[1] as Error;
+    expect(callbackFailure).not.toBe(rawError);
+    expect(Object.keys(callbackFailure)).toEqual([]);
+    expect(Object.keys(callbackFailure.cause as Error)).toEqual([]);
+    expect(callbackFailure.message).toContain('[REDACTED]');
+    const formatted = inspect([callbackFailure, rejection], { depth: null });
+    for (const secret of [password, 'mcp-secret', providerSecret, attachedMcpSecret]) {
+      expect(formatted).not.toContain(secret);
+    }
+  });
+
+  it('rejects a readiness line that is not an authenticated loopback endpoint', async () => {
+    const child = new FakeChild();
+    const { tool } = makeTool({
+      child,
+      spawn: () => {
+        child.ready('http://0.0.0.0:4096');
+        return child;
+      },
+    });
+
+    await expect(tool.runTurn(input())).rejects.toThrow(
+      'OpenCode reported a non-loopback readiness URL'
+    );
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('cleans up a readiness timeout and escalates to SIGKILL within the configured bound', async () => {
+    const child = new FakeChild('SIGKILL');
+    const permissionService = {
+      emitRequest: vi.fn(),
+      waitForDecision: vi.fn(),
+      cancelPendingRequests: vi.fn(),
+    };
+    const { tool } = makeTool({
+      child,
+      permissionService,
+      readinessTimeoutMs: 5,
+      shutdownTimeoutMs: 5,
+      spawn: () => child,
+    });
+
+    await expect(tool.runTurn(input())).rejects.toThrow('timed out');
+    expect(child.kills).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(permissionService.cancelPendingRequests).toHaveBeenCalledOnce();
+  });
+
+  it('does not return normally until the managed server child exit is observed', async () => {
+    const child = new FakeChild();
+    const permissionService = {
+      emitRequest: vi.fn(),
+      waitForDecision: vi.fn(),
+      cancelPendingRequests: vi.fn(),
+    };
+    let exited = false;
+    child.on('exit', () => {
+      exited = true;
+    });
+    const { tool } = makeTool({ child, permissionService });
+
+    await expect(tool.runTurn(input())).resolves.toMatchObject({ sessionWasCreated: true });
+    expect(exited).toBe(true);
+    expect(child.kills).toEqual(['SIGTERM']);
+    expect(permissionService.cancelPendingRequests).toHaveBeenCalledOnce();
+    expect(permissionService.cancelPendingRequests).toHaveBeenCalledWith(
+      '00000000-0000-7000-8000-000000000001'
+    );
+  });
+
+  it('observes an abort-triggered cleanup rejection until the main finally awaits it', async () => {
+    const abortController = new AbortController();
+    const child = new FakeChild('SIGHUP');
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    const client = createClient({
+      prompt: vi.fn(async () => {
+        abortController.abort();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { data: { info: {}, parts: [{ type: 'text', text: 'done' }] } };
+      }),
+    });
+    const permissionService = {
+      emitRequest: vi.fn(),
+      waitForDecision: vi.fn(),
+      cancelPendingRequests: vi.fn(),
+    };
+    const { tool } = makeTool({ client, child, shutdownTimeoutMs: 1, permissionService });
+
+    try {
+      await expect(tool.runTurn(input({ signal: abortController.signal }))).rejects.toThrow(
+        'OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup'
+      );
+      expect(unhandled).toEqual([]);
+      expect(client.session.abort).toHaveBeenCalledOnce();
+      expect(permissionService.cancelPendingRequests).toHaveBeenCalledOnce();
+      expect(child.kills).toEqual(['SIGTERM', 'SIGKILL']);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
   });
 });

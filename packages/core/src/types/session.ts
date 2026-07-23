@@ -107,7 +107,7 @@ export type {
  *   don't get silently cancelled by the elicitation prompt. Workspace
  *   sandbox still constrains shell exec.
  * - Gemini: 'autoEdit' (unchanged — pending separate audit)
- * - OpenCode: 'autoEdit' (unchanged — pending separate audit)
+ * - OpenCode: 'autoEdit' — auto-approve edits and route other permission events to Agor
  * - Cursor: 'bypassPermissions' — scaffolded as autonomous until the SDK
  *   exposes/Agor wires a permission callback.
  *
@@ -121,7 +121,7 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
     case 'codex':
       return 'allow-all'; // Maps to Codex sandbox=workspace-write + approval=never
     case 'opencode':
-      return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
+      return 'autoEdit'; // Auto-approve edits; ask through Agor for other operations
     case 'copilot':
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
     case 'cursor':

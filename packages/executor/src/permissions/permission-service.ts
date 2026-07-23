@@ -62,8 +62,10 @@ export class PermissionService {
     string,
     {
       sessionId: SessionID;
+      taskId: TaskID;
       resolve: (decision: PermissionDecision) => void;
       timeout: NodeJS.Timeout;
+      removeAbortListener: () => void;
     }
   >();
 
@@ -98,15 +100,19 @@ export class PermissionService {
     signal: AbortSignal
   ): Promise<PermissionDecision> {
     return new Promise((resolve) => {
-      // Handle cancellation
-      signal.addEventListener('abort', () => {
-        const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(requestId);
-        }
+      let settled = false;
+      let timeout: NodeJS.Timeout;
+      const finish = (decision: PermissionDecision) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        signal.removeEventListener('abort', onAbort);
+        this.pendingRequests.delete(requestId);
+        resolve(decision);
+      };
+      const onAbort = () => {
         console.log(`🛡️  [executor] Permission request cancelled: ${requestId}`);
-        resolve({
+        finish({
           requestId,
           taskId,
           allow: false,
@@ -115,11 +121,11 @@ export class PermissionService {
           scope: PermissionScope.ONCE,
           decidedBy: 'system',
         });
-      });
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
 
       // Timeout (configurable, default 10 minutes)
-      const timeout = setTimeout(async () => {
-        this.pendingRequests.delete(requestId);
+      timeout = setTimeout(async () => {
         console.warn(`⏰ [executor] Permission request timed out: ${requestId}`);
 
         // Broadcast timeout to UI via daemon
@@ -129,7 +135,7 @@ export class PermissionService {
           console.error(`⚠️  [executor] Failed to emit permission:timeout event:`, err);
         }
 
-        resolve({
+        finish({
           requestId,
           taskId,
           allow: false,
@@ -141,7 +147,14 @@ export class PermissionService {
         });
       }, this.timeoutMs);
 
-      this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
+      this.pendingRequests.set(requestId, {
+        sessionId,
+        taskId,
+        resolve: finish,
+        timeout,
+        removeAbortListener: () => signal.removeEventListener('abort', onAbort),
+      });
+      if (signal.aborted) onAbort();
       console.log(
         `🛡️  [executor] Waiting for permission decision: ${requestId} (timeout: ${Math.round(this.timeoutMs / 1000)}s)`
       );
@@ -156,6 +169,7 @@ export class PermissionService {
     const pending = this.pendingRequests.get(decision.requestId);
     if (pending) {
       clearTimeout(pending.timeout);
+      pending.removeAbortListener();
       pending.resolve(decision);
       this.pendingRequests.delete(decision.requestId);
       console.log(
@@ -175,9 +189,10 @@ export class PermissionService {
     for (const [requestId, pending] of this.pendingRequests.entries()) {
       if (pending.sessionId === sessionId) {
         clearTimeout(pending.timeout);
+        pending.removeAbortListener();
         pending.resolve({
           requestId,
-          taskId: '' as TaskID,
+          taskId: pending.taskId,
           allow: false,
           reason: 'Cancelled due to previous permission denial',
           remember: false,

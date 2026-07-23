@@ -55,13 +55,6 @@ export const ResolvedConfigSliceSchema = z.object({
     })
     .optional(),
 
-  /** Runtime-resolved OpenCode endpoint, when a scoped endpoint is introduced. */
-  opencode: z
-    .object({
-      serverUrl: z.string().optional(),
-    })
-    .optional(),
-
   /** From `config.daemon.*` (selected fields only) */
   daemon: z
     .object({

@@ -88,7 +88,7 @@ describe('termination coordinator', () => {
 
   it('contains a terminal task before releasing its tracked executor', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
-    const state = appDouble();
+    const state = appDouble('opencode');
     state.claim(task(TaskStatus.COMPLETED), 'terminal');
 
     await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
@@ -167,7 +167,7 @@ describe('termination coordinator', () => {
 
   it('contains a terminal SDK-health race in the background', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
-    const state = appDouble();
+    const state = appDouble('opencode');
     state.claim(task(TaskStatus.COMPLETED), 'terminal');
 
     const result = await beginExecutorTermination({
@@ -237,15 +237,17 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
-  it('does not infer OpenCode provider quiescence from local process absence', async () => {
+  it('settles OpenCode after verified local process-group absence', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble('opencode');
     state.claim(stopping('user_stop'));
-    state.settle(task(TaskStatus.STOPPING), 'unverified');
+    state.settle(task(TaskStatus.STOPPED));
 
     await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
-      status: 'unverified',
+      status: 'terminal',
+      task: { status: TaskStatus.STOPPED },
     });
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
   });
 
   it('requires the short Task ID before force-failing unverified work', async () => {

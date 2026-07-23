@@ -44,7 +44,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, ROLES, TaskStatus } from '@agor/core/types';
+import { ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -146,6 +146,7 @@ import {
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
+import { assertStatelessFsModeCompatible } from './utils/stateless-fs-compatibility.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
@@ -780,21 +781,11 @@ function createExecuteHandler(
       throw new Error('Preset-backed sessions cannot override permission mode per task');
     }
 
-    // Validate stateless_fs_mode compatibility with agentic tool
-    if (config.execution?.stateless_fs_mode) {
-      const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
-      const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
-      if (capabilities && !capabilities.supportsStatelessFsMode) {
-        const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
-          .filter(([, caps]) => caps.supportsStatelessFsMode)
-          .map(([name]) => name)
-          .join(', ');
-        throw new Error(
-          `stateless_fs_mode is enabled but tool '${toolName}' does not support it. ` +
-            `Supported tools: ${supported}`
-        );
-      }
-    }
+    // This gate runs before session-token creation and spawnExecutor().
+    assertStatelessFsModeCompatible(
+      session.agentic_tool as import('@agor/core/types').AgenticToolName,
+      config.execution?.stateless_fs_mode
+    );
 
     // Generate session token for executor authentication
     const appWithExecutor = app as unknown as {

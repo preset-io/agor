@@ -191,7 +191,7 @@ const CURSOR_MODES: ModeOption[] = [
   },
 ];
 
-// OpenCode permission modes (uses Gemini-like modes since OpenCode auto-approves)
+// OpenCode permission modes. Non-automatic requests use Agor's permission UI.
 const OPENCODE_MODES: ModeOption[] = [
   {
     mode: 'default',
@@ -202,8 +202,8 @@ const OPENCODE_MODES: ModeOption[] = [
   },
   {
     mode: 'autoEdit',
-    label: 'Auto',
-    description: 'Auto-approves all operations · recommended for OpenCode',
+    label: 'Accept edits',
+    description: 'Auto-approves edits, asks for other operations · recommended for OpenCode',
     icon: <EditOutlined />,
     tone: 'success',
   },

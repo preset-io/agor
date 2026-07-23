@@ -42,6 +42,11 @@ export function createCanUseToolCallback(
     permissionLocks: Map<SessionID, Promise<void>>;
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
+    /**
+     * Managed runtimes may need to finish process containment before a denied
+     * task becomes terminal/promptable. Their outer owner performs settlement.
+     */
+    deferDeniedTerminalState?: boolean;
   }
 ) {
   return async (
@@ -274,7 +279,8 @@ export function createCanUseToolCallback(
 
       // Update task status
       await deps.tasksService.patch(taskId, {
-        status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
+        status:
+          decision.allow || deps.deferDeniedTerminalState ? TaskStatus.RUNNING : TaskStatus.FAILED,
       });
 
       // If permission was denied, stop execution
@@ -285,7 +291,7 @@ export function createCanUseToolCallback(
         deps.permissionService.cancelPendingRequests(sessionId);
 
         // Set session status to idle
-        if (deps.sessionsService) {
+        if (deps.sessionsService && !deps.deferDeniedTerminalState) {
           await deps.sessionsService.patch(sessionId, {
             status: 'idle' as const,
           });

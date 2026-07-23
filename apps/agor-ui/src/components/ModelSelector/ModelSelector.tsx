@@ -283,7 +283,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
 
-  // OpenCode uses a different UI (2 dropdowns: provider + model)
+  // OpenCode uses bounded exact provider/model entry; empty values use runtime defaults.
   if (effectiveTool === 'opencode') {
     return (
       <OpenCodeModelSelector
@@ -298,7 +298,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         onChange={(openCodeConfig: OpenCodeModelConfig) => {
           if (onChange) {
             onChange({
-              mode: 'exact', // OpenCode always uses exact provider+model IDs
+              mode: 'exact',
               model: openCodeConfig.model,
               provider: openCodeConfig.provider,
             });

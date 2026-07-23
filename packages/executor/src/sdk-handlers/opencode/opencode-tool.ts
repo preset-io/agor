@@ -1,66 +1,322 @@
 /**
  * OpenCode Tool Implementation
  *
- * Implements the ITool interface for OpenCode.ai integration.
- * OpenCode is an open-source terminal-based AI coding assistant supporting 75+ LLM providers.
- *
- * Current capabilities:
- * - ✅ Create new sessions
- * - ✅ Send prompts and receive responses
- * - ✅ Get session metadata and messages
- * - ✅ Real-time streaming support via SSE
- * - ✅ Agor MCP tools (via client.mcp.add())
- * - ✅ Branch directory isolation (via x-opencode-directory header)
- * - ⏳ Session import (future: when OpenCode provides export API)
+ * Owns one authenticated, task-scoped OpenCode server and its SDK turn.
+ * The handler calls only runTurn; protocol translation and reconciliation stay
+ * behind this single runtime owner.
  */
 
-import { generateId, shortId } from '@agor/core';
+import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
+import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { shortId } from '@agor/core';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
-import type { Event as OpenCodeEvent, Part as OpenCodePart } from '@opencode-ai/sdk';
+import type {
+  ContentBlock,
+  MessageID,
+  PermissionMode,
+  SessionID,
+  TaskID,
+  ToolUse,
+} from '@agor/core/types';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
+  MessagesRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
-import { reportSdkActivity } from '../../sdk-watchdog.js';
-import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
+import type { PermissionService } from '../../permissions/permission-service.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
   CreateSessionConfig,
   MessagesService,
   SessionHandle,
-  SessionMetadata,
+  SessionsPatchClient,
   StreamingCallbacks,
-  TaskResult,
-  ToolCapabilities,
+  TasksService,
 } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { ITool } from '../base/tool.interface.js';
+import { createCanUseToolCallback } from '../claude/permissions/permission-hooks.js';
+import {
+  createOpenCodeEventTranslator,
+  type OpenCodeEventEffect,
+  reconcileOpenCodeMessages,
+} from './event-translator.js';
 
-export function isOpenCodeSessionEvent(event: OpenCodeEvent, sessionId: string): boolean {
-  const properties = event.properties as Record<string, unknown>;
-  if (typeof properties.sessionID === 'string') return properties.sessionID === sessionId;
+const OPENCODE_VERSION = '1.14.33';
+const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
+const DEFAULT_EVENT_DRAIN_MS = 10;
+const MAX_STARTUP_OUTPUT = 4_096;
+const AGOR_PERMISSION_INTERCEPTION = {
+  '*': 'ask',
+  read: 'ask',
+  edit: 'ask',
+  glob: 'ask',
+  grep: 'ask',
+  list: 'ask',
+  bash: 'ask',
+  task: 'ask',
+  external_directory: 'ask',
+  todowrite: 'ask',
+  question: 'ask',
+  webfetch: 'ask',
+  websearch: 'ask',
+  lsp: 'ask',
+  doom_loop: 'ask',
+  skill: 'ask',
+} as const;
+const AGOR_MANAGED_AGENT = 'agor-managed';
 
-  for (const field of ['info', 'part'] as const) {
-    const nested = properties[field];
-    if (!nested || typeof nested !== 'object') continue;
-    const record = nested as Record<string, unknown>;
-    if (typeof record.sessionID === 'string') return record.sessionID === sessionId;
-    if (field === 'info' && event.type.startsWith('session.') && typeof record.id === 'string') {
-      return record.id === sessionId;
-    }
+type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
+
+export class OpenCodePermissionRejectedError extends Error {}
+
+type ManagedChild = {
+  stdout: NodeJS.ReadableStream | null;
+  stderr: NodeJS.ReadableStream | null;
+  exitCode: number | null;
+  kill(signal: NodeJS.Signals): boolean;
+  once(
+    event: 'exit',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): unknown;
+  once(
+    event: 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): unknown;
+  once(event: 'error', listener: (error: Error) => void): unknown;
+  removeListener(
+    event: 'exit',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): unknown;
+  removeListener(event: 'error', listener: (error: Error) => void): unknown;
+};
+
+export type RunOpenCodeTurnInput = {
+  agorSessionId: SessionID;
+  taskId: TaskID;
+  prompt: string;
+  agorAssistantMessageId: MessageID;
+  existingOpenCodeSessionId?: string;
+  title: string;
+  directory: string;
+  provider?: string;
+  model?: string;
+  mcpToken?: string;
+  permissionMode?: PermissionMode;
+  signal: AbortSignal;
+  persistOpenCodeSessionId: (sessionId: string) => Promise<void>;
+};
+
+export type OpenCodeTurnResult = {
+  openCodeSessionId: string;
+  sessionWasCreated: boolean;
+  finalMessage: {
+    content: string;
+    contentBlocks: ContentBlock[];
+    toolUses: ToolUse[];
+    metadata: Record<string, unknown>;
+  };
+};
+
+type InvocationConfig = {
+  mcp: Record<string, unknown>;
+  permission?: Record<string, 'ask' | 'allow' | 'deny'>;
+  [key: string]: unknown;
+};
+
+export type OpenCodeToolDependencies = {
+  sessionMCPRepo?: SessionMCPServerRepository;
+  mcpServerRepo?: MCPServerRepository;
+  mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository;
+  permissionService?: PermissionService;
+  messagesRepo?: MessagesRepository;
+  messagesService?: MessagesService;
+  tasksService?: TasksService;
+  sessionsService?: SessionsPatchClient;
+  resolveBinary?: () => Promise<string>;
+  spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
+  createClient?: typeof createOpencodeClient;
+  resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<InvocationConfig>;
+  randomBytes?: typeof nodeRandomBytes;
+  readinessTimeoutMs?: number;
+  shutdownTimeoutMs?: number;
+  eventDrainMs?: number;
+};
+
+type PackageLocation = { packageJsonPath: string; version: string };
+
+function collectConfigSecrets(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const credential = /^(?:Bearer|Basic)\s+(.+)$/i.exec(value)?.[1];
+    return credential ? [value, credential] : [value];
+  }
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) return value.flatMap((item) => collectConfigSecrets(item));
+  return Object.values(value).flatMap((item) => collectConfigSecrets(item));
+}
+
+function collectEnvironmentSecrets(environment: NodeJS.ProcessEnv): string[] {
+  const declared = new Set(
+    (environment.AGOR_USER_ENV_KEYS ?? '')
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean)
+  );
+  return Object.entries(environment).flatMap(([key, value]) =>
+    value && (declared.has(key) || /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)$/i.test(key))
+      ? [value]
+      : []
+  );
+}
+
+type TurnSanitizer = {
+  text(value: string): string;
+  error(value: unknown): Error;
+};
+
+function createTurnSanitizer(secrets: readonly string[]): TurnSanitizer {
+  const uniqueSecrets = [...new Set(secrets.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const text = (value: string) =>
+    uniqueSecrets.reduce((safe, secret) => safe.replaceAll(secret, '[REDACTED]'), value);
+  const error = (value: unknown): Error => {
+    const failure = value instanceof Error ? value : new Error(String(value));
+    const seen = new WeakSet<Error>();
+    const normalize = (unsafe: Error): Error => {
+      if (seen.has(unsafe)) return new Error('[Circular error cause]');
+      seen.add(unsafe);
+
+      const safe = new Error(text(unsafe.message));
+      Object.defineProperty(safe, 'name', {
+        value: text(unsafe.name || 'Error'),
+        configurable: true,
+        writable: true,
+      });
+      if (unsafe.stack) safe.stack = text(unsafe.stack);
+      if (unsafe.cause !== undefined) {
+        const safeCause =
+          unsafe.cause instanceof Error
+            ? normalize(unsafe.cause)
+            : new Error(text(String(unsafe.cause)));
+        Object.defineProperty(safe, 'cause', {
+          value: safeCause,
+          configurable: true,
+          writable: true,
+        });
+      }
+      return safe;
+    };
+    return normalize(failure);
+  };
+  return { text, error };
+}
+
+function automaticallyAllowsOpenCodePermission(
+  permissionMode: PermissionMode | undefined,
+  permission: string
+): boolean {
+  if (
+    permissionMode === 'bypassPermissions' ||
+    permissionMode === 'allow-all' ||
+    permissionMode === 'yolo'
+  ) {
+    return true;
+  }
+  if (
+    permissionMode === 'acceptEdits' ||
+    permissionMode === 'auto' ||
+    permissionMode === 'autoEdit'
+  ) {
+    return permission === 'edit' || permission === 'write';
   }
   return false;
 }
 
-export interface OpenCodeConfig {
-  enabled: boolean;
-  serverUrl: string;
+function asUnknownAsyncIterable(value: unknown): AsyncIterable<unknown> {
+  if (value && typeof value === 'object') {
+    if (Symbol.asyncIterator in value) return value as AsyncIterable<unknown>;
+    if (Symbol.iterator in value) {
+      const iterable = value as Iterable<unknown>;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield* iterable;
+        },
+      };
+    }
+  }
+  throw new Error('OpenCode event subscription returned no iterable stream');
+}
+
+async function findPackageLocation(
+  entryPath: string,
+  packageName: string
+): Promise<PackageLocation> {
+  let current = dirname(entryPath);
+  for (;;) {
+    const packageJsonPath = join(current, 'package.json');
+    try {
+      const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
+        name?: string;
+        version?: string;
+      };
+      if (parsed.name === packageName && parsed.version) {
+        return { packageJsonPath, version: parsed.version };
+      }
+    } catch {
+      // Keep walking toward the package root.
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
+}
+
+export async function resolvePackagedOpenCodeBinary(): Promise<string> {
+  const require = createRequire(import.meta.url);
+  let cli: PackageLocation;
+  let sdk: PackageLocation;
+  try {
+    cli = await findPackageLocation(require.resolve('opencode-ai/package.json'), 'opencode-ai');
+    sdk = await findPackageLocation(
+      fileURLToPath(import.meta.resolve('@opencode-ai/sdk')),
+      '@opencode-ai/sdk'
+    );
+  } catch (error) {
+    throw new Error(
+      `OpenCode ${OPENCODE_VERSION} is not fully installed; reinstall Agor with optional dependencies enabled`,
+      { cause: error }
+    );
+  }
+
+  if (cli.version !== OPENCODE_VERSION || sdk.version !== OPENCODE_VERSION) {
+    throw new Error(
+      `OpenCode SDK/CLI mismatch: expected ${OPENCODE_VERSION}, found SDK ${sdk.version} and CLI ${cli.version}`
+    );
+  }
+
+  const packageRoot = dirname(cli.packageJsonPath);
+  const binary =
+    process.platform === 'win32'
+      ? join(packageRoot, 'bin', 'opencode.exe')
+      : join(packageRoot, 'bin', '.opencode');
+  try {
+    await access(binary, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
+  } catch (error) {
+    throw new Error(
+      `Packaged OpenCode ${OPENCODE_VERSION} native binary is missing or not executable; reinstall Agor with optional dependencies enabled`,
+      { cause: error }
+    );
+  }
+  return binary;
 }
 
 /**
@@ -72,60 +328,377 @@ interface SessionContext {
   provider?: string;
   /** Branch directory path for project-scoped operations */
   branchPath?: string;
-  /** MCP token for Agor MCP server injection */
-  mcpToken?: string;
 }
 
-export class OpenCodeTool implements ITool {
-  readonly toolType = 'opencode' as const;
-  readonly name = 'OpenCode';
-
-  /** Default client (no directory override) */
-  private client: ReturnType<typeof createOpencodeClient> | null = null;
-  /** Directory-scoped clients keyed by branch path */
-  private directoryClients: Map<string, ReturnType<typeof createOpencodeClient>> = new Map();
-  private config: OpenCodeConfig;
-  private messagesService?: MessagesService;
+export class OpenCodeTool {
+  private client: OpenCodeClient | null = null;
+  private readonly dependencies: Required<
+    Pick<
+      OpenCodeToolDependencies,
+      | 'resolveBinary'
+      | 'spawn'
+      | 'createClient'
+      | 'resolveInvocationConfig'
+      | 'randomBytes'
+      | 'readinessTimeoutMs'
+      | 'shutdownTimeoutMs'
+      | 'eventDrainMs'
+    >
+  >;
   private sessionContexts: Map<string, SessionContext> = new Map(); // Agor session ID → session context
-  /** Tracks which sessions have had MCP servers injected (hash-based) */
-  private injectedMcpHash: Map<string, string> = new Map();
   /** MCP repository dependencies for resolving user-defined MCP servers */
   private sessionMCPRepo?: SessionMCPServerRepository;
   private mcpServerRepo?: MCPServerRepository;
+  private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository;
+  private readonly permissionService?: PermissionService;
+  private readonly messagesRepo?: MessagesRepository;
+  private readonly messagesService?: MessagesService;
+  private readonly tasksService?: TasksService;
+  private readonly sessionsService?: SessionsPatchClient;
+  private readonly permissionLocks = new Map<SessionID, Promise<void>>();
 
-  /**
-   * Extract user-facing response text from OpenCode parts.
-   * Prefers explicit text parts and falls back to reasoning text when no text parts exist.
-   */
-  private extractDisplayTextFromParts(parts: Array<{ type: string; text?: string }>): string {
-    const textParts = parts
-      .filter((part) => part.type === 'text' && typeof part.text === 'string' && part.text.trim())
-      .map((part) => part.text as string);
-
-    if (textParts.length > 0) {
-      return textParts.join('\n');
-    }
-
-    const reasoningParts = parts
-      .filter(
-        (part) => part.type === 'reasoning' && typeof part.text === 'string' && part.text.trim()
-      )
-      .map((part) => part.text as string);
-
-    return reasoningParts.join('\n');
+  constructor(dependencies: OpenCodeToolDependencies) {
+    this.sessionMCPRepo = dependencies.sessionMCPRepo;
+    this.mcpServerRepo = dependencies.mcpServerRepo;
+    this.mcpOAuthAuthHeadersRepo = dependencies.mcpOAuthAuthHeadersRepo;
+    this.permissionService = dependencies.permissionService;
+    this.messagesRepo = dependencies.messagesRepo;
+    this.messagesService = dependencies.messagesService;
+    this.tasksService = dependencies.tasksService;
+    this.sessionsService = dependencies.sessionsService;
+    this.dependencies = {
+      resolveBinary: dependencies.resolveBinary ?? resolvePackagedOpenCodeBinary,
+      spawn:
+        dependencies.spawn ??
+        ((executable, args, options) => nodeSpawn(executable, [...args], options)),
+      createClient: dependencies.createClient ?? createOpencodeClient,
+      resolveInvocationConfig:
+        dependencies.resolveInvocationConfig ??
+        ((input) =>
+          this.buildInvocationConfig(input.agorSessionId, input.mcpToken, input.directory)),
+      randomBytes: dependencies.randomBytes ?? nodeRandomBytes,
+      readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
+      shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
+      eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
+    };
   }
 
-  constructor(
-    config: OpenCodeConfig,
-    messagesService?: MessagesService,
-    sessionMCPRepo?: SessionMCPServerRepository,
-    mcpServerRepo?: MCPServerRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
-  ) {
-    this.config = config;
-    this.messagesService = messagesService;
-    this.sessionMCPRepo = sessionMCPRepo;
-    this.mcpServerRepo = mcpServerRepo;
+  async runTurn(
+    input: RunOpenCodeTurnInput,
+    streamingCallbacks?: StreamingCallbacks
+  ): Promise<OpenCodeTurnResult> {
+    const environmentSecrets = collectEnvironmentSecrets(process.env);
+    const preliminarySanitizer = createTurnSanitizer([input.mcpToken ?? '', ...environmentSecrets]);
+    let resolvedInvocationConfig: InvocationConfig;
+    try {
+      resolvedInvocationConfig = await this.dependencies.resolveInvocationConfig(input);
+    } catch (error) {
+      throw preliminarySanitizer.error(error);
+    }
+    // OPENCODE_CONFIG_CONTENT is the highest-precedence, invocation-scoped
+    // configuration. Force every interceptable permission through Agor even if
+    // the repository's opencode.json contains permissive rules.
+    const invocationConfig: InvocationConfig = {
+      ...resolvedInvocationConfig,
+      permission: AGOR_PERMISSION_INTERCEPTION,
+      agent: {
+        ...(typeof resolvedInvocationConfig.agent === 'object' &&
+        resolvedInvocationConfig.agent !== null
+          ? resolvedInvocationConfig.agent
+          : {}),
+        [AGOR_MANAGED_AGENT]: {
+          mode: 'primary',
+          permission: AGOR_PERMISSION_INTERCEPTION,
+        },
+      },
+    };
+    const configContent = JSON.stringify(invocationConfig);
+    const password = this.dependencies.randomBytes(32).toString('base64url');
+    const username = 'agor';
+    const authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+    const turnSecrets = [
+      password,
+      authorization,
+      input.mcpToken ?? '',
+      configContent,
+      ...collectConfigSecrets(invocationConfig),
+      ...environmentSecrets,
+    ];
+    const sanitizer = createTurnSanitizer(turnSecrets);
+    let child: ManagedChild;
+    try {
+      const executable = await this.dependencies.resolveBinary();
+      child = this.dependencies.spawn(executable, ['serve', '--hostname=127.0.0.1', '--port=0'], {
+        cwd: input.directory,
+        detached: false,
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG_CONTENT: configContent,
+          // OpenCode resolves this dedicated runtime override when creating
+          // session permission rules. Keep it alongside the config content so
+          // permissive project/agent rules cannot bypass Agor interception.
+          OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
+          OPENCODE_SERVER_USERNAME: username,
+          OPENCODE_SERVER_PASSWORD: password,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      throw sanitizer.error(error);
+    }
+    const close = this.createBoundedClose(child);
+    let stopEventCollector = async () => {};
+    let turnCompleted = false;
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () => {
+      cleanupPromise ??= (async () => {
+        if (!turnCompleted) {
+          await this.settlesWithin(
+            this.abortActiveSession(input),
+            this.dependencies.shutdownTimeoutMs
+          );
+        }
+        const collectorStop = this.settleWithinOrThrow(
+          stopEventCollector(),
+          this.dependencies.shutdownTimeoutMs,
+          'OpenCode event collector did not settle within the shutdown timeout'
+        );
+        this.permissionService?.cancelPendingRequests(input.agorSessionId);
+        // Child containment must start even if iterator.return() or the
+        // collector itself ignores cancellation forever.
+        const [collectorResult, closeResult] = await Promise.allSettled([collectorStop, close()]);
+        const failures = [collectorResult, closeResult].flatMap((result) =>
+          result.status === 'rejected' ? [result.reason] : []
+        );
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            'OpenCode event collector and child cleanup both failed'
+          );
+        }
+        if (failures.length === 1) throw failures[0];
+      })();
+      return cleanupPromise;
+    };
+    const abortHandler = () => {
+      void cleanup().catch(() => undefined);
+    };
+    input.signal.addEventListener('abort', abortHandler, { once: true });
+
+    let outcome: OpenCodeTurnResult | undefined;
+    let turnFailure: Error | undefined;
+    try {
+      const baseUrl = await this.waitForReadiness(child, turnSecrets);
+      this.client = this.dependencies.createClient({
+        baseUrl,
+        directory: input.directory,
+        headers: { Authorization: authorization },
+      });
+
+      let openCodeSessionId = input.existingOpenCodeSessionId;
+      let sessionWasCreated = false;
+      if (openCodeSessionId) {
+        const response = await this.client.session.get({
+          path: { id: openCodeSessionId },
+          query: { directory: input.directory },
+        });
+        if (response.error || !response.data || response.data.id !== openCodeSessionId) {
+          throw new Error(
+            `Unable to resume stored OpenCode session ${openCodeSessionId}; verify that its state is available under the executor identity`
+          );
+        }
+      } else {
+        const created = await this.createSession({
+          title: input.title,
+          projectName: 'agor',
+          model: input.model,
+          provider: input.provider,
+          workingDirectory: input.directory,
+        });
+        openCodeSessionId = created.sessionId;
+        sessionWasCreated = true;
+        await input.persistOpenCodeSessionId(openCodeSessionId);
+      }
+
+      this.setSessionContext(
+        input.agorSessionId,
+        openCodeSessionId,
+        input.model,
+        input.provider,
+        input.directory
+      );
+      if (input.signal.aborted)
+        throw new Error('OpenCode turn was aborted before prompt submission');
+      const finalMessage = await this.executeTask(
+        input,
+        {
+          opencodeSessionId: openCodeSessionId,
+          model: input.model,
+          provider: input.provider,
+          branchPath: input.directory,
+        },
+        streamingCallbacks,
+        (stop) => {
+          stopEventCollector = stop;
+        },
+        sanitizer
+      );
+      turnCompleted = true;
+      outcome = { openCodeSessionId, sessionWasCreated, finalMessage };
+    } catch (error) {
+      turnFailure = sanitizer.error(error);
+    }
+
+    input.signal.removeEventListener('abort', abortHandler);
+    try {
+      await cleanup();
+    } catch (error) {
+      turnFailure = sanitizer.error(error);
+    }
+    this.sessionContexts.delete(input.agorSessionId);
+    this.client = null;
+
+    if (turnFailure) throw turnFailure;
+    if (!outcome) throw new Error('OpenCode turn ended without a result');
+    return outcome;
+  }
+
+  private async abortActiveSession(input: RunOpenCodeTurnInput): Promise<void> {
+    const context = this.getSessionContext(input.agorSessionId);
+    if (!context || !this.client) return;
+    try {
+      await this.client.session.abort({
+        path: { id: context.opencodeSessionId },
+        query: { directory: input.directory },
+      });
+    } catch {
+      // Local child cleanup remains authoritative.
+    }
+  }
+
+  private waitForReadiness(child: ManagedChild, secrets: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let output = '';
+      let settled = false;
+      const redact = (value: string) =>
+        secrets.reduce(
+          (safe, secret) => (secret ? safe.replaceAll(secret, '[REDACTED]') : safe),
+          value
+        );
+      const diagnostic = () => {
+        const tail = redact(output.slice(-MAX_STARTUP_OUTPUT)).trim();
+        return tail ? `: ${tail}` : '';
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        child.stdout?.off('data', onData);
+        child.stderr?.off('data', onData);
+        child.removeListener('exit', onExit);
+        child.removeListener('error', onError);
+      };
+      const fail = (message: string) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`${message}${diagnostic()}`));
+      };
+      const onData = (chunk: Buffer | string) => {
+        output = `${output}${chunk.toString()}`.slice(-MAX_STARTUP_OUTPUT);
+        const matches = [
+          ...output.matchAll(/(?:^|\n)opencode server listening on (https?:\/\/[^\s]+)/g),
+        ];
+        const raw = matches.at(-1)?.[1]?.replace(/[),.;]+$/, '');
+        if (!raw) return;
+        try {
+          const url = new URL(raw);
+          if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) {
+            fail('OpenCode reported a non-loopback readiness URL');
+            return;
+          }
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(url.origin);
+        } catch {
+          fail('OpenCode reported malformed readiness output');
+        }
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+        fail(
+          `OpenCode server exited before readiness (code ${code ?? 'null'}, signal ${signal ?? 'none'})`
+        );
+      const onError = (error: Error) => fail(`OpenCode server failed to start: ${error.message}`);
+      const timer = setTimeout(
+        () =>
+          fail(
+            `OpenCode server readiness timed out after ${this.dependencies.readinessTimeoutMs}ms`
+          ),
+        this.dependencies.readinessTimeoutMs
+      );
+      child.stdout?.on('data', onData);
+      child.stderr?.on('data', onData);
+      child.once('exit', onExit);
+      child.once('error', onError);
+    });
+  }
+
+  private createBoundedClose(child: ManagedChild): () => Promise<void> {
+    let exitObserved = child.exitCode !== null;
+    const exited = exitObserved
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          const observe = () => {
+            exitObserved = true;
+            resolve();
+          };
+          child.once('exit', observe);
+          child.once('close', observe);
+        });
+    let closePromise: Promise<void> | undefined;
+    return () => {
+      closePromise ??= (async () => {
+        if (exitObserved || child.exitCode !== null) return;
+        child.kill('SIGTERM');
+        if (await this.settlesWithin(exited, this.dependencies.shutdownTimeoutMs)) return;
+        child.kill('SIGKILL');
+        if (!(await this.settlesWithin(exited, this.dependencies.shutdownTimeoutMs))) {
+          throw new Error('OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup');
+        }
+      })();
+      return closePromise;
+    };
+  }
+
+  private async settlesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async settleWithinOrThrow(
+    promise: Promise<void>,
+    timeoutMs: number,
+    timeoutMessage: string
+  ): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -137,22 +710,19 @@ export class OpenCodeTool implements ITool {
    * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
    * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
    * @param branchPath - Branch directory path for project-scoped operations
-   * @param mcpToken - MCP token for Agor MCP server injection
    */
-  setSessionContext(
+  private setSessionContext(
     agorSessionId: string,
     opencodeSessionId: string,
     model?: string,
     provider?: string,
-    branchPath?: string,
-    mcpToken?: string
+    branchPath?: string
   ): void {
     this.sessionContexts.set(agorSessionId, {
       opencodeSessionId,
       model,
       provider,
       branchPath,
-      mcpToken,
     });
   }
 
@@ -163,1016 +733,346 @@ export class OpenCodeTool implements ITool {
     return this.sessionContexts.get(agorSessionId);
   }
 
-  /**
-   * Get a client for the default (no directory override) connection.
-   * Backward-compatible wrapper around getClientForDirectory.
-   */
-  private getClient(): ReturnType<typeof createOpencodeClient> {
-    return this.getClientForDirectory(undefined);
+  /** Return the invocation-scoped authenticated client. */
+  private getClientForDirectory(_directory: string | undefined): OpenCodeClient {
+    if (!this.client) throw new Error('OpenCode managed server is not running');
+    return this.client;
   }
 
-  /**
-   * Get or create a directory-scoped client.
-   * If no directory is provided, returns the default client (lazy-initialized).
-   * If a directory is provided, returns a cached client scoped to that directory.
-   */
-  private getClientForDirectory(
-    directory: string | undefined
-  ): ReturnType<typeof createOpencodeClient> {
-    if (!directory) {
-      if (!this.client) {
-        this.client = createOpencodeClient({
-          baseUrl: this.config.serverUrl,
-        });
-      }
-      return this.client;
-    }
-
-    const cached = this.directoryClients.get(directory);
-    if (cached) {
-      return cached;
-    }
-
-    const client = createOpencodeClient({
-      baseUrl: this.config.serverUrl,
-      directory,
-    });
-    this.directoryClients.set(directory, client);
-    return client;
-  }
-
-  /**
-   * Inject MCP servers into OpenCode for the given session.
-   *
-   * Strategy: Use a session-specific MCP name (`agor_<shortId>`) to avoid conflicts with
-   * stale entries that may be cached in OpenCode's memory from previous sessions.
-   * The handler clears the `mcp` section in opencode.json to prevent stale entries from
-   * being loaded at server startup, and we inject fresh entries via mcp.add() each time.
-   *
-   * For user-defined MCP servers: uses a hash to avoid redundant re-injection.
-   */
-  private async ensureMcpServers(
+  private async buildInvocationConfig(
     sessionId: string,
-    client: ReturnType<typeof createOpencodeClient>,
     mcpToken?: string,
-    branchPath?: string
-  ): Promise<void> {
-    if (mcpToken) {
-      // Use session-specific MCP name to avoid conflicts with stale entries
-      const sessionShort = shortId(sessionId);
-      const mcpName = `agor_${sessionShort}`;
-
-      try {
-        const daemonUrl = await getDaemonUrl();
-        const mcpUrl = `${daemonUrl}/mcp`;
-
-        const mcpResult = await client.mcp.add({
-          body: {
-            name: mcpName,
-            config: {
-              type: 'remote' as const,
-              url: mcpUrl,
-              enabled: true,
-              headers: { Authorization: `Bearer ${mcpToken}` },
-            },
-          },
-          query: branchPath ? { directory: branchPath } : undefined,
-        });
-        console.log(
-          `[OpenCodeTool] Injected Agor MCP as "${mcpName}" for session ${shortId}`,
-          mcpResult.data ? `status: ${JSON.stringify(mcpResult.data)}` : ''
-        );
-      } catch (error) {
-        console.warn(`[OpenCodeTool] Failed to inject Agor MCP server "${mcpName}":`, error);
-      }
+    _branchPath?: string
+  ): Promise<InvocationConfig> {
+    if (!mcpToken) {
+      throw new Error('OpenCode requires the built-in Agor MCP token');
     }
-
-    // Inject user-defined MCP servers (use hash to avoid redundant re-injection)
-    const configHash = `${mcpToken ?? ''}:${sessionId}`;
-    if (this.injectedMcpHash.get(sessionId) === configHash) {
-      return;
+    if (!this.sessionMCPRepo || !this.mcpServerRepo) {
+      throw new Error('OpenCode requires MCP repository dependencies');
     }
+    const mcp: Record<string, unknown> = {};
+    mcp[`agor_${shortId(sessionId)}`] = {
+      type: 'remote',
+      url: `${await getDaemonUrl()}/mcp`,
+      enabled: true,
+      headers: { Authorization: `Bearer ${mcpToken}` },
+    };
 
-    if (this.sessionMCPRepo && this.mcpServerRepo) {
-      try {
-        const servers = await getMcpServersForSession(sessionId as SessionID, {
-          sessionMCPRepo: this.sessionMCPRepo,
-          mcpServerRepo: this.mcpServerRepo,
-          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        });
+    const servers = await getMcpServersForSession(sessionId as SessionID, {
+      mode: 'strict',
+      sessionMCPRepo: this.sessionMCPRepo,
+      mcpServerRepo: this.mcpServerRepo,
+      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+    });
 
-        for (const { server } of servers) {
-          const sanitizedName = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-
-          try {
-            if (server.transport === 'stdio') {
-              await client.mcp.add({
-                body: {
-                  name: sanitizedName,
-                  config: {
-                    type: 'local' as const,
-                    command: [server.command!, ...(server.args || [])],
-                    environment: (server.env as Record<string, string>) ?? {},
-                    enabled: true,
-                  },
-                },
-                query: branchPath ? { directory: branchPath } : undefined,
-              });
-            } else if (server.transport === 'http' || server.transport === 'sse') {
-              const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
-              const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
-              await client.mcp.add({
-                body: {
-                  name: sanitizedName,
-                  config: {
-                    type: 'remote' as const,
-                    url: server.url!,
-                    enabled: true,
-                    headers,
-                  },
-                },
-                query: branchPath ? { directory: branchPath } : undefined,
-              });
-            }
-            console.log(`[OpenCodeTool] Injected MCP server: ${sanitizedName}`);
-          } catch (error) {
-            console.warn(`[OpenCodeTool] Failed to inject MCP server "${sanitizedName}":`, error);
-          }
+    for (const { server } of servers) {
+      const sanitizedName = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      const name = `agor_${shortId(sessionId)}_${shortId(server.mcp_server_id)}_${sanitizedName}`;
+      if (server.transport === 'stdio') {
+        if (!server.command) {
+          throw new Error(`Attached MCP server ${server.name} is missing its command`);
         }
-      } catch (error) {
-        console.warn('[OpenCodeTool] Failed to resolve MCP servers for session:', error);
+        mcp[name] = {
+          type: 'local',
+          command: [server.command, ...(server.args || [])],
+          environment: (server.env as Record<string, string>) ?? {},
+          enabled: true,
+        };
+      } else if (server.transport === 'http' || server.transport === 'sse') {
+        if (!server.url) {
+          throw new Error(`Attached MCP server ${server.name} is missing its URL`);
+        }
+        let authHeaders: Record<string, string> | undefined;
+        try {
+          authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        } catch {
+          throw new Error(`Attached MCP server ${server.name} authentication failed`);
+        }
+        const authorization = Object.entries(authHeaders ?? {}).find(
+          ([name]) => name.toLowerCase() === 'authorization'
+        )?.[1];
+        if (
+          server.auth &&
+          server.auth.type !== 'none' &&
+          !/^Bearer\s+\S+$/i.test(authorization?.trim() ?? '')
+        ) {
+          throw new Error(
+            `Attached MCP server ${server.name} did not resolve a usable Authorization header`
+          );
+        }
+        const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
+        mcp[name] = {
+          type: 'remote',
+          url: server.url,
+          enabled: true,
+          headers,
+        };
+      } else {
+        throw new Error(
+          `Attached MCP server ${server.name} uses unsupported transport ${server.transport}`
+        );
       }
     }
-
-    this.injectedMcpHash.set(sessionId, configHash);
+    return { mcp, permission: AGOR_PERMISSION_INTERCEPTION };
   }
 
-  /**
-   * Build canonical Agor message content blocks from OpenCode parts.
-   *
-   * Behavior:
-   * - If OpenCode emitted regular text parts, keep reasoning as `thinking`.
-   * - If OpenCode emitted only reasoning text (no text parts), treat reasoning as user-visible `text`
-   *   to avoid rendering a "thought-only" assistant response.
-   */
-  private buildContentBlocksFromParts(
-    parts: Array<{
-      type: string;
-      text?: string;
-      tool?: string;
-      callID?: string;
-      id?: string;
-      state?: { input?: Record<string, unknown>; status?: string; output?: unknown };
-    }>
-  ): {
-    contentBlocks: Array<{
-      type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
-      [key: string]: unknown;
-    }>;
-    toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>;
-  } {
-    const contentBlocks: Array<{
-      type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
-      [key: string]: unknown;
-    }> = [];
-    const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-    const hasRenderableText = parts.some(
-      (part) => part.type === 'text' && typeof part.text === 'string' && part.text.trim()
+  /** Create a new OpenCode session on the managed runtime. */
+  private async createSession(config: CreateSessionConfig): Promise<SessionHandle> {
+    const client = this.getClientForDirectory(config.workingDirectory);
+    const response = await client.session.create({
+      body: { title: String(config.title || 'Agor Session') },
+      query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
+    });
+    if (response.error) throw new Error('OpenCode failed to create a session');
+    if (!response.data) throw new Error('OpenCode returned no session data');
+    return { sessionId: response.data.id, toolType: 'opencode' };
+  }
+
+  private async executeTask(
+    input: RunOpenCodeTurnInput,
+    context: SessionContext,
+    streamingCallbacks: StreamingCallbacks | undefined,
+    registerStopEventCollector: (stop: () => Promise<void>) => void,
+    sanitizer: TurnSanitizer
+  ): Promise<OpenCodeTurnResult['finalMessage']> {
+    const client = this.getClientForDirectory(context.branchPath);
+    const request = {
+      path: { id: context.opencodeSessionId },
+      signal: input.signal,
+      body: {
+        agent: AGOR_MANAGED_AGENT,
+        parts: [{ type: 'text' as const, text: input.prompt }],
+        ...(context.model && context.provider
+          ? { model: { providerID: context.provider, modelID: context.model } }
+          : {}),
+      },
+      query: context.branchPath ? { directory: context.branchPath } : undefined,
+    };
+    const transcriptRequest = {
+      path: { id: context.opencodeSessionId },
+      query: context.branchPath ? { directory: context.branchPath } : undefined,
+    };
+
+    const collectorController = new AbortController();
+    let subscription: Awaited<ReturnType<OpenCodeClient['event']['subscribe']>> | undefined;
+    let collector: Promise<void> | undefined;
+    let collectorStopPromise: Promise<void> | undefined;
+    const stopEventCollector = () => {
+      collectorStopPromise ??= (async () => {
+        collectorController.abort(input.signal.reason);
+        if (subscription) await subscription.stream.return?.(undefined);
+        if (collector) await collector;
+      })();
+      return collectorStopPromise;
+    };
+    registerStopEventCollector(stopEventCollector);
+
+    const baselineResponse = await client.session.messages(transcriptRequest);
+    if (baselineResponse.error || !Array.isArray(baselineResponse.data)) {
+      throw new Error('OpenCode failed to capture the pre-turn message baseline');
+    }
+    const baselineMessageIds = new Set(
+      baselineResponse.data.flatMap((entry) =>
+        entry?.info && typeof entry.info.id === 'string' ? [entry.info.id] : []
+      )
     );
 
-    for (const part of parts) {
-      if (part.type === 'reasoning' && part.text) {
-        contentBlocks.push({
-          type: hasRenderableText ? 'thinking' : 'text',
-          text: part.text,
-        });
-      } else if (part.type === 'text' && part.text) {
-        contentBlocks.push({
-          type: 'text',
-          text: part.text,
-        });
-      } else if (part.type === 'tool') {
-        const toolName = part.tool || 'unknown';
-        const toolInput = part.state?.input || {};
-        const toolCallId = part.callID || part.id || generateId();
+    if (input.signal.aborted) throw new Error('OpenCode turn was aborted before event collection');
+    let protocolError: Error | undefined;
+    let terminalSettled = false;
+    let settleTerminal!: (result: { error?: Error }) => void;
+    const terminal = new Promise<{ error?: Error }>((resolve) => {
+      settleTerminal = resolve;
+    });
+    let textStarted = false;
+    let thinkingStarted = false;
+    let sequence = 0;
+    const canUseTool =
+      this.permissionService &&
+      this.messagesRepo &&
+      this.messagesService &&
+      this.tasksService &&
+      this.sessionsService &&
+      this.sessionMCPRepo &&
+      this.mcpServerRepo
+        ? createCanUseToolCallback(input.agorSessionId, input.taskId, {
+            permissionService: this.permissionService,
+            tasksService: this.tasksService,
+            messagesRepo: this.messagesRepo,
+            messagesService: this.messagesService,
+            sessionsService: this.sessionsService,
+            permissionLocks: this.permissionLocks,
+            mcpServerRepo: this.mcpServerRepo,
+            sessionMCPRepo: this.sessionMCPRepo,
+            deferDeniedTerminalState: true,
+          })
+        : undefined;
 
-        contentBlocks.push({
-          type: 'tool_use',
-          id: toolCallId,
-          name: toolName,
-          input: toolInput,
-        });
-
-        toolUses.push({
-          id: toolCallId,
-          name: toolName,
-          input: toolInput,
-        });
-
-        if (part.state?.status === 'completed' && part.state.output) {
-          contentBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolCallId,
-            content: part.state.output,
-          });
-        }
-      }
-    }
-
-    return { contentBlocks, toolUses };
-  }
-
-  /**
-   * Get tool capabilities
-   */
-  getCapabilities(): ToolCapabilities {
-    return {
-      supportsSessionImport: false, // Future: add when OpenCode provides export API
-      supportsSessionCreate: true,
-      supportsLiveExecution: true,
-      supportsSessionFork: false, // Not currently supported
-      supportsChildSpawn: true, // Supported via Agor MCP tools
-      supportsGitState: false, // OpenCode doesn't track git state
-      supportsStreaming: true, // Supports SSE streaming
+    const settle = (error?: Error) => {
+      if (terminalSettled) return;
+      terminalSettled = true;
+      settleTerminal({ error });
     };
-  }
+    const settleAbort = () => settle(new Error('OpenCode turn was aborted'));
+    input.signal.addEventListener('abort', settleAbort, { once: true });
+    if (input.signal.aborted) settleAbort();
 
-  /**
-   * Check if OpenCode server is installed and accessible
-   */
-  async checkInstalled(): Promise<boolean> {
-    try {
-      const client = this.getClient();
-      // Try to list sessions as health check
-      await client.session.list();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async stopTask(sessionId: string): Promise<{ success: boolean; reason?: string }> {
-    const context = this.getSessionContext(sessionId);
-    if (!context) return { success: false, reason: 'OpenCode session is not initialized' };
-
-    try {
-      const response = await this.getClientForDirectory(context.branchPath).session.abort({
-        path: { id: context.opencodeSessionId },
-        query: context.branchPath ? { directory: context.branchPath } : undefined,
-      });
-      if (response.error) {
-        return { success: false, reason: JSON.stringify(response.error) };
-      }
-      return { success: true };
-    } catch (error) {
-      return { success: false, reason: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /**
-   * Create a new OpenCode session
-   */
-  async createSession?(config: CreateSessionConfig): Promise<SessionHandle> {
-    // Use directory-scoped client if workingDirectory is provided (branch path)
-    const client = this.getClientForDirectory(config.workingDirectory);
-
-    try {
-      // Note: OpenCode SDK session.create doesn't support model parameter
-      // Model is specified per-message in prompt() calls
-      const response = await client.session.create({
-        body: {
-          title: String(config.title || 'Agor Session'),
-        },
-        // Explicitly pass directory as query param (in addition to SDK header)
-        // to ensure the session is created in the correct branch directory
-        query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
-      });
-
-      if (response.error) {
-        throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
-      }
-
-      return {
-        sessionId: response.data.id,
-        toolType: 'opencode',
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to create OpenCode session: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  /**
-   * Execute task (send prompt) in OpenCode session WITH STREAMING
-   *
-   * Subscribes to OpenCode event stream, sends prompt, and streams response parts in real-time.
-   * Handles reasoning, text, tool execution, and file edits as they arrive.
-   * CONTRACT: Must call messagesService.create() with complete message
-   *
-   * NOTE: Must call setSessionContext() before this method to set OpenCode session ID and model
-   *
-   * @param sessionId - Agor session ID (for message creation)
-   * @param prompt - User prompt
-   * @param taskId - Task ID
-   * @param streamingCallbacks - Optional streaming callbacks for real-time UI updates
-   * @param messageIndex - Index for the assistant message (handler creates user message first)
-   */
-  async executeTask?(
-    sessionId: string,
-    prompt: string,
-    taskId?: string,
-    streamingCallbacks?: StreamingCallbacks,
-    messageIndex?: number
-  ): Promise<TaskResult> {
-    try {
-      // Get session context (OpenCode session ID, model, provider)
-      const context = this.getSessionContext(sessionId);
-
-      console.log('[OpenCodeTool] executeTask called:', {
-        sessionId,
-        opencodeSessionId: context?.opencodeSessionId,
-        taskId,
-        promptLength: prompt.length,
-        model: context?.model,
-        provider: context?.provider,
-        branchPath: context?.branchPath,
-        streaming: !!streamingCallbacks,
-      });
-
-      if (!context?.opencodeSessionId) {
-        throw new Error(
-          `OpenCode session ID not found for Agor session ${sessionId}. Call setSessionContext() first.`
-        );
-      }
-      console.log('[OpenCodeTool] Using OpenCode session:', context.opencodeSessionId);
-
-      if (context.model) {
-        console.log('[OpenCodeTool] Using model:', context.model);
-      }
-      if (context.provider) {
-        console.log('[OpenCodeTool] Using provider:', context.provider);
-      }
-
-      // Get the directory-scoped client
-      const branchPath = context.branchPath;
-      const client = this.getClientForDirectory(branchPath);
-
-      // Inject MCP servers (uses session-specific name to avoid stale entry conflicts)
-      await this.ensureMcpServers(sessionId, client, context.mcpToken, branchPath);
-
-      // Prepare prompt options
-      const promptOptions: {
-        path: { id: string };
-        body: {
-          parts: Array<{ type: 'text'; text: string }>;
-          model?: { providerID: string; modelID: string };
-        };
-        query?: { directory?: string };
-      } = {
-        path: { id: context.opencodeSessionId },
-        body: {
-          parts: [{ type: 'text', text: prompt }],
-        },
-        // Explicitly pass directory as query param to ensure correct branch scoping
-        query: branchPath ? { directory: branchPath } : undefined,
-      };
-
-      // Include model if provided
-      if (context.model && context.provider) {
-        console.log(
-          '[OpenCodeTool] Sending prompt with model:',
-          JSON.stringify({ providerID: context.provider, modelID: context.model })
-        );
-        promptOptions.body.model = { providerID: context.provider, modelID: context.model };
-      }
-
-      // If no streaming callbacks, use non-streaming path
-      if (!streamingCallbacks) {
-        console.log('[OpenCodeTool] No streaming callbacks, using non-streaming execution');
-        return await this.executeTaskNonStreaming(
-          client,
-          sessionId,
-          taskId,
-          promptOptions,
-          context.opencodeSessionId,
-          messageIndex
-        );
-      }
-
-      // STREAMING PATH: Subscribe to events and stream response parts
-      console.log('[OpenCodeTool] Starting streaming execution...');
-
-      // Track accumulated parts by part ID
-      const partContents = new Map<string, string>();
-      const partTypes = new Map<string, string>();
-      const allParts: Array<{ id: string; type: string; data: unknown }> = []; // Store all parts for later processing
-      let currentTextMessageId: string | null = null;
-      let currentReasoningMessageId: string | null = null;
-
-      // IMPORTANT: Subscribe to event stream BEFORE sending prompt
-      // Events are emitted in real-time as prompt executes
-      console.log('[OpenCodeTool] Subscribing to event stream...');
-      const eventStream = await client.event.subscribe({
-        // Pass directory to scope event stream to correct branch
-        query: branchPath ? { directory: branchPath } : undefined,
-      });
-      console.log('[OpenCodeTool] Event stream ready, sending prompt...');
-
-      // Start prompt in background (don't await yet)
-      const promptPromise = client.session.prompt(promptOptions);
-      console.log('[OpenCodeTool] Prompt sent, waiting for events...');
-
-      // Process events as they arrive
-      let _responseCompleted = false;
-      let assistantMessageId: string | undefined;
-      const metadata: {
-        messageId?: string;
-        parentMessageId?: string;
-        cost?: number;
-        tokens?: {
-          input: number;
-          output: number;
-          reasoning: number;
-          cache: { read: number; write: number };
-        };
-      } = {};
-
-      try {
-        console.log('[OpenCodeTool] Listening for events...');
-
-        for await (const event of eventStream.stream) {
-          if (!isOpenCodeSessionEvent(event, context.opencodeSessionId)) continue;
-
-          // Log event type (skip noisy heartbeats)
-          const eventType = event.type as string;
-          reportSdkActivity(streamingCallbacks.onPulse, 'opencode', eventType);
-          if (eventType !== 'server.heartbeat') {
-            console.log('[OpenCodeTool] Event:', eventType);
-          }
-
-          // Check if this event is for our session
-          if ('properties' in event) {
-            // Handle permission.asked / permission.updated events BEFORE processing messages.
-            // When OpenCode needs permission (e.g., external_directory access), it emits this
-            // event and waits for a response. Without auto-granting, the session hangs forever.
-            if (
-              (eventType === 'permission.asked' || eventType === 'permission.updated') &&
-              'id' in event.properties &&
-              'sessionID' in event.properties &&
-              event.properties.sessionID === context.opencodeSessionId
-            ) {
-              const permId = event.properties.id as string;
-              const permType = (
-                'type' in event.properties ? event.properties.type : 'unknown'
-              ) as string;
-              console.log(
-                `[OpenCodeTool] Auto-granting permission: id=${permId}, type=${permType}`
-              );
-              try {
-                await client.postSessionIdPermissionsPermissionId({
-                  path: {
-                    id: context.opencodeSessionId,
-                    permissionID: permId,
-                  },
-                  body: { response: 'always' },
-                  query: branchPath ? { directory: branchPath } : undefined,
-                });
-                console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
-              } catch (permErr) {
-                console.error('[OpenCodeTool] Failed to auto-grant permission:', permErr);
-              }
-              continue;
+    const applyEffects = async (effects: OpenCodeEventEffect[]) => {
+      for (const effect of effects) {
+        switch (effect.type) {
+          case 'text-delta':
+            if (!streamingCallbacks) break;
+            if (!textStarted) {
+              textStarted = true;
+              await streamingCallbacks.onStreamStart(input.agorAssistantMessageId, {
+                session_id: input.agorSessionId,
+                task_id: input.taskId,
+                role: 'assistant',
+                timestamp: new Date().toISOString(),
+              });
             }
-
-            // First, identify the assistant message when it's created
-            if (
-              event.type === 'message.updated' &&
-              'info' in event.properties &&
-              event.properties.info.sessionID === context.opencodeSessionId &&
-              event.properties.info.role === 'assistant'
-            ) {
-              if (!assistantMessageId) {
-                assistantMessageId = event.properties.info.id;
-                console.log('[OpenCodeTool] Assistant message identified:', assistantMessageId);
-
-                // Capture metadata
-                metadata.messageId = event.properties.info.id;
-                if (event.properties.info.parentID) {
-                  metadata.parentMessageId = event.properties.info.parentID;
-                }
-              }
+            await streamingCallbacks.onStreamChunk(
+              input.agorAssistantMessageId,
+              effect.delta,
+              sequence++
+            );
+            break;
+          case 'reasoning-delta':
+            if (!streamingCallbacks?.onThinkingChunk) break;
+            if (!thinkingStarted) {
+              thinkingStarted = true;
+              await streamingCallbacks.onThinkingStart?.(input.agorAssistantMessageId, {});
             }
-
-            // Handle message.part.updated events - these contain the streaming updates
-            // ONLY process parts from the assistant message, not the user message!
-            if (event.type === 'message.part.updated' && 'part' in event.properties) {
-              const part = event.properties.part;
-
-              // Skip if this part is not from the assistant message
-              if (!assistantMessageId || part.messageID !== assistantMessageId) {
-                console.log(
-                  '[OpenCodeTool] Skipping part from non-assistant message:',
-                  part.messageID
-                );
-                continue;
-              }
-
-              // Store this part for later processing (building final message)
-              const existingPartIndex = allParts.findIndex((p) => p.id === part.id);
-              if (existingPartIndex >= 0) {
-                allParts[existingPartIndex] = { id: part.id, type: part.type, data: part };
-              } else {
-                allParts.push({ id: part.id, type: part.type, data: part });
-              }
-
-              // OpenCode sends full text each time, not deltas
-              // We need to calculate the delta ourselves
-              const newText =
-                'text' in part &&
-                typeof (part as OpenCodePart & { text?: string }).text === 'string'
-                  ? (part as OpenCodePart & { text: string }).text
-                  : undefined;
-
-              if (newText) {
-                // Get previous text for this part
-                const previousText = partContents.get(part.id) || '';
-
-                // Calculate delta (new characters added)
-                const delta = newText.substring(previousText.length);
-
-                // Update stored content
-                partContents.set(part.id, newText);
-                partTypes.set(part.id, part.type);
-
-                console.log(
-                  '[OpenCodeTool] Part update:',
-                  part.type,
-                  'delta length:',
-                  delta.length,
-                  'total length:',
-                  newText.length
-                );
-
-                // Stream delta to UI based on part type
-                if (delta.length > 0) {
-                  if (part.type === 'reasoning') {
-                    // Stream reasoning chunks
-                    if (!currentReasoningMessageId) {
-                      currentReasoningMessageId = generateId();
-                      streamingCallbacks.onThinkingStart?.(
-                        currentReasoningMessageId as MessageID,
-                        {}
-                      );
-                    }
-                    streamingCallbacks.onThinkingChunk?.(
-                      currentReasoningMessageId as MessageID,
-                      delta
+            await streamingCallbacks.onThinkingChunk(input.agorAssistantMessageId, effect.delta);
+            break;
+          case 'tool-activity':
+            streamingCallbacks?.onPulse?.('progress', `opencode_tool_${effect.status}`);
+            break;
+          case 'permission':
+            streamingCallbacks?.onPulse?.('waiting', 'permission.request');
+            {
+              let response: 'once' | 'always' | 'reject' = 'reject';
+              let handledByAgor = false;
+              if (canUseTool) {
+                if (
+                  automaticallyAllowsOpenCodePermission(
+                    input.permissionMode,
+                    effect.request.permission
+                  )
+                ) {
+                  response = 'once';
+                } else {
+                  handledByAgor = true;
+                  const decision = await canUseTool(
+                    effect.request.permission,
+                    { ...effect.request.metadata, patterns: effect.request.patterns },
+                    { signal: input.signal }
+                  );
+                  if (decision.behavior === 'allow') {
+                    const remembered = decision.updatedPermissions?.some(
+                      (update) => update.destination !== 'session'
                     );
-                  } else if (part.type === 'text') {
-                    // Stream text chunks
-                    if (!currentTextMessageId) {
-                      currentTextMessageId = generateId();
-                      streamingCallbacks.onStreamStart(currentTextMessageId as MessageID, {
-                        session_id: sessionId as SessionID,
-                        task_id: taskId as TaskID | undefined,
-                        role: 'assistant',
-                        timestamp: new Date().toISOString(),
-                      });
-                    }
-                    streamingCallbacks.onStreamChunk(currentTextMessageId as MessageID, delta);
-                  } else if (part.type === 'tool') {
-                    // Tool execution - log full details
-                    console.log('[OpenCodeTool] ========== TOOL PART ==========');
-                    console.log('[OpenCodeTool] Tool part ID:', part.id);
-                    console.log('[OpenCodeTool] Tool part data:', JSON.stringify(part, null, 2));
-                    console.log('[OpenCodeTool] ================================');
+                    response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
                   }
                 }
-              } else if (part.type === 'tool') {
-                // Tool parts without text field - log full structure
-                console.log('[OpenCodeTool] ========== TOOL PART (no text) ==========');
-                console.log('[OpenCodeTool] Tool part ID:', part.id);
-                console.log('[OpenCodeTool] Tool part data:', JSON.stringify(part, null, 2));
-                console.log('[OpenCodeTool] ===================================');
+              }
+              const reply = await client.postSessionIdPermissionsPermissionId({
+                path: {
+                  id: context.opencodeSessionId,
+                  permissionID: effect.request.id,
+                },
+                query: context.branchPath ? { directory: context.branchPath } : undefined,
+                body: { response },
+              });
+              if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
+              if (response === 'reject') {
+                throw handledByAgor
+                  ? new OpenCodePermissionRejectedError('OpenCode permission was rejected')
+                  : new Error('OpenCode permission was rejected');
               }
             }
-
-            // Check for session idle status - indicates response is complete
-            if (event.type === 'session.status' && event.properties.status.type === 'idle') {
-              console.log('[OpenCodeTool] Session became idle, response complete');
-              _responseCompleted = true;
-              break; // Exit event loop
-            }
-          }
-        }
-      } finally {
-        // Clean up event stream
-        console.log('[OpenCodeTool] Closing event stream...');
-        // Note: The SDK's async generator should clean up automatically when we break/return
-      }
-
-      // Wait for prompt to complete
-      console.log('[OpenCodeTool] Waiting for prompt response...');
-      const response = await promptPromise;
-
-      if (response.error) {
-        throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
-      }
-
-      console.log('[OpenCodeTool] ========== FINAL RESPONSE ==========');
-      console.log('[OpenCodeTool] Response data:', JSON.stringify(response.data, null, 2));
-      console.log('[OpenCodeTool] ===================================');
-
-      // Check for error in response
-      let hasError = false;
-      let errorMessage = '';
-      const responseInfo = response.data.info as
-        | (typeof response.data.info & {
-            error?: { data?: { message?: string }; message?: string };
-          })
-        | undefined;
-      if (responseInfo?.error) {
-        const errorInfo = responseInfo.error;
-        errorMessage =
-          errorInfo.data?.message || errorInfo.message || 'Unknown error from OpenCode';
-        console.error('[OpenCodeTool] OpenCode returned error:', errorMessage);
-        hasError = true;
-
-        // Stream the error message to the user as assistant response
-        if (!currentTextMessageId) {
-          currentTextMessageId = generateId();
-          streamingCallbacks.onStreamStart(currentTextMessageId as MessageID, {
-            session_id: sessionId as SessionID,
-            task_id: taskId as TaskID | undefined,
-            role: 'assistant',
-            timestamp: new Date().toISOString(),
-          });
-        }
-
-        // Format error message for display
-        const formattedError = `❌ **OpenCode Error**\n\n${errorMessage}`;
-        streamingCallbacks.onStreamChunk(currentTextMessageId as MessageID, formattedError);
-      }
-
-      // End streaming notifications
-      if (currentReasoningMessageId) {
-        streamingCallbacks.onThinkingEnd?.(currentReasoningMessageId as MessageID);
-      }
-      if (currentTextMessageId) {
-        streamingCallbacks.onStreamEnd(currentTextMessageId as MessageID);
-      }
-
-      // Extract final text from parts (or use error message if error occurred)
-      let responseText = '';
-
-      if (hasError) {
-        // Use the error message as the response text
-        responseText = `❌ **OpenCode Error**\n\n${errorMessage}`;
-      } else {
-        // Extract metadata from parts
-        for (const part of response.data.parts || []) {
-          // Extract metadata from step-finish part
-          if (part.type === 'step-finish') {
-            metadata.cost = part.cost;
-            metadata.tokens = {
-              input: part.tokens.input,
-              output: part.tokens.output,
-              reasoning: part.tokens.reasoning,
-              cache: {
-                read: part.tokens.cache.read,
-                write: part.tokens.cache.write,
-              },
-            };
-          }
-        }
-
-        responseText = this.extractDisplayTextFromParts(
-          (response.data.parts || []) as Array<{ type: string; text?: string }>
-        );
-        console.log('[OpenCodeTool] Final text length:', responseText.length);
-
-        // Fallback: if no text found, return message
-        if (!responseText) {
-          responseText = 'No response text received from OpenCode';
+            break;
+          case 'idle':
+            settle();
+            break;
+          case 'error':
+            protocolError = new Error(`OpenCode session failed: ${sanitizer.text(effect.message)}`);
+            settle(protocolError);
+            break;
         }
       }
-
-      // Create assistant message in Agor database with OpenCode metadata
-      if (!this.messagesService) {
-        throw new Error('Messages service not available');
-      }
-
-      // Use provided index or default to 0
-      // Handler should create user message first with index N, then pass N+1 here
-      const assistantIndex = messageIndex ?? 0;
-
-      // Process parts from final response (not from streaming cache)
-      // The final response contains ALL parts, including ones that weren't streamed
-      const finalParts = response.data.parts || [];
-      console.log(
-        '[OpenCodeTool] Building message content from',
-        finalParts.length,
-        'parts in final response'
-      );
-      console.log('[OpenCodeTool] Part types:', finalParts.map((p) => p.type).join(', '));
-      const { contentBlocks, toolUses } = this.buildContentBlocksFromParts(
-        finalParts as Array<{
-          type: string;
-          text?: string;
-          tool?: string;
-          callID?: string;
-          id?: string;
-          state?: { input?: Record<string, unknown>; status?: string; output?: unknown };
-        }>
-      );
-
-      // If no content blocks were created (error case), add the error text
-      if (contentBlocks.length === 0 && responseText) {
-        contentBlocks.push({
-          type: 'text',
-          text: responseText,
-        });
-      }
-
-      console.log(
-        '[OpenCodeTool] Created',
-        contentBlocks.length,
-        'content blocks,',
-        toolUses.length,
-        'tool uses'
-      );
-
-      // Best-effort diff enrichment for Edit/Write tool results
-      enrichContentBlocks(contentBlocks);
-
-      const message = await this.messagesService.create({
-        message_id: (currentTextMessageId || generateId()) as MessageID,
-        session_id: sessionId as SessionID,
-        task_id: taskId as TaskID | undefined,
-        type: 'assistant' as const,
-        role: MessageRole.ASSISTANT,
-        index: assistantIndex,
-        timestamp: new Date().toISOString(),
-        content_preview: responseText.substring(0, 200),
-        content: contentBlocks,
-        tool_uses: toolUses.length > 0 ? toolUses : undefined,
-        // Store OpenCode metadata
-        metadata:
-          Object.keys(metadata).length > 0
-            ? {
-                opencode: metadata,
-              }
-            : undefined,
-      });
-
-      console.log('[OpenCodeTool] Message created:', message.message_id);
-
-      return {
-        taskId: taskId || '',
-        status: hasError ? 'failed' : 'completed',
-        messages: [],
-        completedAt: new Date(),
-      };
-    } catch (error) {
-      console.error('[OpenCodeTool] executeTask failed:', error);
-      const errorObj = error instanceof Error ? error : new Error(String(error));
-      return {
-        taskId: taskId || '',
-        status: 'failed',
-        messages: [],
-        error: errorObj,
-        completedAt: new Date(),
-      };
-    }
-  }
-
-  /**
-   * Non-streaming execution path (fallback when no callbacks provided)
-   */
-  private async executeTaskNonStreaming(
-    client: ReturnType<typeof createOpencodeClient>,
-    sessionId: string,
-    taskId: string | undefined,
-    promptOptions: {
-      path: { id: string };
-      body: {
-        parts: Array<{ type: 'text'; text: string }>;
-        model?: { providerID: string; modelID: string };
-      };
-      query?: { directory?: string };
-    },
-    opencodeSessionId: string,
-    messageIndex?: number
-  ): Promise<TaskResult> {
-    const response = await client.session.prompt(promptOptions);
-
-    if (response.error) {
-      throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
-    }
-
-    console.log('[OpenCodeTool] Response received, parts count:', response.data.parts?.length || 0);
-    console.log(
-      '[OpenCodeTool] Part types:',
-      response.data.parts?.map((p) => p.type).join(', ') || 'none'
-    );
-
-    // Extract text and metadata from response
-    let responseText = '';
-    const metadata: {
-      messageId?: string;
-      parentMessageId?: string;
-      cost?: number;
-      tokens?: {
-        input: number;
-        output: number;
-        reasoning: number;
-        cache: { read: number; write: number };
-      };
-    } = {};
-
-    // Extract metadata from 'info' field
-    if (response.data.info) {
-      if (response.data.info.id) {
-        metadata.messageId = response.data.info.id;
-      }
-      if (response.data.info.parentID) {
-        metadata.parentMessageId = response.data.info.parentID;
-      }
-    }
-
-    // Extract text and token/cost metadata from 'parts' array
-    if (response.data.parts && Array.isArray(response.data.parts)) {
-      responseText = this.extractDisplayTextFromParts(
-        response.data.parts as Array<{ type: string; text?: string }>
-      );
-      console.log('[OpenCodeTool] Extracted display text length:', responseText.length);
-
-      // Extract metadata from step-finish part
-      const stepFinish = response.data.parts.find((part) => part.type === 'step-finish');
-      if (stepFinish && stepFinish.type === 'step-finish') {
-        metadata.cost = stepFinish.cost;
-        metadata.tokens = {
-          input: stepFinish.tokens.input,
-          output: stepFinish.tokens.output,
-          reasoning: stepFinish.tokens.reasoning,
-          cache: {
-            read: stepFinish.tokens.cache.read,
-            write: stepFinish.tokens.cache.write,
-          },
-        };
-      }
-    }
-
-    // Fallback: if no text found, return empty
-    if (!responseText) {
-      responseText = 'No response text received from OpenCode';
-    }
-
-    console.log('[OpenCodeTool] Response text:', responseText.substring(0, 100));
-    if (metadata.tokens) {
-      console.log('[OpenCodeTool] Response metadata:', metadata);
-    }
-
-    // Create assistant message in Agor database with OpenCode metadata
-    if (!this.messagesService) {
-      throw new Error('Messages service not available');
-    }
-
-    // Use provided index or default to 0
-    const assistantIndex = messageIndex ?? 0;
-
-    const message = await this.messagesService.create({
-      message_id: generateId() as MessageID,
-      session_id: sessionId as SessionID,
-      task_id: taskId as TaskID | undefined,
-      type: 'assistant' as const,
-      role: MessageRole.ASSISTANT,
-      index: assistantIndex,
-      timestamp: new Date().toISOString(),
-      content_preview: responseText.substring(0, 200),
-      content: [
-        {
-          type: 'text',
-          text: responseText,
-        },
-      ],
-      // Store OpenCode metadata
-      metadata:
-        Object.keys(metadata).length > 0
-          ? {
-              opencode: metadata,
-            }
-          : undefined,
-    });
-
-    console.log('[OpenCodeTool] Message created:', message);
-
-    return {
-      taskId: taskId || '',
-      status: 'completed',
-      messages: [],
-      completedAt: new Date(),
     };
-  }
-
-  /**
-   * Get session metadata
-   */
-  async getSessionMetadata?(sessionId: string): Promise<SessionMetadata> {
-    const client = this.getClient();
 
     try {
-      const response = await client.session.get({
-        path: { id: sessionId },
+      subscription = await client.event.subscribe({
+        query: context.branchPath ? { directory: context.branchPath } : undefined,
+        signal: collectorController.signal,
       });
-
-      if (response.error) {
-        throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
-      }
-
-      return {
-        sessionId,
-        toolType: 'opencode' as const,
-        status: 'active',
-        createdAt: new Date(response.data.time.created),
-        lastUpdatedAt: new Date(response.data.time.updated),
-      };
-    } catch (error) {
-      throw new Error(
-        `Failed to get session metadata: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  /**
-   * Get session messages
-   */
-  async getSessionMessages?(sessionId: string): Promise<Message[]> {
-    const client = this.getClient();
-
-    try {
-      // TODO: Implement proper message fetching from OpenCode
-      // For now, return empty array since OpenCode messages are streamed directly
-      const response = await client.session.messages({
-        path: { id: sessionId },
+      const translator = createOpenCodeEventTranslator({
+        sessionId: context.opencodeSessionId,
+        baselineMessageIds,
       });
+      const iterator = asUnknownAsyncIterable(subscription.stream)[Symbol.asyncIterator]();
+      collector = (async () => {
+        try {
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) {
+              if (!terminalSettled && !collectorController.signal.aborted) {
+                settle(
+                  new Error('OpenCode event stream closed before the active turn became idle')
+                );
+              }
+              return;
+            }
+            await applyEffects(translator.translate(next.value));
+          }
+        } catch (error) {
+          if (!collectorController.signal.aborted) {
+            protocolError = error instanceof Error ? error : new Error(String(error));
+            settle(protocolError);
+          }
+        }
+      })();
 
-      if (response.error) {
-        console.error('Failed to get messages:', response.error);
-        return [];
-      }
+      const promptResponse = await client.session.prompt(request);
+      if (promptResponse.error) throw new Error('OpenCode prompt failed');
 
-      return [];
-    } catch (error) {
-      console.error('Failed to get session messages:', error);
-      // Don't throw - return empty array as fallback
-      return [];
-    }
-  }
+      const terminalResult = await terminal;
+      if (terminalResult.error) throw terminalResult.error;
 
-  /**
-   * List all available sessions
-   */
-  async listSessions?(): Promise<SessionMetadata[]> {
-    const client = this.getClient();
-
-    try {
-      const response = await client.session.list();
-
-      if (response.error) {
-        throw new Error(`OpenCode API error: ${JSON.stringify(response.error)}`);
-      }
-
-      const sessions = Array.isArray(response.data) ? response.data : [];
-
-      return sessions.map((session) => ({
-        sessionId: session.id,
-        toolType: 'opencode' as const,
-        status: 'active' as const,
-        createdAt: new Date(session.time.created),
-        lastUpdatedAt: new Date(session.time.updated),
-      }));
-    } catch (error) {
-      throw new Error(
-        `Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`
+      await new Promise((resolve) => setTimeout(resolve, this.dependencies.eventDrainMs));
+      await this.settleWithinOrThrow(
+        stopEventCollector(),
+        this.dependencies.shutdownTimeoutMs,
+        'OpenCode event collector did not settle within the shutdown timeout'
       );
+      if (protocolError) throw protocolError;
+
+      const finalResponse = await client.session.messages(transcriptRequest);
+      if (finalResponse.error || !Array.isArray(finalResponse.data)) {
+        throw new Error('OpenCode failed to fetch the authoritative completed transcript');
+      }
+      const finalMessage = reconcileOpenCodeMessages(finalResponse.data, {
+        sessionId: context.opencodeSessionId,
+        baselineMessageIds,
+      });
+      enrichContentBlocks(finalMessage.contentBlocks);
+
+      if (thinkingStarted) {
+        await streamingCallbacks?.onThinkingEnd?.(input.agorAssistantMessageId);
+      }
+      if (textStarted) await streamingCallbacks?.onStreamEnd(input.agorAssistantMessageId);
+      return finalMessage;
+    } catch (error) {
+      const failure = sanitizer.error(error);
+      if (textStarted) {
+        await streamingCallbacks?.onStreamError(input.agorAssistantMessageId, failure);
+      }
+      throw failure;
+    } finally {
+      input.signal.removeEventListener('abort', settleAbort);
+      // The runTurn cleanup route owns collector, permission, session, and child shutdown.
     }
-  }
-
-  // ============================================================
-  // Token Accounting (NEW)
-  // ============================================================
-
-  /**
-   * Normalize OpenCode SDK response to common format
-   *
-   * @deprecated This method is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead
-   * This stub remains for API compatibility but should not be used.
-   */
-  normalizedSdkResponse(_rawResponse: RawSdkResponse): NormalizedSdkResponse {
-    throw new Error(
-      'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
-    );
   }
 }

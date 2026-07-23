@@ -16,6 +16,137 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
   }) as MCPServer;
 
 describe('getMcpServersForSession', () => {
+  it('fails closed in strict mode when repository dependencies are unavailable', async () => {
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, { mode: 'strict' })
+    ).rejects.toThrow('MCP repository dependencies are required');
+  });
+
+  it('fails closed in strict mode when a required template cannot be resolved', async () => {
+    const server = {
+      ...makeServer('template-server', 'session'),
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'client',
+        oauth_client_secret: '{{ user.env.MISSING_MCP_CLIENT_SECRET }}',
+      },
+    } as MCPServer;
+
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([server]),
+        } as never,
+      })
+    ).rejects.toThrow(/template-server.+unresolved/i);
+  });
+
+  it('fails closed in strict mode when required OAuth hydration is unavailable', async () => {
+    const oauthServer = {
+      ...makeServer('oauth-server', 'session'),
+      auth: { type: 'oauth', oauth_mode: 'per_user', oauth_access_token: '••••••••' },
+    } as MCPServer;
+
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([oauthServer]),
+        } as never,
+      })
+    ).rejects.toThrow(/OAuth.+auth-header hydrator/i);
+  });
+
+  it('fails closed in strict mode when a remote bearer server has no token', async () => {
+    const bearerServer = {
+      ...makeServer('bearer-server', 'session'),
+      url: 'http://127.0.0.1:4100/mcp',
+      auth: { type: 'bearer' },
+    } as MCPServer;
+
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([bearerServer]),
+        } as never,
+      })
+    ).rejects.toThrow(/bearer-server.+bearer token/i);
+  });
+
+  it('fails closed in strict mode when a remote JWT server has incomplete credentials', async () => {
+    const jwtServer = {
+      ...makeServer('jwt-server', 'session'),
+      url: 'http://127.0.0.1:4100/mcp',
+      auth: {
+        type: 'jwt',
+        api_url: 'http://127.0.0.1:4101/token',
+        api_token: 'client-token',
+      },
+    } as MCPServer;
+
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([jwtServer]),
+        } as never,
+      })
+    ).rejects.toThrow(/jwt-server.+JWT credentials/i);
+  });
+
+  it('accepts structurally complete remote bearer and JWT auth in strict mode', async () => {
+    const bearerServer = {
+      ...makeServer('bearer-server', 'session'),
+      url: 'http://127.0.0.1:4100/mcp',
+      auth: { type: 'bearer', token: 'bearer-token' },
+    } as MCPServer;
+    const jwtServer = {
+      ...makeServer('jwt-server', 'session'),
+      url: 'http://127.0.0.1:4100/mcp',
+      auth: {
+        type: 'jwt',
+        api_url: 'http://127.0.0.1:4101/token',
+        api_token: 'client-token',
+        api_secret: 'client-secret',
+      },
+    } as MCPServer;
+
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([bearerServer, jwtServer]),
+        } as never,
+      })
+    ).resolves.toEqual([
+      { server: bearerServer, source: 'session-assigned' },
+      { server: jwtServer, source: 'session-assigned' },
+    ]);
+  });
+
+  it('propagates repository failures in strict mode instead of returning a partial set', async () => {
+    await expect(
+      getMcpServersForSession('session-a' as SessionID, {
+        mode: 'strict',
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockRejectedValue(new Error('attachment route failed')),
+        } as never,
+      })
+    ).rejects.toThrow('attachment route failed');
+  });
+
+  it('preserves best-effort behavior for existing callers', async () => {
+    await expect(getMcpServersForSession('session-a' as SessionID, {})).resolves.toEqual([]);
+  });
+
   it('uses session-scoped effective config retrieval when available', async () => {
     const globalServer = makeServer('global-server', 'global');
     const sessionServer = makeServer('session-server', 'session');

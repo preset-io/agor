@@ -146,6 +146,16 @@ jobs:
             exit 1
           fi
 
+      - name: Prove packaged OpenCode managed runtime
+        run: |
+          set -euo pipefail
+          INSTALL="$RUNNER_TEMP/smoke-install/node_modules/agor-live"
+          node packages/executor/scripts/opencode-managed-runtime-harness.mjs \
+            --module "$INSTALL/dist/executor/sdk-handlers/opencode/opencode-tool.js" \
+            --permission-module "$INSTALL/dist/executor/permissions/permission-service.js" \
+            --streaming-module "$INSTALL/dist/executor/handlers/sdk/base-executor.js" \
+            --containment-module "$INSTALL/dist/daemon/executor-tracking.js"
+
       - name: Boot daemon and curl /ui/
         run: |
           set -euo pipefail

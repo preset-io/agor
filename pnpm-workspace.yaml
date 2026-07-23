@@ -66,6 +66,7 @@ allowBuilds:
   'esbuild@0.25.4 || 0.25.12': true
   'keytar@7.9.0': true
   'node-pty@1.0.0 || 1.2.0-beta.12': true
+  'opencode-ai@1.14.33': true
   'protobufjs@7.5.8 || 7.6.5': false
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true

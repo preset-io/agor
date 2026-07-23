@@ -314,7 +314,7 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
-      // opencode is server-based — no credentials concept, always ready.
+      // OpenCode provider authentication is resolved inside the managed task runtime.
       if (tool === 'opencode') {
         return authed('native');
       }

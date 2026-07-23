@@ -146,7 +146,7 @@ describe('resolveProbeAgent', () => {
 
   it('falls back to the onboarding-selected agent when no DB key is present', () => {
     expect(resolveProbeAgent(asUser({ default_agentic_config: { gemini: {} } }))).toBe('gemini');
-    // OpenCode is server-based (no credential field) — a user who selected it must
+    // OpenCode resolves provider credentials inside its managed task runtime, so a selected user must
     // still resolve to probing opencode, not fall through to claude-code.
     expect(resolveProbeAgent(asUser({ default_agentic_config: { opencode: {} } }))).toBe(
       'opencode'

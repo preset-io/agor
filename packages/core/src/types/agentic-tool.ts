@@ -106,10 +106,10 @@ export type GeminiPermissionMode = 'default' | 'autoEdit' | 'yolo';
  * OpenCode permission modes (via OpenCode server SDK)
  *
  * Unified permission model - single mode controls tool approval behavior.
- * OpenCode auto-approves permissions during automation, so modes primarily affect
- * interactive prompting when user is present.
+ * OpenCode permission events are routed through Agor. Automatic modes approve only
+ * their applicable operations; other requests use Agor's interactive permission UI.
  */
-export type OpenCodePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+export type OpenCodePermissionMode = 'default' | 'autoEdit' | 'yolo';
 
 /**
  * Codex permission modes (legacy - now split into sandboxMode + approvalPolicy)

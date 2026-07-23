@@ -7,5 +7,9 @@
  * Uses official @opencode-ai/sdk for all API interactions.
  */
 
-export type { OpenCodeConfig } from './opencode-tool.js';
-export { OpenCodeTool } from './opencode-tool.js';
+export type {
+  OpenCodeToolDependencies,
+  OpenCodeTurnResult,
+  RunOpenCodeTurnInput,
+} from './opencode-tool.js';
+export { OpenCodePermissionRejectedError, OpenCodeTool } from './opencode-tool.js';
