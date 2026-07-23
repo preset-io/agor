@@ -19,8 +19,16 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { BranchID, SessionUpdate } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PermissionMode } from '../../types.js';
+import type {
+  BranchRepository,
+  MessagesRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+} from '../../db/feathers-repositories.js';
+import type { Message, PermissionMode, SessionID } from '../../types.js';
+import type { MessagesService } from '../base/index.js';
 
 const appServerMocks = vi.hoisted(() => ({
   forkCodexThreadViaAppServer: vi.fn(),
@@ -51,11 +59,13 @@ let mockInstanceConfigs: Array<unknown> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 let mockStartThreadId: string | undefined = 'mock-thread-id';
+let mockStreamFailure: Error | undefined;
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
     yield event;
   }
+  if (mockStreamFailure) throw mockStreamFailure;
 }
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
@@ -598,12 +608,13 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     });
   });
 
-  it('persists a fresh Codex thread after clearing a stale thread for new MCP config', async () => {
+  it('owns fresh Codex thread state after clearing a stale thread for new MCP config', async () => {
+    const sessionId = 'session-fresh-thread' as SessionID;
     const sessionCreatedAt = new Date('2026-01-01T00:00:00.000Z');
     let storedSdkSessionId: string | undefined = 'stale-thread-id';
     const sessionsRepo = {
-      findById: vi.fn(async () => ({
-        session_id: 'session-fresh-thread',
+      findById: vi.fn(async (_sessionId: SessionID) => ({
+        session_id: sessionId,
         branch_id: 'branch-1',
         created_at: sessionCreatedAt.toISOString(),
         last_updated: sessionCreatedAt.toISOString(),
@@ -611,42 +622,45 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         permission_config: { codex: {} },
         model_config: {},
       })),
-      update: vi.fn(async (_sessionId: string, patch: { sdk_session_id?: string | null }) => {
+      update: vi.fn(async (_sessionId: SessionID, patch: SessionUpdate) => {
         if (patch.sdk_session_id === null) storedSdkSessionId = undefined;
         else if (patch.sdk_session_id !== undefined) storedSdkSessionId = patch.sdk_session_id;
         return { sdk_session_id: storedSdkSessionId };
       }),
-    } as any;
+    };
     const messagesRepo = {
-      findBySessionId: vi.fn().mockResolvedValue([]),
-    } as any;
+      findBySessionId: vi.fn(async (_sessionId: SessionID) => []),
+    };
     const sessionMCPServerRepo = {
-      listServersWithMetadata: vi.fn().mockResolvedValue([
+      listServersWithMetadata: vi.fn(async (_sessionId: SessionID, _enabledOnly = false) => [
         {
           server: { name: 'new-server' },
           added_at: sessionCreatedAt.getTime() + 60_000,
           enabled: true,
         },
       ]),
-    } as any;
+    };
     const branchesRepo = {
-      findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }),
-    } as any;
+      findById: vi.fn(async (_branchId: BranchID) => ({ branch_id: 'branch-1' })),
+    };
     const messagesService = {
-      create: vi.fn(async (message) => message),
-    } as any;
+      create: vi.fn(async (message: Partial<Message>) => message as Message),
+      patch: vi.fn(async (_messageId: string, message: Partial<Message>) => message as Message),
+    } satisfies MessagesService;
     const tool = new CodexTool(
-      messagesRepo,
-      sessionsRepo,
-      sessionMCPServerRepo,
-      branchesRepo,
+      messagesRepo as unknown as MessagesRepository,
+      sessionsRepo as unknown as SessionRepository,
+      sessionMCPServerRepo as unknown as SessionMCPServerRepository,
+      branchesRepo as unknown as BranchRepository,
       undefined,
       'test-api-key',
       messagesService
     );
     const previousStreamEvents = mockStreamEvents;
     const previousStartThreadId = mockStartThreadId;
+    const previousStreamFailure = mockStreamFailure;
     mockStartThreadId = 'fresh-thread-id';
+    mockStreamFailure = undefined;
     mockStreamEvents = [
       {
         type: 'turn.completed',
@@ -659,21 +673,47 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         vi.fn().mockResolvedValue([]),
         async () => {
           await expect(
-            tool.executePromptWithStreaming('session-fresh-thread' as any, 'continue')
+            tool.executePromptWithStreaming(sessionId, 'continue')
           ).resolves.toBeDefined();
+
+          expect(sessionsRepo.update).toHaveBeenNthCalledWith(1, sessionId, {
+            sdk_session_id: null,
+          });
+          expect(sessionsRepo.update).toHaveBeenNthCalledWith(2, sessionId, {
+            sdk_session_id: 'fresh-thread-id',
+          });
+          expect(storedSdkSessionId).toBe('fresh-thread-id');
+
+          storedSdkSessionId = 'stale-thread-id';
+          sessionsRepo.update.mockClear();
+          mockStreamEvents = [
+            {
+              type: 'item.completed',
+              item: { id: 'message-1', type: 'agent_message', text: 'Progress.' },
+            },
+          ];
+          mockStreamFailure = new Error('event iterator failed after thread capture');
+
+          await expect(tool.executePromptWithStreaming(sessionId, 'continue')).rejects.toThrow(
+            'event iterator failed after thread capture'
+          );
         }
       );
 
-      expect(sessionsRepo.update).toHaveBeenNthCalledWith(1, 'session-fresh-thread', {
+      expect(sessionsRepo.update).toHaveBeenNthCalledWith(1, sessionId, {
         sdk_session_id: null,
       });
-      expect(sessionsRepo.update).toHaveBeenNthCalledWith(2, 'session-fresh-thread', {
+      expect(sessionsRepo.update).toHaveBeenNthCalledWith(2, sessionId, {
         sdk_session_id: 'fresh-thread-id',
       });
-      expect(storedSdkSessionId).toBe('fresh-thread-id');
+      expect(sessionsRepo.update).toHaveBeenNthCalledWith(3, sessionId, {
+        sdk_session_id: null,
+      });
+      expect(storedSdkSessionId).toBeUndefined();
     } finally {
       mockStreamEvents = previousStreamEvents;
       mockStartThreadId = previousStartThreadId;
+      mockStreamFailure = previousStreamFailure;
       await fs.rm(path.join(os.tmpdir(), 'agor-codex-instructions-session-fresh-thread.md'), {
         force: true,
       });
@@ -1398,6 +1438,17 @@ describe('CodexPromptService - tool payload mapping', () => {
 // running until the daemon safety-net (~15 min later) marked it failed.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('CodexPromptService - event_msg terminal handling (issue #1749)', () => {
+  type CodexPromptServiceTestHarness = CodexPromptService & {
+    ensureCodexClient(config: { model_instructions_file: string }): Promise<void>;
+    refreshClient(apiKey: string): void;
+    codex: {
+      startThread: (...args: never[]) => unknown;
+      resumeThread: (...args: never[]) => unknown;
+    };
+  };
+
+  const testSessionId = 'session-1' as SessionID;
+
   function makeStreamingService(sdkSessionId: string | null = null) {
     const service = new CodexPromptService(
       mockMessagesRepo,
@@ -1432,6 +1483,23 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
 
     return service;
+  }
+
+  async function makeInitializedStreamingService(sdkSessionId: string | null = null) {
+    const service = makeStreamingService(sdkSessionId);
+    const internals = service as unknown as CodexPromptServiceTestHarness;
+    await internals.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    internals.ensureCodexClient = vi.fn(async () => {});
+    internals.refreshClient = vi.fn();
+    return { service, codex: internals.codex };
+  }
+
+  async function drain(service: CodexPromptService) {
+    for await (const _event of service.promptSessionStreaming(testSessionId, 'go')) {
+      // drain
+    }
   }
 
   beforeEach(() => {
@@ -1740,13 +1808,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
   });
 
   it('ignores reconnect progress until turn.completed and preserves the existing thread', async () => {
-    const service = makeStreamingService('existing-thread-id');
-    const serviceWithPrivates = service as any;
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
 
     const reconnectMessage =
       'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
@@ -1770,14 +1832,11 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     warn.mockRestore();
   });
 
-  it('lets turn.failed remain authoritative after reconnect progress and preserves the thread', async () => {
-    const service = makeStreamingService('existing-thread-id');
-    const serviceWithPrivates = service as any;
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])('lets turn.failed remain authoritative after reconnect progress for a %s thread', async (_threadKind, sdkSessionId) => {
+    const { service } = await makeInitializedStreamingService(sdkSessionId);
 
     mockStreamEvents = [
       { type: 'error', message: 'Reconnecting... 2/5' },
@@ -1785,27 +1844,33 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ];
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(
-      (async () => {
-        for await (const _event of service.promptSessionStreaming('session-1' as any, 'go')) {
-          // drain
-        }
-      })()
-    ).rejects.toThrow('provider rejected the turn');
+    await expect(drain(service)).rejects.toThrow('provider rejected the turn');
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Reconnecting... 2/5'));
     expect(mockSessionsRepo.update).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
-  it('throws a clear actionable error when stream ends without any terminal event', async () => {
-    const service = makeStreamingService('existing-thread-id');
-    const serviceWithPrivates = service as any;
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+  it.each([
+    ['reconnecting... 2/5', 'lowercase'],
+    ['Reconnecting...', 'missing N/M'],
+    [' Reconnecting... 2/5', 'leading whitespace'],
+    ['Error: Reconnecting... 2/5', 'prefixed text'],
+  ])('treats %s as a fatal stream error (%s)', async (message) => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+
+    mockStreamEvents = [{ type: 'error', message }];
+
+    await expect(drain(service)).rejects.toThrow(`Codex stream error: ${message}`);
+
+    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])('throws on pre-terminal EOF and only clears a %s thread invocation', async (_threadKind, sdkSessionId) => {
+    const { service } = await makeInitializedStreamingService(sdkSessionId);
 
     // Stream ends with no terminal event — simulates process exit with code 0
     mockStreamEvents = [
@@ -1814,17 +1879,57 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       // Stream just ends — no turn.completed, turn.failed, task_complete, or error
     ];
 
-    await expect(
-      (async () => {
-        for await (const _event of service.promptSessionStreaming('session-1' as any, 'go')) {
-          // drain
-        }
-      })()
-    ).rejects.toThrow('Codex stream ended without a terminal completion event');
+    await expect(drain(service)).rejects.toThrow(
+      'Codex stream ended without a terminal completion event'
+    );
 
-    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
-      sdk_session_id: null,
-    });
+    if (sdkSessionId === null) {
+      expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+        sdk_session_id: null,
+      });
+    } else {
+      expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['before event iteration', null],
+    ['before event iteration', 'existing-thread-id'],
+    ['while iterating events', null],
+    ['while iterating events', 'existing-thread-id'],
+  ])('only clears fresh thread state when transport fails %s (sdk_session_id=%s)', async (failurePoint, sdkSessionId) => {
+    const { service, codex } = await makeInitializedStreamingService(sdkSessionId);
+
+    const thread = {
+      id: sdkSessionId ?? 'fresh-thread-id',
+      run: vi.fn(),
+      runStreamed:
+        failurePoint === 'before event iteration'
+          ? vi.fn().mockRejectedValue(new Error('runStreamed rejected'))
+          : vi.fn().mockResolvedValue({
+              events: (async function* () {
+                yield { type: 'turn.started' };
+                throw new Error('event iterator failed');
+              })(),
+            }),
+    };
+    if (sdkSessionId) {
+      codex.resumeThread = vi.fn(() => thread);
+    } else {
+      codex.startThread = vi.fn(() => thread);
+    }
+
+    await expect(drain(service)).rejects.toThrow(
+      failurePoint === 'before event iteration' ? 'runStreamed rejected' : 'event iterator failed'
+    );
+
+    if (sdkSessionId === null) {
+      expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+        sdk_session_id: null,
+      });
+    } else {
+      expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    }
   });
 
   it('does not throw when stream ends after a user-requested stop', async () => {

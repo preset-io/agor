@@ -1154,16 +1154,19 @@ export class CodexPromptService {
       session.sdk_session_id = undefined;
     }
 
+    const resumeThreadId = session.sdk_session_id;
+    const startedFreshThread = !resumeThreadId;
+
     // Check if we need to update thread settings due to approval policy change
     const previousApprovalPolicy = session.permission_config?.codex?.approvalPolicy || 'on-request';
     const approvalPolicyChanged = approvalPolicy !== previousApprovalPolicy;
 
     // Start or resume thread
     let thread: Thread;
-    if (session.sdk_session_id) {
-      codexDebug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
+    if (resumeThreadId) {
+      codexDebug(`🔄 [Codex] Resuming thread: ${resumeThreadId}`);
 
-      thread = this.getCodexClient().resumeThread(session.sdk_session_id, threadOptions);
+      thread = this.getCodexClient().resumeThread(resumeThreadId, threadOptions);
 
       // If approval policy changed, send slash command to update thread settings
       if (approvalPolicyChanged) {
@@ -1195,6 +1198,15 @@ export class CodexPromptService {
       }
       thread = this.getCodexClient().startThread(threadOptions);
     }
+
+    let receivedTerminalEvent = false;
+    const clearFreshThreadResumeState = async () => {
+      if (startedFreshThread) {
+        await this.sessionsRepo.update(sessionId, {
+          sdk_session_id: null,
+        });
+      }
+    };
 
     try {
       codexDebug(
@@ -1239,11 +1251,6 @@ export class CodexPromptService {
 
       let eventCount = 0;
       let didStop = false;
-      const clearUnsafeResumeState = async () => {
-        await this.sessionsRepo.update(sessionId, {
-          sdk_session_id: null,
-        });
-      };
 
       for await (const event of events) {
         eventCount++;
@@ -1305,6 +1312,7 @@ export class CodexPromptService {
           if (payloadType === 'task_complete' || payloadType === 'turn_complete') {
             // Terminal completion event from new Codex rollout format.
             // Treat as equivalent to turn.completed.
+            receivedTerminalEvent = true;
             threadId = thread.id || '';
             const taskCompleteUsage = extractCodexTokenUsage(
               (eventPayload?.usage ?? eventPayload?.token_usage) as unknown
@@ -1484,6 +1492,7 @@ export class CodexPromptService {
 
           case 'turn.completed': {
             // Turn complete, emit final message
+            receivedTerminalEvent = true;
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
             const contextUsage =
@@ -1507,6 +1516,7 @@ export class CodexPromptService {
           }
 
           case 'turn.failed': {
+            receivedTerminalEvent = true;
             // Classify error for better user-facing messages
             const errorMessage =
               typeof event.error === 'string' ? event.error : JSON.stringify(event.error, null, 2);
@@ -1545,7 +1555,6 @@ export class CodexPromptService {
 
             // Fatal stream-level error from Codex SDK.
             // Surface this as a task failure so users see it in the conversation.
-            await clearUnsafeResumeState();
             throw new Error(
               `Codex stream error: ${
                 (event as { message?: unknown; error?: unknown }).message ||
@@ -1566,7 +1575,6 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
-        await clearUnsafeResumeState();
         throw new Error(
           'Codex stream ended without a terminal completion event (turn.completed, task_complete, or turn_complete). ' +
             'The Codex process may have exited unexpectedly (check the executor logs for exit code 0 clues). ' +
@@ -1587,6 +1595,10 @@ export class CodexPromptService {
         yield { type: 'stopped', threadId: thread.id || undefined };
         // Don't throw - this is a clean stop, not an error
         return;
+      }
+
+      if (!receivedTerminalEvent) {
+        await clearFreshThreadResumeState();
       }
 
       // Don't log here — error will be logged by the caller (base-executor)
