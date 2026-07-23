@@ -138,6 +138,12 @@ export function mcpPositiveIntWithDefault(
   defaultValue: number,
   maxValue?: number
 ) {
+  if (!Number.isSafeInteger(defaultValue) || defaultValue <= 0) {
+    throw new Error(`MCP ${fieldName} default must be a positive safe integer`);
+  }
+  if (maxValue !== undefined && (!Number.isSafeInteger(maxValue) || maxValue <= 0)) {
+    throw new Error(`MCP ${fieldName} maximum must be a positive safe integer`);
+  }
   if (maxValue !== undefined && defaultValue > maxValue) {
     throw new Error(`MCP ${fieldName} default ${defaultValue} exceeds maximum ${maxValue}`);
   }
@@ -165,6 +171,10 @@ export function mcpLimit(defaultValue = 50, maxValue?: number) {
 }
 
 export function mcpOffset(defaultValue = 0) {
+  if (!Number.isSafeInteger(defaultValue) || defaultValue < 0) {
+    throw new Error('MCP offset default must be a non-negative safe integer');
+  }
+
   return z
     .number({
       error: 'offset must be a non-negative integer when provided.',
