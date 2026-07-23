@@ -5,7 +5,7 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -208,10 +208,12 @@ describe('SessionFooter', () => {
       wrapper: Wrapper,
     });
 
-    fireEvent.click(screen.getByRole('img', { name: 'ellipsis' }).closest('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
     const settingsButton = await screen.findByRole('button', { name: 'Session settings' });
+    const overflowButtons = within(overflowOptions).getAllByRole('button');
 
-    expect(settingsButton.parentElement?.lastElementChild).toBe(settingsButton);
+    expect(overflowButtons[overflowButtons.length - 1]).toBe(settingsButton);
     fireEvent.click(settingsButton);
     expect(onOpenSessionSettings).toHaveBeenCalledWith('test-session-123');
   });

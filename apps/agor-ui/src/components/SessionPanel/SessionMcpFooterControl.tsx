@@ -27,7 +27,6 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
-  const [open, setOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
   const summary = React.useMemo(
@@ -97,8 +96,6 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 
   return (
     <Popover
-      open={open}
-      onOpenChange={setOpen}
       trigger="click"
       placement="top"
       getPopupContainer={(trigger) => trigger.parentElement ?? document.body}

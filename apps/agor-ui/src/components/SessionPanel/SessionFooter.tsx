@@ -225,7 +225,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
 
   const moreContent = (
-    <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
+    <fieldset
+      aria-label="More options"
+      style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
+    >
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
 
@@ -1228,7 +1231,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Button>
         </>
       )}
-    </div>
+    </fieldset>
   );
 
   const stopTooltip = stopRequestInFlight
