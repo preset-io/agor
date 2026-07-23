@@ -531,7 +531,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
-    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db });
+    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db, config: ctx.config });
   }
 
   // ============================================================================

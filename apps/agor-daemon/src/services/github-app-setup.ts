@@ -15,9 +15,9 @@
  *                                        post-install redirect.
  * 3. GET  /api/github/setup/callback   — Consumes the state token (one-shot),
  *                                        verifying the install originated from
- *                                        an authenticated admin session. Writes
- *                                        installation_id to the GitHub gateway
- *                                        channel.
+ *                                        an authenticated admin session. Shows
+ *                                        the installation_id so the admin can
+ *                                        finish configuring the channel.
  * 4. GET  /api/github/installations    — Lists installations for a GitHub App
  *                                        so the admin can pick which org/repos
  *                                        to connect.
@@ -32,9 +32,9 @@
  * browser redirects and HTML responses, which don't fit the Feathers service model.
  */
 
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { type AgorConfig, resolveTenantContext } from '@agor/core/config';
+import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { type AuthenticatedParams, hasMinimumRole, ROLES } from '@agor/core/types';
 import type express from 'express';
 import { escapeHtml } from '../utils/html.js';
 import { consumeInstallState, issueInstallState } from './github-install-state.js';
@@ -61,16 +61,37 @@ function readBearerToken(req: express.Request): string | null {
 async function authenticateRequest(
   // biome-ignore lint/suspicious/noExplicitAny: FeathersExpress app has mixed typing
   app: any,
-  req: express.Request
-): Promise<{ user_id: string; role?: string } | null> {
+  req: express.Request,
+  config: AgorConfig
+): Promise<{ user_id: string; role?: string; tenantId: string } | null> {
   const token = readBearerToken(req);
   if (!token) return null;
   try {
     const authService = app.service('authentication');
-    const result = await authService.create({ strategy: 'jwt', accessToken: token });
-    const user = result?.user as { user_id?: string; role?: string } | undefined;
+    const headers = req.headers as Record<string, unknown>;
+    // Authentication establishes params.tenant from the signed runtime token.
+    // Preserve that same params object for tenant resolution so a request header
+    // cannot replace the identity under which the user was authenticated.
+    const authParams: AuthenticatedParams = { headers };
+    const result = await authService.create({ strategy: 'jwt', accessToken: token }, authParams);
+    const user = result?.user as
+      | { user_id?: string; role?: string; tenant_id?: string }
+      | undefined;
     if (!user?.user_id) return null;
-    return { user_id: user.user_id, role: user.role };
+    const authentication = result?.authentication as { payload?: unknown } | undefined;
+    const { headers: _requestHeaders, ...authenticatedParams } = authParams;
+    const tenant = resolveTenantContext(config, {
+      params: {
+        ...authenticatedParams,
+        user,
+        authentication: authentication ?? authParams.authentication,
+      },
+      authPayload: authentication?.payload,
+      // Once authentication establishes a tenant, do not let an unverified
+      // request header conflict with that authenticated identity.
+      ...(authParams.tenant ? {} : { headers }),
+    });
+    return { user_id: user.user_id, role: user.role, tenantId: tenant.tenant_id };
   } catch {
     return null;
   }
@@ -124,9 +145,9 @@ function renderErrorPage(opts: {
  * install instruction page and passes the token along as a query parameter.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Feathers app typing
-function handleIssueState(app: any) {
+function handleIssueState(app: any, config: AgorConfig) {
   return async (req: express.Request, res: express.Response) => {
-    const authed = await authenticateRequest(app, req);
+    const authed = await authenticateRequest(app, req, config);
     if (!authed) {
       res.status(401).json({ error: 'Authentication required to initiate GitHub App install' });
       return;
@@ -137,7 +158,7 @@ function handleIssueState(app: any) {
       res.status(403).json({ error: 'Admin role required to initiate GitHub App install' });
       return;
     }
-    const state = issueInstallState(authed.user_id);
+    const state = issueInstallState(authed.user_id, authed.tenantId);
     res.json({ state });
   };
 }
@@ -245,16 +266,17 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
  * GET /api/github/setup/callback?installation_id=ID&state=XYZ
  *
  * GitHub redirects the browser here after the app is installed.
- * Verifies the CSRF state token (one-shot), finds the GitHub gateway
- * channel and sets the installation_id on it, then shows a "done,
- * close this tab" page.
+ * Verifies the CSRF state token (one-shot), then shows the installation_id
+ * for the admin to enter in the channel setup form. The callback deliberately
+ * does not select or mutate a channel: the create flow runs before a channel
+ * exists, and multiple GitHub channels may exist in the same tenant.
  *
  * Authentication: callers do not (and cannot) attach a Bearer header here
  * because the request is a browser redirect from GitHub. Authentication is
  * proven by the state token — it is only issued from an authenticated
  * admin session (POST /api/github/setup/state) and is validated here.
  */
-function handleSetupCallback(db: TenantScopeAwareDatabase, uiUrl: string) {
+function handleSetupCallback(uiUrl: string) {
   return async (req: express.Request, res: express.Response) => {
     const state = typeof req.query.state === 'string' ? req.query.state : undefined;
     const installationIdRaw =
@@ -291,28 +313,8 @@ function handleSetupCallback(db: TenantScopeAwareDatabase, uiUrl: string) {
       return;
     }
 
-    try {
-      const { GatewayChannelRepository } = await import('@agor/core/db');
-      const channelRepo = new GatewayChannelRepository(db);
-      const channels = await channelRepo.findAll();
-      const githubChannel = channels.find((ch) => ch.channel_type === 'github');
-
-      if (!githubChannel) {
-        res.status(404).send('No GitHub gateway channel found. Create one first in Settings.');
-        return;
-      }
-
-      // Merge installation_id into existing config
-      const config = { ...(githubChannel.config as Record<string, unknown>) };
-      config.installation_id = installationIdNum;
-      await channelRepo.update(githubChannel.id, { config });
-
-      console.log(
-        `[github-app-setup] Set installation_id=${installationIdNum} on channel id=${githubChannel.id} (initiated by user=${shortId(consumed.userId)})`
-      );
-
-      res.setHeader('Content-Type', 'text/html');
-      res.send(`<!DOCTYPE html>
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!DOCTYPE html>
 <html>
 <head>
   <title>GitHub App Installed — Agor</title>
@@ -327,32 +329,39 @@ function handleSetupCallback(db: TenantScopeAwareDatabase, uiUrl: string) {
 <body>
   <div class="card">
     <h2>GitHub App Installed</h2>
-    <p>Installation ID <code>${escapeHtml(installationIdNum)}</code> saved to channel <strong>${escapeHtml(githubChannel.name)}</strong>.</p>
-    <p style="margin-top: 12px;">You can close this tab. The gateway will start polling shortly.</p>
+    <p>Installation ID <code>${escapeHtml(installationIdNum)}</code></p>
+    <p style="margin-top: 12px;">Return to Agor and enter this ID to finish configuring the gateway channel.</p>
   </div>
 </body>
 </html>`);
-    } catch (error) {
-      console.error('[github-app-setup] Callback error:', error);
-      res.status(500).send('Failed to save installation_id');
-    }
   };
 }
 
 /**
- * GET /api/github/installations?app_id=APP_ID&private_key=...
+ * GET /api/github/installations?app_id=APP_ID&channel_id=CHANNEL_ID
  *
- * Lists installations for a GitHub App. Requires the app's private_key
- * to create a JWT for authentication.
- *
- * The private key can come from:
- *   1. A query param (during setup flow, from the UI)
- *   2. An existing gateway channel (query param: channel_id)
+ * Lists installations for an existing GitHub gateway channel. The caller must
+ * be an authenticated admin in the channel's tenant.
  */
-function handleListInstallations(_db: TenantScopeAwareDatabase) {
+function handleListInstallations(
+  // biome-ignore lint/suspicious/noExplicitAny: FeathersExpress app has mixed typing
+  app: any,
+  db: TenantScopeAwareDatabase,
+  config: AgorConfig
+) {
   return async (req: express.Request, res: express.Response) => {
-    const appIdStr = req.query.app_id as string | undefined;
-    const channelId = req.query.channel_id as string | undefined;
+    const authed = await authenticateRequest(app, req, config);
+    if (!authed) {
+      res.status(401).json({ error: 'Authentication required to list GitHub App installations' });
+      return;
+    }
+    if (!hasMinimumRole(authed.role, ROLES.ADMIN)) {
+      res.status(403).json({ error: 'Admin role required to list GitHub App installations' });
+      return;
+    }
+
+    const appIdStr = typeof req.query.app_id === 'string' ? req.query.app_id : undefined;
+    const channelId = typeof req.query.channel_id === 'string' ? req.query.channel_id : undefined;
 
     if (!appIdStr) {
       res.status(400).json({ error: 'Missing app_id query parameter' });
@@ -360,8 +369,8 @@ function handleListInstallations(_db: TenantScopeAwareDatabase) {
     }
 
     const appId = Number(appIdStr);
-    if (Number.isNaN(appId)) {
-      res.status(400).json({ error: 'app_id must be a number' });
+    if (!Number.isSafeInteger(appId) || appId <= 0) {
+      res.status(400).json({ error: 'app_id must be a positive integer' });
       return;
     }
 
@@ -369,16 +378,19 @@ function handleListInstallations(_db: TenantScopeAwareDatabase) {
     let privateKey: string | undefined;
 
     if (channelId) {
-      // From an existing gateway channel
-      const { GatewayChannelRepository } = await import('@agor/core/db');
-      const channelRepo = new GatewayChannelRepository(_db);
-      const channel = await channelRepo.findById(channelId);
-      if (channel?.config) {
-        const config = channel.config as Record<string, unknown>;
-        if (config.app_id === appId && typeof config.private_key === 'string') {
-          privateKey = config.private_key;
+      privateKey = await runWithTenantDatabaseScope(db, authed.tenantId, async (tenantDb) => {
+        // Resolve credentials only from a GitHub channel in the caller's tenant.
+        const { GatewayChannelRepository } = await import('@agor/core/db');
+        const channelRepo = new GatewayChannelRepository(tenantDb);
+        const channel = await channelRepo.findById(channelId);
+        if (channel?.channel_type === 'github' && channel.config) {
+          const channelConfig = channel.config as Record<string, unknown>;
+          if (channelConfig.app_id === appId && typeof channelConfig.private_key === 'string') {
+            return channelConfig.private_key;
+          }
         }
-      }
+        return undefined;
+      });
     }
 
     if (!privateKey) {
@@ -445,12 +457,13 @@ export function registerGitHubAppSetupRoutes(
     uiUrl: string;
     daemonUrl: string;
     db: TenantScopeAwareDatabase;
+    config: AgorConfig;
   }
 ): void {
-  app.post('/api/github/setup/state', handleIssueState(app));
+  app.post('/api/github/setup/state', handleIssueState(app, opts.config));
   app.get('/api/github/setup/new', handleNewApp(opts.uiUrl, opts.daemonUrl));
-  app.get('/api/github/setup/callback', handleSetupCallback(opts.db, opts.uiUrl));
-  app.get('/api/github/installations', handleListInstallations(opts.db));
+  app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl));
+  app.get('/api/github/installations', handleListInstallations(app, opts.db, opts.config));
 
   console.log(
     '[github-app-setup] Routes registered: POST /state, GET /setup/new, /setup/callback, /installations'
@@ -462,6 +475,7 @@ export const __testables = {
   escapeHtml,
   readBearerToken,
   handleIssueState,
+  handleListInstallations,
   handleSetupCallback,
   handleNewApp,
 };

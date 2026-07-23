@@ -17,32 +17,37 @@ describe('github-install-state', () => {
 
   describe('issueInstallState', () => {
     it('returns a non-empty hex string', () => {
-      const state = issueInstallState('user-1');
+      const state = issueInstallState('user-1', 'tenant-1');
       expect(state).toMatch(/^[a-f0-9]+$/);
       expect(state.length).toBeGreaterThanOrEqual(32);
     });
 
     it('returns a different state each call', () => {
-      const a = issueInstallState('user-1');
-      const b = issueInstallState('user-1');
+      const a = issueInstallState('user-1', 'tenant-1');
+      const b = issueInstallState('user-1', 'tenant-1');
       expect(a).not.toBe(b);
     });
 
     it('rejects empty userId', () => {
-      expect(() => issueInstallState('')).toThrow();
-      expect(() => issueInstallState(undefined as unknown as string)).toThrow();
+      expect(() => issueInstallState('', 'tenant-1')).toThrow();
+      expect(() => issueInstallState(undefined as unknown as string, 'tenant-1')).toThrow();
+    });
+
+    it('rejects empty tenantId', () => {
+      expect(() => issueInstallState('user-1', '')).toThrow();
+      expect(() => issueInstallState('user-1', undefined as unknown as string)).toThrow();
     });
   });
 
   describe('consumeInstallState', () => {
     it('returns ok + userId on happy path', () => {
-      const state = issueInstallState('user-alice');
+      const state = issueInstallState('user-alice', 'tenant-1');
       const result = consumeInstallState(state);
-      expect(result).toEqual({ ok: true, userId: 'user-alice' });
+      expect(result).toEqual({ ok: true, userId: 'user-alice', tenantId: 'tenant-1' });
     });
 
     it('is one-shot: a second consume returns unknown', () => {
-      const state = issueInstallState('user-alice');
+      const state = issueInstallState('user-alice', 'tenant-1');
       expect(consumeInstallState(state).ok).toBe(true);
       const second = consumeInstallState(state);
       expect(second).toEqual({ ok: false, reason: 'unknown' });
@@ -62,7 +67,7 @@ describe('github-install-state', () => {
       // want to fire it here (otherwise entries get swept and come back as
       // 'unknown' rather than 'expired' when consumed after the TTL).
       vi.useFakeTimers({ toFake: ['Date'] });
-      const state = issueInstallState('user-alice');
+      const state = issueInstallState('user-alice', 'tenant-1');
       // TTL is 10 minutes; advance past it.
       vi.advanceTimersByTime(11 * 60 * 1000);
       const result = consumeInstallState(state);
@@ -72,16 +77,16 @@ describe('github-install-state', () => {
     });
 
     it('returns user-mismatch when expectedUserId differs, and still consumes', () => {
-      const state = issueInstallState('user-alice');
+      const state = issueInstallState('user-alice', 'tenant-1');
       const result = consumeInstallState(state, 'user-bob');
       expect(result).toEqual({ ok: false, reason: 'user-mismatch' });
       expect(consumeInstallState(state)).toEqual({ ok: false, reason: 'unknown' });
     });
 
     it('allows consumption when expectedUserId matches', () => {
-      const state = issueInstallState('user-alice');
+      const state = issueInstallState('user-alice', 'tenant-1');
       const result = consumeInstallState(state, 'user-alice');
-      expect(result).toEqual({ ok: true, userId: 'user-alice' });
+      expect(result).toEqual({ ok: true, userId: 'user-alice', tenantId: 'tenant-1' });
     });
   });
 });
