@@ -133,35 +133,45 @@ export function mcpOptionalNonNegativeInt(fieldName: string, description: string
     .describe(description);
 }
 
-export function mcpLimit(defaultValue = 50, maxValue?: number) {
+export function mcpPositiveIntWithDefault(
+  fieldName: string,
+  defaultValue: number,
+  maxValue?: number
+) {
   if (maxValue !== undefined && defaultValue > maxValue) {
-    throw new Error(`MCP limit default ${defaultValue} exceeds maximum ${maxValue}`);
+    throw new Error(`MCP ${fieldName} default ${defaultValue} exceeds maximum ${maxValue}`);
   }
 
   const limit = z
     .number({
-      error: 'limit must be a positive integer when provided.',
+      error: `${fieldName} must be a positive integer when provided.`,
     })
-    .int('limit must be an integer.')
-    .positive('limit must be greater than 0.');
+    .int(`${fieldName} must be an integer.`)
+    .positive(`${fieldName} must be greater than 0.`);
   const boundedLimit =
     maxValue === undefined
       ? limit
-      : limit.max(maxValue, `limit must be less than or equal to ${maxValue}.`);
+      : limit.max(maxValue, `${fieldName} must be less than or equal to ${maxValue}.`);
 
-  return boundedLimit
-    .optional()
-    .default(defaultValue)
-    .describe(
-      `Maximum number of results (default: ${defaultValue}${
-        maxValue === undefined ? '' : `, max: ${maxValue}`
-      })`
-    );
+  return boundedLimit.optional().default(defaultValue);
+}
+
+export function mcpLimit(defaultValue = 50, maxValue?: number) {
+  return mcpPositiveIntWithDefault('limit', defaultValue, maxValue).describe(
+    `Maximum number of results (default: ${defaultValue}${
+      maxValue === undefined ? '' : `, max: ${maxValue}`
+    })`
+  );
 }
 
 export function mcpOffset(defaultValue = 0) {
-  return mcpOptionalNonNegativeInt(
-    'offset',
-    `Number of results to skip (default: ${defaultValue})`
-  );
+  return z
+    .number({
+      error: 'offset must be a non-negative integer when provided.',
+    })
+    .int('offset must be an integer.')
+    .nonnegative('offset must be greater than or equal to 0.')
+    .optional()
+    .default(defaultValue)
+    .describe(`Number of results to skip (default: ${defaultValue})`);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mcpLimit } from './schema.js';
+import { mcpLimit, mcpOffset, mcpPositiveIntWithDefault } from './schema.js';
 
 describe('mcpLimit', () => {
   it('applies the documented default when callers omit a limit', () => {
@@ -17,5 +17,18 @@ describe('mcpLimit', () => {
 
     expect(limit.safeParse(100).success).toBe(true);
     expect(limit.safeParse(101).success).toBe(false);
+  });
+
+  it('applies offset defaults consistently', () => {
+    expect(mcpOffset(0).parse(undefined)).toBe(0);
+  });
+
+  it('uses the caller field name in validation errors', () => {
+    const result = mcpPositiveIntWithDefault('max_results', 10).safeParse(0);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('max_results');
+    }
   });
 });

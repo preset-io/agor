@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { mcpLimit, mcpRequiredString } from '../schema.js';
+import { mcpPositiveIntWithDefault, mcpRequiredString } from '../schema.js';
 import { coerceJsonRecord, textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
 
@@ -126,7 +126,9 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
           ),
         read_only: z.boolean().optional().describe('Filter to read-only tools only'),
         destructive: z.boolean().optional().describe('Filter to destructive tools only'),
-        max_results: mcpLimit(10).describe('Max results to return (default: 10)'),
+        max_results: mcpPositiveIntWithDefault('max_results', 10).describe(
+          'Max results to return (default: 10)'
+        ),
       }),
       annotations: { readOnlyHint: true },
     },
