@@ -30,6 +30,19 @@ function tenantChannelName(tenantId: string): string {
  * `sessions.get`.
  */
 const SESSION_STREAM_CHANNEL_PREFIX = 'session-stream:';
+const EXECUTOR_TASK_CHANNEL_PREFIX = 'executor-task:';
+
+/**
+ * Private control-plane room for the one executor JWT scoped to a Task.
+ *
+ * Unlike normal Task events, membership is not derived from branch visibility:
+ * configureChannels joins this room only after ServiceJWTStrategy has verified
+ * an `executor-session` token whose signed `task_id` matches the room. There is
+ * no client-callable subscribe method.
+ */
+export function executorTaskChannelName(taskId: string): string {
+  return `${EXECUTOR_TASK_CHANNEL_PREFIX}${taskId}`;
+}
 
 export function sessionStreamChannelName(sessionId: string): string {
   return `${SESSION_STREAM_CHANNEL_PREFIX}${sessionId}`;
@@ -49,6 +62,24 @@ export function leaveAllSessionStreamChannels(app: Application, connection: unkn
       app.channel(name).leave(connection as never);
     }
   }
+}
+
+/** Drop task-control capability on logout or before replacing socket auth. */
+export function leaveAllExecutorTaskChannels(app: Application, connection: unknown): void {
+  for (const name of app.channels ?? []) {
+    if (name.startsWith(EXECUTOR_TASK_CHANNEL_PREFIX)) {
+      app.channel(name).leave(connection as never);
+    }
+  }
+}
+
+/** Join the private executor control room after the signed task claim is verified. */
+export function joinExecutorTaskChannel(
+  app: Application,
+  taskId: string,
+  connection: unknown
+): void {
+  app.channel(executorTaskChannelName(taskId)).join(connection as never);
 }
 
 /**
@@ -591,6 +622,19 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     }
 
     const authenticated = app.channel('authenticated');
+
+    // This is an executor control-plane event, not a branch-visible data
+    // broadcast. The only possible recipients are sockets placed in this room
+    // from a server-verified executor-session JWT. Do not materialize an empty
+    // room on publish: a Stop before executor connect is recovered from the
+    // durable Task state when connectExecutor/reauthentication runs.
+    if (context.path === 'tasks' && context.event === 'termination_requested') {
+      const taskId = extractTaskId(data);
+      if (!taskId) return [];
+      const room = existingChannel(app, executorTaskChannelName(taskId));
+      return room ? [room] : [];
+    }
+
     let tenantScoped = authenticated;
     if (multiTenancy) {
       try {

@@ -148,4 +148,49 @@ describe('AgorExecutor watchdog handoff', () => {
       requested_at: '2026-07-23T12:00:00.000Z',
     });
   });
+
+  it('handles the private task-scoped termination socket event', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const heartbeatStop = vi.fn();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service(path: string): {
+          on(event: string, listener: (data: unknown) => void): void;
+        };
+      };
+      heartbeat: { stop: typeof heartbeatStop } | null;
+      abortController: AbortController;
+      setupEventListeners(): void;
+    };
+    executor.client = {
+      service(path) {
+        return {
+          on(event, listener) {
+            listeners.set(`${path}:${event}`, listener);
+          },
+        };
+      },
+    };
+    executor.heartbeat = { stop: heartbeatStop };
+    executor.setupEventListeners();
+
+    listeners.get('tasks:termination_requested')?.({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    expect(executor.abortController.signal.aborted).toBe(true);
+    expect(heartbeatStop).toHaveBeenCalledOnce();
+  });
 });

@@ -2231,7 +2231,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Stop endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  // Stop coordinates durable state with an external executor and may wait for
+  // its socket acknowledgement. It must not hold the route-wide tenant DB
+  // transaction while waiting: emitServiceEvent correctly defers realtime
+  // publication until commit, so a long transaction here would withhold the
+  // Stop event until after the cooperative grace expired and containment had
+  // already fallen back to SIGTERM. Internal service calls still use their
+  // normal short tenant transactions.
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
     {

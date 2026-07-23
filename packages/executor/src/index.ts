@@ -5,10 +5,11 @@
  * 1. Connects to daemon via Feathers/WebSocket
  * 2. Executes exactly one task
  * 3. Receives realtime permission resolutions while running
- * 4. Receives durable Task STOPPING transitions over that socket
+ * 4. Receives task-scoped Stop control events over that socket
  * 5. Exits when task completes
  *
- * The daemon persists Stop before publishing the normal Task patch. The
+ * The daemon persists Stop before publishing a private task-scoped control
+ * event. The durable Task patch/read remains reconnect and race recovery. The
  * executor cooperatively aborts its SDK and reports quiescence; local process
  * signals and remote heartbeat recovery remain containment fallbacks.
  */
@@ -151,6 +152,9 @@ export class AgorExecutor {
     if (!this.client) return;
 
     this.client.service('tasks').on('patched', (data: unknown) => {
+      this.handleTaskLifecycleUpdate(data as Task);
+    });
+    this.client.service('tasks').on('termination_requested', (data: unknown) => {
       this.handleTaskLifecycleUpdate(data as Task);
     });
 

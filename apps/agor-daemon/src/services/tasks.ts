@@ -324,6 +324,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       id: result.task.task_id,
       params,
     });
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'termination_requested',
+      data: result.task,
+      id: result.task.task_id,
+      method: 'patch',
+      params,
+    });
     try {
       await this.app
         .service('sessions')
