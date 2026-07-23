@@ -1,6 +1,6 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { ApiOutlined, SettingOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Button, Divider, Popover, Space, Typography, theme } from 'antd';
+import { ApiOutlined } from '@ant-design/icons';
+import { Tag as AntTag, Popover, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -16,7 +16,6 @@ export interface SessionMcpFooterControlProps {
   sessionMcpServerIds: string[];
   mcpServerById: Map<string, MCPServer>;
   userAuthenticatedMcpServerIds: Set<string>;
-  onOpenSessionSettings?: (sessionId: string) => void;
 }
 
 export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = ({
@@ -25,7 +24,6 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   sessionMcpServerIds,
   mcpServerById,
   userAuthenticatedMcpServerIds,
-  onOpenSessionSettings,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
@@ -93,18 +91,6 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           disabled={!client || saving}
           style={{ width: '100%' }}
         />
-
-        <Divider style={{ margin: `${token.sizeUnit}px 0` }} />
-        <Button
-          block
-          icon={<SettingOutlined />}
-          onClick={() => {
-            setOpen(false);
-            onOpenSessionSettings?.(sessionId);
-          }}
-        >
-          Open session settings
-        </Button>
       </Space>
     </div>
   );

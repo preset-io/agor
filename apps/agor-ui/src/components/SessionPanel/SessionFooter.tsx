@@ -23,6 +23,7 @@ import {
   QuestionCircleOutlined,
   RobotOutlined,
   SendOutlined,
+  SettingOutlined,
   StopOutlined,
   ToolOutlined,
   UploadOutlined,
@@ -1203,6 +1204,30 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Tooltip>
         </div>
       </Popover>
+
+      {onOpenSessionSettings && (
+        <>
+          <Divider style={{ margin: '4px 0' }} />
+          <Button
+            block
+            type="text"
+            icon={<SettingOutlined />}
+            aria-label="Session settings"
+            style={{
+              height: 32,
+              justifyContent: 'flex-start',
+              paddingInline: 12,
+              fontSize: 13,
+            }}
+            onClick={() => {
+              setMoreOpen(false);
+              onOpenSessionSettings(session.session_id);
+            }}
+          >
+            Session settings
+          </Button>
+        </>
+      )}
     </div>
   );
 
@@ -1297,7 +1322,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 sessionMcpServerIds={sessionMcpServerIds}
                 mcpServerById={mcpServerById}
                 userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-                onOpenSessionSettings={onOpenSessionSettings}
               />
             )}
 
@@ -1554,7 +1578,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               title={null}
             >
               <Tooltip title="More options">
-                <Button size="small" type="text" icon={<EllipsisOutlined />} />
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<EllipsisOutlined />}
+                  aria-label="More options"
+                />
               </Tooltip>
             </Popover>
           </Space>
