@@ -313,6 +313,66 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+export const value = "after";'))).toBe(true);
   });
 
+  it('falls back to the turn baseline independently for each file in a mixed snapshot', async () => {
+    const repoDir = createTempGitRepo();
+    const firstPath = path.join(repoDir, 'src', 'first.ts');
+    const secondPath = path.join(repoDir, 'src', 'second.ts');
+    fs.mkdirSync(path.dirname(firstPath), { recursive: true });
+    fs.writeFileSync(firstPath, 'export const first = "before";\n', 'utf-8');
+    fs.writeFileSync(secondPath, 'export const second = "before";\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-mixed-start' };
+    await registerEditFilesTurnBaseline(context);
+
+    // Simulate Codex being between two filesystem mutations when item.started
+    // is observed: first.ts is already post-edit, while second.ts is pre-edit.
+    fs.writeFileSync(firstPath, 'export const first = "after";\n', 'utf-8');
+    const changes = [
+      { path: 'src/first.ts', kind: 'update' },
+      { path: 'src/second.ts', kind: 'update' },
+    ];
+    registerToolInvocationStart(
+      'tool-codex-edit-files-mixed-start',
+      'edit_files',
+      { changes },
+      context
+    );
+    fs.writeFileSync(secondPath, 'export const second = "after";\n', 'utf-8');
+
+    const blocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-mixed-start',
+        name: 'edit_files',
+        input: { changes },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-mixed-start',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(blocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    expect(blocks[1].diff?.files).toHaveLength(2);
+    const firstLines =
+      blocks[1].diff?.files?.find((file) => file.path === 'src/first.ts')?.structuredPatch?.[0]
+        ?.lines ?? [];
+    const secondLines =
+      blocks[1].diff?.files?.find((file) => file.path === 'src/second.ts')?.structuredPatch?.[0]
+        ?.lines ?? [];
+    expect(firstLines.some((line) => line.includes('-export const first = "before";'))).toBe(true);
+    expect(firstLines.some((line) => line.includes('+export const first = "after";'))).toBe(true);
+    expect(secondLines.some((line) => line.includes('-export const second = "before";'))).toBe(
+      true
+    );
+    expect(secondLines.some((line) => line.includes('+export const second = "after";'))).toBe(true);
+  });
+
   it('keeps rapid late-start edits scoped to the immediately preceding state', async () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'src', 'rapid-late-start.ts');
