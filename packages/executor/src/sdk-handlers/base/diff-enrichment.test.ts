@@ -373,6 +373,49 @@ describe('diff enrichment', () => {
     expect(secondLines.some((line) => line.includes('+export const second = "after";'))).toBe(true);
   });
 
+  it('does not treat files beyond a truncated turn baseline as absent', async () => {
+    const repoDir = createTempGitRepo();
+    const bulkDir = path.join(repoDir, 'bulk');
+    fs.mkdirSync(bulkDir, { recursive: true });
+    for (let index = 0; index < 5_000; index += 1) {
+      fs.writeFileSync(path.join(bulkDir, `${String(index).padStart(4, '0')}.txt`), '');
+    }
+
+    // This sorts after the 5,000 bulk files and is therefore not enumerated in
+    // the bounded turn baseline.
+    const filePath = path.join(repoDir, 'target.ts');
+    fs.writeFileSync(filePath, 'export const value = "before";\n', 'utf-8');
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-truncated-baseline' };
+    await registerEditFilesTurnBaseline(context);
+
+    fs.writeFileSync(filePath, 'export const value = "after";\n', 'utf-8');
+    registerToolInvocationStart(
+      'tool-codex-edit-files-truncated-baseline',
+      'edit_files',
+      { changes: [{ path: 'target.ts', kind: 'update' }] },
+      context
+    );
+
+    const blocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-truncated-baseline',
+        name: 'edit_files',
+        input: { changes: [{ path: 'target.ts', kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-truncated-baseline',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(blocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    expect(blocks[1].diff).toBeUndefined();
+  });
+
   it('keeps rapid late-start edits scoped to the immediately preceding state', async () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'src', 'rapid-late-start.ts');

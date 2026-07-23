@@ -75,6 +75,7 @@ interface TextFileSnapshot {
 interface EditFilesBaselineEntry {
   gitRoot: string;
   files: Map<string, TextFileSnapshot>;
+  fileListComplete: boolean;
   createdAt: number;
 }
 
@@ -166,7 +167,9 @@ async function getGitRootFromGit(workingDirectory: string): Promise<string | nul
   }
 }
 
-async function listTurnBaselineFiles(gitRoot: string): Promise<string[]> {
+async function listTurnBaselineFiles(
+  gitRoot: string
+): Promise<{ files: string[]; complete: boolean }> {
   try {
     const { git } = createGit(gitRoot);
     const output = await git.raw(['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
@@ -174,15 +177,17 @@ async function listTurnBaselineFiles(gitRoot: string): Promise<string[]> {
     const seen = new Set<string>();
 
     for (const rawPath of output.split('\0')) {
-      if (files.length >= MAX_TURN_BASELINE_FILES) break;
       if (!rawPath || seen.has(rawPath) || !isSafeRepoRelativePath(rawPath)) continue;
+      if (files.length >= MAX_TURN_BASELINE_FILES) {
+        return { files, complete: false };
+      }
       seen.add(rawPath);
       files.push(rawPath);
     }
 
-    return files;
+    return { files, complete: true };
   } catch {
-    return [];
+    return { files: [], complete: false };
   }
 }
 
@@ -339,9 +344,10 @@ export async function registerEditFilesTurnBaseline(
     const gitRoot = await getGitRootFromGit(workingDirectory);
     if (!gitRoot) return;
 
+    const listedFiles = await listTurnBaselineFiles(gitRoot);
     const files = new Map<string, TextFileSnapshot>();
     let totalBytes = 0;
-    for (const relativePath of await listTurnBaselineFiles(gitRoot)) {
+    for (const relativePath of listedFiles.files) {
       const absolutePath = path.join(gitRoot, relativePath);
       const snapshot = readTextFileSnapshot(absolutePath);
       if (snapshot.content !== undefined) {
@@ -358,6 +364,7 @@ export async function registerEditFilesTurnBaseline(
     pendingEditFilesBaselines.set(getBaselineKey(context), {
       gitRoot,
       files,
+      fileListComplete: listedFiles.complete,
       createdAt: Date.now(),
     });
   } catch {
@@ -856,13 +863,19 @@ function snapshotsFromEditFilesBaseline(
     const relativePath = resolveRepoRelativePath(baseline.gitRoot, absolutePath);
     if (!relativePath) continue;
 
-    const before = baseline.files.get(relativePath) ?? { exists: false };
+    const before = baseline.files.get(relativePath);
+    if (!before && !baseline.fileListComplete) {
+      // An absent entry is only authoritative when enumeration completed. If
+      // capture hit its file cap or failed, the path may already have existed.
+      // Omitting an uncertain diff is safer than fabricating a whole-file add.
+      continue;
+    }
     snapshots.push({
       path: relativePath,
       kind: normalizeChangeKind(change.kind),
       absolutePath,
-      beforeExists: before.exists,
-      beforeContent: before.content,
+      beforeExists: before?.exists ?? false,
+      beforeContent: before?.content,
     });
   }
 
