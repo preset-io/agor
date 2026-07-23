@@ -3031,6 +3031,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
+      reportTerminationComplete: [requireExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireExecutorRuntimeToken()],
       remove: [

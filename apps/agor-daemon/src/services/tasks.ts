@@ -29,6 +29,7 @@ import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   ContentBlock,
+  ExecutorTerminationCompleteInput,
   Paginated,
   QueryParams,
   RuntimeTelemetryInput,
@@ -49,7 +50,10 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { beginExecutorTermination } from '../termination-coordinator.js';
+import {
+  beginExecutorTermination,
+  requestExecutorTermination,
+} from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
@@ -1160,6 +1164,45 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
     return connection.task;
+  }
+
+  async reportTerminationComplete(
+    data: ExecutorTerminationCompleteInput,
+    params?: TaskParams
+  ): Promise<Task> {
+    const task = await this.taskRepo.recordExecutorQuiescence(data);
+    if (!task?.termination_request) {
+      throw new Conflict(
+        `Task ${shortId(data.task_id)} has no matching active termination request`
+      );
+    }
+
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: task,
+      id: task.task_id,
+      params,
+    });
+
+    // Do not await containment here. A local executor must receive this RPC
+    // response before it can exit, while the coordinator verifies that process
+    // group only after the wrapper exits. The durable quiescence timestamp
+    // wakes an existing coordinator and also makes this restart/retry safe.
+    void requestExecutorTermination({
+      app: this.app,
+      taskId: task.task_id,
+      cause: task.termination_request.cause,
+      errorMessage: task.termination_request.error_message ?? 'Executor stopped cooperatively.',
+      params: { ...(params ?? {}), provider: undefined },
+    }).catch((error) =>
+      console.error(
+        `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,
+        error
+      )
+    );
+
+    return task;
   }
 
   async recordExecutorStartupWarning(

@@ -1045,13 +1045,23 @@ SDK activity facts share the existing executor heartbeat transport. Disabling
 diagnostics and the stale-wrapper backstop, but the executor-local watchdog and
 its direct failure report remain active.
 
-For locally spawned executors, enforced failures and user Stop wait for bounded
-process-group termination and absence verification before the session becomes
-promptable. This can add the configured grace and signal-escalation latency.
-Templated/remote execution that cannot prove absence remains visible and blocked
-until a branch owner or administrator explicitly force-fails it. After an abrupt
-daemon restart, Agor keeps its existing orphan cleanup behavior; diagnostics
-disclose that logical release does not prove remote process termination.
+User Stop first persists the Task's `stopping` state. That normal realtime Task
+patch travels over the executor's authenticated WebSocket, so the executor can
+abort its SDK and run provider cleanup regardless of which host or pod runs the
+daemon. Reconnecting executors read the durable Task state instead of relying on
+an ephemeral cancellation event. The executor reports quiescence only after its
+SDK and stop hooks return.
+
+For locally spawned executors, Agor additionally verifies process-group absence
+before the session becomes promptable; a short cooperative grace is followed by
+SIGTERM/SIGKILL only when the wrapper does not exit itself. A scoped remote
+executor's quiescence report is the authoritative cooperative result because
+the daemon cannot inspect a process group on another host. Missing reports still
+flow through the heartbeat supervisor and remain visible and blocked rather
+than being treated as proof of termination. OpenCode server-side execution also
+remains unverified. After an abrupt daemon restart, Agor keeps its existing
+orphan cleanup behavior; diagnostics disclose that logical release does not
+prove remote process termination.
 
 ### Step 5: Test Single Executor
 

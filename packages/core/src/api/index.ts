@@ -328,6 +328,11 @@ export interface SessionsService extends AgorService<Session, CreatePayload<Crea
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Report that a requested cooperative stop has fully quiesced SDK work. */
+  reportTerminationComplete(
+    data: import('../types/task').ExecutorTerminationCompleteInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
@@ -918,7 +923,12 @@ function extendTasksService(client: AgorClient): void {
   };
   if (tasksService[TASKS_SERVICE_EXTENDED]) return;
   if (typeof tasksService.methods === 'function') {
-    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry', 'reportSdkHealthFailure');
+    tasksService.methods(
+      'connectExecutor',
+      'reportTerminationComplete',
+      'reportRuntimeTelemetry',
+      'reportSdkHealthFailure'
+    );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }

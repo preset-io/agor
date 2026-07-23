@@ -29,6 +29,7 @@ import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import { isSdkHealthAbort } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { isCoordinatorTerminationAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -420,11 +421,14 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
-  const coordinatorOwnsTerminality = () => isSdkHealthAbort(params.abortController);
+  const coordinatorOwnsTerminality = () =>
+    isSdkHealthAbort(params.abortController) ||
+    isCoordinatorTerminationAbort(params.abortController);
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
   let abortHandler: (() => Promise<void>) | undefined;
+  let abortCompletion: Promise<void> | undefined;
 
   try {
     // Ensure plain git commands launched by the agent SDK inherit safe.directory
@@ -475,24 +479,27 @@ export async function executeToolTask(params: {
     // Pass the resolved key (or empty string) and useNativeAuth flag
     const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
 
-    // Wire up abort signal to tool's stopTask method.
-    // Triggered by SIGTERM handler calling abortController.abort().
-    abortHandler = async () => {
-      console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
-      if (tool.stopTask) {
-        try {
-          const stopResult = await tool.stopTask(sessionId, taskId);
-          if (stopResult.success) {
-            console.log(`[${toolName}] Tool stopped successfully`);
-          } else {
-            console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+    // Wire up abort signal to tool's stopTask method. The primary path is a
+    // durable STOPPING patch over the socket; SIGTERM remains a fallback.
+    abortHandler = () => {
+      abortCompletion ??= (async () => {
+        console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+        if (tool.stopTask) {
+          try {
+            const stopResult = await tool.stopTask(sessionId, taskId);
+            if (stopResult.success) {
+              console.log(`[${toolName}] Tool stopped successfully`);
+            } else {
+              console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+            }
+          } catch (error) {
+            console.error(`[${toolName}] Error calling stopTask:`, error);
           }
-        } catch (error) {
-          console.error(`[${toolName}] Error calling stopTask:`, error);
+        } else {
+          console.warn(`[${toolName}] Tool does not implement stopTask method`);
         }
-      } else {
-        console.warn(`[${toolName}] Tool does not implement stopTask method`);
-      }
+      })();
+      return abortCompletion;
     };
 
     // Handle race condition: if signal is already aborted, call handler immediately
@@ -691,5 +698,8 @@ export async function executeToolTask(params: {
     if (abortHandler) {
       params.abortController.signal.removeEventListener('abort', abortHandler);
     }
+    // AbortSignal dispatch does not await async listeners. Do not report the
+    // executor quiesced until the provider-specific stop hook has completed.
+    await abortCompletion;
   }
 }

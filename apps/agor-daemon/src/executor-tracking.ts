@@ -106,7 +106,13 @@ export function getTrackedExecutor(sessionId: string): Readonly<TrackedExecutor>
 export async function containExecutorProcess(
   sessionId: string,
   taskId: string,
-  options: { termGraceMs?: number; killGraceMs?: number; pollMs?: number } = {}
+  options: {
+    /** Give a cooperatively quiesced wrapper a brief chance to exit itself. */
+    preSignalGraceMs?: number;
+    termGraceMs?: number;
+    killGraceMs?: number;
+    pollMs?: number;
+  } = {}
 ): Promise<ContainmentResult> {
   const tracked = executorProcesses.get(sessionId);
   if (!tracked || tracked.taskId !== taskId) {
@@ -136,6 +142,18 @@ export async function containExecutorProcess(
         reason: 'Executor process identity changed or is unreadable.',
       };
     }
+  }
+
+  if (
+    options.preSignalGraceMs &&
+    (await waitForAbsence(
+      tracked.pgid,
+      options.preSignalGraceMs,
+      options.pollMs ?? 50,
+      tracked.asUser
+    ))
+  ) {
+    return { status: 'verified_absent' };
   }
 
   const signal = (value: NodeJS.Signals): ContainmentResult | undefined => {

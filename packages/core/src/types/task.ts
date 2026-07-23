@@ -86,6 +86,19 @@ export interface TerminationRequest {
   requested_at: string;
   /** Failure/stop reason captured with the winning claim. */
   error_message?: string;
+  /**
+   * Daemon-authored time at which the scoped executor reported that its SDK
+   * work and stop hooks had fully quiesced. For remote executors this is the
+   * authoritative cooperative-containment result; local executors still get
+   * process-group absence verification before the session becomes promptable.
+   */
+  executor_quiesced_at?: string;
+}
+
+export interface ExecutorTerminationCompleteInput {
+  task_id: string;
+  /** Fences a late report from a previous termination request. */
+  requested_at: string;
 }
 
 /**
