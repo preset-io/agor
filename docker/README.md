@@ -192,16 +192,16 @@ Manual example:
 ```bash
 # Branch 1 (postgres-support branch)
 cd ~/.agor/worktrees/preset-io/agor/postgres-support
-DAEMON_PORT=3001 UI_PORT=5001 docker compose -p agor-postgres-support up -d --build
+DAEMON_PORT=3001 UI_PORT=5001 docker compose -p agor-postgres-support up -d
 
 # Branch 2 (main branch)
 cd ~/.agor/worktrees/preset-io/agor/main
-DAEMON_PORT=3002 UI_PORT=5002 docker compose -p agor-main up -d --build
+DAEMON_PORT=3002 UI_PORT=5002 docker compose -p agor-main up -d
 ```
 
 **How it works:**
 
-1. **Shared image**: all branch projects reuse `agor-dev:latest`; `--build` refreshes it from the current checkout
+1. **Shared image**: all branch projects reuse `agor-dev:latest`; the managed `.agor.yml` workflow rebuilds it from the current checkout
 2. **Volume isolation**: Docker Compose creates separate volumes per project (named volumes + anonymous volumes for node_modules)
 3. **Prebuilt dependencies**: the image build runs `pnpm install`; startup uses those dependencies without reinstalling
 4. **Non-interactive startup**: Compose and the entrypoint disable pnpm's workspace verification/purge prompts
@@ -209,7 +209,7 @@ DAEMON_PORT=3002 UI_PORT=5002 docker compose -p agor-main up -d --build
 **Benefits:**
 
 - Work on multiple branches simultaneously
-- Refresh dependencies explicitly with `docker compose up --build` when a branch changes the lockfile
+- Rebuild explicitly with `docker compose up --build` when the Dockerfile or lockfile changes
 - Clean separation of databases and configs
 
 ### SSH Key Authentication (Dev)
