@@ -184,9 +184,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const teammateOptions = useMemo(() => {
     if (!needsTeammateList) return [];
 
-    // The store's branchById holds every non-archived branch instance-wide
-    // (useAgorData hydrates it with no board_id filter and keeps it live over
-    // sockets), so cross-board teammates are already available here — no fetch.
+    // The store's branchById holds all non-archived branches instance-wide, so
+    // cross-board teammates are already available here — no fetch.
     return Array.from(branchById.values())
       .filter((b) => isTeammate(b) && !b.archived)
       .sort((a, b) => {

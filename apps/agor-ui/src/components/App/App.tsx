@@ -985,7 +985,7 @@ export const App: React.FC<AppProps> = ({
     progress?: CreateDialogProgress
   ) => {
     const repoId = result.repoId;
-    if (!repoId || !onCreateBranch || !onUpdateBranch) {
+    if (!repoId || !onCreateBranch) {
       throw new Error('Missing repository or branch creation handler for AI teammate creation.');
     }
 
@@ -1001,7 +1001,7 @@ export const App: React.FC<AppProps> = ({
         sourceBranch: result.sourceBranch,
         boardId: currentBoardId || undefined,
       },
-      { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
+      { client, repoById: agorStore.getState().repoById, onCreateBranch }
     );
 
     if (!branch) {

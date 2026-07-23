@@ -33,7 +33,6 @@ describe('createTeammateBranch', () => {
     const repo = makeRepo();
     const branch = makeBranch({ board_id: 'board-1' });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
-    const onUpdateBranch = vi.fn();
     const boardsService = {
       create: vi.fn().mockResolvedValue({
         board_id: 'board-1',
@@ -62,7 +61,6 @@ describe('createTeammateBranch', () => {
         client: client as never,
         repoById: new Map([[repo.repo_id, repo]]),
         onCreateBranch,
-        onUpdateBranch,
       }
     );
 
@@ -95,14 +93,12 @@ describe('createTeammateBranch', () => {
     // demote an existing primary from ungated create entry points, so the client
     // must NOT call setPrimaryTeammate.
     expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
-    expect(onUpdateBranch).not.toHaveBeenCalled();
   });
 
   it('reuses the provided boardId instead of creating a new board', async () => {
     const repo = makeRepo();
     const branch = makeBranch({ board_id: 'existing-board' });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
-    const onUpdateBranch = vi.fn();
     const boardsService = {
       create: vi.fn(),
       ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
@@ -125,7 +121,6 @@ describe('createTeammateBranch', () => {
         client: client as never,
         repoById: new Map([[repo.repo_id, repo]]),
         onCreateBranch,
-        onUpdateBranch,
       }
     );
 

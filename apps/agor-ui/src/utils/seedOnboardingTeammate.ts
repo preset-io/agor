@@ -21,7 +21,6 @@ export interface SeedOnboardingTeammateInput {
   client: AgorClient | null;
   repoById: TeammateCreationDeps['repoById'];
   onCreateBranch: TeammateCreationDeps['onCreateBranch'];
-  onUpdateBranch: TeammateCreationDeps['onUpdateBranch'];
   onCreateSession: (config: unknown, boardId: string) => Promise<string | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
   onWarn: (message: string) => void;
@@ -64,7 +63,6 @@ export async function seedOnboardingTeammate(
         client: input.client,
         repoById: input.repoById,
         onCreateBranch: input.onCreateBranch,
-        onUpdateBranch: input.onUpdateBranch,
       }
     );
 
