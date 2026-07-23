@@ -132,9 +132,9 @@ vi.mock('../../utils/message', () => ({
   useThemedMessage: () => ({ showError: vi.fn() }),
 }));
 
-// Antd Modal mount + async validateFields cycles brush against vitest's 5s
-// default on slower runners (see ForkSpawnModal.test.tsx).
-describe('NewSessionModal attachment intake', { timeout: 10_000 }, () => {
+// Antd Modal mount + async validateFields can exceed the default under the
+// full CI suite (see ForkSpawnModal.test.tsx).
+describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
   it('refuses file intake while a session is being created', async () => {
     // onCreate never resolves, so the modal stays open with isCreating latched.
     const onCreate = vi.fn(() => new Promise<void>(() => {}));

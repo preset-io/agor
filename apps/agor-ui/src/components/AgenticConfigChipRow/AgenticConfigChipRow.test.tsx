@@ -124,7 +124,7 @@ describe('AgenticConfigChipRow', () => {
   });
 
   it('uses semantic, focusable buttons for popover chips', async () => {
-    render(<Harness user={userWithDefault} />);
+    render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
     const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8' });
 
     modelChip.focus();

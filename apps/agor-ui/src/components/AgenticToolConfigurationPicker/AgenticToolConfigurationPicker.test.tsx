@@ -71,10 +71,11 @@ afterEach(() => {
 function renderPicker(
   currentUser: User,
   tool: AgenticToolName = 'claude-code',
-  presets: unknown[] = []
+  presets: unknown[] = [],
+  initialSource?: string
 ) {
   return render(
-    <Form>
+    <Form initialValues={{ agenticToolPresetId: initialSource }}>
       <AgenticToolConfigurationPicker
         tool={tool}
         client={makeClient(presets)}
@@ -82,6 +83,11 @@ function renderPicker(
         currentUser={currentUser}
         enableSaveAsDefault
       />
+      <Form.Item shouldUpdate noStyle>
+        {({ getFieldValue }) => (
+          <output data-testid="selected-source">{getFieldValue('agenticToolPresetId')}</output>
+        )}
+      </Form.Item>
     </Form>
   );
 }
@@ -128,6 +134,16 @@ describe('AgenticToolConfigurationPicker', () => {
       expect(screen.getByText(/My default · Workspace default/)).toBeInTheDocument()
     );
     expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+  });
+
+  it('preserves an explicit workspace default when built-in fallbacks are allowed', async () => {
+    renderPicker(userWithoutDefault, 'claude-code', [], WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(
+        WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+      )
+    );
   });
 
   it('reads the default under the canonical key on claude-code-cli surfaces', async () => {

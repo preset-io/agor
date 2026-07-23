@@ -204,9 +204,10 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
       isSourceAllowedByPolicy(source) &&
       (presets.some((preset) => preset.preset_id === source) ||
         (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
-        (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION && Boolean(workspacePreset)) ||
+        (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION &&
+          (inlineAllowed || Boolean(workspacePreset))) ||
         source === INLINE_AGENTIC_CONFIGURATION),
-    [hasUserDefault, isSourceAllowedByPolicy, presets, workspacePreset]
+    [hasUserDefault, inlineAllowed, isSourceAllowedByPolicy, presets, workspacePreset]
   );
 
   const preferredSource = hasUserDefault
@@ -274,20 +275,13 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
   );
 
   return {
-    canonicalTool,
     inlineAllowed,
     presets,
     loading,
     loaded,
     loadError,
     retry,
-    workspacePreset,
-    userSelection,
-    userConfigBlob,
-    hasUserDefault,
     resolveConfiguration,
-    myDefaultSummary,
-    isSourceAllowedByPolicy,
     isValidSource,
     preferredSource,
     sourceOptions,
