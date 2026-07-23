@@ -652,14 +652,18 @@ function enrichEditFilesResult(
 
   if (snapshots?.length) {
     const snapshotDiffs = enrichFromEditFilesSnapshots(snapshots);
-    refreshEditFilesBaselineFromSnapshots(context, snapshots);
     if (snapshotDiffs.length > 0) {
+      refreshEditFilesBaselineFromSnapshots(context, snapshots);
       block.diff = {
         structuredPatch: snapshotDiffs[0].structuredPatch,
         files: snapshotDiffs,
       };
       return;
     }
+    // Codex may emit file_change/item.started after apply_patch has already
+    // mutated the worktree. In that case these snapshots are post-edit and
+    // produce no diff. Keep the turn baseline intact so it can provide the
+    // actual pre-edit state below.
   }
 
   const baselineSnapshots = snapshotsFromEditFilesBaseline(changes, context);

@@ -271,6 +271,114 @@ describe('diff enrichment', () => {
     expect(lines.some((line) => line.includes('+export const value = "after";'))).toBe(true);
   });
 
+  it('preserves the turn baseline when file_change starts after the filesystem mutation', async () => {
+    const repoDir = createTempGitRepo();
+    const filePath = path.join(repoDir, 'src', 'late-start.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'export const value = "before";\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-late-start' };
+    await registerEditFilesTurnBaseline(context);
+
+    // Codex can report item.started after apply_patch has already mutated disk.
+    fs.writeFileSync(filePath, 'export const value = "after";\n', 'utf-8');
+    registerToolInvocationStart(
+      'tool-codex-edit-files-late-start',
+      'edit_files',
+      { changes: [{ path: filePath, kind: 'update' }] },
+      context
+    );
+
+    const blocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-late-start',
+        name: 'edit_files',
+        input: { changes: [{ path: filePath, kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-late-start',
+        content: '[completed]',
+      },
+    ];
+
+    enrichContentBlocks(blocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    const lines = blocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(lines.some((line) => line.includes('-export const value = "before";'))).toBe(true);
+    expect(lines.some((line) => line.includes('+export const value = "after";'))).toBe(true);
+  });
+
+  it('keeps rapid late-start edits scoped to the immediately preceding state', async () => {
+    const repoDir = createTempGitRepo();
+    const filePath = path.join(repoDir, 'src', 'rapid-late-start.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'export const value = "one";\n', 'utf-8');
+    execSync('git add .', { cwd: repoDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: repoDir, stdio: 'ignore' });
+
+    const context = { workingDirectory: repoDir, snapshotScope: 'turn-rapid-late-start' };
+    await registerEditFilesTurnBaseline(context);
+
+    fs.writeFileSync(filePath, 'export const value = "two";\n', 'utf-8');
+    registerToolInvocationStart(
+      'tool-codex-edit-files-rapid-late-start-1',
+      'edit_files',
+      { changes: [{ path: 'src/rapid-late-start.ts', kind: 'update' }] },
+      context
+    );
+    const firstBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-rapid-late-start-1',
+        name: 'edit_files',
+        input: { changes: [{ path: 'src/rapid-late-start.ts', kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-rapid-late-start-1',
+        content: '[completed]',
+      },
+    ];
+    enrichContentBlocks(firstBlocks, context);
+
+    fs.writeFileSync(filePath, 'export const value = "three";\n', 'utf-8');
+    registerToolInvocationStart(
+      'tool-codex-edit-files-rapid-late-start-2',
+      'edit_files',
+      { changes: [{ path: 'src/rapid-late-start.ts', kind: 'update' }] },
+      context
+    );
+    const secondBlocks: TestContentBlock[] = [
+      {
+        type: 'tool_use',
+        id: 'tool-codex-edit-files-rapid-late-start-2',
+        name: 'edit_files',
+        input: { changes: [{ path: 'src/rapid-late-start.ts', kind: 'update' }] },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-codex-edit-files-rapid-late-start-2',
+        content: '[completed]',
+      },
+    ];
+    enrichContentBlocks(secondBlocks, context);
+    clearEditFilesTurnBaseline(context);
+
+    const firstLines = firstBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(firstLines.some((line) => line.includes('-export const value = "one";'))).toBe(true);
+    expect(firstLines.some((line) => line.includes('+export const value = "two";'))).toBe(true);
+
+    const secondLines = secondBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
+    expect(secondLines.some((line) => line.includes('-export const value = "two";'))).toBe(true);
+    expect(secondLines.some((line) => line.includes('+export const value = "three";'))).toBe(true);
+    expect(secondLines.some((line) => line.includes('"one"'))).toBe(false);
+  });
+
   it('refreshes the Codex turn baseline after each edit_files result', async () => {
     const repoDir = createTempGitRepo();
     const filePath = path.join(repoDir, 'src', 'twice.ts');
