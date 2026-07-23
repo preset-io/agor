@@ -211,7 +211,7 @@ describe('check-auth tri-state', () => {
     expect(result.status).toBe('unauthenticated');
   });
 
-  it('opencode is always authenticated', async () => {
+  it('treats OpenCode provider authentication as a managed-runtime concern', async () => {
     const result = await service().create({ tool: 'opencode' }, params);
     expect(result.status).toBe('authenticated');
   });

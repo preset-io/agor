@@ -20,12 +20,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                       |
 | **Session forkable**        | ✅ SDK-native       | ✅ App Server fork        | ❌ Not yet          | ❌ Not yet                | ❌ Not yet                | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar  |
 | **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                              |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ⚠️ Auto-granted          | OpenCode permissions auto-granted by Agor to prevent session hangs                          |
+| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ✅ Interactive           | OpenCode routes permission events through Agor and supports remembered stable patterns      |
 | **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md             |
 | **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | ✅ Rich events            | OpenCode streams tool parts with state tracking (pending/running/completed)                  |
 | **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history            |
-| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ✅ Via step-finish        | OpenCode provides token counts and cost via `step-finish` message parts                     |
-| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                                 |
+| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ⚠️ Captured              | OpenCode cost, token, and cache metrics are retained from `step-finish` parts                |
+| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | ❌ Not aggregated         | OpenCode per-step metrics are not yet converted into a context-window occupancy snapshot     |
 
 </ScrollTable>
 
@@ -210,10 +210,10 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 **OpenCode:** ✅ **Native support**
 
-- MCP servers added dynamically via REST API (`mcp.add()`)
+- MCP servers are included in the managed runtime configuration before startup
 - Supports both local (STDIO) and remote (Streamable HTTP) transports
 - Agor injects its built-in MCP server with session token authentication
-- User-defined MCP servers injected per-session from Agor UI
+- User-defined MCP servers are resolved per invocation from the session's attachments
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote servers
 
 **Remote MCP headers:** For HTTP/SSE MCP servers that require service-account headers (for example `DD-API-KEY`), configure **Custom HTTP Headers** in Settings → MCP Servers. Header values can be literals or templates such as `{{ user.env.DATADOG_API_KEY }}`. Values are treated as secrets in UI/API responses, and `Authorization` is reserved for the Auth Type field so bearer/JWT/OAuth headers cannot be accidentally overridden.
@@ -258,14 +258,16 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - **No SDK-level persistence.** The Copilot SDK (v0.2.0) does not expose a mechanism to save permission rules (unlike Claude's `updatedPermissions`). Approvals are per-request only. The Copilot CLI itself supports persistent rules via `~/.copilot/config.json` and `--allow-tool` flags, but these are not accessible through the SDK's `onPermissionRequest` callback
 - MCP tools from attached servers (including Agor's built-in server) are auto-approved
 
-**OpenCode:** ⚠️ **Auto-granted by Agor**
+**OpenCode:** ✅ **Interactive permission system**
 
-- OpenCode emits `permission.asked` events when tool execution requires approval
-- Agor auto-grants all permissions (responds with `'always'`) to prevent session hangs
+- OpenCode emits permission events when tool execution requires approval
+- Agor applies explicit invocation-level `ask` rules for every packaged OpenCode permission category; permissive repository rules cannot bypass the Agor decision path
+- Agor uses the session permission mode and shows its existing approve/deny UI when required
+- One-time and automatic approvals reply with `'once'`; applicable remembered approvals reply with `'always'`
+- Denial, timeout, and cancellation reply with `'reject'`
 - Permissions include `external_directory` access when working outside the default project
-- No interactive UI (designed for autonomous agent operation)
 
-**Agor Implementation:** Permission modals adapt based on agent type. Claude shows persistent scope options (Project/User/Local); Copilot shows approve/deny only. OpenCode permissions are auto-granted for seamless autonomous execution.
+**Agor Implementation:** Permission modals adapt based on agent type. Claude and OpenCode can apply remembered scopes when the provider can represent them; Copilot shows approve/deny only.
 
 ---
 
@@ -300,6 +302,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 - Reads project configuration from `opencode.json` in the working directory
 - Supports custom instructions, model defaults, and provider configuration
+- Agor's invocation-scoped permission policy remains authoritative over repository permission settings
 - Directory-scoped operations ensure the correct project config is loaded
 - Agor passes the branch path to scope OpenCode to the correct project
 
@@ -384,9 +387,10 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 **OpenCode:** ✅ **SDK-managed conversation**
 
 - SDK assigns session ID on creation
-- Agor captures and stores `sdk_session_id` from OpenCode session
-- Seamless continuity via session resume with the stored ID
-- No message replay needed (OpenCode server maintains conversation state)
+- Agor stores `sdk_session_id` before submitting the first prompt
+- Each later task starts a new server and resumes that ID from OpenCode state under the same executor identity
+- A missing or invalid stored session fails with an actionable error; Agor does not silently create a replacement
+- No Agor message replay is needed
 
 **Performance Consideration:** Claude, Copilot, and OpenCode's session ID approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
 
@@ -434,10 +438,10 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 
 - `step-finish` message parts include `cost`, `tokens.input`, `tokens.output`, `tokens.reasoning`
 - Cache metrics: `tokens.cache.read` and `tokens.cache.write`
-- Agor stores these in message metadata under `opencode` key
-- Supports cost tracking across all 75+ providers
+- Agor sums all new assistant `step-finish` parts and stores the result in message metadata under the `opencode` key
+- These metrics are retained for inspection; they are not yet normalized into TaskHeader token/context pills or session context occupancy
 
-**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini and Copilot support is next.
+**Agor Implementation:** Claude and Codex feed the normalized task-level usage pipeline today. OpenCode retains authoritative per-turn metrics in message metadata; Gemini and Copilot are not yet wired into task-level usage.
 
 ---
 
@@ -837,36 +841,60 @@ Copilot supports multiple underlying models selectable via the SDK:
 
 OpenCode uses a **client-server model** unlike other agents:
 
-- **Server:** `opencode serve` runs as a standalone process (user-managed, not started by Agor)
-- **SDK:** `@opencode-ai/sdk` provides a REST client that communicates with the server
+- **Server:** Agor starts one authenticated loopback server for each executor task and stops it before the task returns
+- **Runtime:** Agor supplies the exact matching OpenCode SDK and native CLI from its package; no global OpenCode installation or separately managed server is used
+- **SDK:** `@opencode-ai/sdk` communicates with that task-scoped server
 - **Directory Scoping:** Agor passes the branch path via the `x-opencode-directory` header and `directory` query parameter to scope all operations
 
 ### Provider Configuration
 
-OpenCode supports 75+ providers configured via `opencode auth login` or environment variables:
+Agor's per-task Basic credential authenticates only the private SDK-to-server connection. It is not a model-provider credential. The executor identity must still have the selected provider configured through its injected environment or OpenCode credential state:
 
-- **OpenAI** (GPT-4o, GPT-5, etc.)
-- **Anthropic** (Claude Sonnet, Opus, Haiku)
-- **Google** (Gemini models)
-- **GitHub Copilot** (via Pro+ subscription, near-unlimited usage)
-- **Self-hosted** (Ollama, vLLM, etc.)
-- **Many more** (any OpenAI-compatible endpoint)
+- In `strict` Unix mode, OpenCode reads state as the session creator's Unix user.
+- In `insulated` mode, it reads state as the configured executor user.
+- In `simple` mode, it reads state as the daemon user.
+- Prefer Agor-scoped environment variables when credentials must remain user- or session-specific.
+
+Provider authentication is resolved when the managed task starts. Agor's generic OpenCode auth check confirms that the runtime is enabled; it does not validate a particular provider credential in advance.
+
+The model override UI does not call a daemon model-discovery endpoint because no persistent OpenCode server exists between tasks. Enter an exact provider/model pair, or leave both fields empty to use OpenCode's configured defaults.
+
+### Session Continuity
+
+The managed server is disposable, but OpenCode session state is durable under the executor identity. Agor validates the stored `sdk_session_id` on every restart. Changing the executor identity, removing its OpenCode data directory, or supplying an invalid stored ID makes resume fail instead of starting an unrelated conversation.
 
 ### MCP Integration
 
-OpenCode supports MCP servers via its REST API:
+OpenCode receives MCP servers in its task-scoped startup configuration:
 
 - **Local (STDIO):** Agor injects `command` + `args` configurations
 - **Remote (Streamable HTTP):** Agor injects its built-in MCP server URL with session token
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote connections
-- MCP servers are added per-session and scoped to the branch directory
+- MCP servers are resolved before the prompt and scoped to the branch directory
+- Startup fails before spawning OpenCode when the built-in token, repository resolution, a required template, attachment configuration, or required OAuth hydration is unavailable
+
+### Permissions and Process Containment
+
+- Non-automatic permission requests use Agor's existing permission UI and timeout/cancellation paths.
+- Explicit invocation-level rules force interceptable operations through that path even when project configuration says `allow`.
+- One-time approval does not create a remembered rule. A remembered approval is applied only when OpenCode supplies a stable pattern that can represent it.
+- A denial is delivered to OpenCode before the task becomes terminal, so the session cannot accept a second turn while managed cleanup is still settling.
+- Denial, timeout, and Stop reject the pending provider request and run the same bounded cleanup path. Collector shutdown is time-bounded even when an iterator ignores cancellation.
+- On Linux and macOS, the server is a non-detached descendant of the executor process group. Local cleanup stops and awaits it; daemon Stop and watchdog containment provide the final group-level backstop.
+- Windows group containment is not currently a verified support boundary.
+
+### Startup Failures
+
+Startup errors identify whether the packaged binary is missing, the SDK/CLI versions differ, the server exited, or readiness timed out. The diagnostic includes only a bounded tail of server output. The same turn-local sanitizer covers startup, post-readiness provider/runtime errors, stream-error broadcasts, and final rethrows, redacting the managed server credential, provider credential environment values, MCP tokens and headers, and invocation-config secrets. Reinstall Agor with optional dependencies enabled when the packaged native binary is reported missing.
+
+Completed transcripts are read back from OpenCode rather than trusted from the prompt response. A new assistant turn must contain renderable text, reasoning, or tool content. Reasoning-only output is retained as a thinking block and used as the textual fallback; step-only or empty output fails reconciliation.
 
 ### Limitations
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
 - **Session import/export** not available
-- **Permissions** are auto-granted by Agor (no interactive approval UI)
-- **Server must be running.** `opencode serve` must be started separately before using in Agor
+- **Permissions** follow the session's Agor policy, including interactive approval when required
+- **Stateless filesystem mode** is not supported. OpenCode is rejected before an executor is spawned when `execution.stateless_fs_mode` is enabled.
 
 ---
 
@@ -884,7 +912,6 @@ Agent integration priorities:
 - **Richer tool metadata** - If Codex/Gemini expose more tool details
 - **Copilot permission persistence** - The Copilot SDK (v0.2.0) doesn't expose a way to persist permission rules. When the SDK adds an `updatedPermissions`-equivalent, Agor will support persistent scopes (session, project, user) matching Claude Code's UX
 - **OpenCode session forking** - When OpenCode adds fork/replay API support
-- **OpenCode interactive permissions** - Surface permission requests to Agor UI instead of auto-granting
 
 ---
 

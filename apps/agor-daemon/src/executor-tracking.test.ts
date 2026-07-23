@@ -38,7 +38,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       }
     });
 
-    it('contains descendants after the process-group leader exits', async () => {
+    it('contains a managed nondetached server child after the executor leader exits', async () => {
       const script = `
         const { spawn } = require('node:child_process');
         const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)"], {

@@ -9,7 +9,7 @@
  *   network-on; MCP elicitation auto-approved via per-server
  *   default_tools_approval_mode in the executor)
  * - Gemini: autoEdit (unchanged — pending separate audit)
- * - OpenCode: autoEdit (unchanged — pending separate audit)
+ * - OpenCode: autoEdit (auto-approve edits; ask through Agor for other operations)
  * - Cursor: bypassPermissions (experimental/autonomous until permission callbacks exist)
  */
 

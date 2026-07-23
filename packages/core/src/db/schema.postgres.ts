@@ -1082,7 +1082,6 @@ export const users = pgTable(
               model?: string;
             };
             permissionMode?: string;
-            serverUrl?: string;
           };
           copilot?: {
             modelConfig?: {

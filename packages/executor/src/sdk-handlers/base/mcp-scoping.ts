@@ -54,6 +54,11 @@ export interface MCPServerWithSource {
  * Dependencies required for MCP server resolution
  */
 export interface MCPResolutionDeps {
+  /**
+   * `strict` is reserved for managed runtimes that cannot safely start with a
+   * partial attachment set. Existing SDK handlers remain best-effort by default.
+   */
+  mode?: 'best-effort' | 'strict';
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
   /**
@@ -96,9 +101,13 @@ export async function getMcpServersForSession(
   deps: MCPResolutionDeps
 ): Promise<MCPServerWithSource[]> {
   const servers: MCPServerWithSource[] = [];
+  const strict = deps.mode === 'strict';
 
   // Early return if dependencies not available
   if (!deps.sessionMCPRepo || !deps.mcpServerRepo) {
+    if (strict) {
+      throw new Error('MCP repository dependencies are required for strict resolution');
+    }
     console.warn('⚠️  MCP repository dependencies not available - skipping MCP configuration');
     return servers;
   }
@@ -207,13 +216,45 @@ export async function getMcpServersForSession(
 
       if (hasEnvTemplates || hasHeaderTemplates || hasUrlTemplate || hasAuthTemplates) {
         const result = resolveMcpServerTemplates(original, templateContext);
+        const emptiedTemplateFields = strict
+          ? [
+              ...(hasUrlTemplate && !result.server.url ? ['url'] : []),
+              ...Object.entries(original.env ?? {}).flatMap(([key, value]) =>
+                containsTemplate(value) && !result.server.env?.[key] ? [`env.${key}`] : []
+              ),
+              ...Object.entries(original.headers ?? {}).flatMap(([key, value]) =>
+                containsTemplate(value) && !result.server.headers?.[key] ? [`headers.${key}`] : []
+              ),
+              ...AUTH_TEMPLATE_FIELDS.flatMap((field) =>
+                containsTemplate(original.auth?.[field] as string | undefined) &&
+                !result.server.auth?.[field]
+                  ? [`auth.${field}`]
+                  : []
+              ),
+            ]
+          : [];
 
         if (!result.isValid) {
+          if (strict) {
+            throw new Error(
+              `MCP server "${original.name}" has unresolved required templates: ${result.errorMessage}`
+            );
+          }
           // Remove server from list - required templates didn't resolve
           console.warn(`   ⚠️  Skipping MCP server "${original.name}": ${result.errorMessage}`);
           servers.splice(i, 1);
           serversSkipped++;
         } else {
+          if (emptiedTemplateFields.length > 0) {
+            throw new Error(
+              `MCP server "${original.name}" has unresolved templates: ${emptiedTemplateFields.join(', ')}`
+            );
+          }
+          if (strict && result.unresolvedFields.length > 0) {
+            throw new Error(
+              `MCP server "${original.name}" has unresolved templates: ${result.unresolvedFields.join(', ')}`
+            );
+          }
           servers[i] = {
             ...servers[i],
             server: result.server,
@@ -244,6 +285,9 @@ export async function getMcpServersForSession(
       .filter((server) => server.auth?.type === 'oauth');
     if (oauthServers.length > 0) {
       if (!deps.mcpOAuthAuthHeadersRepo) {
+        if (strict) {
+          throw new Error('OAuth MCP servers require the executor auth-header hydrator');
+        }
         mcpDebug(
           `   ℹ️  ${oauthServers.length} OAuth MCP server(s) resolved without executor auth-header hydrator`
         );
@@ -260,6 +304,13 @@ export async function getMcpServersForSession(
             const header = authHeaders[server.mcp_server_id];
             const bearer = /^Bearer\s+(.+)$/i.exec(header?.authorization ?? '')?.[1];
             if (!bearer) {
+              if (strict) {
+                throw new Error(
+                  `OAuth MCP server "${server.name}" auth is unavailable${
+                    header?.error ? `: ${header.error}` : ''
+                  }`
+                );
+              }
               if (header?.error && header.error !== 'needs_reauth') {
                 console.warn(
                   `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
@@ -286,11 +337,31 @@ export async function getMcpServersForSession(
           }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
         } catch (error) {
+          if (strict) throw error;
           console.warn(
             `   ⚠️  Failed to hydrate OAuth MCP auth headers: ${
               error instanceof Error ? error.message : String(error)
             }`
           );
+        }
+      }
+    }
+
+    if (strict) {
+      for (const { server } of servers) {
+        if (server.transport !== 'http' && server.transport !== 'sse') continue;
+        if (!server.auth || server.auth.type === 'none') continue;
+
+        if (server.auth.type === 'bearer' && !server.auth.token?.trim()) {
+          throw new Error(`MCP server "${server.name}" requires a bearer token`);
+        }
+        if (
+          server.auth.type === 'jwt' &&
+          (!server.auth.api_url?.trim() ||
+            !server.auth.api_token?.trim() ||
+            !server.auth.api_secret?.trim())
+        ) {
+          throw new Error(`MCP server "${server.name}" requires complete JWT credentials`);
         }
       }
     }
@@ -309,6 +380,7 @@ export async function getMcpServersForSession(
       );
     });
   } catch (error) {
+    if (strict) throw error;
     console.warn(
       `⚠️  Failed to resolve MCP servers: ${error instanceof Error ? error.message : String(error)}`
     );

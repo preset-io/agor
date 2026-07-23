@@ -63,14 +63,7 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  hasMinimumRole,
-  MessageRole,
-  ROLES,
-  SessionStatus,
-  TaskStatus,
-} from '@agor/core/types';
+import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -145,6 +138,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { assertStatelessFsModeCompatible } from './utils/stateless-fs-compatibility.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -1497,20 +1491,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
         }
 
-        // Early validation: reject unsupported tools when stateless_fs_mode is enabled
-        if (config.execution?.stateless_fs_mode) {
-          const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
-          const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
-          if (capabilities && !capabilities.supportsStatelessFsMode) {
-            const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
-              .filter(([, caps]) => caps.supportsStatelessFsMode)
-              .map(([name]) => name)
-              .join(', ');
-            throw new Error(
-              `stateless_fs_mode is enabled but tool '${toolName}' does not support it. Supported tools: ${supported}`
-            );
-          }
-        }
+        assertStatelessFsModeCompatible(
+          session.agentic_tool as import('@agor/core/types').AgenticToolName,
+          config.execution?.stateless_fs_mode
+        );
 
         // Auto-unarchive on prompt
         if (session.archived) {

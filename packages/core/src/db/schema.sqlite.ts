@@ -1076,7 +1076,6 @@ export const users = sqliteTable(
               model?: string;
             };
             permissionMode?: string;
-            serverUrl?: string;
           };
           copilot?: {
             modelConfig?: {

@@ -170,7 +170,7 @@ V1 should be explicit: **Cursor SDK provider is autonomous.**
   - hook events that can deny/allow synchronously per operation, or
   - a reliable config policy language Agor can generate per task.
 
-This is similar to OpenCode's current “auto-granted by Agor” behavior, but should be even more conservatively labeled because Cursor's harness includes rich native tools and context indexing.
+This is more permissive than OpenCode's interactive Agor permission routing and should be conservatively labeled because Cursor's harness includes rich native tools and context indexing.
 
 ### 6. Usage/cost/context
 
