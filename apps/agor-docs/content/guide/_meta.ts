@@ -1,5 +1,6 @@
 export default {
   index: 'Overview',
+  'first-teammate': 'Your First AI Teammate',
   'getting-started': 'Getting Started',
   'extended-install': 'Extended Installation',
   '--- Features': {
