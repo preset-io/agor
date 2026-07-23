@@ -32,6 +32,7 @@ import {
 } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonNegativeInt,
   mcpOptionalPositiveInt,
@@ -201,7 +202,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
+        offset: mcpOffset(0),
         includeArchived: z
           .boolean()
           .optional()
@@ -224,7 +226,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const query: Record<string, unknown> = {};
       if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
-      if (args.limit) query.$limit = args.limit;
+      // Prevent no-argument MCP calls from inheriting the service's intentional
+      // 10,000-row UI default. On large installations that aggregate response
+      // can cross the Socket.IO 1 MB frame limit when Codex persists the tool
+      // completion through the executor.
+      query.$limit = args.limit ?? 50;
+      query.$skip = args.offset ?? 0;
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {

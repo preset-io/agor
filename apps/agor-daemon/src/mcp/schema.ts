@@ -133,8 +133,30 @@ export function mcpOptionalNonNegativeInt(fieldName: string, description: string
     .describe(description);
 }
 
-export function mcpLimit(defaultValue = 50) {
-  return mcpOptionalPositiveInt('limit', `Maximum number of results (default: ${defaultValue})`);
+export function mcpLimit(defaultValue = 50, maxValue?: number) {
+  if (maxValue !== undefined && defaultValue > maxValue) {
+    throw new Error(`MCP limit default ${defaultValue} exceeds maximum ${maxValue}`);
+  }
+
+  const limit = z
+    .number({
+      error: 'limit must be a positive integer when provided.',
+    })
+    .int('limit must be an integer.')
+    .positive('limit must be greater than 0.');
+  const boundedLimit =
+    maxValue === undefined
+      ? limit
+      : limit.max(maxValue, `limit must be less than or equal to ${maxValue}.`);
+
+  return boundedLimit
+    .optional()
+    .default(defaultValue)
+    .describe(
+      `Maximum number of results (default: ${defaultValue}${
+        maxValue === undefined ? '' : `, max: ${maxValue}`
+      })`
+    );
 }
 
 export function mcpOffset(defaultValue = 0) {
