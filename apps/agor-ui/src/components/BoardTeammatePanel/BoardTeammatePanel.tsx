@@ -1,11 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  Branch,
-  PaginatedResult,
-  Repo,
-  SpawnConfig,
-} from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -186,37 +179,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  const [allTeammateBranches, setAllTeammateBranches] = useState<Branch[]>([]);
   const needsTeammateList = !primaryTeammateBranch && !primaryTeammateInaccessible;
-  useEffect(() => {
-    if (!needsTeammateList || !client) {
-      setAllTeammateBranches([]);
-      return;
-    }
-    let cancelled = false;
-    // Cap to a single bounded page on purpose: `findAll` would auto-paginate
-    // over every non-archived branch in the instance, and there is no
-    // server-side teammate filter, so we fetch one page and filter client-side.
-    client
-      .service('branches')
-      .find({ query: { archived: false, $limit: 200 } })
-      .then((res: PaginatedResult<Branch> | Branch[]) => {
-        if (cancelled) return;
-        const rows = Array.isArray(res) ? res : res.data;
-        setAllTeammateBranches(rows.filter((b) => isTeammate(b)));
-      })
-      .catch((err) => {
-        console.error('Failed to load teammate branches', err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [needsTeammateList, client]);
 
   const teammateOptions = useMemo(() => {
     if (!needsTeammateList) return [];
 
-    return [...allTeammateBranches]
+    // The store's branchById holds every non-archived branch instance-wide
+    // (useAgorData hydrates it with no board_id filter and keeps it live over
+    // sockets), so cross-board teammates are already available here — no fetch.
+    return Array.from(branchById.values())
+      .filter((b) => isTeammate(b) && !b.archived)
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -234,7 +206,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [allTeammateBranches, needsTeammateList, repoById]);
+  }, [branchById, needsTeammateList, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -251,9 +223,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const handleAssignTeammate = async () => {
     if (!board || !client || !selectedTeammateId) return;
 
-    const teammate =
-      branchById.get(selectedTeammateId) ??
-      allTeammateBranches.find((b) => b.branch_id === selectedTeammateId);
+    const teammate = branchById.get(selectedTeammateId);
     if (!teammate) return;
 
     setAssigningTeammate(true);
@@ -431,7 +401,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <Divider style={{ margin: 0 }}>or</Divider>
             </>
           )}
-          <Typography.Text strong>Assign an existing teammate</Typography.Text>
+          <Typography.Text strong>Move an existing teammate here</Typography.Text>
           <Select
             showSearch
             placeholder="Select a teammate"

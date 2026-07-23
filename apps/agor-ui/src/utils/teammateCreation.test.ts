@@ -90,10 +90,11 @@ describe('createTeammateBranch', () => {
       teammateName: 'Pineapple Helper',
       teammateEmoji: '🍍',
     });
-    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
-      boardId: 'board-1',
-      branchId: branch.branch_id,
-    });
+    // The branches create hook auto-promotes a new teammate to board primary
+    // when the board has none (setPrimaryTeammateIfUnset). Forcing it here would
+    // demote an existing primary from ungated create entry points, so the client
+    // must NOT call setPrimaryTeammate.
+    expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
     expect(onUpdateBranch).not.toHaveBeenCalled();
   });
 
@@ -133,9 +134,8 @@ describe('createTeammateBranch', () => {
       repo.repo_id,
       expect.objectContaining({ boardId: 'existing-board' })
     );
-    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
-      boardId: 'existing-board',
-      branchId: branch.branch_id,
-    });
+    // No forcible primary assignment: we rely on the server's create hook to
+    // promote the teammate only when the reused board has no primary yet.
+    expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
   });
 });

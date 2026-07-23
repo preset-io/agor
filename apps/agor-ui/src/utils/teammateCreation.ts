@@ -46,7 +46,9 @@ export interface TeammateCreationDeps {
  * Shared teammate creation logic used by CreateDialog (via App.tsx).
  *
  * Flow: resolve repo → create board → create branch → tag branch with
- * teammate metadata → designate the branch as the board primary.
+ * teammate metadata. The server's branches create hook promotes the new
+ * teammate to board primary only when the board has none, so no explicit
+ * primary assignment happens here.
  */
 export async function createTeammateBranch(
   input: TeammateCreationInput,
@@ -109,11 +111,11 @@ export async function createTeammateBranch(
         board_id: boardId as BoardID,
       });
     }
-    if (boardId) {
-      await deps.client
-        ?.service('boards')
-        .setPrimaryTeammate({ boardId, branchId: branch.branch_id });
-    }
+    // Intentionally no explicit setPrimaryTeammate here: the branches create
+    // hook auto-promotes a new teammate to primary only when the board has none
+    // (setPrimaryTeammateIfUnset). Forcing it from ungated create entry points
+    // (NewSessionButton, settings modal) would silently demote a board's
+    // existing primary teammate.
   }
 
   return branch;
