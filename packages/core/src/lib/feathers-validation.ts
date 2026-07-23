@@ -132,6 +132,7 @@ export const taskQuerySchema = createQuerySchema(
       Type.Union([
         Type.Literal('queued'),
         Type.Literal('created'),
+        Type.Literal('dispatching'),
         Type.Literal('running'),
         Type.Literal('stopping'),
         Type.Literal('awaiting_permission'),

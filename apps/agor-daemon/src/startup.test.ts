@@ -30,12 +30,14 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       touchDb();
       return fixtures.orphanedTasks ?? [];
     }),
-    find: vi.fn(async (params: { query?: { status?: string } }) => {
+    find: vi.fn(async (params: { query?: { status?: string; $skip?: number } }) => {
       touchDb();
       if (params?.query?.status === TaskStatus.QUEUED) {
-        return { data: fixtures.queuedTasks ?? [] };
+        const matches = fixtures.queuedTasks ?? [];
+        const skip = params.query.$skip ?? 0;
+        return { data: matches.slice(skip, skip + 1000), total: matches.length };
       }
-      return { data: [] };
+      return { data: [], total: 0 };
     }),
     get: vi.fn(async (id: string) => {
       touchDb();
@@ -46,18 +48,25 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       return task;
     }),
     patch: vi.fn(),
+    settleTermination: vi.fn(),
   };
   const sessionsService = {
-    find: vi.fn(async (params: { query?: { status?: string; ready_for_prompt?: boolean } }) => {
-      touchDb();
-      if (
-        params?.query?.status === SessionStatus.IDLE &&
-        params?.query?.ready_for_prompt === false
-      ) {
-        return { data: fixtures.idleNotReadySessions ?? [] };
+    find: vi.fn(
+      async (params: {
+        query?: { status?: string; ready_for_prompt?: boolean; $skip?: number };
+      }) => {
+        touchDb();
+        if (
+          params?.query?.status === SessionStatus.IDLE &&
+          params?.query?.ready_for_prompt === false
+        ) {
+          const matches = fixtures.idleNotReadySessions ?? [];
+          const skip = params.query.$skip ?? 0;
+          return { data: matches.slice(skip, skip + 1000), total: matches.length };
+        }
+        return { data: [], total: 0 };
       }
-      return { data: [] };
-    }),
+    ),
     get: vi.fn(async (id: string) => {
       touchDb();
       const session = fixtures.sessionsById?.[id];
@@ -110,6 +119,7 @@ function makeTask(overrides: Partial<Task>): Task {
 function makeSession(overrides: Partial<Session>): Session {
   return {
     session_id: 'session-1',
+    agentic_tool: 'codex',
     status: SessionStatus.IDLE,
     ready_for_prompt: false,
     tasks: [],
@@ -130,6 +140,29 @@ describe('startup tenant database scope', () => {
     expect(baseDb.marker).toHaveBeenCalled();
   });
 
+  it('preserves restart recovery while disclosing unverified termination', async () => {
+    const task = makeTask({});
+    const session = makeSession({ tasks: [task.task_id] as Session['tasks'] });
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      sessionsById: { [session.session_id]: session },
+    });
+
+    await cleanupOrphanStatuses(ctx);
+    expect(tasksService.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.task_id,
+        outcome: 'restart_unverified',
+        sdkFailure: expect.objectContaining({
+          reason: 'termination_unverified',
+          termination: 'unverified',
+        }),
+        errorMessage: expect.stringContaining('without verifying executor termination'),
+      }),
+      expect.objectContaining({ suppressTerminalQueueProcessing: true })
+    );
+  });
+
   it('demonstrates guarded startup DB access fails without scope', () => {
     const { baseDb, ctx } = makeStartupContextWithGuardedDb();
 
@@ -137,6 +170,20 @@ describe('startup tenant database scope', () => {
       MissingTenantDatabaseScopeError
     );
     expect(baseDb.marker).not.toHaveBeenCalled();
+  });
+
+  it('cleans every queued task when recovery spans multiple pages', async () => {
+    const queuedTasks = Array.from({ length: 1001 }, (_, index) =>
+      makeTask({ task_id: `queued-${index}`, status: TaskStatus.QUEUED })
+    );
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({ queuedTasks });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(tasksService.patch).toHaveBeenCalledTimes(queuedTasks.length);
+    expect(tasksService.find).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ $skip: 1000 }) })
+    );
   });
 });
 

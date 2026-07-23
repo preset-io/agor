@@ -11,6 +11,7 @@ import type {
   GatewayChannel,
   GatewayChannelID,
   GatewayEnvVar,
+  TenantID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -21,8 +22,8 @@ import {
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
-import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import type { Database, SystemDatabase } from '../client';
+import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
 import {
@@ -32,6 +33,50 @@ import {
   EntityNotFoundError,
   RepositoryError,
 } from './base';
+
+export interface EnabledGatewayChannelRef {
+  channel_id: GatewayChannelID;
+  tenant_id: TenantID;
+}
+
+/**
+ * Capability-specific repository for process-wide listener discovery.
+ *
+ * This deliberately exposes no full-channel read or credential decryption
+ * operations. Callers receive only immutable routing references, leave system
+ * scope, and reload each channel through GatewayChannelRepository in its
+ * discovered tenant scope.
+ */
+export class GatewayListenerDiscoveryRepository {
+  constructor(private db: SystemDatabase) {}
+
+  async findEnabledTenantRefs(): Promise<EnabledGatewayChannelRef[]> {
+    const tenantColumn = (gatewayChannels as unknown as { tenant_id?: unknown }).tenant_id;
+    if (!isPostgresDatabase(this.db) || !tenantColumn) {
+      throw new RepositoryError('Gateway listener discovery requires PostgreSQL tenant metadata');
+    }
+
+    const rows = await select(this.db, {
+      channel_id: gatewayChannels.id,
+      tenant_id: tenantColumn,
+    })
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.enabled, true))
+      .all();
+
+    return (rows as Array<{ channel_id: string; tenant_id?: unknown }>).map((row) => {
+      if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
+        throw new RepositoryError(
+          `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
+        );
+      }
+      return {
+        channel_id: row.channel_id as GatewayChannelID,
+        tenant_id: row.tenant_id as TenantID,
+      };
+    });
+  }
+}
 
 /**
  * Encrypt sensitive fields within a config object

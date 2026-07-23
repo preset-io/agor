@@ -246,6 +246,7 @@ describe('TaskRepository.create', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -680,6 +681,7 @@ describe('TaskRepository.findByStatus', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -701,10 +703,290 @@ describe('TaskRepository.findByStatus', () => {
 });
 
 // ============================================================================
+// Executor connection
+// ============================================================================
+
+const startupWarning = 'Remote executor is still starting.';
+
+async function createExecutorDispatch(
+  db: Database,
+  executorMode: 'local' | 'templated' = 'templated'
+) {
+  const taskRepo = new TaskRepository(db);
+  const sessionId = await createSessionWithDeps(db);
+  const task = await taskRepo.create(
+    createTaskData({
+      session_id: sessionId,
+      status: TaskStatus.DISPATCHING,
+      executor_mode: executorMode,
+    })
+  );
+  return { taskRepo, task };
+}
+
+describe('TaskRepository.connectExecutor', () => {
+  dbTest(
+    'atomically transitions dispatching to running with a server timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const startedAt = '2026-01-01T00:00:00.000Z';
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          started_at: startedAt,
+        })
+      );
+
+      const connection = await taskRepo.connectExecutor(created.task_id);
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(connection?.transitioned).toBe(true);
+      expect(connection?.task.status).toBe(TaskStatus.RUNNING);
+      expect(connection?.task.started_at).toBe(startedAt);
+      expect(connection?.task.executor_connected_at).toBeDefined();
+      expect(connection?.task.last_executor_heartbeat_at).toBe(
+        connection?.task.executor_connected_at
+      );
+      expect(found).toMatchObject({
+        status: TaskStatus.RUNNING,
+        started_at: startedAt,
+        executor_connected_at: connection?.task.executor_connected_at,
+        last_executor_heartbeat_at: connection?.task.executor_connected_at,
+      });
+    }
+  );
+
+  dbTest(
+    'is idempotent once running and does not rewrite the connection timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+
+      const first = await taskRepo.connectExecutor(created.task_id);
+      const second = await taskRepo.connectExecutor(created.task_id);
+
+      expect(second).toEqual({ task: first?.task, transitioned: false });
+    }
+  );
+
+  dbTest('serializes concurrent executor claims without SQLite lock errors', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    const claims = await Promise.all([
+      taskRepo.connectExecutor(created.task_id),
+      taskRepo.connectExecutor(created.task_id),
+    ]);
+
+    expect(claims.map((claim) => claim?.transitioned).sort()).toEqual([false, true]);
+    expect(new Set(claims.map((claim) => claim?.task.executor_connected_at)).size).toBe(1);
+    expect(new Set(claims.map((claim) => claim?.task.last_executor_heartbeat_at)).size).toBe(1);
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.RUNNING);
+  });
+
+  dbTest('clears a templated startup warning when the executor connects', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toMatchObject(
+      { error_message: startupWarning }
+    );
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+
+    const connection = await taskRepo.connectExecutor(task.task_id);
+    expect(connection).toMatchObject({
+      transitioned: true,
+      task: { status: TaskStatus.RUNNING },
+    });
+    expect(connection?.task.error_message).toBeUndefined();
+  });
+
+  dbTest('rejects a stale startup warning after connection wins', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    await taskRepo.connectExecutor(task.task_id);
+
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+    const connected = await taskRepo.findById(task.task_id);
+    expect(connected?.status).toBe(TaskStatus.RUNNING);
+    expect(connected?.error_message).toBeUndefined();
+  });
+
+  dbTest('serializes a concurrent startup warning and connection', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db);
+
+    await Promise.all([
+      taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning),
+      taskRepo.connectExecutor(task.task_id),
+    ]);
+
+    const connected = await taskRepo.findById(task.task_id);
+    expect(connected?.status).toBe(TaskStatus.RUNNING);
+    expect(connected?.error_message).toBeUndefined();
+  });
+
+  dbTest('rejects startup warnings for local executors', async ({ db }) => {
+    const { taskRepo, task } = await createExecutorDispatch(db, 'local');
+    expect(await taskRepo.recordExecutorStartupWarning(task.task_id, startupWarning)).toBeNull();
+  });
+
+  dbTest('does not accept a timestamp-less running row as a prior claim', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const corrupted = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    expect(await taskRepo.connectExecutor(corrupted.task_id)).toBeNull();
+    expect(await taskRepo.findById(corrupted.task_id)).toMatchObject({
+      status: TaskStatus.RUNNING,
+      executor_connected_at: undefined,
+    });
+  });
+
+  dbTest('does not revive stopping, stopped, or terminal tasks', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    for (const status of [
+      TaskStatus.STOPPING,
+      TaskStatus.STOPPED,
+      TaskStatus.COMPLETED,
+      TaskStatus.FAILED,
+      TaskStatus.TIMED_OUT,
+    ]) {
+      const task = await taskRepo.create(createTaskData({ session_id: sessionId, status }));
+      expect(await taskRepo.connectExecutor(task.task_id)).toBeNull();
+      expect((await taskRepo.findById(task.task_id))?.status).toBe(status);
+    }
+  });
+
+  dbTest(
+    'includes dispatching in orphan cleanup but not connected-heartbeat supervision',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+        })
+      );
+
+      expect((await taskRepo.findOrphaned()).map((item) => item.task_id)).toContain(task.task_id);
+      expect(
+        (await taskRepo.findActiveWithExecutorHeartbeat()).map((item) => item.task_id)
+      ).not.toContain(task.task_id);
+    }
+  );
+});
+
+describe('TaskRepository.reportRuntimeTelemetry', () => {
+  dbTest('stamps heartbeat and advances only to a greater pulse sequence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    await taskRepo.connectExecutor(task.task_id);
+
+    const first = await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      { sequence: 2, kind: 'progress', detail: 'tool.start' },
+      new Date('2026-01-01T00:00:02.000Z')
+    );
+    const retry = await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      { sequence: 2, kind: 'waiting' },
+      new Date('2026-01-01T00:00:03.000Z')
+    );
+
+    expect(first).toMatchObject({
+      last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+      latest_executor_pulse: {
+        sequence: 2,
+        kind: 'progress',
+        detail: 'tool.start',
+        observed_at: '2026-01-01T00:00:02.000Z',
+      },
+    });
+    expect(retry).toMatchObject({
+      last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+      latest_executor_pulse: first?.latest_executor_pulse,
+    });
+  });
+
+  dbTest('rejects telemetry before connect and after terminality', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    await taskRepo.connectExecutor(task.task_id);
+    await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+  });
+});
+
+describe('TaskRepository.recordSdkHealthObservation', () => {
+  dbTest('serializes observe-only evidence with normal completion', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-01-01T00:00:01.000Z',
+      })
+    );
+    const failure = {
+      reason: 'no_first_progress' as const,
+      detected_at: '2026-01-01T00:03:01.000Z',
+      tool: 'codex' as const,
+      watchdog_action: 'would_fire' as const,
+      termination: 'not_requested' as const,
+    };
+
+    const [, observed] = await Promise.all([
+      taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED }),
+      taskRepo.recordSdkHealthObservation(task.task_id, failure),
+    ]);
+    const completed = await taskRepo.findById(task.task_id);
+
+    expect(completed).toMatchObject({ status: TaskStatus.COMPLETED });
+    expect(completed?.sdk_failure).toEqual(observed?.sdk_failure);
+    expect(await taskRepo.recordSdkHealthObservation(task.task_id, failure)).toBeNull();
+    expect((await taskRepo.findById(task.task_id))?.sdk_failure).toEqual(completed?.sdk_failure);
+  });
+});
+
+// ============================================================================
 // Update
 // ============================================================================
 
 describe('TaskRepository.update', () => {
+  dbTest('does not let generic updates claim a dispatching task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    await expect(taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })).rejects.toThrow(
+      'dispatching tasks must be claimed through connectExecutor'
+    );
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+  });
+
   dbTest('should update task by full UUID and short ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -720,6 +1002,498 @@ describe('TaskRepository.update', () => {
     const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
+
+  dbTest('keeps persisted identity authoritative over update payloads', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(createTaskData({ session_id: sessionId }));
+
+    const updated = await taskRepo.update(created.task_id, {
+      task_id: generateId(),
+      session_id: await createSessionWithDeps(db),
+      created_by: 'forged-user',
+      created_at: '2000-01-01T00:00:00.000Z',
+      status: TaskStatus.COMPLETED,
+    });
+
+    expect(updated).toMatchObject({
+      task_id: created.task_id,
+      session_id: created.session_id,
+      created_by: created.created_by,
+      created_at: created.created_at,
+      status: TaskStatus.COMPLETED,
+    });
+    expect(await taskRepo.findById(created.task_id)).toMatchObject({
+      task_id: created.task_id,
+      session_id: created.session_id,
+      created_by: created.created_by,
+    });
+  });
+
+  dbTest('allows a running executor task to complete normally', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    const updated = await taskRepo.update(created.task_id, {
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
+
+    expect(updated).toMatchObject({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
+  });
+
+  dbTest('computes terminal timing at the row-locked mutation boundary', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const startedAt = '2026-07-10T20:00:00.000Z';
+    const completedAt = '2026-07-10T20:00:05.000Z';
+    const created = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        started_at: startedAt,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: startedAt,
+        },
+      })
+    );
+
+    await expect(
+      taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED, completed_at: completedAt })
+    ).resolves.toMatchObject({
+      completed_at: completedAt,
+      duration_ms: 5_000,
+      message_range: { end_timestamp: completedAt },
+    });
+  });
+
+  dbTest('round-trips bounded executor health state through JSON data', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await taskRepo.update(created.task_id, {
+      sdk_watchdog_mode: 'enforce',
+      sdk_failure: {
+        reason: 'no_first_progress',
+        detected_at: '2026-07-10T20:03:00.000Z',
+        tool: 'codex',
+        watchdog_action: 'enforced',
+        termination: 'requested',
+      },
+      termination_request: {
+        cause: 'sdk_health_failure',
+        requested_at: '2026-07-10T20:03:00.000Z',
+      },
+    });
+
+    expect(await taskRepo.findById(created.task_id)).toMatchObject({
+      sdk_watchdog_mode: 'enforce',
+      sdk_failure: { reason: 'no_first_progress', termination: 'requested' },
+      termination_request: { cause: 'sdk_health_failure' },
+    });
+  });
+
+  dbTest(
+    'atomically gives user Stop precedence over a concurrent health failure',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+
+      const [health, stop] = await Promise.all([
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'sdk_health_failure',
+          errorMessage: 'SDK stalled',
+          sdkFailure: {
+            reason: 'no_first_progress',
+            detected_at: '2026-07-10T20:03:00.000Z',
+            tool: 'codex',
+            termination: 'requested',
+          },
+        }),
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user',
+        }),
+      ]);
+
+      expect([health.outcome, stop.outcome]).toContain('claimed');
+      expect(await taskRepo.findById(task.task_id)).toMatchObject({
+        status: TaskStatus.STOPPING,
+        termination_request: { cause: 'user_stop' },
+      });
+
+      const settled = await taskRepo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+      });
+      expect(settled).toMatchObject({
+        outcome: 'transitioned',
+        task: { status: TaskStatus.STOPPED },
+      });
+    }
+  );
+
+  dbTest('does not erase unverified evidence when user Stop takes precedence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.STOPPING,
+        termination_request: {
+          cause: 'sdk_health_failure',
+          requested_at: '2026-07-10T20:03:00.000Z',
+        },
+        sdk_failure: {
+          reason: 'termination_unverified',
+          detected_at: '2026-07-10T20:03:00.000Z',
+          tool: 'codex',
+          termination: 'unverified',
+        },
+      })
+    );
+
+    const result = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'claimed',
+      task: {
+        termination_request: { cause: 'user_stop' },
+        sdk_failure: { termination: 'unverified' },
+      },
+    });
+  });
+
+  dbTest('rejects a stale-heartbeat claim when the observed heartbeat changed', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+        last_executor_heartbeat_at: '2026-07-10T20:00:01.000Z',
+      })
+    );
+    await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      undefined,
+      new Date('2026-07-10T20:00:05Z')
+    );
+
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'Heartbeat lost',
+      expectedStatus: TaskStatus.RUNNING,
+      expectedHeartbeatAt: '2026-07-10T20:00:01.000Z',
+      heartbeatStaleBefore: '2026-07-10T20:00:02.000Z',
+    });
+
+    expect(claim).toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
+    });
+  });
+
+  dbTest('rejects a startup-timeout claim after the executor connects', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    await taskRepo.connectExecutor(task.task_id);
+
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'startup_timeout',
+      errorMessage: 'Executor did not connect',
+      expectedStatus: TaskStatus.DISPATCHING,
+      requireExecutorDisconnected: true,
+    });
+
+    expect(claim).toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
+    });
+  });
+
+  dbTest('makes repeated claims and settlements idempotent', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const request = {
+      taskId: task.task_id,
+      cause: 'user_stop' as const,
+      errorMessage: 'Stopped by user',
+    };
+
+    expect((await taskRepo.claimTermination(request)).outcome).toBe('claimed');
+    expect((await taskRepo.claimTermination(request)).outcome).toBe('unchanged');
+    expect(
+      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
+        .outcome
+    ).toBe('transitioned');
+    expect(
+      (await taskRepo.settleTermination({ taskId: task.task_id, outcome: 'verified_absent' }))
+        .outcome
+    ).toBe('terminal');
+  });
+
+  dbTest(
+    'releases a stopping task after restart without claiming verified absence',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+      });
+
+      const result = await taskRepo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'restart_unverified',
+        errorMessage: 'Daemon restarted',
+        sdkFailure: {
+          reason: 'termination_unverified',
+          detected_at: '2026-07-10T20:03:00.000Z',
+          tool: 'codex',
+          termination: 'unverified',
+        },
+      });
+
+      expect(result).toMatchObject({
+        outcome: 'transitioned',
+        task: {
+          status: TaskStatus.STOPPED,
+          error_message: 'Daemon restarted',
+          sdk_failure: { termination: 'unverified' },
+        },
+      });
+    }
+  );
+
+  dbTest('reserves termination-owned terminality for settlement', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      'termination-owned tasks must be settled through settleTermination'
+    );
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.RUNNING })).rejects.toThrow(
+      'termination-owned tasks must be settled through settleTermination'
+    );
+  });
+
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_permission then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_PERMISSION })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_input then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_INPUT })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  dbTest(
+    'allows metadata-only updates after completion without changing status',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.COMPLETED })
+      );
+
+      const updated = await taskRepo.update(created.task_id, { tool_use_count: 7 });
+
+      expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, tool_use_count: 7 });
+    }
+  );
+
+  dbTest('rejects executor writes after termination owns the locked row', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    const [claim, executorWrite] = await Promise.allSettled([
+      taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+      }),
+      taskRepo.updateFromExecutor(task.task_id, { status: TaskStatus.AWAITING_PERMISSION }),
+    ]);
+
+    expect(claim).toMatchObject({ status: 'fulfilled', value: { outcome: 'claimed' } });
+    if (executorWrite.status === 'rejected') {
+      expect(String(executorWrite.reason)).toContain('not connected and executor-writable');
+    }
+    expect(await taskRepo.findById(task.task_id)).toMatchObject({
+      status: TaskStatus.STOPPING,
+      termination_request: { cause: 'user_stop' },
+    });
+    await expect(taskRepo.updateFromExecutor(task.task_id, { model: 'late' })).rejects.toThrow(
+      'not connected and executor-writable'
+    );
+  });
+
+  dbTest(
+    'freezes executor metadata after terminality without freezing internal writes',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.COMPLETED,
+          executor_connected_at: '2026-07-10T20:00:00.000Z',
+        })
+      );
+
+      await expect(taskRepo.updateFromExecutor(task.task_id, { model: 'late' })).rejects.toThrow(
+        'not connected and executor-writable'
+      );
+      await expect(taskRepo.update(task.task_id, { model: 'internal' })).resolves.toMatchObject({
+        model: 'internal',
+      });
+    }
+  );
+
+  dbTest('accepts executor results while the connected executor owns the row', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    await expect(
+      taskRepo.updateFromExecutor(task.task_id, { status: TaskStatus.DISPATCHING })
+    ).rejects.toThrow('Task status is not executor-managed');
+    await expect(
+      taskRepo.updateFromExecutor(task.task_id, {
+        status: TaskStatus.COMPLETED,
+        model: 'test-model',
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.COMPLETED, model: 'test-model' });
+  });
+
+  for (const resumableStatus of [TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT]) {
+    dbTest(
+      `keeps terminal status across a concurrent resume from ${resumableStatus}`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: resumableStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        // Do not assume which transaction acquires the row lock first. If the
+        // resume wins it may complete before the terminal write; if completion
+        // wins, the resume must reject. The lifecycle invariant is identical.
+        const [completionResult, resumeResult] = await Promise.allSettled([
+          taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED }),
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING }),
+        ]);
+
+        expect(completionResult.status).toBe('fulfilled');
+        if (resumeResult.status === 'fulfilled') {
+          expect(resumeResult.value.status).toBe(TaskStatus.RUNNING);
+        } else {
+          expect(String(resumeResult.reason)).toContain(
+            'terminal task status cannot be changed from completed'
+          );
+        }
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
+      }
+    );
+  }
 
   dbTest('should update multiple fields and preserve unchanged ones', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
@@ -823,8 +1597,8 @@ describe('TaskRepository.delete', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
 
-    const data1 = createTaskData({ session_id: sessionId });
-    const data2 = createTaskData({ session_id: sessionId });
+    const data1 = createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const data2 = createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED });
     await taskRepo.create(data1);
     await taskRepo.create(data2);
 
@@ -842,6 +1616,44 @@ describe('TaskRepository.delete', () => {
     const taskRepo = new TaskRepository(db);
     await expect(taskRepo.delete('99999999')).rejects.toThrow(EntityNotFoundError);
   });
+
+  dbTest('never deletes an active task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const running = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    await expect(taskRepo.delete(running.task_id)).rejects.toThrow(
+      'Only queued tasks can be deleted'
+    );
+    expect(await taskRepo.findById(running.task_id)).toMatchObject({
+      status: TaskStatus.RUNNING,
+    });
+  });
+
+  dbTest('never deletes work that concurrently leaves the queue', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const queued = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+
+    const [deletion, dispatch] = await Promise.allSettled([
+      taskRepo.delete(queued.task_id),
+      taskRepo.update(queued.task_id, { status: TaskStatus.DISPATCHING }),
+    ]);
+
+    const survivor = await taskRepo.findById(queued.task_id);
+    if (survivor) {
+      expect(survivor.status).toBe(TaskStatus.DISPATCHING);
+      expect(dispatch.status).toBe('fulfilled');
+      expect(deletion.status).toBe('rejected');
+    } else {
+      expect(deletion.status).toBe('fulfilled');
+      expect(dispatch.status).toBe('rejected');
+    }
+  });
 });
 
 // ============================================================================
@@ -858,7 +1670,7 @@ describe('TaskRepository.countBySession', () => {
     expect(await taskRepo.countBySession(session1)).toBe(0);
 
     // After creates
-    const data1 = createTaskData({ session_id: session1 });
+    const data1 = createTaskData({ session_id: session1, status: TaskStatus.QUEUED });
     const data2 = createTaskData({ session_id: session1 });
     await taskRepo.create(data1);
     await taskRepo.create(data2);

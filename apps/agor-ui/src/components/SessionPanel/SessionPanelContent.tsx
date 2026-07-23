@@ -107,6 +107,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
       onNukeEnvironment,
       onViewLogs,
       onPermissionDecision,
+      onOpenAgenticToolSettings,
     } = useAppActions();
 
     // Get repo from branch
@@ -323,6 +324,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
             }
             forceExpandAll={forceExpandAll}
+            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
           />
         </div>
 

@@ -27,6 +27,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
+import { isSdkHealthAbort } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
@@ -37,6 +38,10 @@ function sdkDebug(...args: unknown[]): void {
   if (DEBUG_SDK_EXECUTOR) {
     console.debug(...args);
   }
+}
+
+class MissingCredentialError extends Error {
+  override readonly name = 'MissingCredentialError';
 }
 
 /**
@@ -127,7 +132,8 @@ export interface ExecutionContext {
 export function createStreamingCallbacks(
   client: AgorClient,
   toolName: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  onPulse?: StreamingCallbacks['onPulse']
 ): StreamingCallbacks {
   // Use session_id passed in (available before any streaming starts)
   // This ensures thinking events have session_id even if they fire before onStreamStart
@@ -145,6 +151,7 @@ export function createStreamingCallbacks(
   };
 
   return {
+    onPulse,
     onStreamStart: async (message_id, data) => {
       // Initialize sequence counter for this message
       sequenceCounters.set(message_id, 0);
@@ -220,12 +227,13 @@ export function createStreamingCallbacks(
 export function createExecutionContext(
   client: AgorClient,
   toolName: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  onPulse?: StreamingCallbacks['onPulse']
 ): ExecutionContext {
   return {
     client,
     repos: createFeathersBackedRepositories(client),
-    callbacks: createStreamingCallbacks(client, toolName, sessionId),
+    callbacks: createStreamingCallbacks(client, toolName, sessionId, onPulse),
   };
 }
 
@@ -402,6 +410,7 @@ export async function executeToolTask(params: {
   abortController: AbortController;
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
+  onPulse?: StreamingCallbacks['onPulse'];
   messageSource?: MessageSource;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
@@ -411,84 +420,89 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
+  const coordinatorOwnsTerminality = () => isSdkHealthAbort(params.abortController);
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
-  // Ensure plain git commands launched by the agent SDK inherit safe.directory
-  // trust for this managed checkout. Without this, Unix-isolated sessions can
-  // create and run successfully through executor-mediated git probes while
-  // `git status` inside the agent shell still fails with dubious ownership.
-  await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
-
-  // Capture and stamp task-start git state inside the executor as early as
-  // possible. The daemon transitions the task to RUNNING before spawn, but the
-  // authoritative branch git read belongs here with the rest of
-  // executor-mediated git work.
-  await stampGitStateAtTaskStart(client, sessionId, taskId);
-
-  // Resolve one complete user-or-tenant provider connection.
-  const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
-  const connection = {
-    ...(resolution.connection ?? {}),
-    ...(resolution.apiKey ? { [apiKeyEnvVar]: resolution.apiKey } : {}),
-  } as Record<string, string | undefined>;
-  installProviderConnection(toolName, connection);
-
-  // Fail fast if stored key can't be decrypted (e.g. master secret changed)
-  if (resolution.decryptionFailed) {
-    throw new Error(
-      `API key "${apiKeyEnvVar}" could not be decrypted. ` +
-        `The stored key may have been encrypted with a different master secret. ` +
-        `Please re-enter your API key in Settings > ${toolName} > Authentication.`
-    );
-  }
-  if (!hasProviderCredential(toolName, connection) && !resolution.useNativeAuth) {
-    throw new Error(`No scoped ${toolName} credential is configured for this workspace or user.`);
-  }
-
-  // Log resolution result
-  if (resolution.apiKey) {
-    sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
-  } else {
-    sdkDebug(`[${toolName}] No scoped provider API key is configured`);
-  }
-
-  // Create execution context
-  const ctx = createExecutionContext(client, toolName, sessionId);
-
-  // Create tool instance using factory function
-  // Pass the resolved key (or empty string) and useNativeAuth flag
-  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
-
-  // Wire up abort signal to tool's stopTask method.
-  // Triggered by SIGTERM handler calling abortController.abort().
-  const abortHandler = async () => {
-    console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
-    if (tool.stopTask) {
-      try {
-        const stopResult = await tool.stopTask(sessionId, taskId);
-        if (stopResult.success) {
-          console.log(`[${toolName}] Tool stopped successfully`);
-        } else {
-          console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
-        }
-      } catch (error) {
-        console.error(`[${toolName}] Error calling stopTask:`, error);
-      }
-    } else {
-      console.warn(`[${toolName}] Tool does not implement stopTask method`);
-    }
-  };
-
-  // Handle race condition: if signal is already aborted, call handler immediately
-  if (params.abortController.signal.aborted) {
-    await abortHandler();
-  }
-
-  // Listen for abort signal
-  params.abortController.signal.addEventListener('abort', abortHandler);
+  let abortHandler: (() => Promise<void>) | undefined;
 
   try {
+    // Ensure plain git commands launched by the agent SDK inherit safe.directory
+    // trust for this managed checkout. Without this, Unix-isolated sessions can
+    // create and run successfully through executor-mediated git probes while
+    // `git status` inside the agent shell still fails with dubious ownership.
+    await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
+
+    // Capture and stamp task-start git state inside the executor as early as
+    // possible. The daemon transitions the task to RUNNING before spawn, but the
+    // authoritative branch git read belongs here with the rest of
+    // executor-mediated git work.
+    await stampGitStateAtTaskStart(client, sessionId, taskId);
+
+    // Resolve one complete user-or-tenant provider connection.
+    const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+    const connection = {
+      ...(resolution.connection ?? {}),
+      ...(resolution.apiKey ? { [apiKeyEnvVar]: resolution.apiKey } : {}),
+    } as Record<string, string | undefined>;
+    installProviderConnection(toolName, connection);
+
+    // Fail fast if stored key can't be decrypted (e.g. master secret changed)
+    if (resolution.decryptionFailed) {
+      throw new Error(
+        `API key "${apiKeyEnvVar}" could not be decrypted. ` +
+          `The stored key may have been encrypted with a different master secret. ` +
+          `Please re-enter your API key in Settings > ${toolName} > Authentication.`
+      );
+    }
+    if (!hasProviderCredential(toolName, connection) && !resolution.useNativeAuth) {
+      throw new MissingCredentialError(
+        `No scoped ${toolName} credential is configured for this workspace or user.`
+      );
+    }
+
+    // Log resolution result
+    if (resolution.apiKey) {
+      sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
+    } else {
+      sdkDebug(`[${toolName}] No scoped provider API key is configured`);
+    }
+
+    // Create execution context
+    const ctx = createExecutionContext(client, toolName, sessionId, params.onPulse);
+
+    // Create tool instance using factory function
+    // Pass the resolved key (or empty string) and useNativeAuth flag
+    const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+
+    // Wire up abort signal to tool's stopTask method.
+    // Triggered by SIGTERM handler calling abortController.abort().
+    abortHandler = async () => {
+      console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+      if (tool.stopTask) {
+        try {
+          const stopResult = await tool.stopTask(sessionId, taskId);
+          if (stopResult.success) {
+            console.log(`[${toolName}] Tool stopped successfully`);
+          } else {
+            console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+          }
+        } catch (error) {
+          console.error(`[${toolName}] Error calling stopTask:`, error);
+        }
+      } else {
+        console.warn(`[${toolName}] Tool does not implement stopTask method`);
+      }
+    };
+
+    // Handle race condition: if signal is already aborted, call handler immediately
+    if (params.abortController.signal.aborted) {
+      await abortHandler();
+    }
+
+    // Listen for abort signal
+    params.abortController.signal.addEventListener('abort', abortHandler);
+
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
     const result = await tool.executePromptWithStreaming(
@@ -500,6 +514,8 @@ export async function executeToolTask(params: {
       params.abortController,
       params.messageSource
     );
+
+    if (coordinatorOwnsTerminality()) return;
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
@@ -610,7 +626,8 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    const err = error as Error;
+    if (coordinatorOwnsTerminality()) return;
+    const err = error instanceof Error ? error : new Error(String(error));
     console.error(`[${toolName}] Execution failed:`, err);
 
     // Capture git SHA at task end (even for failed tasks)
@@ -659,6 +676,10 @@ export async function executeToolTask(params: {
         timestamp: new Date().toISOString(),
         content: err.message,
         content_preview: err.message.substring(0, 200),
+        metadata: {
+          is_task_failure: true,
+          ...(err instanceof MissingCredentialError ? { is_missing_credential_failure: true } : {}),
+        },
       });
     } catch (msgErr) {
       console.error(`[${toolName}] Failed to create error message:`, msgErr);
@@ -667,6 +688,8 @@ export async function executeToolTask(params: {
     throw err;
   } finally {
     // Clean up abort listener
-    params.abortController.signal.removeEventListener('abort', abortHandler);
+    if (abortHandler) {
+      params.abortController.signal.removeEventListener('abort', abortHandler);
+    }
   }
 }

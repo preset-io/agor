@@ -14,8 +14,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { AgorConfig } from '@agor/core/config';
+import {
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { shortId, UserApiKeysRepository } from '@agor/core/db';
+import {
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+  shortId,
+  UserApiKeysRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { SessionID, TenantContext, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -26,7 +37,7 @@ import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
-import { validateSessionToken } from './tokens.js';
+import { validateVerifiedSessionToken, verifySessionToken } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
@@ -57,11 +68,9 @@ function mcpRequestDebug(...args: unknown[]): void {
   }
 }
 
-function tenantFromAuthenticatedUser(user: AuthenticatedUser): TenantContext | undefined {
+function authenticatedUserTenantMatches(user: AuthenticatedUser, tenant: TenantContext): boolean {
   const tenantId = typeof user.tenant_id === 'string' ? user.tenant_id.trim() : '';
-  return tenantId
-    ? { tenant_id: tenantId as TenantContext['tenant_id'], source: 'auth_claim' }
-    : undefined;
+  return !tenantId || tenantId === tenant.tenant_id;
 }
 
 /**
@@ -363,7 +372,8 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
 export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
-  toolSearchEnabled = true
+  toolSearchEnabled = true,
+  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined }
 ): void {
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
@@ -372,6 +382,7 @@ export function setupMCPRoutes(
   }
 
   const personalApiKeys = new UserApiKeysRepository(db);
+  const multiTenancy = resolveMultiTenancyConfig(config);
 
   type StatefulTransportEntry = {
     transport: StreamableHTTPServerTransport;
@@ -379,6 +390,8 @@ export function setupMCPRoutes(
     /** Mutable context object captured by registered tool handlers. */
     context: McpContext;
     userId: UserID;
+    /** Immutable tenant binding established at MCP initialize time. */
+    tenantId: TenantContext['tenant_id'];
     /** Immutable Agor session binding established at MCP initialize time, if any. */
     sessionId?: SessionID;
     lastUsedAt: number;
@@ -454,6 +467,19 @@ export function setupMCPRoutes(
     return coerceString(Array.isArray(xApiKey) ? xApiKey[0] : xApiKey);
   };
 
+  /**
+   * Preserve duplicate on-wire header fields for tenant resolution. Node's
+   * normalized `headers` map comma-coalesces most duplicate names;
+   * `headersDistinct` lets the resolver compare every trusted tenant value.
+   * Non-Node test adapters may not expose it, so retain the normalized map as
+   * a fail-closed fallback (the resolver rejects comma/list values).
+   */
+  const getTenantResolutionHeaders = (req: Request): Record<string, unknown> => {
+    const distinct = (req as Request & { headersDistinct?: Record<string, string[] | undefined> })
+      .headersDistinct;
+    return distinct ?? (req.headers as Record<string, unknown>);
+  };
+
   const getRequestedSessionId = (req: Request): string | undefined => {
     const fromQuery = coerceString(req.query.sessionId);
     if (fromQuery) return fromQuery;
@@ -499,10 +525,32 @@ export function setupMCPRoutes(
       let authenticatedUser: AuthenticatedUser;
       let userId: UserID;
       let sessionId: SessionID | undefined;
+      let tenant: TenantContext;
       const isPersonalApiKey = credential.startsWith('agor_sk_');
 
       if (isPersonalApiKey) {
-        const keyRow = await personalApiKeys.verifyKey(credential);
+        try {
+          // Opaque personal keys do not contain a signed tenant claim. Resolve
+          // static mode or the configured trusted edge header before touching
+          // the tenant-owned key table. Auth-claim-only hosted deployments must
+          // use an internal tenant-bound MCP token instead.
+          tenant = resolveTenantContext(multiTenancy, {
+            headers: getTenantResolutionHeaders(req),
+          });
+        } catch (error) {
+          if (error instanceof TenantResolutionError) {
+            return res.status(401).json({
+              ...jsonRpcError(req, -32001, error.message),
+            });
+          }
+          throw error;
+        }
+
+        const keyRow = await runWithTenantContext(tenant.tenant_id, () =>
+          runWithTenantDatabaseScope(db, tenant.tenant_id, () =>
+            personalApiKeys.verifyKey(credential)
+          )
+        );
         if (!keyRow) {
           console.warn('⚠️  Invalid MCP personal API key');
           return res.status(401).json({
@@ -510,13 +558,19 @@ export function setupMCPRoutes(
           });
         }
 
-        personalApiKeys.updateLastUsed(keyRow.id).catch((err: unknown) => {
+        void runWithTenantContext(tenant.tenant_id, () =>
+          runWithTenantDatabaseScope(db, tenant.tenant_id, () =>
+            personalApiKeys.updateLastUsed(keyRow.id)
+          )
+        ).catch((err: unknown) => {
           console.warn('Failed to update MCP personal API key last_used_at:', err);
         });
 
         userId = keyRow.user_id as UserID;
         try {
-          authenticatedUser = await app.service('users').get(userId);
+          authenticatedUser = await runWithTenantContext(tenant.tenant_id, () =>
+            app.service('users').get(userId, { tenant } as AuthenticatedParams)
+          );
         } catch (error) {
           if (error instanceof NotFoundError) {
             return res.status(401).json({
@@ -527,7 +581,32 @@ export function setupMCPRoutes(
         }
         sessionId = getRequestedSessionId(req) as SessionID | undefined;
       } else {
-        const context = await validateSessionToken(app, credential);
+        const verifiedToken = verifySessionToken(app, credential);
+        if (!verifiedToken) {
+          console.warn('⚠️  Invalid MCP session token');
+          return res.status(401).json({
+            ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
+          });
+        }
+
+        try {
+          // The signed token binding is an authenticated tenant signal. Static
+          // configuration and a configured trusted header, when present, must
+          // agree with it before the token's session is looked up.
+          tenant = resolveTenantContext(multiTenancy, {
+            params: { tenant_id: verifiedToken.tenantId },
+            headers: getTenantResolutionHeaders(req),
+          });
+        } catch (error) {
+          if (error instanceof TenantResolutionError) {
+            return res.status(403).json({
+              ...jsonRpcError(req, -32003, 'Forbidden: tenant identity mismatch'),
+            });
+          }
+          throw error;
+        }
+
+        const context = await validateVerifiedSessionToken(verifiedToken);
         if (!context) {
           console.warn('⚠️  Invalid MCP session token');
           return res.status(401).json({
@@ -539,7 +618,9 @@ export function setupMCPRoutes(
         sessionId = context.sessionId;
 
         try {
-          authenticatedUser = await app.service('users').get(userId);
+          authenticatedUser = await runWithTenantContext(tenant.tenant_id, () =>
+            app.service('users').get(userId, { tenant } as AuthenticatedParams)
+          );
         } catch (error) {
           if (error instanceof NotFoundError) {
             return res.status(401).json({
@@ -550,192 +631,209 @@ export function setupMCPRoutes(
         }
       }
 
-      const tenant = tenantFromAuthenticatedUser(authenticatedUser);
-      const baseServiceParams: Pick<
-        AuthenticatedParams,
-        'user' | 'authenticated' | 'provider' | 'tenant'
-      > = {
-        user: {
-          user_id: authenticatedUser.user_id,
-          email: authenticatedUser.email,
-          role: authenticatedUser.role,
-        },
-        authenticated: true,
-        provider: 'mcp',
-        ...(tenant ? { tenant } : {}),
-      };
-
-      // Personal API key callers may optionally bind a current-session context
-      // using a header/query param. Validate through the normal sessions
-      // service so branch RBAC and short-ID resolution stay identical to REST.
-      if (isPersonalApiKey && sessionId) {
-        try {
-          const session = await app.service('sessions').get(sessionId, baseServiceParams);
-          sessionId = session.session_id;
-        } catch {
-          return res.status(403).json({
-            ...jsonRpcError(
-              req,
-              -32003,
-              'Forbidden: X-Agor-Session-Id / ?sessionId is invalid or not accessible to this API key user.'
-            ),
-          });
-        }
+      if (!authenticatedUserTenantMatches(authenticatedUser, tenant)) {
+        console.warn('⚠️  MCP authenticated user tenant does not match request tenant');
+        return res.status(401).json({
+          ...jsonRpcError(req, -32001, 'Authenticated identity is not valid for this tenant'),
+        });
       }
 
-      mcpRequestDebug(
-        `🔌 MCP request authenticated (user: ${shortId(userId)}, session: ${sessionId ? shortId(sessionId) : 'none'})`
-      );
+      // Keep tenant identity ambient for the complete MCP request without
+      // holding a database transaction. Tool/repository operations open their
+      // own short tenant units of work.
+      return runWithTenantContext(tenant.tenant_id, async () => {
+        const baseServiceParams: Pick<
+          AuthenticatedParams,
+          'user' | 'authenticated' | 'provider' | 'tenant'
+        > = {
+          user: {
+            user_id: authenticatedUser.user_id,
+            email: authenticatedUser.email,
+            role: authenticatedUser.role,
+          },
+          authenticated: true,
+          provider: 'mcp',
+          tenant,
+        };
 
-      const mcpContext: McpContext = {
-        app,
-        db,
-        userId,
-        sessionId,
-        authenticatedUser,
-        baseServiceParams,
-      };
-
-      const mcpSessionHeader = req.headers['mcp-session-id'];
-      const mcpSessionId = coerceString(
-        Array.isArray(mcpSessionHeader) ? mcpSessionHeader[0] : mcpSessionHeader
-      );
-
-      if (req.method === 'GET' || req.method === 'DELETE' || mcpSessionId) {
-        if (!mcpSessionId) {
-          return res.status(400).json({
-            ...jsonRpcError(req, -32000, 'Bad Request: Mcp-Session-Id header is required'),
-          });
-        }
-        const entry = statefulTransports.get(mcpSessionId);
-        if (!entry) {
-          return res.status(404).json({
-            ...jsonRpcError(req, -32001, 'Session not found for Mcp-Session-Id'),
-          });
-        }
-        if (entry.userId !== userId) {
-          return res.status(403).json({
-            ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different user'),
-          });
-        }
-
-        // A stateful MCP transport's Agor session binding is immutable. Tool
-        // handlers close over `entry.context`, so allowing callers to add or
-        // change X-Agor-Session-Id on later requests would be confusing at
-        // best and a stale-context authorization footgun at worst.
-        if (!entry.sessionId && sessionId) {
-          return res.status(403).json({
-            ...jsonRpcError(
-              req,
-              -32003,
-              'Forbidden: MCP session was initialized without X-Agor-Session-Id / ?sessionId context; start a new MCP session with session context instead.'
-            ),
-          });
-        }
-        if (entry.sessionId && sessionId && entry.sessionId !== sessionId) {
-          return res.status(403).json({
-            ...jsonRpcError(
-              req,
-              -32003,
-              'Forbidden: MCP session is already bound to a different X-Agor-Session-Id / ?sessionId context'
-            ),
-          });
-        }
-
-        armStatefulTransportTtl(mcpSessionId, entry);
-
-        // Rebuild the mutable context captured by registered handlers on each
-        // stateful request. Credentials have just been re-authenticated and
-        // the user was reloaded, so this keeps role/user data fresh for
-        // long-lived streamable HTTP sessions. If the immutable Agor session
-        // binding is no longer accessible to this user, evict the MCP session.
-        if (entry.sessionId) {
+        // Personal API key callers may optionally bind a current-session context
+        // using a header/query param. Validate through the normal sessions
+        // service so branch RBAC and short-ID resolution stay identical to REST.
+        if (isPersonalApiKey && sessionId) {
           try {
-            const session = await app.service('sessions').get(entry.sessionId, baseServiceParams);
-            entry.sessionId = session.session_id;
+            const session = await app.service('sessions').get(sessionId, baseServiceParams);
+            sessionId = session.session_id;
           } catch {
-            closeStatefulTransport(mcpSessionId);
             return res.status(403).json({
               ...jsonRpcError(
                 req,
                 -32003,
-                'Forbidden: the X-Agor-Session-Id / ?sessionId context bound to this MCP session is no longer accessible.'
+                'Forbidden: X-Agor-Session-Id / ?sessionId is invalid or not accessible to this API key user.'
               ),
             });
           }
         }
-        entry.context.userId = userId;
-        entry.context.sessionId = entry.sessionId;
-        entry.context.authenticatedUser = authenticatedUser;
-        entry.context.baseServiceParams = baseServiceParams;
 
-        await entry.transport.handleRequest(req, res, req.body);
-        return;
-      }
+        mcpRequestDebug(
+          `🔌 MCP request authenticated (user: ${shortId(userId)}, session: ${sessionId ? shortId(sessionId) : 'none'})`
+        );
 
-      if (req.method === 'POST' && isInitializeRequest(req.body)) {
-        evictOldestStatefulTransportIfNeeded();
-
-        const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
-        let transport: StreamableHTTPServerTransport;
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (newSessionId) => {
-            const ttlTimer = setTimeout(
-              () => closeStatefulTransport(newSessionId),
-              STATEFUL_TRANSPORT_TTL_MS
-            );
-            ttlTimer.unref?.();
-            const entry: StatefulTransportEntry = {
-              transport,
-              server: mcpServer,
-              context: mcpContext,
-              userId,
-              sessionId,
-              lastUsedAt: Date.now(),
-              ttlTimer,
-            };
-            statefulTransports.set(newSessionId, entry);
-          },
-          onsessionclosed: (closedSessionId) => {
-            if (closedSessionId) closeStatefulTransport(closedSessionId);
-          },
-        });
-
-        transport.onclose = () => {
-          const sid = transport.sessionId;
-          if (sid) {
-            const entry = statefulTransports.get(sid);
-            statefulTransports.delete(sid);
-            if (entry) clearTimeout(entry.ttlTimer);
-          }
+        const mcpContext: McpContext = {
+          app,
+          db,
+          userId,
+          sessionId,
+          authenticatedUser,
+          baseServiceParams,
         };
 
+        const mcpSessionHeader = req.headers['mcp-session-id'];
+        const mcpSessionId = coerceString(
+          Array.isArray(mcpSessionHeader) ? mcpSessionHeader[0] : mcpSessionHeader
+        );
+
+        if (req.method === 'GET' || req.method === 'DELETE' || mcpSessionId) {
+          if (!mcpSessionId) {
+            return res.status(400).json({
+              ...jsonRpcError(req, -32000, 'Bad Request: Mcp-Session-Id header is required'),
+            });
+          }
+          const entry = statefulTransports.get(mcpSessionId);
+          if (!entry) {
+            return res.status(404).json({
+              ...jsonRpcError(req, -32001, 'Session not found for Mcp-Session-Id'),
+            });
+          }
+          if (entry.tenantId !== tenant.tenant_id) {
+            return res.status(403).json({
+              ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different tenant'),
+            });
+          }
+          if (entry.userId !== userId) {
+            return res.status(403).json({
+              ...jsonRpcError(req, -32003, 'Forbidden: MCP session belongs to a different user'),
+            });
+          }
+
+          // A stateful MCP transport's Agor session binding is immutable. Tool
+          // handlers close over `entry.context`, so allowing callers to add or
+          // change X-Agor-Session-Id on later requests would be confusing at
+          // best and a stale-context authorization footgun at worst.
+          if (!entry.sessionId && sessionId) {
+            return res.status(403).json({
+              ...jsonRpcError(
+                req,
+                -32003,
+                'Forbidden: MCP session was initialized without X-Agor-Session-Id / ?sessionId context; start a new MCP session with session context instead.'
+              ),
+            });
+          }
+          if (entry.sessionId && sessionId && entry.sessionId !== sessionId) {
+            return res.status(403).json({
+              ...jsonRpcError(
+                req,
+                -32003,
+                'Forbidden: MCP session is already bound to a different X-Agor-Session-Id / ?sessionId context'
+              ),
+            });
+          }
+
+          armStatefulTransportTtl(mcpSessionId, entry);
+
+          // Rebuild the mutable context captured by registered handlers on each
+          // stateful request. Credentials have just been re-authenticated and
+          // the user was reloaded, so this keeps role/user data fresh for
+          // long-lived streamable HTTP sessions. If the immutable Agor session
+          // binding is no longer accessible to this user, evict the MCP session.
+          if (entry.sessionId) {
+            try {
+              const session = await app.service('sessions').get(entry.sessionId, baseServiceParams);
+              entry.sessionId = session.session_id;
+            } catch {
+              closeStatefulTransport(mcpSessionId);
+              return res.status(403).json({
+                ...jsonRpcError(
+                  req,
+                  -32003,
+                  'Forbidden: the X-Agor-Session-Id / ?sessionId context bound to this MCP session is no longer accessible.'
+                ),
+              });
+            }
+          }
+          entry.context.userId = userId;
+          entry.context.sessionId = entry.sessionId;
+          entry.context.authenticatedUser = authenticatedUser;
+          entry.context.baseServiceParams = baseServiceParams;
+
+          await entry.transport.handleRequest(req, res, req.body);
+          return;
+        }
+
+        if (req.method === 'POST' && isInitializeRequest(req.body)) {
+          evictOldestStatefulTransportIfNeeded();
+
+          const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
+          let transport: StreamableHTTPServerTransport;
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (newSessionId) => {
+              const ttlTimer = setTimeout(
+                () => closeStatefulTransport(newSessionId),
+                STATEFUL_TRANSPORT_TTL_MS
+              );
+              ttlTimer.unref?.();
+              const entry: StatefulTransportEntry = {
+                transport,
+                server: mcpServer,
+                context: mcpContext,
+                userId,
+                tenantId: tenant.tenant_id,
+                sessionId,
+                lastUsedAt: Date.now(),
+                ttlTimer,
+              };
+              statefulTransports.set(newSessionId, entry);
+            },
+            onsessionclosed: (closedSessionId) => {
+              if (closedSessionId) closeStatefulTransport(closedSessionId);
+            },
+          });
+
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid) {
+              const entry = statefulTransports.get(sid);
+              statefulTransports.delete(sid);
+              if (entry) clearTimeout(entry.ttlTimer);
+            }
+          };
+
+          await mcpServer.connect(transport);
+          await transport.handleRequest(req, res, req.body);
+          return;
+        }
+
+        if (req.method !== 'POST') {
+          return res.status(405).json({
+            ...jsonRpcError(req, -32005, `Method ${req.method} not allowed on /mcp`),
+          });
+        }
+
+        const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
+
+        // Create stateless transport (one per request, no session tracking)
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+
+        // Connect and handle the request
         await mcpServer.connect(transport);
         await transport.handleRequest(req, res, req.body);
-        return;
-      }
 
-      if (req.method !== 'POST') {
-        return res.status(405).json({
-          ...jsonRpcError(req, -32005, `Method ${req.method} not allowed on /mcp`),
+        // Clean up after response is done
+        res.on('close', () => {
+          mcpServer.close().catch(() => {});
         });
-      }
-
-      const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
-
-      // Create stateless transport (one per request, no session tracking)
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-      });
-
-      // Connect and handle the request
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-
-      // Clean up after response is done
-      res.on('close', () => {
-        mcpServer.close().catch(() => {});
       });
     } catch (error) {
       console.error('❌ MCP request failed:', error);

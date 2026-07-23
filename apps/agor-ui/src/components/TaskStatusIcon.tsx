@@ -34,6 +34,7 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 1
     case TaskStatus.COMPLETED:
     case 'completed': // SessionStatus.COMPLETED
       return <CheckCircleOutlined style={{ ...iconStyle, color: token.colorSuccess }} />;
+    case TaskStatus.DISPATCHING:
     case TaskStatus.RUNNING:
     case 'running': // SessionStatus.RUNNING
       return <Spin size={spinSize} />;

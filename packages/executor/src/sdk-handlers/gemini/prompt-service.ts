@@ -34,6 +34,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -135,7 +136,8 @@ export class GeminiPromptService {
     sessionId: SessionID,
     prompt: string,
     taskId?: TaskID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<GeminiStreamEvent> {
     // Get session metadata for model
     const session = await this.sessionsRepo.findById(sessionId);
@@ -194,6 +196,7 @@ export class GeminiPromptService {
 
         // Stream all events from this turn
         for await (const event of stream) {
+          reportSdkActivity(onActivity, 'gemini', String(event.type));
           // Debug logging for all events
           const eventValue = 'value' in event ? event.value : undefined;
           console.debug(

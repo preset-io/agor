@@ -91,6 +91,9 @@ export type ProcessedEvent =
       parent_tool_use_id?: string | null;
       agentSessionId?: string;
       resolvedModel?: string;
+      /** Set on the synthesized result message emitted for a zero-turn success
+       * (no real assistant turns) — the only signal safe to gate auth classification on. */
+      isSynthesizedResult?: boolean;
     }
   | {
       type: 'tool_start';
@@ -172,7 +175,6 @@ export interface ProcessorOptions {
   sessionId: SessionID;
   existingSdkSessionId?: string;
   enableTokenStreaming?: boolean;
-  idleTimeoutMs?: number;
   /**
    * Minimum chunk size in characters before emitting to prevent tiny/out-of-order chunks
    * @default 20
@@ -194,18 +196,14 @@ interface ProcessorState {
   capturedAgentSessionId?: string;
   messageCount: number;
   assistantMessageCount: number;
-  lastActivityTime: number;
   lastAssistantMessageTime: number;
   resolvedModel?: string;
   enableTokenStreaming: boolean;
-  idleTimeoutMs: number;
   minChunkSize: number;
-  // Track current content blocks for tool_complete events
+  // Track current content blocks for streaming lifecycle events
   contentBlockStack: Array<{
     index: number;
-    type: 'text' | 'tool_use' | 'thinking';
-    toolUseId?: string;
-    toolName?: string;
+    type: 'text' | 'thinking';
   }>;
   // Text chunk accumulation buffer
   textChunkBuffer: string;
@@ -231,10 +229,8 @@ export class SDKMessageProcessor {
       capturedAgentSessionId: undefined,
       messageCount: 0,
       assistantMessageCount: 0,
-      lastActivityTime: Date.now(),
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
-      idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
       minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
       contentBlockStack: [],
       textChunkBuffer: '',
@@ -252,7 +248,6 @@ export class SDKMessageProcessor {
    */
   async process(msg: SDKMessage): Promise<ProcessedEvent[]> {
     this.state.messageCount++;
-    this.state.lastActivityTime = Date.now();
 
     // Log message type for debugging (skip stream_event as it's too verbose)
     if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
@@ -274,15 +269,6 @@ export class SDKMessageProcessor {
     }
 
     return this.routeMessage(msg);
-  }
-
-  /**
-   * Check if processor has timed out due to inactivity
-   * Uses lastActivityTime (updated on EVERY message) for proper moving anchor behavior
-   */
-  hasTimedOut(): boolean {
-    const timeSinceLastActivity = Date.now() - this.state.lastActivityTime;
-    return timeSinceLastActivity > this.state.idleTimeoutMs;
   }
 
   /**
@@ -385,8 +371,20 @@ export class SDKMessageProcessor {
         `🔧 SDK user message with ${toolResults.length} tool result(s) (✅ ${successCount}, ❌ ${errorCount})`
       );
 
-      // Yield event to save tool results to database
+      // A tool is complete when Claude reports its result, not when the
+      // preceding tool-use content block finishes streaming.
       return [
+        ...toolResults.flatMap((result) =>
+          result.tool_use_id
+            ? [
+                {
+                  type: 'tool_complete' as const,
+                  toolUseId: result.tool_use_id,
+                  agentSessionId: this.state.capturedAgentSessionId,
+                },
+              ]
+            : []
+        ),
         {
           type: 'complete',
           role: MessageRole.USER,
@@ -463,14 +461,6 @@ export class SDKMessageProcessor {
         const toolName = block.name as string;
         const toolId = block.id as string;
 
-        // Track this tool use block
-        this.state.contentBlockStack.push({
-          index: blockIndex,
-          type: 'tool_use',
-          toolUseId: toolId,
-          toolName: toolName,
-        });
-
         events.push({
           type: 'tool_start',
           toolName: toolName,
@@ -539,13 +529,7 @@ export class SDKMessageProcessor {
       // Find the block that just completed
       const completedBlock = this.state.contentBlockStack.find((b) => b.index === blockIndex);
 
-      if (completedBlock?.type === 'tool_use') {
-        events.push({
-          type: 'tool_complete',
-          toolUseId: completedBlock.toolUseId!,
-          agentSessionId: this.state.capturedAgentSessionId,
-        });
-      } else if (completedBlock?.type === 'thinking') {
+      if (completedBlock?.type === 'thinking') {
         events.push({
           type: 'thinking_complete',
           agentSessionId: this.state.capturedAgentSessionId,
@@ -631,6 +615,7 @@ export class SDKMessageProcessor {
           parent_tool_use_id: null,
           agentSessionId: this.state.capturedAgentSessionId,
           resolvedModel: this.state.resolvedModel,
+          isSynthesizedResult: true,
         });
       }
     }

@@ -28,7 +28,7 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   // on the connection while dropping the decoded JWT payload. Treat those
   // fields as executor scope only when they came from JWT auth and carry a task
   // claim; normal user/API-key auth must continue through unscoped.
-  if (params.authentication?.strategy === 'jwt' && params.task_id) {
+  if (params.authentication?.strategy === 'jwt' && payload === undefined && params.task_id) {
     return {
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
@@ -41,6 +41,16 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
 
   if (payload?.type !== undefined) return null;
   return null;
+}
+
+/** Whether this authenticated transport request carries executor scope for one task. */
+export function isTaskScopedExecutorRequest(context: HookContext, taskId: string): boolean {
+  return scopedPayload(context)?.task_id === taskId;
+}
+
+/** Whether this request carries a validated executor-session scope. */
+export function hasExecutorRuntimeScope(context: HookContext): boolean {
+  return scopedPayload(context) !== null;
 }
 
 function expectClaim(claim: string | undefined, label: string): string {
@@ -170,6 +180,16 @@ export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
   return async (context: HookContext): Promise<HookContext> => {
     const authenticated = await requireAuth(context);
     return executorRuntimeScopeGuard()(authenticated);
+  };
+}
+
+/** Require this transport call to carry a task-scoped executor session token. */
+export function requireExecutorRuntimeToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!scopedPayload(context)) {
+      throw new Forbidden('A task-scoped executor token is required for this request');
+    }
+    return context;
   };
 }
 

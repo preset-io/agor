@@ -17,6 +17,7 @@ import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
   SessionStatus,
+  shortId,
   TaskStatus,
 } from '@agor-live/client';
 import {
@@ -688,6 +689,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let index = tasks.length - 1; index >= 0; index -= 1) {
       const candidate = tasks[index];
       if (
+        candidate.status === TaskStatus.DISPATCHING ||
         candidate.status === TaskStatus.RUNNING ||
         candidate.status === TaskStatus.STOPPING ||
         candidate.status === TaskStatus.AWAITING_PERMISSION ||
@@ -1092,6 +1094,37 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleStop = async () => {
     if (!session || !client || stopRequestInFlight) return;
+
+    const unverifiedTask = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+      );
+    if (unverifiedTask) {
+      const expected = shortId(unverifiedTask.task_id);
+      const confirmation = window.prompt(
+        `Agor could not verify that this executor stopped. It may still be running and writing to the branch. Type ${expected} to force-fail the Task anyway.`
+      );
+      if (confirmation === null) return;
+      if (confirmation !== expected) {
+        showError(`Type ${expected} to confirm force-fail.`);
+        return;
+      }
+      setStopRequestInFlight(true);
+      try {
+        await client.service(`sessions/${session.session_id}/stop`).create({
+          force_unverified: true,
+          confirmation,
+        });
+      } catch (error) {
+        console.error('Failed to force-fail execution:', error);
+        showError('Failed to force-fail execution. You can try again.');
+      } finally {
+        setStopRequestInFlight(false);
+      }
+      return;
+    }
 
     // Show feedback immediately if this is a retry
     if (isStopping) {

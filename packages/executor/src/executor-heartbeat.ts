@@ -1,4 +1,4 @@
-import type { TaskID } from '@agor/core/types';
+import type { ExecutorPulseKind, TaskID } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 export interface ExecutorHeartbeatOptions {
@@ -6,11 +6,11 @@ export interface ExecutorHeartbeatOptions {
   taskId: TaskID | string;
   enabled?: boolean;
   intervalMs?: number;
-  now?: () => Date;
   warn?: (...args: unknown[]) => void;
 }
 
 export interface ExecutorHeartbeatHandle {
+  recordPulse(kind: ExecutorPulseKind, detail?: string): void;
   stop(): void;
 }
 
@@ -19,7 +19,7 @@ const DEFAULT_INTERVAL_MS = 10_000;
 export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): ExecutorHeartbeatHandle {
   const enabled = options.enabled ?? true;
   if (!enabled) {
-    return { stop() {} };
+    return { recordPulse() {}, stop() {} };
   }
 
   const intervalMs =
@@ -28,18 +28,20 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     options.intervalMs > 0
       ? Math.floor(options.intervalMs)
       : DEFAULT_INTERVAL_MS;
-  const now = options.now ?? (() => new Date());
   const warn = options.warn ?? console.warn;
   let stopped = false;
   let inFlight = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let sequence = 0;
+  let latestPulse: { sequence: number; kind: ExecutorPulseKind; detail?: string } | undefined;
 
   const emit = async () => {
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      await options.client.service('tasks').patch(options.taskId, {
-        last_executor_heartbeat_at: now().toISOString(),
+      await options.client.service('tasks').reportRuntimeTelemetry({
+        task_id: options.taskId,
+        ...(latestPulse ? { pulse: latestPulse } : {}),
       });
     } catch (error) {
       warn(
@@ -58,6 +60,10 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
   timer.unref?.();
 
   return {
+    recordPulse(kind, detail) {
+      sequence += 1;
+      latestPulse = { sequence, kind, ...(detail ? { detail } : {}) };
+    },
     stop() {
       stopped = true;
       if (timer) clearInterval(timer);

@@ -16,11 +16,14 @@ import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
+  GatewayListenerDiscoveryRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
   getHiddenTenantId,
   MCPServerRepository,
+  requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
+  runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
@@ -634,16 +637,16 @@ export class GatewayService {
   private db: TenantScopeAwareDatabase;
   private app: Application;
 
-  /** Active Socket Mode listeners keyed by channel ID */
+  /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
 
   /**
-   * In-memory flag: true when at least one gateway channel exists.
+   * Tenants with at least one enabled gateway channel.
    * Allows routeMessage() to skip the DB lookup entirely when the
-   * gateway feature is not in use (the common case for most instances).
-   * Updated on startup and whenever channels are created/deleted.
+   * gateway feature is not in use for the current tenant. A tenant-local
+   * refresh must never suppress another tenant's delivery.
    */
-  private hasActiveChannels = false;
+  private activeChannelTenants = new Set<string>();
 
   /**
    * GitHub message buffer: keyed by session_id, stores the latest message text.
@@ -687,15 +690,33 @@ export class GatewayService {
     this.app = app;
   }
 
-  /**
-   * Refresh the in-memory hasActiveChannels flag.
-   * Called at startup and should be called when channels are created/deleted.
-   */
+  private listenerKey(tenantId: TenantID | string, channelId: string): string {
+    return `${tenantId}\0${channelId}`;
+  }
+
+  private getActiveListener(channelId: string): GatewayConnector | undefined {
+    const tenantId = getCurrentTenantId();
+    return tenantId ? this.activeListeners.get(this.listenerKey(tenantId, channelId)) : undefined;
+  }
+
+  private currentTenantHasActiveChannels(): boolean {
+    const tenantId = getCurrentTenantId();
+    return !!tenantId && this.activeChannelTenants.has(tenantId);
+  }
+
+  /** Refresh the current tenant's process-local channel fast path. */
   async refreshChannelState(): Promise<void> {
+    const tenantId = requireCurrentTenantId(
+      'Missing tenant context while refreshing gateway channel state'
+    );
     const channels = await this.channelRepo.findAll();
-    this.hasActiveChannels = channels.some((ch) => ch.enabled);
+    if (channels.some((ch) => ch.enabled)) {
+      this.activeChannelTenants.add(tenantId);
+    } else {
+      this.activeChannelTenants.delete(tenantId);
+    }
     console.log(
-      `[gateway] refreshChannelState: found ${channels.length} channels, ${channels.filter((ch) => ch.enabled).length} enabled`
+      `[gateway] refreshChannelState: tenant=${tenantId} found ${channels.length} channels, ${channels.filter((ch) => ch.enabled).length} enabled`
     );
   }
 
@@ -723,7 +744,7 @@ export class GatewayService {
       // store ConversationReferences in memory on the listener instance.
       // Creating a new connector via getConnector() would lose that state.
       const connector =
-        this.activeListeners.get(channel.id) ??
+        this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
       connector
         .sendMessage({
@@ -1211,7 +1232,7 @@ export class GatewayService {
   }
 
   private async updateProgressNow(data: GatewayProgressData): Promise<void> {
-    if (!this.hasActiveChannels) return;
+    if (!this.currentTenantHasActiveChannels()) return;
 
     const mapping = await this.threadMapRepo.findBySession(data.session_id);
     if (!mapping) return;
@@ -1269,7 +1290,7 @@ export class GatewayService {
     };
 
     const connector =
-      this.activeListeners.get(channel.id) ??
+      this.getActiveListener(channel.id) ??
       getConnector(channel.channel_type as ChannelType, channel.config);
     const activeTaskId =
       typeof metadata.slack_status_task_id === 'string' ? metadata.slack_status_task_id : undefined;
@@ -1323,7 +1344,7 @@ export class GatewayService {
     event: 'streaming:start' | 'streaming:chunk' | 'streaming:end' | 'streaming:error',
     data: Record<string, unknown>
   ): Promise<void> {
-    if (!this.hasActiveChannels) return;
+    if (!this.currentTenantHasActiveChannels()) return;
 
     const sessionId = typeof data.session_id === 'string' ? data.session_id : undefined;
     const messageId = typeof data.message_id === 'string' ? data.message_id : undefined;
@@ -1346,7 +1367,7 @@ export class GatewayService {
     if (!channel?.enabled || channel.channel_type !== 'slack') return;
 
     const connector =
-      this.activeListeners.get(channel.id) ??
+      this.getActiveListener(channel.id) ??
       getConnector(channel.channel_type as ChannelType, channel.config);
 
     const streamConnector = connector as GatewayConnector & {
@@ -2336,7 +2357,7 @@ export class GatewayService {
             ? mappingMetadata.slack_last_delivered_ts
             : undefined;
         const connector =
-          this.activeListeners.get(channel.id) ??
+          this.getActiveListener(channel.id) ??
           getConnector(channel.channel_type as ChannelType, channel.config);
         const historyConnector = connector as Partial<SlackHistoryConnector>;
         if (currentTs && typeof historyConnector.fetchThreadHistory === 'function') {
@@ -2539,7 +2560,7 @@ export class GatewayService {
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
     // Fast path: skip DB lookup entirely when no channels are configured
-    if (!this.hasActiveChannels) {
+    if (!this.currentTenantHasActiveChannels()) {
       return { routed: false };
     }
 
@@ -2588,7 +2609,7 @@ export class GatewayService {
       // Prefer the active listener instance — webhook-based connectors (e.g. Teams)
       // store ConversationReferences in memory on the listener instance.
       const connector =
-        this.activeListeners.get(channel.id) ??
+        this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
 
       const systemMeta = data.metadata?.system as Record<string, unknown> | undefined;
@@ -2725,7 +2746,15 @@ export class GatewayService {
    * the gateway's create() method (same path as webhook POST).
    */
   async startListeners(): Promise<void> {
+    const tenantId = requireCurrentTenantId(
+      'Missing tenant context while starting gateway listeners'
+    );
     const channels = await this.channelRepo.findAll();
+    if (channels.some((channel) => channel.enabled)) {
+      this.activeChannelTenants.add(tenantId);
+    } else {
+      this.activeChannelTenants.delete(tenantId);
+    }
     const eligible = channels.filter(
       (ch) => ch.enabled && hasConnector(ch.channel_type as ChannelType) && hasListeningConfig(ch)
     );
@@ -2736,7 +2765,65 @@ export class GatewayService {
     }
 
     for (const channel of eligible) {
-      await this.startChannelListener(channel);
+      await this.startChannelListener(channel, tenantId);
+    }
+  }
+
+  /**
+   * Discover enabled channels across tenants at daemon startup. The system
+   * transaction returns only channel and tenant IDs. Credentials and all
+   * connector-owned work are reloaded under the discovered tenant's RLS scope.
+   */
+  async startListenersAcrossTenants(): Promise<void> {
+    const refs = await runWithSystemDatabaseScope(
+      this.db,
+      'gateway listener discovery',
+      (systemDb) => new GatewayListenerDiscoveryRepository(systemDb).findEnabledTenantRefs(),
+      { capability: 'gateway_listener_discovery' }
+    );
+
+    if (refs.length === 0) {
+      console.log('[gateway] No enabled channels found during listener discovery');
+      return;
+    }
+
+    for (const ref of refs) {
+      const tenantId = ref.tenant_id;
+
+      try {
+        await runWithTenantContext(tenantId, async () => {
+          const channel = await this.channelRepo.findById(ref.channel_id);
+          if (!channel) {
+            console.warn(
+              `[gateway] Channel ${ref.channel_id} disappeared before tenant-scoped listener startup`
+            );
+            return;
+          }
+
+          const rowTenantId = tenantIdFromGatewayChannel(channel);
+          if (rowTenantId !== tenantId) {
+            throw new Error(
+              `Gateway listener discovery tenant mismatch for channel ${ref.channel_id}`
+            );
+          }
+          if (!channel.enabled) {
+            console.warn(
+              `[gateway] Channel ${ref.channel_id} was disabled before tenant-scoped listener startup`
+            );
+            return;
+          }
+
+          this.activeChannelTenants.add(tenantId);
+          if (hasConnector(channel.channel_type as ChannelType) && hasListeningConfig(channel)) {
+            await this.startChannelListener(channel, tenantId);
+          }
+        });
+      } catch (error) {
+        console.error(
+          `[gateway] Refusing listener startup for channel ${ref.channel_id} in tenant ${tenantId}:`,
+          error
+        );
+      }
     }
   }
 
@@ -2745,6 +2832,9 @@ export class GatewayService {
    * (public wrapper for hook usage)
    */
   async startListenerForChannel(channelId: string): Promise<void> {
+    const tenantId = requireCurrentTenantId(
+      'Missing tenant context while managing a gateway listener'
+    );
     const channel = await this.channelRepo.findById(channelId);
     if (!channel) {
       console.warn(`[gateway] Cannot manage listener: channel ${channelId} not found`);
@@ -2776,7 +2866,7 @@ export class GatewayService {
     // startChannelListener() is a no-op if a listener already exists,
     // so we must tear down the old one before creating a new connector
     // with the updated config (e.g. enable_channels toggled).
-    if (this.activeListeners.has(channelId)) {
+    if (this.activeListeners.has(this.listenerKey(tenantId, channelId))) {
       console.log(
         `[gateway] Restarting listener for channel "${channel.name}" to pick up config changes`
       );
@@ -2784,21 +2874,25 @@ export class GatewayService {
     }
 
     // Start with fresh config
-    await this.startChannelListener(channel);
+    await this.startChannelListener(channel, tenantId);
   }
 
   /**
    * Stop a Socket Mode listener for a single channel
    */
   async stopChannelListener(channelId: string): Promise<void> {
-    const connector = this.activeListeners.get(channelId);
+    const tenantId = requireCurrentTenantId(
+      'Missing tenant context while stopping a gateway listener'
+    );
+    const key = this.listenerKey(tenantId, channelId);
+    const connector = this.activeListeners.get(key);
     if (!connector) {
       return; // Not listening
     }
 
     // Always remove from activeListeners so a fresh start can proceed,
     // even if stopListening() throws (e.g. socket already closed).
-    this.activeListeners.delete(channelId);
+    this.activeListeners.delete(key);
 
     try {
       if (connector.stopListening) {
@@ -2818,12 +2912,19 @@ export class GatewayService {
   /**
    * Start a Socket Mode listener for a single channel
    */
-  private async startChannelListener(channel: GatewayChannel): Promise<void> {
-    if (this.activeListeners.has(channel.id)) {
-      return; // Already listening
+  private async startChannelListener(
+    channel: GatewayChannel,
+    listenerTenantId: TenantID | string
+  ): Promise<void> {
+    const rowTenantId = tenantIdFromGatewayChannel(channel);
+    if (rowTenantId && rowTenantId !== listenerTenantId) {
+      throw new Error(`Gateway listener tenant mismatch for channel ${channel.id}`);
     }
 
-    const listenerTenantId = tenantIdFromGatewayChannel(channel) ?? getCurrentTenantId();
+    const key = this.listenerKey(listenerTenantId, channel.id);
+    if (this.activeListeners.has(key)) {
+      return; // Already listening
+    }
 
     return runWithoutTenantDatabaseScope(async () => {
       try {
@@ -2843,7 +2944,7 @@ export class GatewayService {
         };
 
         await connector.startListening(callback);
-        this.activeListeners.set(channel.id, connector);
+        this.activeListeners.set(key, connector);
         console.log(`[gateway] Socket Mode listener started for channel "${channel.name}"`);
       } catch (error) {
         console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
@@ -2876,17 +2977,18 @@ export class GatewayService {
    * Stop all active listeners (called on shutdown)
    */
   async stopListeners(): Promise<void> {
-    for (const [channelId, connector] of this.activeListeners) {
+    for (const [listenerKey, connector] of this.activeListeners) {
       try {
         if (connector.stopListening) {
           await connector.stopListening();
         }
-        console.log(`[gateway] Listener stopped for channel ${shortId(channelId)}`);
+        console.log(`[gateway] Listener stopped for ${listenerKey.replace('\0', '/')}`);
       } catch (error) {
-        console.error(`[gateway] Error stopping listener for ${channelId}:`, error);
+        console.error(`[gateway] Error stopping listener for ${listenerKey}:`, error);
       }
     }
     this.activeListeners.clear();
+    this.activeChannelTenants.clear();
   }
 }
 

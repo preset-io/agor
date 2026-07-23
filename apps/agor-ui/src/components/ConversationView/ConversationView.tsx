@@ -10,7 +10,14 @@
  * - Auto-scrolling to latest content
  */
 
-import type { AgorClient, Message, PermissionScope, SessionID, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  Message,
+  PermissionScope,
+  SessionID,
+  User,
+} from '@agor-live/client';
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
@@ -125,6 +132,8 @@ export interface ConversationViewProps {
    * When true, all task blocks are force-expanded (used by in-session search)
    */
   forceExpandAll?: boolean;
+
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -145,6 +154,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     genealogy,
     teammateEmoji,
     forceExpandAll = false,
+    onOpenAgenticToolSettings,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -505,6 +515,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
+              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
             />
           ))}
         </div>

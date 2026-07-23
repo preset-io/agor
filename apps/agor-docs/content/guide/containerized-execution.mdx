@@ -1012,6 +1012,47 @@ execution:
       -- agor-executor --stdin
 ```
 
+### Upgrade Remote Executors with the Daemon
+
+Remote executors may be deployed independently, but they are part of the same
+runtime contract as the daemon. Upgrade remote executor images to the same Agor
+release when upgrading the daemon; mixed-version daemon/executor deployments are
+not a supported rollout mode. Before downgrading to a release that predates the
+`dispatching` state, stop or settle pending dispatches with the current daemon.
+
+### SDK Health Watchdog
+
+Agor can detect an executor whose wrapper is alive but whose SDK stream stops
+making progress. The watchdog starts in observe-only mode so upgrades collect
+diagnostics without stopping work:
+
+```yaml
+execution:
+  sdk_watchdog:
+    mode: observe # disabled | observe | enforce
+    first_progress_timeout_ms: 180000
+    abort_grace_ms: 15000
+    claude_idle_timeout_ms: 3600000 # null disables Claude's post-progress check
+```
+
+`observe` records what would have fired. Use `enforce` only after reviewing
+real-workload diagnostics for false positives; `disabled` is the rollback
+switch. Unknown SDK events fail open while they continue, permission/input
+waits pause the clock, and known active Claude tools are not timed out.
+
+SDK activity facts share the existing executor heartbeat transport. Disabling
+`execution.executor_heartbeat.enabled` therefore disables persisted pulse
+diagnostics and the stale-wrapper backstop, but the executor-local watchdog and
+its direct failure report remain active.
+
+For locally spawned executors, enforced failures and user Stop wait for bounded
+process-group termination and absence verification before the session becomes
+promptable. This can add the configured grace and signal-escalation latency.
+Templated/remote execution that cannot prove absence remains visible and blocked
+until a branch owner or administrator explicitly force-fails it. After an abrupt
+daemon restart, Agor keeps its existing orphan cleanup behavior; diagnostics
+disclose that logical release does not prove remote process termination.
+
 ### Step 5: Test Single Executor
 
 Spawn one executor pod manually:

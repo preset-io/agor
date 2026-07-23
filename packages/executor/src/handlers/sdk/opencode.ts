@@ -10,7 +10,13 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ExecutorPulseKind,
+  MessageID,
+  PermissionMode,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
@@ -31,8 +37,10 @@ export async function executeOpenCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   resolvedConfig?: ResolvedConfigSlice;
+  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
+  let abortHandler: (() => void) | undefined;
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
@@ -48,7 +56,7 @@ export async function executeOpenCodeTask(params: {
 
     // Create execution context (similar to other handlers)
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
+    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId, params.onPulse);
 
     // OpenCode server URL: env var > daemon-resolved config slice > default.
     const serverUrl =
@@ -125,6 +133,13 @@ export async function executeOpenCodeTask(params: {
       branchPath,
       session.mcp_token
     );
+    abortHandler = () => {
+      void tool.stopTask(sessionId).then((result) => {
+        if (!result.success) console.warn(`[opencode] Abort was not confirmed: ${result.reason}`);
+      });
+    };
+    params.abortController.signal.addEventListener('abort', abortHandler, { once: true });
+    if (params.abortController.signal.aborted) abortHandler();
 
     // Get existing messages to determine next index
     const existingMessages = await client.service('messages').find({
@@ -166,21 +181,27 @@ export async function executeOpenCodeTask(params: {
     console.log('[opencode] Setting task model:', modelIdentifier);
 
     // Update task status to completed and set model
-    await client.service('tasks').patch(taskId, {
-      status: result?.status === 'completed' ? 'completed' : 'failed',
-      completed_at: new Date().toISOString(),
-      model: modelIdentifier, // Set the model identifier used for this task (provider/model format)
-    });
+    if (!params.abortController.signal.aborted) {
+      await client.service('tasks').patch(taskId, {
+        status: result?.status === 'completed' ? 'completed' : 'failed',
+        completed_at: new Date().toISOString(),
+        model: modelIdentifier, // Set the model identifier used for this task (provider/model format)
+      });
+    }
   } catch (error) {
     const err = error as Error;
     console.error('[opencode] Execution failed:', err);
 
     // Update task status to failed
-    await client.service('tasks').patch(taskId, {
-      status: 'failed',
-      completed_at: new Date().toISOString(),
-    });
+    if (!params.abortController.signal.aborted) {
+      await client.service('tasks').patch(taskId, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+      });
+    }
 
     throw err;
+  } finally {
+    if (abortHandler) params.abortController.signal.removeEventListener('abort', abortHandler);
   }
 }

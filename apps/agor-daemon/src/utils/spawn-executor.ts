@@ -93,6 +93,12 @@ export interface ExecutorTemplateVariables {
   log_level?: string;
 }
 
+export type ExecutorSpawnMode = 'local' | 'templated';
+
+export interface ExecutorSpawnContext {
+  mode: ExecutorSpawnMode;
+}
+
 export interface SpawnExecutorOptions {
   cwd?: string;
   env?: Record<string, string>;
@@ -102,9 +108,9 @@ export interface SpawnExecutorOptions {
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
   templateVariables?: ExecutorTemplateVariables;
-  onExit?: (code: number | null) => void;
+  onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
-  onSpawn?: (child: ChildProcess) => void;
+  onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
@@ -355,7 +361,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
     // conventional "command not found" exit code; close enough semantically
     // for "the cwd is gone" without inventing a new one.
-    options.onExit?.(127);
+    options.onExit?.(127, { mode: 'local' });
     return;
   }
 
@@ -363,14 +369,14 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code);
+    options.onExit?.(code, { mode: 'local' });
   };
 
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: false, // Don't detach - let daemon manage lifecycle
+    detached: process.platform !== 'win32',
   });
 
   // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
@@ -379,7 +385,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
   attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
 
-  onSpawn?.(executorProcess);
+  onSpawn?.(executorProcess, { mode: 'local' });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -424,7 +430,7 @@ function spawnExecutorWithTemplate(
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code);
+    options.onExit?.(code, { mode: 'templated' });
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
@@ -432,7 +438,7 @@ function spawnExecutorWithTemplate(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  options.onSpawn?.(executorProcess);
+  options.onSpawn?.(executorProcess, { mode: 'templated' });
 
   executorProcess.stdout?.on('data', (data) => {
     console.log(`${logPrefix} ${data.toString().trim()}`);

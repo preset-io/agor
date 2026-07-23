@@ -46,6 +46,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -971,7 +972,8 @@ export class CodexPromptService {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    abortController?: AbortController
+    abortController?: AbortController,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<CodexStreamEvent> {
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
@@ -1241,6 +1243,15 @@ export class CodexPromptService {
       for await (const event of events) {
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+
+        const activityEvent = event as { type: string; payload?: { type?: string } };
+        const activityPayloadType =
+          activityEvent.type === 'event_msg' ? activityEvent.payload?.type : undefined;
+        reportSdkActivity(
+          onActivity,
+          'codex',
+          activityPayloadType ? `${activityEvent.type}.${activityPayloadType}` : activityEvent.type
+        );
 
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {

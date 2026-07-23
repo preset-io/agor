@@ -1285,6 +1285,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   }
                   durationMs={footerTimerTask.duration_ms}
                   lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
+                  latestExecutorPulse={footerTimerTask.latest_executor_pulse}
                 />
               </div>
             )}

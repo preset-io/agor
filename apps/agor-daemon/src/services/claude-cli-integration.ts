@@ -70,6 +70,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  type Params,
   type Session,
   type SessionID,
   SessionStatus,
@@ -84,6 +85,7 @@ import {
   type UnixUserMode,
 } from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
+import type { TasksServiceImpl } from '../declarations.js';
 import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { canControlCliSession } from '../utils/mcp-token-authorization.js';
@@ -565,6 +567,95 @@ export function buildCliPersister(app: Application): CliWatcherStatePersister {
  * multiple pending tasks here.
  */
 const pendingCliTask = new Map<SessionID, { taskId: TaskID; userMessageIndex: number }>();
+const cliStopWaiters = new Map<SessionID, { taskId: TaskID; resolve(task: Task): void }>();
+const CLI_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
+
+function resolveCliStopWaiter(sessionId: SessionID, task: Task): void {
+  const waiter = cliStopWaiters.get(sessionId);
+  if (!waiter || waiter.taskId !== task.task_id) return;
+  cliStopWaiters.delete(sessionId);
+  waiter.resolve(task);
+}
+
+export async function stopClaudeCliTask(input: {
+  app: Application;
+  session: Session;
+  task: Task;
+  params?: Params;
+  timeoutMs?: number;
+}): Promise<{
+  status: 'terminal' | 'unverified';
+  task: Task;
+  reason?: string;
+  queueHandled?: boolean;
+}> {
+  const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
+  const claim = await tasks.claimTermination(
+    {
+      taskId: input.task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user.',
+    },
+    { ...(input.params ?? {}), provider: undefined }
+  );
+  if (claim.outcome === 'terminal') {
+    return { status: 'terminal', task: claim.task, queueHandled: true };
+  }
+
+  const targetUserId = input.session.created_by;
+  const io = input.app.io;
+  const confirmed = new Promise<Task | undefined>((resolve) => {
+    const timer = setTimeout(() => {
+      cliStopWaiters.delete(input.session.session_id);
+      resolve(undefined);
+    }, input.timeoutMs ?? CLI_STOP_CONFIRMATION_TIMEOUT_MS);
+    timer.unref?.();
+    cliStopWaiters.set(input.session.session_id, {
+      taskId: input.task.task_id,
+      resolve: (task) => {
+        clearTimeout(timer);
+        resolve(task);
+      },
+    });
+  });
+
+  if (io && targetUserId) {
+    const channel = `user/${targetUserId}/terminal`;
+    io.to(channel).emit('terminal:tab', {
+      userId: targetUserId,
+      action: 'focus',
+      tabName: `cli-${shortId(input.session.session_id)}`,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    io.to(channel).emit('terminal:input', { userId: targetUserId, input: '\x03' });
+  }
+
+  const task = await confirmed;
+  if (task) return { status: 'terminal', task, queueHandled: false };
+
+  const reason =
+    io && targetUserId
+      ? 'Claude CLI did not confirm the interrupted turn ended.'
+      : 'Claude CLI terminal input is unavailable.';
+  const settlement = await tasks.settleTermination(
+    {
+      taskId: input.task.task_id,
+      outcome: 'unverified',
+      errorMessage: `${reason} The session remains blocked until termination is confirmed or force-failed.`,
+      sdkFailure: {
+        reason: 'termination_unverified',
+        detected_at: new Date().toISOString(),
+        tool: 'claude-code-cli',
+        termination: 'unverified',
+      },
+    },
+    { ...(input.params ?? {}), provider: undefined }
+  );
+  if (settlement.outcome === 'terminal') {
+    return { status: 'terminal', task: settlement.task, queueHandled: true };
+  }
+  return { status: 'unverified', task: settlement.task, reason };
+}
 
 /** Set by `/sessions/:id/prompt` for CLI sessions right before PTY-injection. */
 export function setPendingCliTask(
@@ -585,8 +676,8 @@ export function setPendingCliTask(
  *     task with status=RUNNING (terminal-direct path). Stamp every subsequent
  *     message for this session with that task_id.
  *   - On `assistant_message` / `tool_result`: tag with the active task_id.
- *   - On `turn_end` (assistant `stop_reason === 'end_turn'`): patch the task
- *     to COMPLETED + final `message_range`, patch the session back to IDLE.
+ *   - On `turn_end` (assistant `stop_reason === 'end_turn'`): close the task
+ *     through TasksService, which owns the resulting session projection.
  *
  * Index allocation: per-session in-memory counter primed from `countMessages`
  * on first use. Cross-restart correctness comes from the persisted
@@ -914,11 +1005,18 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
           );
           return;
         }
-        activeCliTurn.delete(sessionId);
-        // Clear the persisted snapshot so a daemon restart after this
-        // point doesn't try to rehydrate a turn that has already closed.
-        void clearActiveTurnSnapshot(app, sessionId as SessionID);
-        stopTaskWatchdog(sessionId);
+        const tasks = app.service('tasks') as unknown as TasksServiceImpl;
+        const currentTask = await tasks.get(active.taskId, { provider: undefined });
+        if (event.interrupted) {
+          await tasks.claimTermination(
+            {
+              taskId: active.taskId,
+              cause: 'user_stop',
+              errorMessage: 'Stopped through Claude CLI.',
+            },
+            { provider: undefined }
+          );
+        }
         const ts = event.timestamp ?? active.lastTimestamp ?? baseTs;
         const endedAtMs = Date.parse(ts) || Date.now();
         const durationMs = Math.max(0, endedAtMs - active.startedAtMs);
@@ -1026,14 +1124,17 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             (lastTurn.usage.cache_read_input_tokens ?? 0)
           : undefined;
 
-        // Patch task to COMPLETED with the full message_range + analytics.
+        // Normal completion and Stop race at the row-locked task boundary.
+        // If Stop wins, retain the turn result and settle its durable request;
+        // never release the session from a pre-transition read.
         try {
-          await app.service('tasks').patch(active.taskId, {
-            status: TaskStatus.COMPLETED,
-            completed_at: ts,
+          const taskResult = {
             message_range: {
               start_index: active.userMessageIndex,
               end_index: active.lastIndex,
+              start_timestamp:
+                currentTask.message_range?.start_timestamp ??
+                new Date(active.startedAtMs).toISOString(),
               end_timestamp: ts,
             },
             model: primaryModel,
@@ -1042,33 +1143,58 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
             raw_sdk_response: rawSdkResponse,
             normalized_sdk_response: normalizedSdkResponse,
             computed_context_window: computedContextWindow,
-          });
+          };
+          try {
+            await tasks.patch(
+              active.taskId,
+              { ...taskResult, status: TaskStatus.COMPLETED, completed_at: ts },
+              { provider: undefined }
+            );
+          } catch (completionError) {
+            await tasks.patch(active.taskId, taskResult, { provider: undefined });
+            const stopRouteWaiting = cliStopWaiters.has(sessionId as SessionID);
+            const settlement = await tasks.settleTermination(
+              { taskId: active.taskId, outcome: 'verified_absent', now: new Date(ts) },
+              {
+                provider: undefined,
+                suppressTerminalQueueProcessing: stopRouteWaiting,
+              } as Params
+            );
+            if (settlement.outcome === 'condition_changed' || settlement.outcome === 'unverified') {
+              throw completionError;
+            }
+            resolveCliStopWaiter(sessionId as SessionID, settlement.task);
+          }
         } catch (err) {
           console.warn('[claude-cli-watcher.sink] task close failed', {
             sessionId,
             taskId: active.taskId,
             err: err instanceof Error ? err.message : String(err),
           });
+          throw err;
         }
+        activeCliTurn.delete(sessionId);
+        // Clear recovery state only after terminality is durable. If closing
+        // failed, the watcher retries this same turn_end with the turn intact.
+        await clearActiveTurnSnapshot(app, sessionId as SessionID);
+        stopTaskWatchdog(sessionId);
         // Mirror the latest context-usage snapshot up onto the session
         // row so the branch pill's "X% of context" pill shows the
         // right number across reload boundaries.
-        try {
-          const patch: Partial<Session> = {
-            status: SessionStatus.IDLE,
-            ready_for_prompt: true,
-          };
-          if (computedContextWindow !== undefined) {
-            patch.current_context_usage = computedContextWindow;
-            patch.context_window_limit = normalizedSdkResponse.contextWindowLimit;
-            patch.last_context_update_at = ts;
+        if (computedContextWindow !== undefined) {
+          try {
+            const patch: Partial<Session> = {
+              current_context_usage: computedContextWindow,
+              context_window_limit: normalizedSdkResponse.contextWindowLimit,
+              last_context_update_at: ts,
+            };
+            await app.service('sessions').patch(sessionId, patch);
+          } catch (err) {
+            console.warn('[claude-cli-watcher.sink] session context patch failed', {
+              sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
           }
-          await app.service('sessions').patch(sessionId, patch);
-        } catch (err) {
-          console.warn('[claude-cli-watcher.sink] session IDLE patch failed', {
-            sessionId,
-            err: err instanceof Error ? err.message : String(err),
-          });
         }
         return;
       }

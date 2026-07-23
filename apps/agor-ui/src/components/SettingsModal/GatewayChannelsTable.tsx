@@ -1746,7 +1746,7 @@ const ChannelFormFields: React.FC<{
                 <Form.Item
                   label="Installation ID"
                   name="github_installation_id"
-                  tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
+                  tooltip="Shown by the setup callback, or available in your GitHub App's installation URL"
                 >
                   <Input placeholder="123456789" />
                 </Form.Item>
@@ -1810,7 +1810,7 @@ const ChannelFormFields: React.FC<{
                               <Form.Item
                                 label="Installation ID"
                                 name="github_installation_id"
-                                tooltip="Set automatically via the setup callback, or paste from your GitHub App's installation URL"
+                                tooltip="Shown by the setup callback, or available in your GitHub App's installation URL"
                               >
                                 <Input placeholder="123456789" />
                               </Form.Item>

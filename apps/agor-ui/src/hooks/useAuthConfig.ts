@@ -15,6 +15,12 @@ interface AuthConfig {
   externalLaunch?: {
     enabled?: boolean;
     loginRedirectUrl?: string;
+    /**
+     * Query parameter name the UI appends to `loginRedirectUrl` carrying the
+     * current browser host as an opaque return context for direct-host entry.
+     * The launch issuer allow-lists this value against its routing records.
+     */
+    returnHostParam?: string;
   };
 }
 
@@ -31,14 +37,6 @@ export interface FeaturesConfig {
    * Defaults to true when the daemon config key is unset.
    */
   webTerminal?: boolean;
-  /**
-   * Minimum role required to trigger managed environment commands
-   * (start/stop/nuke/logs). Value: 'none' | 'viewer' | 'member' | 'admin' |
-   * 'superadmin'. UI uses this to disable trigger buttons with a tooltip for
-   * users below the threshold. Server-side enforcement in
-   * services/branches.ts is the source of truth. Defaults to 'member'.
-   */
-  managedEnvsMinimumRole?: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin';
   /**
    * How managed environment lifecycle fields are handled by this instance.
    * Defaults to 'hybrid': shell commands and URL webhooks are both supported.

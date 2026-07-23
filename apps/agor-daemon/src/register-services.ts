@@ -44,22 +44,20 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  isSessionExecuting,
-  isTaskExecuting,
-  ROLES,
-  SessionStatus,
-  TaskStatus,
-} from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
   SessionsServiceImpl,
+  TasksServiceImpl,
 } from './declarations.js';
-import { trackExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
+import {
+  getTrackedExecutor,
+  markExecutorProcessExited,
+  trackExecutorProcess,
+} from './executor-tracking.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -80,6 +78,8 @@ import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
+import { createCodexAuthImportService } from './services/codex-auth-import.js';
+import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
@@ -128,6 +128,7 @@ import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
+import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
@@ -144,6 +145,7 @@ import {
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
+import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -242,6 +244,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'connectExecutor',
+      'reportRuntimeTelemetry',
+      'reportSdkHealthFailure',
+    ],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -519,7 +531,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
-    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db });
+    registerGitHubAppSetupRoutes(app, { uiUrl, daemonUrl, db, config: ctx.config });
   }
 
   // ============================================================================
@@ -549,6 +561,20 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/check-auth', createCheckAuthService(db));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Imports a pasted Codex CLI auth.json for the authenticated user — writes
+  // it 0600 into the Unix identity that runs Codex and flips their auth
+  // method to subscription. Token material never leaves the daemon.
+  app.use('/codex-auth/import', createCodexAuthImportService(app, db));
+  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // ChatGPT device-code sign-in: create starts an attempt (code + verification
+  // URL back to the UI, daemon polls OpenAI for approval); find reports the
+  // caller's attempt status. Tokens stay daemon-side end to end.
+  app.use('/codex-auth/device', createCodexDeviceAuthService(app, db));
+  app
+    .service('/codex-auth/device')
+    .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
@@ -969,6 +995,7 @@ function createExecuteHandler(
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
+    let localExecutorPid: number | undefined;
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
@@ -979,70 +1006,80 @@ function createExecuteHandler(
         task_id: taskId,
         unix_user: executorUnixUser || undefined,
       },
-      onSpawn: (child) => {
-        if (child.pid) {
-          trackExecutorProcess(sessionId, child.pid);
+      onSpawn: (child, spawnContext) => {
+        if (spawnContext.mode === 'local' && child.pid) {
+          localExecutorPid = child.pid;
+          trackExecutorProcess({
+            sessionId,
+            taskId,
+            pid: child.pid,
+            ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
+          });
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
       },
-      onExit: async (code) => {
+      onExit: async (code, spawnContext) => {
         console.log(`${logPrefix} Exited with code ${code}`);
-        untrackExecutorProcess(sessionId);
 
-        // Safety net: check if task is still running
-        try {
-          const currentSession = await app.service('sessions').get(sessionId, params);
-          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+        if (spawnContext.mode === 'local') markExecutorProcessExited(sessionId, localExecutorPid);
 
-          if (latestTaskId && latestTaskId !== taskId) {
-            console.log(
-              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
-            );
-          } else if (
-            isSessionExecuting(currentSession) ||
-            currentSession.status === SessionStatus.TIMED_OUT
-          ) {
-            try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                await app.service('tasks').patch(
+        if (spawnContext.mode === 'templated') {
+          const disposition = classifyExecutorExit({
+            mode: spawnContext.mode,
+            code,
+            nonzeroMayHaveDispatched:
+              config.execution?.executor_command_nonzero_may_have_dispatched === true,
+          });
+          if (disposition !== 'authoritative') {
+            if (disposition === 'ambiguous') {
+              try {
+                await (
+                  app.service('tasks') as unknown as TasksServiceImpl
+                ).recordExecutorStartupWarning(
                   taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
-                  },
-                  params
+                  `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
+                  { ...params, provider: undefined }
                 );
-                console.log(
-                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-                );
-              } else {
-                console.log(
-                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
-                );
-                await app
-                  .service('sessions')
-                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
+              } catch (error) {
+                console.warn(`${logPrefix} Failed to record ambiguous launcher exit:`, error);
               }
-            } catch (taskError) {
-              console.error(
-                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
-                taskError
-              );
-              await app
-                .service('sessions')
-                .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-              console.log(
-                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-              );
             }
-          } else {
             console.log(
-              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
+              `${logPrefix} Launcher exit is passive; awaiting remote executor lifecycle`
             );
+            return;
+          }
+        }
+
+        try {
+          const termination = await requestExecutorTermination({
+            app,
+            taskId,
+            cause: 'heartbeat_lost',
+            errorMessage: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+            params,
+            absenceVerified: !getTrackedExecutor(sessionId),
+            sdkFailure: {
+              reason: 'heartbeat_lost',
+              detected_at: new Date().toISOString(),
+              tool: session.agentic_tool,
+              termination: 'requested',
+            },
+            // A remote executor may connect while its launcher is exiting.
+            // Resolve that race only at the row-locked claim.
+            ...(spawnContext.mode === 'templated'
+              ? {
+                  expectedStatus: TaskStatus.DISPATCHING,
+                  requireExecutorDisconnected: true,
+                }
+              : {}),
+          });
+          if (termination.status === 'condition_changed') {
+            console.log(`${logPrefix} Connected executor won the launcher-exit race`);
+            return;
           }
         } catch (error) {
-          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
+          console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
         }
 
         // Stateless FS mode: serialize session file to DB after executor exits
@@ -1080,7 +1117,9 @@ function createExecuteHandler(
                 if (filePath) {
                   const md5 = await computeFileHash(filePath);
                   if (md5) {
-                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                    await app
+                      .service('tasks')
+                      .patch(taskId, { session_md5: md5 }, { ...params, provider: undefined });
                   }
                 }
               } catch (md5Err) {

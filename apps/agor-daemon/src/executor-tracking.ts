@@ -1,70 +1,190 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { shortId } from '@agor/core/db';
+import { buildSpawnArgs } from '@agor/core/unix';
 
-/**
- * Executor PID Tracking
- *
- * In-memory map of session → executor process info for signal-based stopping.
- * When the user clicks Stop, we SIGTERM/SIGKILL the process directly instead of
- * relying on WebSocket ACK protocols.
- */
-
-const executorProcesses = new Map<string, { pid: number; startedAt: Date }>();
-
-/**
- * Track an executor process for a session.
- */
-export function trackExecutorProcess(sessionId: string, pid: number): void {
-  executorProcesses.set(sessionId, { pid, startedAt: new Date() });
+interface TrackedExecutor {
+  sessionId: string;
+  taskId: string;
+  pid: number;
+  pgid: number;
+  startIdentity?: string;
+  asUser?: string;
+  leaderExited: boolean;
 }
 
-/**
- * Remove tracking for a session's executor process.
- */
-export function untrackExecutorProcess(sessionId: string): void {
-  executorProcesses.delete(sessionId);
-}
+export type ContainmentResult =
+  | { status: 'verified_absent' }
+  | { status: 'unverified'; reason: string };
 
-/**
- * Kill an executor process for a session using Unix signals.
- *
- * Phase 1: SIGTERM (allows graceful shutdown — executor's SIGTERM handler
- *          calls abortController.abort() and patches task status)
- * Phase 2: After 3 seconds, SIGKILL (uncatchable, guaranteed death)
- *
- * @returns true if a process was found and signaled
- */
-export function killExecutorProcess(sessionId: string): boolean {
-  const proc = executorProcesses.get(sessionId);
-  if (!proc) return false;
+const executorProcesses = new Map<string, TrackedExecutor>();
 
+function readStartIdentity(pid: number): string | undefined {
   try {
-    // Check if process is still alive
-    process.kill(proc.pid, 0);
+    if (process.platform === 'linux') {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    }
+    if (process.platform === 'darwin') {
+      return execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+      }).trim();
+    }
   } catch {
-    // Process already dead, clean up tracking
-    executorProcesses.delete(sessionId);
-    return false;
+    return undefined;
   }
+  return undefined;
+}
+
+type GroupInspection = 'present' | 'absent' | 'unverified';
+
+function inspectGroup(
+  pgid: number,
+  signal: 0 | NodeJS.Signals = 0,
+  asUser?: string
+): GroupInspection {
+  try {
+    if (asUser) {
+      const signalArg = signal === 0 ? '-0' : `-${signal}`;
+      const { cmd, args } = buildSpawnArgs('/bin/kill', [signalArg, '--', String(-pgid)], asUser);
+      execFileSync(cmd, args, { stdio: 'pipe' });
+    } else {
+      process.kill(-pgid, signal);
+    }
+    return 'present';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return 'absent';
+    const stderr = (error as { stderr?: Buffer | string }).stderr;
+    if (stderr && /no such process/i.test(stderr.toString())) return 'absent';
+    return 'unverified';
+  }
+}
+
+async function waitForAbsence(
+  pgid: number,
+  timeoutMs: number,
+  pollMs: number,
+  asUser?: string
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (inspectGroup(pgid, 0, asUser) === 'absent') return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+  }
+  return inspectGroup(pgid, 0, asUser) === 'absent';
+}
+
+export function trackExecutorProcess(input: {
+  sessionId: string;
+  taskId: string;
+  pid: number;
+  asUser?: string;
+}): void {
+  executorProcesses.set(input.sessionId, {
+    ...input,
+    pgid: input.pid,
+    startIdentity: readStartIdentity(input.pid),
+    leaderExited: false,
+  });
+}
+
+export function markExecutorProcessExited(sessionId: string, pid?: number): void {
+  const tracked = executorProcesses.get(sessionId);
+  if (tracked && (!pid || tracked.pid === pid)) tracked.leaderExited = true;
+}
+
+export function untrackExecutorProcess(sessionId: string, taskId?: string): void {
+  const tracked = executorProcesses.get(sessionId);
+  if (!taskId || tracked?.taskId === taskId) executorProcesses.delete(sessionId);
+}
+
+export function getTrackedExecutor(sessionId: string): Readonly<TrackedExecutor> | undefined {
+  return executorProcesses.get(sessionId);
+}
+
+export async function containExecutorProcess(
+  sessionId: string,
+  taskId: string,
+  options: { termGraceMs?: number; killGraceMs?: number; pollMs?: number } = {}
+): Promise<ContainmentResult> {
+  const tracked = executorProcesses.get(sessionId);
+  if (!tracked || tracked.taskId !== taskId) {
+    return { status: 'unverified', reason: 'No matching local executor is tracked.' };
+  }
+  if (process.platform !== 'linux' && process.platform !== 'darwin') {
+    return {
+      status: 'unverified',
+      reason: `Process-group verification is unsupported on ${process.platform}.`,
+    };
+  }
+  const initial = inspectGroup(tracked.pgid, 0, tracked.asUser);
+  if (initial === 'absent') return { status: 'verified_absent' };
+  if (initial === 'unverified') {
+    return {
+      status: 'unverified',
+      reason: tracked.asUser
+        ? `Executor process-group presence could not be checked as ${tracked.asUser}.`
+        : 'Executor process-group presence is unverified.',
+    };
+  }
+  if (!tracked.leaderExited) {
+    const currentIdentity = readStartIdentity(tracked.pid);
+    if (!tracked.startIdentity || currentIdentity !== tracked.startIdentity) {
+      return {
+        status: 'unverified',
+        reason: 'Executor process identity changed or is unreadable.',
+      };
+    }
+  }
+
+  const signal = (value: NodeJS.Signals): ContainmentResult | undefined => {
+    const result = inspectGroup(tracked.pgid, value, tracked.asUser);
+    if (result === 'present') return undefined;
+    if (result === 'absent') return { status: 'verified_absent' };
+    return { status: 'unverified', reason: `${value} process-group signal was not authorized.` };
+  };
 
   console.log(
-    `🛑 [Stop] Sending SIGTERM to executor PID ${proc.pid} (session ${shortId(sessionId)})`
+    `🛑 [Executor] Sending SIGTERM to PGID ${tracked.pgid} (session ${shortId(sessionId)})`
   );
-  try {
-    process.kill(proc.pid, 'SIGTERM');
-  } catch (err) {
-    console.warn(`⚠️  [Stop] SIGTERM failed for PID ${proc.pid}:`, err);
+  const termResult = signal('SIGTERM');
+  if (termResult) return termResult;
+  if (
+    await waitForAbsence(
+      tracked.pgid,
+      options.termGraceMs ?? 3000,
+      options.pollMs ?? 50,
+      tracked.asUser
+    )
+  ) {
+    return { status: 'verified_absent' };
   }
 
-  // Phase 2: SIGKILL after 3 seconds if still alive
-  setTimeout(() => {
-    try {
-      process.kill(proc.pid, 0); // Check if still alive
-      console.log(`🛑 [Stop] Process still alive after 3s, sending SIGKILL to PID ${proc.pid}`);
-      process.kill(proc.pid, 'SIGKILL');
-    } catch {
-      // Process already dead — good
-    }
-  }, 3000);
+  console.log(`🛑 [Executor] PGID ${tracked.pgid} still present; sending SIGKILL`);
+  const killResult = signal('SIGKILL');
+  if (killResult) return killResult;
+  if (
+    await waitForAbsence(
+      tracked.pgid,
+      options.killGraceMs ?? 2000,
+      options.pollMs ?? 50,
+      tracked.asUser
+    )
+  ) {
+    return { status: 'verified_absent' };
+  }
+  return { status: 'unverified', reason: 'Executor process group remained present after SIGKILL.' };
+}
 
-  return true;
+export async function containAllTrackedExecutors(): Promise<void> {
+  await Promise.all(
+    [...executorProcesses.values()].map((tracked) =>
+      containExecutorProcess(tracked.sessionId, tracked.taskId).then((result) => {
+        if (result.status === 'unverified') {
+          console.warn(`⚠️  [Executor] Graceful-shutdown containment: ${result.reason}`);
+        }
+      })
+    )
+  );
 }

@@ -152,7 +152,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('shows Codex authentication choices when subscription mode hides API-key fields', async () => {
+  it('offers the three Codex authentication methods, defaulting to the sign-in view for a subscription', async () => {
     const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
     renderWithApp(
       <UserSettingsModal
@@ -167,8 +167,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
-    expect(screen.getByText('ChatGPT subscription')).toBeInTheDocument();
-    expect(screen.getByText('Use Codex CLI subscription authentication')).toBeInTheDocument();
+    // The method selector surfaces all three ways in.
+    expect(screen.getByText('API key')).toBeInTheDocument();
+    expect(screen.getByText('Sign in with ChatGPT')).toBeInTheDocument();
+    expect(screen.getByText('Import login file')).toBeInTheDocument();
+    // A stored subscription lands on the ChatGPT sign-in view.
+    expect(screen.getByText(/Sign in with your ChatGPT account/i)).toBeInTheDocument();
   });
 
   it('saves a Claude model alias before closing', async () => {

@@ -69,7 +69,7 @@ jobs:
       # Test runs against a narrower filter set than build/typecheck —
       # only the packages with real test suites worth gating on. Kept as
       # a separate turbo invocation to preserve that filter.
-      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor
 
   # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
   # used to live here. It now runs nightly + workflow_dispatch in

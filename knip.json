@@ -15,8 +15,9 @@
       "ignore": []
     },
     "apps/agor-ui": {
-      "entry": ["src/main.tsx", "src/**/*.test.{ts,tsx}", "src/test/setup.ts"],
-      "ignore": []
+      "entry": ["src/main.tsx", "src/**/*.test.{ts,tsx}", "src/test/setup.ts", "scripts/**/*.mjs"],
+      "ignore": [],
+      "ignoreDependencies": ["@tailwindcss/cli", "tailwindcss"]
     },
     "apps/agor-docs": {
       "entry": ["pages/**/*.{md,mdx}", "theme.config.tsx", "next-sitemap.config.cjs"],

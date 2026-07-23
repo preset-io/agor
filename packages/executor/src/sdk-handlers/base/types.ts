@@ -5,7 +5,7 @@
  * Not to be confused with AI agents (internal personas)
  */
 
-import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { ExecutorPulseKind, Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 
 /**
  * Supported tool types
@@ -35,6 +35,9 @@ export type ToolType =
  * ```
  */
 export interface StreamingCallbacks {
+  /** Reports bounded semantic SDK activity to the executor-local health observer. */
+  onPulse?(kind: ExecutorPulseKind, detail?: string): void;
+
   /**
    * Called when message streaming starts
    *

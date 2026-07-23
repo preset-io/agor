@@ -19,6 +19,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,6 +76,15 @@ import {
  * lifetime — no broader daemon access.
  */
 const TERMINAL_EXECUTOR_TOKEN_TTL = '30d';
+
+/**
+ * Zellij 0.44 exits when the canonical 24-character short ID is prefixed with
+ * `agor-`. Hash the full user ID into a compact, stable operational identity
+ * instead of truncating the time-ordered UUID prefix shared by nearby users.
+ */
+export function buildZellijSessionName(userId: UserID): string {
+  return `agor-${createHash('sha256').update(userId).digest('hex').slice(0, 16)}`;
+}
 
 interface CreateTerminalData {
   rows?: number;
@@ -797,7 +807,7 @@ export class TerminalsService {
     // Detect any running `zellij attach agor-<sessionName>` and adopt
     // it into the Map so subsequent dispatch reuses the existing
     // executor instead of fork-bombing.
-    const expectedSessionName = `agor-${shortId(userId)}`;
+    const expectedSessionName = buildZellijSessionName(userId);
     if (!this.executorTerminals.get(userId)) {
       const adopted = await this.detectExistingExecutor(expectedSessionName);
       if (adopted) {
@@ -964,8 +974,7 @@ export class TerminalsService {
       }
 
       // Build Zellij session name
-      const userSessionSuffix = shortId(userId);
-      const sessionName = `agor-${userSessionSuffix}`;
+      const sessionName = buildZellijSessionName(userId);
 
       // Generate session token for executor. Bind the userId into the token
       // (`terminal_user_id`) so the socket layer can scope this executor's

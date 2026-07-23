@@ -8,39 +8,18 @@ import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
+import { buildLaunchInitUrl } from '../../utils/launchInitUrl';
 import { BrandLogo } from '../BrandLogo';
 import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
-
-function currentReturnToPath(): string | null {
-  if (typeof window === 'undefined') return null;
-
-  // Send only a relative Agor route to the external launcher. Avoiding an
-  // absolute URL keeps this from becoming an open-redirect primitive if the
-  // launcher blindly follows `return_to`.
-  const pathname = window.location.pathname.startsWith('//') ? '/' : window.location.pathname;
-  return `${pathname}${window.location.search}${window.location.hash}`;
-}
-
-function addReturnToParam(loginRedirectUrl: string): string {
-  const returnTo = currentReturnToPath();
-  if (!returnTo) return loginRedirectUrl;
-
-  try {
-    const url = new URL(loginRedirectUrl);
-    url.searchParams.set('return_to', returnTo);
-    return url.toString();
-  } catch {
-    return loginRedirectUrl;
-  }
-}
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
   loading?: boolean;
   error?: string | null;
   externalLaunchLoginRedirectUrl?: string;
+  externalLaunchReturnHostParam?: string;
 }
 
 export function LoginPage({
@@ -48,6 +27,7 @@ export function LoginPage({
   loading = false,
   error,
   externalLaunchLoginRedirectUrl,
+  externalLaunchReturnHostParam,
 }: LoginPageProps) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +35,7 @@ export function LoginPage({
   const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
   const externalLaunchHref = externalLaunchLoginRedirectUrl
-    ? addReturnToParam(externalLaunchLoginRedirectUrl)
+    ? buildLaunchInitUrl(externalLaunchLoginRedirectUrl, externalLaunchReturnHostParam)
     : undefined;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;

@@ -7,13 +7,16 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session } from '@agor/core/types';
+import { type Session, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateSessionToken } from '../mcp/tokens.js';
 import {
   buildClaudeCliAgorMcpConfig,
+  buildCliEventSink,
   buildSpawnConfigForSession,
   resolveClaudeCliMcpConfigTargetUnixUser,
+  setPendingCliTask,
+  stopClaudeCliTask,
   writeClaudeCliMcpConfigFile,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration';
@@ -64,7 +67,131 @@ afterEach(() => {
   }
 });
 
-describe('Claude CLI Agor MCP config', () => {
+describe('Claude CLI integration', () => {
+  it('sends Ctrl-C through the existing terminal channel and stays unverified without watcher confirmation', async () => {
+    const task = {
+      task_id: '019e8abc-0000-7000-8000-000000000002',
+      session_id: makeSession().session_id,
+      status: 'running',
+      created_at: new Date().toISOString(),
+    };
+    const emit = vi.fn();
+    const settleTermination = vi.fn(async () => ({
+      outcome: 'unverified',
+      task: { ...task, status: 'stopping', sdk_failure: { termination: 'unverified' } },
+    }));
+    const app = {
+      io: { to: vi.fn(() => ({ emit })) },
+      service: () => ({
+        claimTermination: vi.fn(async () => ({
+          outcome: 'claimed',
+          task: { ...task, status: 'stopping' },
+        })),
+        settleTermination,
+      }),
+    } as unknown as Application;
+
+    const result = await stopClaudeCliTask({
+      app,
+      session: makeSession({ status: 'running', tasks: [task.task_id] as never }),
+      task: task as never,
+      timeoutMs: 1,
+    });
+
+    expect(emit).toHaveBeenCalledWith('terminal:input', {
+      userId: 'user-1',
+      input: '\x03',
+    });
+    expect(settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.objectContaining({ provider: undefined })
+    );
+    expect(result.status).toBe('unverified');
+  });
+
+  it('settles a Stop that wins the turn_end race without releasing the session itself', async () => {
+    const sessionId = makeSession().session_id;
+    const taskId = '019e8abc-0000-7000-8000-000000000002';
+    const runningTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.RUNNING,
+      message_range: {
+        start_index: 0,
+        end_index: 0,
+        start_timestamp: '2026-07-20T10:00:00.000Z',
+      },
+    };
+    const stoppingTask = {
+      ...runningTask,
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-20T10:00:01.000Z',
+      },
+    };
+    const patchTask = vi.fn(async (_id: string, data: Record<string, unknown>) => {
+      if (data.status === TaskStatus.COMPLETED) {
+        throw new Error('termination-owned tasks must be settled');
+      }
+      return { ...stoppingTask, ...data };
+    });
+    const settleTermination = vi.fn(async () => ({
+      outcome: 'transitioned',
+      task: { ...stoppingTask, status: TaskStatus.STOPPED },
+    }));
+    const claimTermination = vi.fn(async () => ({ outcome: 'claimed', task: stoppingTask }));
+    const patchSession = vi.fn();
+    const app = {
+      get: () => undefined,
+      service: (name: string) => {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => runningTask),
+            patch: patchTask,
+            claimTermination,
+            settleTermination,
+          };
+        }
+        if (name === 'sessions') return { patch: patchSession };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as unknown as Application;
+    const sink = buildCliEventSink(app);
+    setPendingCliTask(sessionId, taskId as never, 0);
+
+    await sink(sessionId, {
+      type: 'user_message',
+      content: 'ping',
+      timestamp: '2026-07-20T10:00:00.000Z',
+      isSidechain: false,
+    });
+    await sink(sessionId, {
+      type: 'turn_end',
+      messageId: 'turn-end',
+      timestamp: '2026-07-20T10:00:02.000Z',
+      interrupted: true,
+    });
+
+    expect(claimTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, cause: 'user_stop' }),
+      { provider: undefined }
+    );
+    expect(patchTask).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: TaskStatus.COMPLETED }),
+      { provider: undefined }
+    );
+    expect(settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, outcome: 'verified_absent' }),
+      expect.objectContaining({ provider: undefined })
+    );
+    expect(patchSession).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ status: 'idle', ready_for_prompt: true })
+    );
+  });
+
   it('renders the Claude CLI mcpServers file shape with a session bearer token', () => {
     expect(
       buildClaudeCliAgorMcpConfig({ daemonUrl: 'https://agor.example.test/', mcpToken: 'tok_123' })

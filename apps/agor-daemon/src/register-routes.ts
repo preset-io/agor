@@ -11,6 +11,7 @@ import {
   isTenantAgenticToolEnabled,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
 } from '@agor/core/config';
@@ -90,7 +91,6 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
-import { killExecutorProcess } from './executor-tracking.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -110,6 +110,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
+import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
@@ -122,8 +123,7 @@ import {
   checkSessionOwnerOrAdmin,
   ensureBranchPermission,
   loadScheduleAndBranch,
-  PERMISSION_RANK,
-  resolveBranchPermission,
+  resolveSessionPromptAccess,
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
@@ -143,7 +143,9 @@ import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
+import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
   createTenantDatabaseScopeAroundHook,
@@ -192,7 +194,7 @@ export class AgorLocalStrategy extends LocalStrategy {
 /**
  * Extended Params with route ID parameter.
  */
-interface RouteParams extends Params {
+export interface RouteParams extends Params {
   route?: {
     id?: string;
     messageId?: string;
@@ -254,6 +256,28 @@ export interface RegisterRoutesContext {
     typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
   >;
   terminalsService: TerminalsService | null;
+}
+
+export async function authorizeTaskTerminalRoute(input: {
+  id: string;
+  params: RouteParams;
+  tasksService: Pick<TasksServiceImpl, 'get'>;
+}): Promise<RouteParams> {
+  const internalParams = { ...input.params, provider: undefined };
+  const userId = input.params.user?.user_id as UUID | undefined;
+  if (!userId) throw new NotAuthenticated('Authentication required to update tasks');
+  const task = await input.tasksService.get(input.id, internalParams);
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  if (task.created_by !== userId && !isAdmin) {
+    throw new Forbidden('Only the task creator or an admin can update this task');
+  }
+  return internalParams;
+}
+
+export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+  return tasks.find(
+    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+  );
 }
 
 /**
@@ -1064,7 +1088,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `running`.
+   * `created` / `queued` → `dispatching` (or directly to `running` for CLI).
    *
    * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
    * drainer call this helper. Centralising the transition guarantees that:
@@ -1119,19 +1143,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
     const startTimestamp = new Date().toISOString();
 
-    // The daemon transitions the task to RUNNING and writes required sentinel
-    // git fields before executor spawn. The executor overwrites these with the
-    // authoritative task-start git state from inside the managed checkout.
+    // The daemon persists launch intent and writes required sentinel git fields
+    // before executor spawn. Non-CLI executors claim DISPATCHING → RUNNING after
+    // authenticating; claude-code-cli has no executor connection and stays direct.
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    // Patch task: queued/created → running, with real ranges. queue_position
+    const launchState = buildTaskLaunchState(
+      session.agentic_tool,
+      startTimestamp,
+      config.execution?.executor_command_template ? 'templated' : 'local'
+    );
+
+    // Patch task: queued/created → launch status, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
     const updatedTask = (await app.service('tasks').patch(
       task.task_id,
       {
-        status: TaskStatus.RUNNING,
-        started_at: startTimestamp,
+        ...launchState,
+        ...(launchState.executor_mode
+          ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+          : {}),
         queue_position: undefined,
         message_range: {
           start_index: messageStartIndex,
@@ -1144,7 +1176,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sha_at_start: gitStateAtStart,
         },
       },
-      params
+      { ...params, provider: undefined }
     )) as Task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
@@ -1192,7 +1224,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch to RUNNING here, which
+    // IDLE path creates `status: CREATED` and we patch the task here, which
     // `TasksService.patch` does NOT mirror onto the session. Without this
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
@@ -1287,7 +1319,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${shortId(taskId)}, ${promptForExecutor.length} chars)`
           );
           // Task lifecycle is now owned by the watcher's sink: it closes
-          // the task and patches the session back to IDLE on `turn_end`.
+          // the task through TasksService on `turn_end`.
           // We deliberately do NOT pre-complete here.
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1709,18 +1741,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
             const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
             const branchPermission = await branchRepository.resolveUserPermission(wt, userId);
-            const effectiveLevel = resolveBranchPermission(
-              wt,
+            const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+              branch: wt,
+              session,
               userId,
               isOwner,
-              params.user?.role,
-              superadminOpts.allowSuperadmin,
-              branchPermission
-            );
-            const canRun =
-              PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-              (effectiveLevel === 'session' && session.created_by === userId);
-            if (!canRun) {
+              userRole: params.user?.role,
+              allowSuperadmin: superadminOpts.allowSuperadmin,
+              branchPermission,
+            });
+            if (!allowed) {
               throw new Forbidden(
                 `You have '${effectiveLevel}' permission on this branch, which does not ` +
                   `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
@@ -1969,20 +1999,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return res.status(404).json({ error: 'Branch not found' });
         }
         const { branchPermission, isOwner, wt } = access;
-        const effectiveLevel = resolveBranchPermission(
-          wt,
+        const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+          branch: wt,
+          session,
           userId,
           isOwner,
-          params.user?.role,
-          superadminOpts.allowSuperadmin,
-          branchPermission
-        );
+          userRole: params.user?.role,
+          allowSuperadmin: superadminOpts.allowSuperadmin,
+          branchPermission,
+        });
 
-        const canUpload =
-          PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-          (effectiveLevel === 'session' && session.created_by === userId);
-
-        if (!canUpload) {
+        if (!allowed) {
           console.error(
             `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
@@ -2218,29 +2245,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        const stopReason =
-          data && typeof data === 'object' && 'reason' in data && typeof data.reason === 'string'
-            ? data.reason
-            : undefined;
-
+        const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
-
-        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
-          stopSessionPreserveQueue(
-            {
-              app,
-              taskRepo: new TaskRepository(db),
-              sessionsService: sessionsServiceWithHooks,
-              tasksService,
-              killExecutorProcess,
-            },
-            id as SessionID,
-            params,
-            { reason: stopReason }
-          )
-        );
-
-        if (result.success) {
+        const triggerPreservedQueue = () => {
           deferInFreshTenantScope(params, async () => {
             try {
               await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
@@ -2251,6 +2258,57 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               );
             }
           });
+        };
+        if (body.force_unverified === true) {
+          const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+            const session = await app.service('sessions').get(id, params);
+            const task = findUnverifiedTerminationTask(
+              await findActiveTasksForSession(app, session.session_id, params)
+            );
+            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
+            const taskId = task.task_id;
+            const userId = params.user?.user_id;
+            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
+            const isOwner =
+              !!userId && (await branchRepository.isOwner(session.branch_id, userId as UUID));
+            if (!isAdmin && !isOwner) {
+              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+            }
+            if (typeof body.confirmation !== 'string') {
+              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
+            }
+            const failedTask = await forceFailUnverifiedTask({
+              app,
+              taskId,
+              confirmation: body.confirmation,
+              params,
+            });
+            return {
+              success: true,
+              status: failedTask.status,
+              stoppedTaskId: failedTask.task_id,
+            };
+          });
+          triggerPreservedQueue();
+          return result;
+        }
+
+        const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
+        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
+          stopSessionPreserveQueue(
+            {
+              app,
+              taskRepo: new TaskRepository(db),
+              sessionsService: sessionsServiceWithHooks,
+            },
+            id as SessionID,
+            params,
+            { reason: stopReason }
+          )
+        );
+
+        if (result.success && !result.queueHandled) {
+          triggerPreservedQueue();
         }
 
         return result;
@@ -2654,11 +2712,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/tasks/bulk',
     {
       async create(data: unknown, params: RouteParams) {
-        return tasksService.createMany(data as Partial<Task>[]);
+        if (!Array.isArray(data)) throw new BadRequest('Task import requires an array');
+        const createdBy = params.user?.user_id;
+        if (!createdBy) throw new NotAuthenticated('Authentication required to import tasks');
+        return tasksService.createMany(
+          (data as Partial<Task>[]).map((task) => ({
+            ...task,
+            created_by: createdBy as UUID,
+          }))
+        );
       },
     },
     {
-      create: { role: ROLES.MEMBER, action: 'create tasks' },
+      create: { role: ROLES.ADMIN, action: 'import tasks' },
     },
     requireAuth
   );
@@ -2673,7 +2739,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        return tasksService.complete(id, data, params);
+        const internalParams = await authorizeTaskTerminalRoute({
+          id,
+          params,
+          tasksService,
+        });
+        return tasksService.complete(id, data, internalParams);
       },
     },
     {
@@ -2689,7 +2760,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: { error?: string }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Task ID required');
-        return tasksService.fail(id, data, params);
+        const internalParams = await authorizeTaskTerminalRoute({
+          id,
+          params,
+          tasksService,
+        });
+        return tasksService.fail(id, data, internalParams);
       },
     },
     {
@@ -3772,13 +3848,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
           webTerminal: config.execution?.allow_web_terminal !== false,
-          // Legacy managed-environment minimum-role value retained for
-          // compatibility with older clients. Current environment control
-          // authorization is enforced by the branches service from effective
-          // branch `all` permission or admin access.
-          // Value: 'none' | 'viewer' | 'member' | 'admin' | 'superadmin'.
-          // Defaults to 'member' when unset.
-          managedEnvsMinimumRole: config.execution?.managed_envs_minimum_role ?? 'member',
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.
@@ -3889,7 +3958,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled);
+    setupMCPRoutes(app, db, toolSearchEnabled, config);
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

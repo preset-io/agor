@@ -242,6 +242,32 @@ export function resolveBranchPermission(
   return effectivePermission ?? branch.others_can ?? 'session';
 }
 
+/** Resolve the one prompt-level policy shared by hooks and custom routes. */
+export function resolveSessionPromptAccess(input: {
+  branch: Branch;
+  session: Session;
+  userId: UUID;
+  isOwner: boolean;
+  userRole?: string;
+  allowSuperadmin?: boolean;
+  branchPermission?: BranchPermissionLevel;
+}): { allowed: boolean; effectiveLevel: BranchPermissionLevel } {
+  const effectiveLevel = resolveBranchPermission(
+    input.branch,
+    input.userId,
+    input.isOwner,
+    input.userRole,
+    input.allowSuperadmin,
+    input.branchPermission
+  );
+  return {
+    effectiveLevel,
+    allowed:
+      PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
+      (effectiveLevel === 'session' && input.session.created_by === input.userId),
+  };
+}
+
 /**
  * Cache branch access fields on Feathers params for downstream authorization
  * hooks. Keep this as the single place that translates "current user + branch"
@@ -1257,23 +1283,16 @@ export async function ensureCanPromptTargetSession(
   // Resolve ownership internally — callers shouldn't need to know this
   const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
 
-  // Owners can always prompt
-  if (isOwner) {
-    return targetSession;
-  }
+  const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+    branch,
+    session: targetSession,
+    userId: userId as UUID,
+    isOwner,
+    branchPermission: await branchRepo.resolveUserPermission(branch, userId as UUID),
+  });
+  if (allowed) return targetSession;
 
-  const effectiveLevel = await branchRepo.resolveUserPermission(branch, userId as UUID);
-
-  // 'prompt' or 'all' → can prompt any session
-  if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
-    return targetSession;
-  }
-
-  // 'session' → can only prompt own sessions
   if (effectiveLevel === 'session') {
-    if (targetSession.created_by === userId) {
-      return targetSession;
-    }
     throw new Forbidden(
       `You have 'session' permission — you can only prompt sessions you created. ` +
         `This session was created by another user. ` +
@@ -1354,36 +1373,22 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    // Owners always have full access
-    if (isOwner) {
-      return context;
+    const session = context.params.session;
+    if (!session) {
+      throw new Error('loadSession hook must run before ensureCanPromptInSession');
     }
-
-    const effectiveLevel = resolveBranchPermission(
+    const { allowed, effectiveLevel } = resolveSessionPromptAccess({
       branch,
+      session,
       userId,
       isOwner,
       userRole,
       allowSuperadmin,
-      context.params.branchPermission
-    );
+      branchPermission: context.params.branchPermission,
+    });
+    if (allowed) return context;
 
-    // 'prompt' or 'all' → can prompt any session
-    if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
-      return context;
-    }
-
-    // 'session' → can only prompt own sessions
     if (effectiveLevel === 'session') {
-      const session = context.params.session;
-      if (!session) {
-        throw new Error('loadSession hook must run before ensureCanPromptInSession');
-      }
-
-      if (session.created_by === userId) {
-        return context;
-      }
-
       throw new Forbidden(
         `You have 'session' permission — you can only prompt sessions you created. ` +
           `This session was created by another user. ` +

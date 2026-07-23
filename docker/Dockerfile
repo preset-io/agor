@@ -70,15 +70,26 @@ RUN npm install -g \
 ARG UID=1000
 ARG GID=1000
 
-# Rename existing 'node' user to 'agor' and switch UID/GID to match host
-# This is critical for bind mount permissions on Linux
-RUN usermod -l agor -d /home/agor -m -u ${UID} node && \
-    groupmod -n agor -g ${GID} node && \
+# Rename existing 'node' user to 'agor' and switch UID/GID to match host.
+# This is critical for bind mount permissions on Linux.
+#
+# The GID may already be taken by another group in the base image (e.g. a
+# macOS host GID of 20 collides with the base image's 'dialout' group). When
+# that happens, rename the existing group to 'agor' instead of failing —
+# everything downstream (and the entrypoint) chowns against the 'agor' name.
+RUN set -eux; \
+    usermod -l agor -d /home/agor -m -u "${UID}" node; \
+    if getent group "${GID}" >/dev/null; then \
+      groupmod -n agor "$(getent group "${GID}" | cut -d: -f1)"; \
+    else \
+      groupmod -n agor -g "${GID}" node; \
+    fi; \
+    usermod -g agor agor; \
     # Grant passwordless sudo for fixing volume permissions and executor spawning
-    echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor && \
-    chmod 0440 /etc/sudoers.d/agor && \
+    echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
+    chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
-    mkdir -p /home/agor/.agor && \
+    mkdir -p /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
 # Create 'agor_executor' user (unprivileged user for isolated SDK execution)
@@ -118,6 +129,7 @@ COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
+COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container

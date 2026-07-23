@@ -46,6 +46,14 @@ export type AgenticToolName =
   | 'copilot'
   | 'cursor';
 
+export const NON_EXECUTOR_AGENTIC_TOOLS: ReadonlySet<AgenticToolName> = new Set([
+  'claude-code-cli',
+]);
+
+export function usesExecutorRuntime(tool: AgenticToolName): boolean {
+  return !NON_EXECUTOR_AGENTIC_TOOLS.has(tool);
+}
+
 /**
  * Agentic tool metadata for UI display
  *
@@ -219,6 +227,57 @@ export interface AuthCheckResult {
 }
 
 /**
+ * Result of importing a Codex `auth.json` via the daemon's `/codex-auth/import`
+ * endpoint. Carries ONLY non-secret metadata — token material stays on the
+ * daemon/filesystem side and never transits back to callers.
+ */
+export interface CodexAuthImportResult {
+  status: 'authenticated';
+  /** Whether the imported file carries ChatGPT login tokens or a bare API key. */
+  authMode: 'chatgpt' | 'api_key';
+  /** ChatGPT plan type parsed from the id_token claims (e.g. "plus", "pro"), when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
+ * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
+ * `/codex-auth/device` endpoints.
+ * - `idle`: no attempt exists for this user.
+ * - `pending`: a code was issued; the daemon is polling for approval.
+ * - `success`: tokens were exchanged and persisted to the user's Codex home.
+ * - `expired`: the code's 15-minute window elapsed without approval.
+ * - `unavailable`: OpenAI's server refused to issue a code — device-code
+ *   authorization is disabled for this account/workspace (a common, first-class
+ *   state, not an edge case).
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type CodexDeviceAuthPhase =
+  | 'idle'
+  | 'pending'
+  | 'success'
+  | 'expired'
+  | 'unavailable'
+  | 'error';
+
+/**
+ * Non-secret status of a device-code sign-in attempt. The user code and
+ * verification URL are meant to be displayed; tokens never appear here.
+ */
+export interface CodexDeviceAuthStatus {
+  phase: CodexDeviceAuthPhase;
+  /** One-time code the user enters on the verification page (pending only). */
+  userCode?: string;
+  /** Page where the user approves the code (pending only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the pending code stops working. */
+  expiresAt?: string;
+  /** ChatGPT plan type parsed from the id_token after success, when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
  * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
  * Tools that authenticate without a key (opencode) are intentionally absent.
  *
@@ -231,6 +290,27 @@ export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = 
   gemini: 'GEMINI_API_KEY',
   copilot: 'COPILOT_GITHUB_TOKEN',
   cursor: 'CURSOR_API_KEY',
+};
+
+/** Human-readable display name for each agentic tool (user-facing copy). */
+export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
+  'claude-code': 'Claude Code',
+  'claude-code-cli': 'Claude Code CLI',
+  codex: 'Codex',
+  gemini: 'Gemini',
+  opencode: 'OpenCode',
+  copilot: 'GitHub Copilot',
+  cursor: 'Cursor SDK',
+};
+
+/** Where a user creates a fresh API key for each tool. Keyless tools (opencode) are absent. */
+export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> = {
+  'claude-code': 'https://platform.claude.com/settings/keys',
+  'claude-code-cli': 'https://platform.claude.com/settings/keys',
+  codex: 'https://platform.openai.com/api-keys',
+  gemini: 'https://aistudio.google.com/app/apikey',
+  copilot: 'https://github.com/settings/tokens',
+  cursor: 'https://cursor.com/dashboard/integrations',
 };
 
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
