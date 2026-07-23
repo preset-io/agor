@@ -744,6 +744,18 @@ describe('terminal:* handler authorization', () => {
       expect(s.joined.size).toBe(0);
     });
 
+    it('does not expose executor control rooms through the client join event', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock');
+      asUser(s, ALICE);
+      connect(io, s);
+      const room = executorTaskChannelName('tenant-a', 'task-1');
+
+      s.handlers.get('join')?.(room);
+
+      expect(s.joined.has(room)).toBe(false);
+    });
+
     it("rejects a user joining another user's terminal channel", () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
@@ -1072,7 +1084,13 @@ describe('configureChannels tenant isolation', () => {
 
   it('joins only the Task room proven by a verified executor-session login', () => {
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app);
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
     const connection = { data: {} } as any;
 
     handlers.get('login')?.(
@@ -1085,18 +1103,21 @@ describe('configureChannels tenant isolation', () => {
             purpose: 'executor-task',
             task_id: 'task-1',
             session_id: 'session-1',
+            tenant_id: 'tenant-a',
           },
         },
       },
       { connection }
     );
 
-    expect(joins.get(executorTaskChannelName('task-1'))).toEqual([connection]);
+    expect(joins.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
   });
 
   it('does not trust an unscoped login or mismatched result task claim', () => {
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app);
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
     const connection = { data: {} } as any;
 
     handlers.get('login')?.(
@@ -1114,13 +1135,15 @@ describe('configureChannels tenant isolation', () => {
       { connection }
     );
 
-    expect(joins.has(executorTaskChannelName('task-1'))).toBe(false);
-    expect(joins.has(executorTaskChannelName('task-2'))).toBe(false);
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
   });
 
   it('drops the prior Task room before replacing socket authentication', () => {
     const { app, handlers, joins, leaves } = makeChannelHarness();
-    configureChannels(app);
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
     const connection = { data: {} } as any;
     const login = (taskId: string) =>
       handlers.get('login')?.(
@@ -1141,8 +1164,8 @@ describe('configureChannels tenant isolation', () => {
     login('task-1');
     login('task-2');
 
-    expect(joins.get(executorTaskChannelName('task-2'))).toEqual([connection]);
-    expect(leaves.get(executorTaskChannelName('task-1'))).toEqual([connection]);
+    expect(joins.get(executorTaskChannelName('tenant-a', 'task-2'))).toEqual([connection]);
+    expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
   });
 
   it('leaves tenant-scoped channels on logout', () => {

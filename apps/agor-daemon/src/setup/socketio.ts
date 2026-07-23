@@ -1019,9 +1019,14 @@ export function configureChannels(
         executorPayload.task_id.length > 0 &&
         result.task_id === executorPayload.task_id
       ) {
-        joinExecutorTaskChannel(app, executorPayload.task_id, context.connection);
+        // A signed task claim is necessary but not sufficient: namespace the
+        // private room by the tenant resolved from that same authenticated
+        // login, preventing even a pathological cross-tenant Task-ID collision
+        // from crossing the control-plane boundary.
+        if (!tenant) return;
+        joinExecutorTaskChannel(app, tenant.tenant_id, executorPayload.task_id, context.connection);
         console.debug(
-          `🎯 Executor connection joined task control room: ${executorTaskChannelName(executorPayload.task_id)}`
+          `🎯 Executor connection joined task control room: ${executorTaskChannelName(tenant.tenant_id, executorPayload.task_id)}`
         );
       }
     }
