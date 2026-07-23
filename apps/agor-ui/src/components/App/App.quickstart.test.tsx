@@ -81,13 +81,31 @@ vi.mock('../TerminalModal', () => ({ TerminalModal: () => null, WEB_TERMINAL_MIN
 vi.mock('../ThemeEditorModal', () => ({ ThemeEditorModal: () => null }));
 vi.mock('../EnvironmentLogsModal', () => ({ EnvironmentLogsModal: () => null }));
 vi.mock('../../hooks/useTaskCompletionChime', () => ({ useTaskCompletionChime: () => {} }));
+// Records the session drawer Panel's mount lifecycle. The real
+// `<Panel id="session-panel">` renders only while `sessionPanelTargetOpen` is
+// true, so it unmounts for any frame where neither a session nor the picker is
+// targeted — exactly the create→select flash. Tests assert it never unmounts
+// during the handoff. Hoisted so both the mock factory and the tests can reach
+// it.
+const drawerPanel = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 vi.mock('react-resizable-panels', async () => {
   const React = await import('react');
   const noopHandle = { collapse: () => {}, expand: () => {}, resize: () => {} };
-  const Panel = React.forwardRef<unknown, { children?: React.ReactNode }>(({ children }, ref) => {
-    React.useImperativeHandle(ref, () => noopHandle, []);
-    return <div>{children}</div>;
-  });
+  const Panel = React.forwardRef<unknown, { children?: React.ReactNode; id?: string }>(
+    ({ children, id }, ref) => {
+      React.useImperativeHandle(ref, () => noopHandle, []);
+      React.useEffect(() => {
+        if (id !== 'session-panel') return;
+        drawerPanel.mounts += 1;
+        return () => {
+          drawerPanel.unmounts += 1;
+        };
+      }, [id]);
+      return (
+        <div data-testid={id === 'session-panel' ? 'drawer-panel' : undefined}>{children}</div>
+      );
+    }
+  );
   return {
     Panel,
     PanelGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -206,6 +224,8 @@ function renderShell(
 describe('App quick-start — always shows the tool picker', () => {
   beforeEach(() => {
     seedStore();
+    drawerPanel.mounts = 0;
+    drawerPanel.unmounts = 0;
   });
 
   it('opens the tile picker without creating a session', async () => {
@@ -217,22 +237,35 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('opens the created session immediately when a tool is picked', async () => {
-    // The create seam inserts the session into the store before returning, so
-    // navigation resolves it on the next render — SessionPanel shows with no
-    // blank/loading frame in between.
+  it('keeps the session drawer mounted across the pick→open transition (no flash)', async () => {
+    // Exercises the REAL selection path, not a seeded shortcut: optimisticCreate
+    // inserts the session exactly as the create seam does, and `useUrlState`
+    // (wired inside App) derives `selectedSessionId` from the navigation — the
+    // test never sets selection directly. The drawer Panel must stay mounted the
+    // whole time. With URL-only selection there is a one-render frame where
+    // pending is cleared but `selectedSessionId` hasn't caught up, so the Panel
+    // unmounts and fades back in (the reported flash); this asserts it doesn't.
     const onCreateSession = optimisticCreate(SESSION_A);
     renderShell(USER, onCreateSession);
 
     fireEvent.click(await screen.findByTestId('quick-start'));
+    await screen.findByTestId('tool-picker');
+    // Picker up → drawer Panel mounted once.
+    expect(screen.getByTestId('drawer-panel')).toBeInTheDocument();
+    const mountsWhilePicking = drawerPanel.mounts;
+
     await act(async () => {
-      fireEvent.click(await screen.findByTestId('tool-picker'));
+      fireEvent.click(screen.getByTestId('tool-picker'));
     });
 
     await waitFor(() => expect(screen.getByTestId('session-panel')).toBeInTheDocument());
     expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
     expect(onCreateSession).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('tool-picker')).not.toBeInTheDocument();
+    // The drawer Panel never unmounted/remounted during the handoff.
+    expect(drawerPanel.unmounts).toBe(0);
+    expect(drawerPanel.mounts).toBe(mountsWhilePicking);
+    expect(screen.getByTestId('drawer-panel')).toBeInTheDocument();
   });
 
   it('does not resurrect the picker on Back after the session is shown', async () => {
@@ -291,6 +324,8 @@ describe('App quick-start — always shows the tool picker', () => {
     });
     expect(screen.getByTestId('session-panel')).toBeInTheDocument();
     expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_B);
+    // The drawer Panel stayed mounted across pick→A and switch A→B — no flash.
+    expect(drawerPanel.unmounts).toBe(0);
   });
 
   it('shows the picker when Add session is used while a session is open', async () => {

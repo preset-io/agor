@@ -849,10 +849,14 @@ export const App: React.FC<AppProps> = ({
     const sessionId = await onCreateSession?.(config, currentBoardId);
     setNewSessionBranchId(null);
 
-    // Route through the URL so useUrlState owns selection — setting
-    // selectedSessionId directly raced with the cleanup effect (and the
-    // state→URL self-heal) before the socket `created` event arrived.
+    // Select synchronously, then let the URL catch up. The create seam inserts
+    // the session into the store before returning, so `selectedSessionExists`
+    // is already true and the cleanup effect won't clear this — selecting
+    // directly no longer races. This keeps the drawer's SessionPanel mounted
+    // across the transition instead of blanking for the render it took
+    // `useUrlState` to derive selection from the new URL.
     if (sessionId) {
+      setSelectedSessionId(sessionId);
       navigation.goToSession(sessionId);
     }
   };
@@ -882,12 +886,19 @@ export const App: React.FC<AppProps> = ({
       );
       if (!sessionId) return null;
 
-      // The create seam optimistically inserts the new session into the store,
-      // so `goToSession` selects it on the very next render — no propagation
-      // gap, nothing to hold the drawer open. Navigate BEFORE awaiting removal
-      // of the replaced session (switch-tool path): the new session already
-      // wins the ternary, so removing the old one can't blank the drawer.
+      // Select the new session synchronously, in the same render that clears
+      // the picker, so the drawer never has a frame with neither target set.
+      // Routing selection through the URL alone leaves a one-render gap:
+      // `useUrlState` sets `selectedSessionId` a render after `goToSession`, so
+      // `effectiveSelectedSessionId` would be null while pending is already
+      // cleared → the drawer unmounts and fades back in. Safe because the
+      // create seam already inserted the session, so `selectedSessionExists` is
+      // true and the cleanup effect won't clear this. `goToSession` then just
+      // catches the URL up; its later `onSessionChange` re-sets the same id.
+      // Set selection BEFORE removing the replaced session (switch-tool path)
+      // so the new session already wins the ternary when the old one goes.
       setPendingToolChoiceBranchId(null);
+      setSelectedSessionId(sessionId);
       navigation.goToSession(sessionId);
 
       if (replacingSessionId && client) {
