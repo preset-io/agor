@@ -237,7 +237,7 @@ function sanitizeStringMap(input: unknown): Record<string, string> {
 // Legacy format detection
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HANDLEBARS_TOKEN_RE = /\{\{\s*agor\.(token|apiUrl|user\w*)/g;
+const HANDLEBARS_AGOR_GRANT_RE = /\{\{\s*agor\.(apiUrl|user\w*)/g;
 const HANDLEBARS_USER_ENV_RE = /\{\{\s*user\.env\.([A-Z_][A-Z0-9_]*)/g;
 // Old format also rendered top-level `{{user.email}}` (note: NOT `agor.user…`)
 // and `{{artifact.id}}` / `{{artifact.boardId}}`. Presence-only — no /g flag
@@ -278,11 +278,10 @@ export function detectLegacyFormat(artifact: {
 
   for (const [, content] of Object.entries(files)) {
     if (typeof content !== 'string') continue;
-    for (const m of content.matchAll(HANDLEBARS_TOKEN_RE)) {
-      signals.add('has_handlebars_token');
+    for (const m of content.matchAll(HANDLEBARS_AGOR_GRANT_RE)) {
+      signals.add('has_handlebars_agor_grant');
       const which = m[1];
-      if (which === 'token') detectedGrants.add('agor_token');
-      else if (which === 'apiUrl') detectedGrants.add('agor_api_url');
+      if (which === 'apiUrl') detectedGrants.add('agor_api_url');
       else if (which === 'userEmail' || which === 'user') {
         detectedGrants.add('agor_user_email');
       }

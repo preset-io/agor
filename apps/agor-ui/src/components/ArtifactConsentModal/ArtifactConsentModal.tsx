@@ -16,8 +16,6 @@
  * (`unix_user_mode !== 'simple'`). The roadmap's reasoning: a "trust everyone"
  * button on a shared instance is too sharp.
  *
- * agor_token is treated stricter — author/instance scopes are disabled when
- * the artifact requests it; only artifact-scoped or just-once grants apply.
  */
 
 import type { AgorGrants, ArtifactTrustScopeType } from '@agor-live/client';
@@ -50,8 +48,6 @@ interface ArtifactConsentModalProps {
   onGranted: () => void;
 }
 
-const HIGH_POWER_GRANT_KEYS = new Set<keyof AgorGrants>(['agor_token']);
-
 export function ArtifactConsentModal({
   open,
   artifactId,
@@ -68,7 +64,6 @@ export function ArtifactConsentModal({
   const [scope, setScope] = useState<Exclude<ArtifactTrustScopeType, 'self'>>('artifact');
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const requestsAgorToken = !!grants.agor_token;
   // Auto-hide the instance scope when the daemon is in multi-user Unix
   // isolation mode, unless the caller explicitly forces a value via prop.
   const effectivelyHideInstanceScope = hideInstanceScope ?? featuresConfig?.multiUser === true;
@@ -209,15 +204,6 @@ export function ArtifactConsentModal({
           {grantBadges.length === 0 && <Typography.Text type="secondary">(none)</Typography.Text>}
           {grantBadges}
         </Space>
-        {requestsAgorToken && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginTop: 8 }}
-            title="agor_token is artifact-scoped only"
-            description="Author and instance grants do NOT cover agor_token — granting it here only affects this artifact, regardless of the scope you pick below."
-          />
-        )}
       </div>
 
       <div style={{ marginTop: 16 }}>
@@ -228,15 +214,9 @@ export function ArtifactConsentModal({
           <Space orientation="vertical">
             <Radio value="session">Just once (in-memory; cleared when daemon restarts)</Radio>
             <Radio value="artifact">This artifact only</Radio>
-            <Radio value="author" disabled={requestsAgorToken}>
-              Anything published by this author
-              {requestsAgorToken ? ' (disabled — agor_token requires artifact scope)' : ''}
-            </Radio>
+            <Radio value="author">Anything published by this author</Radio>
             {!effectivelyHideInstanceScope && (
-              <Radio value="instance" disabled={requestsAgorToken}>
-                Anything on this Agor instance
-                {requestsAgorToken ? ' (disabled — agor_token requires artifact scope)' : ''}
-              </Radio>
+              <Radio value="instance">Anything on this Agor instance</Radio>
             )}
           </Space>
         </Radio.Group>
@@ -256,13 +236,8 @@ function renderGrantBadges(grants: AgorGrants): ReactNode[] {
   const out: ReactNode[] = [];
   for (const [key, value] of Object.entries(grants)) {
     if (value !== true) continue;
-    const isHighPower = HIGH_POWER_GRANT_KEYS.has(key as keyof AgorGrants);
     out.push(
-      <Tag
-        key={key}
-        color={isHighPower ? 'red' : 'blue'}
-        icon={isHighPower ? <WarningOutlined /> : undefined}
-      >
+      <Tag key={key} color="blue">
         {key}
       </Tag>
     );

@@ -179,13 +179,13 @@ describe('detectLegacyFormat', () => {
     const result = detectLegacyFormat({
       files: {
         '/agor.config.js': [
-          'export const t = "{{ agor.token }}";',
           'export const u = "{{ agor.apiUrl }}";',
+          'export const e = "{{ agor.userEmail }}";',
         ].join('\n'),
       },
     });
-    expect(result.detected_grants).toContain('agor_token');
     expect(result.detected_grants).toContain('agor_api_url');
+    expect(result.detected_grants).toContain('agor_user_email');
   });
 
   it('returns is_legacy=false for a clean new-format artifact', () => {

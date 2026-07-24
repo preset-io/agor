@@ -51,7 +51,7 @@ Each artifact is a stored file map plus a small set of declarative metadata colu
 - `template`: Sandpack template (`react`, `react-ts`, `vue3`, …).
 - `sandpack_config`: Author-controlled SandpackProvider props (template, customSetup, options). Sanitized on write.
 - `required_env_vars`: Names of env vars the artifact needs (e.g. `["OPENAI_KEY"]`). The daemon synthesizes a per-viewer `.env` at render time.
-- `agor_grants`: Declarative daemon capabilities (`agor_token`, `agor_api_url`, and metadata grants).
+- `agor_grants`: Declarative daemon capabilities (`agor_api_url`, viewer email, and metadata grants).
 - `agor_runtime`: Controls injection of the daemon-side `agor-runtime.js` (which powers agent DOM introspection via `agor_artifacts_query_dom`). Enabled by default; opt out per-artifact with `{ enabled: false }`. The runtime ships as an iframe-level `<script>` tag via Sandpack's `externalResources`, so it works regardless of which user files exist (no entry-file detection, no file mutation, no template-specific gotchas).
 
 **On the board:**
@@ -187,7 +187,7 @@ For anything that needs a real backend, the artifact is still a great starting p
 Artifacts get secrets and daemon capabilities through two declarative fields on the artifact row, with a **TOFU consent flow** for non-self artifacts:
 
 - `requiredEnvVars`: names of env vars the artifact needs.
-- `agorGrants`: capabilities the daemon will inject (JWT, daemon URL, and artifact metadata).
+- `agorGrants`: capabilities the daemon will inject (daemon URL, viewer email, and artifact metadata).
 
 At render time the daemon resolves consent, looks up the **viewing user's** values, and synthesizes a `.env` file into the served file map (never persisted). Apps read the values via the standard bundler convention.
 
@@ -200,7 +200,7 @@ agor_artifacts_publish({
   name: 'OpenAI Chat',
   template: 'react-ts',
   requiredEnvVars: ['OPENAI_KEY'],
-  agorGrants: { agor_token: true },
+  agorGrants: { agor_api_url: true },
 });
 ```
 
@@ -222,7 +222,7 @@ Right now only the `react` / `react-ts` mapping has been exercised against a liv
 ```ts
 // react / react-ts (CRA)
 const apiKey = process.env.REACT_APP_OPENAI_KEY;
-const agorToken = process.env.REACT_APP_AGOR_TOKEN;
+const agorApiUrl = process.env.REACT_APP_AGOR_API_URL;
 
 // Best-effort inherited mapping for vue3 / svelte / solid (not yet
 // verified end-to-end — see the status table above):
@@ -235,13 +235,12 @@ if (!apiKey) {
 
 ### Available `agor_grants`
 
-| Grant                    | Env var name       | Behavior                                                                                                                                                                         |
-| ------------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agor_token: true`       | `AGOR_TOKEN`       | Mints a 15-min artifact-runtime token for the viewer. It is not a general daemon API credential. **Artifact-scoped consent only;** author/instance grants don't auto-cover this. |
-| `agor_api_url: true`     | `AGOR_API_URL`     | Daemon base URL.                                                                                                                                                                 |
-| `agor_user_email: true`  | `AGOR_USER_EMAIL`  | Viewer's email.                                                                                                                                                                  |
-| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Pure metadata, no consent.                                                                                                                                                       |
-| `agor_board_id: true`    | `AGOR_BOARD_ID`    | Pure metadata, no consent.                                                                                                                                                       |
+| Grant                    | Env var name       | Behavior                   |
+| ------------------------ | ------------------ | -------------------------- |
+| `agor_api_url: true`     | `AGOR_API_URL`     | Daemon base URL.           |
+| `agor_user_email: true`  | `AGOR_USER_EMAIL`  | Viewer's email.            |
+| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Pure metadata, no consent. |
+| `agor_board_id: true`    | `AGOR_BOARD_ID`    | Pure metadata, no consent. |
 
 #### Local Chrome note: Private Network Access
 
@@ -280,7 +279,7 @@ When the viewer is **not** the artifact's author, the daemon won't inject secret
 3. **The viewer picks a trust scope**: just-once / this-artifact / this-author / instance-wide.
 4. **The grant is persisted** in `artifact_trust_grants` (or held in-memory for "just-once") and the daemon re-renders with secrets injected.
 
-The matching check is a **strict subset**: if the artifact later adds a new required env var or grant, the existing grant doesn't cover it and the consent modal re-prompts. `agor_token` is treated stricter still: only artifact-scoped grants cover it; author or instance scopes don't.
+The matching check is a **strict subset**: if the artifact later adds a new required env var or grant, the existing grant doesn't cover it and the consent modal re-prompts.
 
 You can review and revoke grants from **Settings > Trusted Artifacts**.
 
@@ -333,7 +332,7 @@ Artifacts are designed for rapid prototyping, not permanent hosting. When you're
 3. **Pick your hosting:** Vercel, Netlify, Cloudflare Pages, a Docker container. The agent can set up deployment config for whatever platform you choose
 4. **Graduate your secrets**: Move `requiredEnvVars` to your hosting platform's environment variable system. The bundler convention is the same on the other side (CRA reads `process.env.REACT_APP_*`, Vite reads `import.meta.env.VITE_*`, etc.). Only the source of values changes.
 
-You can also one-click eject to CodeSandbox (`agor_artifacts_export_codesandbox`) if you want a quick share link. Note that daemon-supplied capabilities such as `AGOR_TOKEN` won't work there.
+You can also one-click eject to CodeSandbox (`agor_artifacts_export_codesandbox`) if you want a quick share link. Note that daemon-supplied capabilities won't work there.
 
 The artifact gets you from idea to working UI in minutes. The agent gets you from prototype to deployed app when you're ready.
 

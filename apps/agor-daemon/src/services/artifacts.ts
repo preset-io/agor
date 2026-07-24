@@ -51,14 +51,13 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
-  ARTIFACT_SCOPED_ONLY_GRANT_KEYS,
+  canonicalizeAgorGrants,
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
   NO_CONSENT_GRANT_KEYS,
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
-import { ARTIFACT_RUNTIME_JWT_AUDIENCE, issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import {
   canonicalizeExistingPrefix,
@@ -598,7 +597,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const requiredEnvVars = sanitizeEnvVarNames(
       data.required_env_vars ?? sidecar?.required_env_vars ?? existing?.required_env_vars
     );
-    const agorGrants = sanitizeAgorGrants(
+    const agorGrants = canonicalizeAgorGrants(
       data.agor_grants ?? sidecar?.agor_grants ?? existing?.agor_grants
     );
     // agor_runtime is a small flag bag (currently just `enabled`). Same
@@ -814,7 +813,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dbUpdates.required_env_vars = sanitizeEnvVarNames(updates.required_env_vars);
     }
     if (updates.agor_grants !== undefined) {
-      dbUpdates.agor_grants = sanitizeAgorGrants(updates.agor_grants);
+      dbUpdates.agor_grants = canonicalizeAgorGrants(updates.agor_grants);
     }
     if (updates.agor_runtime !== undefined) {
       dbUpdates.agor_runtime = updates.agor_runtime;
@@ -1010,7 +1009,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: artifact.template,
       sandpack_config: artifact.sandpack_config ?? {},
       required_env_vars: artifact.required_env_vars ?? [],
-      agor_grants: sanitizeAgorGrants(artifact.agor_grants),
+      agor_grants: canonicalizeAgorGrants(artifact.agor_grants),
       agor_runtime: artifact.agor_runtime ?? {},
     };
     const sidecarJson = `${JSON.stringify(sidecar, null, 2)}\n`;
@@ -1045,7 +1044,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const filesOut: Record<string, string> = { ...artifact.files };
     const requiredEnvVars = artifact.required_env_vars ?? [];
-    const grants = sanitizeAgorGrants(artifact.agor_grants);
+    const grants = canonicalizeAgorGrants(artifact.agor_grants);
     const consentRelevantGrants = pickConsentRelevantGrants(grants);
 
     // "Needs consent" gates the trust prompt. "Has injectables" gates the
@@ -1149,8 +1148,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    *
    * Resolution order matches the roadmap:
    *   1. Author is the viewer → 'self'.
-   *   2. agor_token requested → ONLY artifact-scoped grants apply.
-   *   3. instance > author > artifact > session — first matching wins.
+   *   2. instance > author > artifact > session — first matching wins.
    */
   private async resolveTrust(input: {
     artifact: Artifact;
@@ -1164,40 +1162,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
     if (!userId) return { state: 'untrusted' };
 
-    const wantsAgorToken = !!grants.agor_token;
     const consentRelevantGrants = pickConsentRelevantGrants(grants);
 
-    // agor_token is artifact-scoped only — author/instance grants do NOT cover it.
-    if (wantsAgorToken) {
-      const artifactGrants = await this.trustRepo.findActiveForScope({
+    const tryScopes: {
+      type: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
+      value: string | null;
+    }[] = [
+      { type: 'instance', value: null },
+      { type: 'author', value: artifact.created_by ?? null },
+      { type: 'artifact', value: artifact.artifact_id },
+    ];
+    for (const sc of tryScopes) {
+      if (sc.type === 'author' && !sc.value) continue;
+      const matches = await this.trustRepo.findActiveForScope({
         userId,
-        scopeType: 'artifact',
-        scopeValue: artifact.artifact_id,
+        scopeType: sc.type,
+        scopeValue: sc.value,
       });
-      if (artifactGrants.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
-        return { state: 'trusted', scope: 'artifact' };
-      }
-      // Even if a non-token grant covers, agor_token requires artifact scope.
-      // Fall through to untrusted unless a session grant matches (below).
-    } else {
-      const tryScopes: {
-        type: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
-        value: string | null;
-      }[] = [
-        { type: 'instance', value: null },
-        { type: 'author', value: artifact.created_by ?? null },
-        { type: 'artifact', value: artifact.artifact_id },
-      ];
-      for (const sc of tryScopes) {
-        if (sc.type === 'author' && !sc.value) continue;
-        const matches = await this.trustRepo.findActiveForScope({
-          userId,
-          scopeType: sc.type,
-          scopeValue: sc.value,
-        });
-        if (matches.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
-          return { state: 'trusted', scope: sc.type };
-        }
+      if (matches.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
+        return { state: 'trusted', scope: sc.type };
       }
     }
 
@@ -1206,10 +1189,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (sessionGrant) {
       const envCovered = requiredEnvVars.every((v) => sessionGrant.envVars.has(v));
       const grantsCovered = grantsAreSubset(consentRelevantGrants, sessionGrant.grants);
-      // agor_token is artifact-scoped only; for the session-scope path we
-      // additionally require that the grant explicitly listed agor_token.
-      const tokenCovered = !wantsAgorToken || sessionGrant.grants.agor_token === true;
-      if (envCovered && grantsCovered && tokenCovered) {
+      if (envCovered && grantsCovered) {
         return { state: 'trusted', scope: 'session' };
       }
     }
@@ -1226,7 +1206,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    *     empty string otherwise.
    *   - No-consent grants (artifact_id, board_id): always emitted with their
    *     real values regardless of trust state — they are pure metadata.
-   *   - Consent-gated grants (agor_token, agor_api_url, agor_user_email):
+   *   - Consent-gated grants (agor_api_url, agor_user_email):
    *     emitted with real values when trusted, empty when not.
    *     Empty keys are still emitted so the artifact can detect "untrusted"
    *     rather than crash on a ReferenceError.
@@ -1294,8 +1274,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Resolve the runtime values for each granted capability. Mints a JWT for
-   * `agor_token`, looks up the daemon URL for `agor_api_url`, etc.
+   * Resolve the runtime values for each granted capability.
    */
   private async resolveGrantValues(input: {
     grants: AgorGrants;
@@ -1305,9 +1284,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const out: Record<string, string> = {};
     const { grants, artifact, userId } = input;
 
-    if (grants.agor_token && userId) {
-      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId, artifact);
-    }
     if (grants.agor_api_url) {
       out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getBaseUrl();
     }
@@ -1328,27 +1304,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     return out;
-  }
-
-  private async mintViewerJwt(userId: string, artifact: Artifact): Promise<string> {
-    const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
-    const jwtSecret = authConfig?.secret;
-    if (!jwtSecret) {
-      console.warn('[artifacts] no auth.secret set — AGOR_TOKEN will render empty');
-      return '';
-    }
-    return issueRuntimeToken(
-      {
-        sub: userId,
-        type: 'artifact',
-        purpose: 'artifact-runtime',
-        artifact_id: artifact.artifact_id,
-        board_id: artifact.board_id,
-      },
-      jwtSecret,
-      '15m',
-      { audience: ARTIFACT_RUNTIME_JWT_AUDIENCE }
-    );
   }
 
   private async resolveEnvVarValues(
@@ -1405,7 +1360,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${input.artifactId} not found`);
     }
     const sanitizedEnv = sanitizeEnvVarNames(artifact.required_env_vars ?? []);
-    const sanitizedGrants = sanitizeAgorGrants(artifact.agor_grants ?? {});
+    const sanitizedGrants = canonicalizeAgorGrants(artifact.agor_grants ?? {});
 
     if (input.scopeType === 'session') {
       const key = `${input.userId}:${input.artifactId}`;
@@ -1439,14 +1394,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       }
     }
 
-    // agor_token must be artifact-scoped only.
-    const wantsAgorToken = !!sanitizedGrants.agor_token;
-    if (wantsAgorToken && input.scopeType !== 'artifact') {
-      throw new Error(
-        `Cannot grant agor_token at scope '${input.scopeType}' — agor_token requires artifact-scoped consent`
-      );
-    }
-
     await this.trustRepo.create({
       user_id: input.userId,
       scope_type: input.scopeType,
@@ -1477,7 +1424,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * and POST it. Returns the resulting sandbox URL on success.
    *
    * Caveats inherent to the eject path (caller should surface to users):
-   *  - daemon-supplied capabilities such as AGOR_TOKEN are stripped server-side
+   *  - daemon-supplied capabilities are stripped server-side
    *    anyway and won't function on CodeSandbox;
    *  - the synthesized `.env` and round-trip sidecars are dropped — they're
    *    Agor-only artifacts;
@@ -1862,7 +1809,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         entry: artifact.entry ?? null,
         sandpack_config: artifact.sandpack_config ?? null,
         required_env_vars: artifact.required_env_vars ?? [],
-        agor_grants: sanitizeAgorGrants(artifact.agor_grants),
+        agor_grants: canonicalizeAgorGrants(artifact.agor_grants),
         agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
       }),
     });
@@ -2491,16 +2438,6 @@ export function sanitizeEnvVarNames(input: unknown): string[] {
   return [...seen];
 }
 
-export function sanitizeAgorGrants(input: unknown): AgorGrants {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
-  const src = input as Record<string, unknown>;
-  const out: AgorGrants = {};
-  for (const key of Object.keys(GRANT_ENV_VAR_NAMES)) {
-    if (src[key] === true) (out as Record<string, unknown>)[key] = true;
-  }
-  return out;
-}
-
 /** Strip informational grants that don't need consent. */
 export function pickConsentRelevantGrants(grants: AgorGrants): AgorGrants {
   const out: AgorGrants = { ...grants };
@@ -2532,17 +2469,7 @@ function coversRequest(
   for (const v of requiredEnvVars) {
     if (!env.has(v)) return false;
   }
-  if (!grantsAreSubset(requestedGrants, grant.agor_grants_set)) return false;
-  // agor_token specifically must already be in the existing grant if requested.
-  for (const k of ARTIFACT_SCOPED_ONLY_GRANT_KEYS) {
-    if (
-      (requestedGrants as Record<string, unknown>)[k] === true &&
-      (grant.agor_grants_set as Record<string, unknown>)[k] !== true
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return grantsAreSubset(requestedGrants, grant.agor_grants_set);
 }
 
 function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {

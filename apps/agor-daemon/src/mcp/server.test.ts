@@ -116,6 +116,7 @@ describe('MCP tool registry', () => {
         | undefined
     )?.agorGrants;
     expect(agorGrants?.properties).not.toHaveProperty('agor_proxies');
+    expect(agorGrants?.properties).not.toHaveProperty('agor_token');
   });
 });
 
