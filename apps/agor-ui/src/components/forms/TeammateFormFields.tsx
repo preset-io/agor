@@ -1,7 +1,18 @@
 import type { Repo } from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Checkbox,
+  Collapse,
+  Form,
+  Input,
+  Select,
+  Space,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 export interface TeammateFormFieldsProps {
@@ -12,6 +23,13 @@ export interface TeammateFormFieldsProps {
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
+  /**
+   * The board the create dialog was opened from, if any. Only when a current
+   * board exists can the teammate be attached to it instead of getting its own
+   * new board — on Home / global Settings this is empty, so the checkbox is
+   * hidden and the teammate always gets a fresh board.
+   */
+  currentBoardId?: string;
   /** Optional section inserted before the repo/branch advanced settings collapse. */
   extraBeforeAdvanced?: React.ReactNode;
 }
@@ -19,7 +37,8 @@ export interface TeammateFormFieldsProps {
 /**
  * Shared teammate form fields used by the CreateDialog Teammate tab.
  *
- * Renders: Name + icon, teammate board advice Alert, Advanced collapse
+ * Renders: Name + icon, board placement control (new-board checkbox when a
+ * current board exists, otherwise an own-board notice), Advanced collapse
  * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
@@ -31,6 +50,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   onDisplayNameChange,
   customRepoSelected,
   onCustomRepoChange,
+  currentBoardId,
   extraBeforeAdvanced,
 }) => {
   const { token } = theme.useToken();
@@ -71,16 +91,30 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         />
       </Form.Item>
 
-      <Alert
-        type="info"
-        showIcon={false}
-        style={{ marginBottom: 16 }}
-        title={
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Each AI teammate gets a fresh board and becomes that board&apos;s primary teammate.
-          </Typography.Text>
-        }
-      />
+      {currentBoardId ? (
+        <Form.Item name="createNewBoard" valuePropName="checked" initialValue={true}>
+          <Checkbox>
+            <Space direction="vertical" size={0}>
+              <span>Create a new board for this teammate</span>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Uncheck to add the teammate to the current board instead of its own.
+              </Typography.Text>
+            </Space>
+          </Checkbox>
+        </Form.Item>
+      ) : (
+        <Alert
+          type="info"
+          showIcon={false}
+          style={{ marginBottom: 16 }}
+          title={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              This AI teammate gets its own fresh board and becomes that board&apos;s primary
+              teammate.
+            </Typography.Text>
+          }
+        />
+      )}
 
       {extraBeforeAdvanced}
 

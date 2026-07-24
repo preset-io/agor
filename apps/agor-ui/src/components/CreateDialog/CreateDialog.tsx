@@ -252,6 +252,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
+            currentBoardId={currentBoardId}
           />
         </div>
       ),

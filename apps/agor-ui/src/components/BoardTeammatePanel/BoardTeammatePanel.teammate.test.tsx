@@ -56,4 +56,23 @@ describe('BoardTeammatePanel teammate tab', () => {
       'true'
     );
   });
+
+  it('labels the move-teammate action to match the "Move an existing teammate here" heading', () => {
+    render(
+      <AntApp>
+        <BoardTeammatePanel
+          board={board}
+          activeTab="teammate"
+          onTabChange={vi.fn()}
+          primaryTeammateInaccessible={false}
+          onSessionClick={vi.fn()}
+          client={null}
+        />
+      </AntApp>
+    );
+
+    expect(screen.getByText('Move an existing teammate here')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move here' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Assign' })).not.toBeInTheDocument();
+  });
 });

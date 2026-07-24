@@ -43,6 +43,12 @@ export interface TeammateTabResult {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  /**
+   * When true (default), the teammate gets its own new board. When false, the
+   * caller attaches it to the current board — only possible when a current
+   * board exists (see currentBoardId).
+   */
+  createNewBoard: boolean;
 }
 
 export interface TeammateTabProps {
@@ -54,6 +60,8 @@ export interface TeammateTabProps {
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null;
   client?: AgorClient | null;
+  /** Board the dialog was opened from; gates the attach-to-current-board option. */
+  currentBoardId?: string;
 }
 
 export const TeammateTab: React.FC<TeammateTabProps> = ({
@@ -65,6 +73,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   mcpServerById = new Map(),
   currentUser,
   client,
+  currentBoardId,
 }) => {
   const repos = Array.from(repoById.values());
   const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
@@ -127,6 +136,9 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
         permissionMode,
+        // Default to a fresh board. The checkbox only renders when a current
+        // board exists, so an undefined value means "own board".
+        createNewBoard: values.createNewBoard ?? true,
       };
 
       if (selectedAgent === 'codex') {
@@ -166,6 +178,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         onDisplayNameChange={handleDisplayNameChange}
         customRepoSelected={customRepoSelected}
         onCustomRepoChange={setCustomRepoSelected}
+        currentBoardId={currentBoardId}
         extraBeforeAdvanced={
           <Collapse
             ghost

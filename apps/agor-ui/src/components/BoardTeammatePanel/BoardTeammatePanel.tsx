@@ -422,7 +422,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             loading={assigningTeammate}
             disabled={!selectedTeammateId || !board || !client}
           >
-            Assign
+            Move here
           </Button>
         </Space>
       </div>

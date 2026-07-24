@@ -999,7 +999,10 @@ export const App: React.FC<AppProps> = ({
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
-        boardId: currentBoardId || undefined,
+        // Own board by default. Only attach to the current board when the user
+        // unchecked "Create a new board" AND a current board is in context
+        // (never on Home / the global Settings modal).
+        boardId: result.createNewBoard === false && currentBoardId ? currentBoardId : undefined,
       },
       { client, repoById: agorStore.getState().repoById, onCreateBranch }
     );

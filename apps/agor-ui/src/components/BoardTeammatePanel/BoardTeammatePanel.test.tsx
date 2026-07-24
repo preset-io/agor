@@ -113,8 +113,8 @@ describe('BoardTeammatePanel', () => {
 
       renderPanel({ activeTab: 'teammate', client });
 
-      const assignButton = await screen.findByRole('button', { name: /^assign$/i });
-      await waitFor(() => expect(assignButton).toBeEnabled());
+      const moveButton = await screen.findByRole('button', { name: /^move here$/i });
+      await waitFor(() => expect(moveButton).toBeEnabled());
       expect(screen.getByText('Move an existing teammate here')).toBeInTheDocument();
     });
 
@@ -140,10 +140,10 @@ describe('BoardTeammatePanel', () => {
 
       renderPanel({ activeTab: 'teammate', client });
 
-      const assignButton = await screen.findByRole('button', { name: /^assign$/i });
-      await waitFor(() => expect(assignButton).toBeEnabled());
+      const moveButton = await screen.findByRole('button', { name: /^move here$/i });
+      await waitFor(() => expect(moveButton).toBeEnabled());
 
-      fireEvent.click(assignButton);
+      fireEvent.click(moveButton);
 
       // Moving a teammate re-parents its single board_id, then promotes it.
       await waitFor(() => expect(patch).toHaveBeenCalledWith('tm-42', { board_id: 'board-1' }));
