@@ -91,5 +91,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         await expect(repository.getApiKey()).resolves.toBe('concurrent-secret');
       });
     });
+
+    it('blocks credential-only mutation behind the tenant aggregate guard', async () => {
+      const tenant = `knowledge-settings-guard-${suffix}`;
+      let releaseGuard!: () => void;
+      let signalLocked!: () => void;
+      const guardLocked = new Promise<void>((resolve) => {
+        signalLocked = resolve;
+      });
+      const holdGuard = new Promise<void>((resolve) => {
+        releaseGuard = resolve;
+      });
+
+      const holder = runWithTenantDatabaseScope(db, tenant, async (tenantDb) => {
+        await new KnowledgeSemanticSettingsRepository(tenantDb).lockAggregateForUpdate(tenantDb);
+        signalLocked();
+        await holdGuard;
+      });
+      await guardLocked;
+
+      let mutationCompleted = false;
+      const mutation = runWithTenantDatabaseScope(db, tenant, async (tenantDb) => {
+        await new KnowledgeSemanticSettingsRepository(tenantDb).patch({
+          api_key: 'guarded-secret',
+        });
+        mutationCompleted = true;
+      });
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(mutationCompleted).toBe(false);
+      } finally {
+        releaseGuard();
+      }
+      await Promise.all([holder, mutation]);
+      expect(mutationCompleted).toBe(true);
+    });
   }
 );

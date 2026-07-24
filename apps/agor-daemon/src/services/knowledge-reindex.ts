@@ -1,7 +1,11 @@
 import {
+  getCurrentTenantDatabase,
   isPostgresDatabase,
+  isSQLiteDatabase,
   KnowledgeSemanticSettingsRepository,
+  runDatabaseTransaction,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, KnowledgeEmbeddingStatus, Params } from '@agor/core/types';
@@ -17,31 +21,55 @@ export interface KnowledgeReindexResult {
 export type KnowledgeReindexParams = Params & AuthenticatedParams;
 
 export class KnowledgeReindexService {
-  private settings: KnowledgeSemanticSettingsRepository;
-
   constructor(
     private db: TenantScopeAwareDatabase,
     private app?: Application
-  ) {
-    this.settings = new KnowledgeSemanticSettingsRepository(db);
+  ) {}
+
+  private async reindexInTransaction(db: TenantScopedDatabase): Promise<KnowledgeReindexResult> {
+    const semantic = await new KnowledgeSemanticSettingsRepository(db).lockAggregateForUpdate(db);
+    const embeddingConfigured =
+      isPostgresDatabase(db) &&
+      isUsableOpenAIEmbeddingConfig(semantic, semantic.api_key_configured) &&
+      (await ensureKnowledgePgvectorStorage(db)).available;
+    const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';
+
+    const queued = await rebuildCurrentKnowledgeUnits(db, semantic, { embeddingConfigured });
+
+    return { queued, status };
   }
 
   async create(_data?: unknown, _params?: KnowledgeReindexParams): Promise<KnowledgeReindexResult> {
-    const semantic = await this.settings.find();
-    const embeddingConfigured =
-      isPostgresDatabase(this.db) &&
-      isUsableOpenAIEmbeddingConfig(semantic, semantic.api_key_configured) &&
-      (await ensureKnowledgePgvectorStorage(this.db)).available;
-    const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';
-
-    const queued = await rebuildCurrentKnowledgeUnits(this.db, semantic, { embeddingConfigured });
+    const ambientDb = getCurrentTenantDatabase();
+    let result: KnowledgeReindexResult;
+    if (ambientDb && isPostgresDatabase(ambientDb)) {
+      result = await this.reindexInTransaction(ambientDb as TenantScopedDatabase);
+    } else if (isSQLiteDatabase(this.db)) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          result = await runDatabaseTransaction(
+            this.db,
+            (tx) => this.reindexInTransaction(tx as TenantScopedDatabase),
+            { sqliteImmediate: true }
+          );
+          break;
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+        }
+      }
+    } else {
+      result = await runDatabaseTransaction(this.db, (tx) =>
+        this.reindexInTransaction(tx as TenantScopedDatabase)
+      );
+    }
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
     ) as { wake?: () => void } | undefined;
-    if (embeddingConfigured && queued > 0) indexer?.wake?.();
+    if (result.status === 'pending' && result.queued > 0) indexer?.wake?.();
 
-    return { queued, status };
+    return result;
   }
 }
 

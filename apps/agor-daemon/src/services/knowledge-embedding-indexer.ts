@@ -20,7 +20,7 @@ import {
   type TenantScopeAwareDatabase,
   update,
 } from '@agor/core/db';
-import type { KnowledgeDocumentUnitID, TenantID } from '@agor/core/types';
+import type { KnowledgeDocumentUnitID, KnowledgeSemanticPolicy, TenantID } from '@agor/core/types';
 import {
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
   embeddingToPgvector,
@@ -37,6 +37,12 @@ interface PendingUnitRow {
   document_id: string;
   content_text: string | null;
   content_md5: string | null;
+}
+
+interface CurrentUnitRow {
+  unit_id: string;
+  content_md5: string | null;
+  embedding_status: string;
 }
 
 interface ReusedEmbeddingRow {
@@ -74,6 +80,23 @@ function sameEmbeddingReuseScope(
     existing.provider === update.provider &&
     existing.model === update.model &&
     existing.dimensions === update.dimensions
+  );
+}
+
+export function isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+  snapshot: KnowledgeSemanticPolicy,
+  current: KnowledgeSemanticPolicy,
+  snapshotApiKey: string,
+  currentApiKey: string | null
+): boolean {
+  return (
+    snapshotApiKey === currentApiKey &&
+    snapshot.enabled === current.enabled &&
+    snapshot.provider === current.provider &&
+    snapshot.model === current.model &&
+    snapshot.dimensions === current.dimensions &&
+    snapshot.indexing.paused === current.indexing.paused &&
+    JSON.stringify(snapshot.chunking) === JSON.stringify(current.chunking)
   );
 }
 
@@ -191,6 +214,7 @@ export class KnowledgeEmbeddingIndexer {
   private intervalHandle?: NodeJS.Timeout;
   private running = false;
   private wakeScheduled = false;
+  private rerunRequested = false;
   private settings: KnowledgeSemanticSettingsRepository;
   private provider = new OpenAIEmbeddingProvider();
   private lastErrorByTenant = new Map<string, string | null>();
@@ -230,6 +254,10 @@ export class KnowledgeEmbeddingIndexer {
       // indexer establishes its own tenant context in tick().
       runWithoutTenantContext(() => {
         runWithoutTenantDatabaseScope(() => {
+          if (this.running) {
+            this.rerunRequested = true;
+            return;
+          }
           if (this.wakeScheduled) return;
           this.wakeScheduled = true;
           setTimeout(() => {
@@ -424,6 +452,10 @@ export class KnowledgeEmbeddingIndexer {
       throw error;
     } finally {
       this.running = false;
+      if (this.rerunRequested) {
+        this.rerunRequested = false;
+        this.wake();
+      }
     }
   }
 
@@ -453,6 +485,19 @@ export class KnowledgeEmbeddingIndexer {
     const batchSize = Math.min(Math.max(semantic.indexing.batch_size, 1), 128);
     this.lastErrorByTenant.set(this.currentTenantKey(), null);
     const prepared = await this.withTenantDatabase(async () => {
+      const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+      const currentApiKey = await this.settings.getApiKey();
+      if (
+        !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+          semantic,
+          currentSemantic,
+          apiKey,
+          currentApiKey
+        )
+      ) {
+        return { kind: 'obsolete' as const };
+      }
+
       // Hot idle path: avoid provider setup/work when no units are pending.
       const pending = (await select(this.db, { unit_id: kbDocumentUnits.unit_id })
         .from(kbDocumentUnits)
@@ -500,6 +545,7 @@ export class KnowledgeEmbeddingIndexer {
         .all()) as PendingUnitRow[];
       return { kind: 'ready' as const, embeddingSpaceId, reused, rows };
     });
+    if (prepared.kind === 'obsolete') return 0;
     if (prepared.kind === 'idle') return this.idle();
     if (prepared.kind === 'unavailable') {
       this.lastErrorByTenant.set(this.currentTenantKey(), prepared.reason);
@@ -541,26 +587,53 @@ export class KnowledgeEmbeddingIndexer {
         { apiKey, model, dimensions }
       );
     } catch (error) {
-      await this.withTenantDatabase(() =>
-        update(this.db, kbDocumentUnits)
+      const recorded = await this.withTenantDatabase(async () => {
+        const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+        const currentApiKey = await this.settings.getApiKey();
+        if (
+          !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+            semantic,
+            currentSemantic,
+            apiKey,
+            currentApiKey
+          )
+        ) {
+          return false;
+        }
+        const eligibleIds = await this.eligibleResultUnitIds(rows);
+        if (eligibleIds.length === 0) return false;
+        await update(this.db, kbDocumentUnits)
           .set({
             embedding_status: 'error',
             embedding_error: error instanceof Error ? error.message : String(error),
             updated_at: new Date(),
           })
-          .where(
-            inArray(
-              kbDocumentUnits.unit_id,
-              rows.map((row) => row.unit_id as KnowledgeDocumentUnitID)
-            )
-          )
-          .run()
-      );
+          .where(inArray(kbDocumentUnits.unit_id, eligibleIds as KnowledgeDocumentUnitID[]))
+          .run();
+        return true;
+      });
+      if (!recorded) return 0;
       throw error;
     }
 
-    await this.withTenantDatabase(async () => {
-      for (const result of results) {
+    const committed = await this.withTenantDatabase(async () => {
+      const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+      const currentApiKey = await this.settings.getApiKey();
+      if (
+        !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+          semantic,
+          currentSemantic,
+          apiKey,
+          currentApiKey
+        )
+      ) {
+        return 0;
+      }
+
+      const eligibleIds = new Set(await this.eligibleResultUnitIds(rows));
+      const currentResults = results.filter((result) => eligibleIds.has(result.id));
+      if (currentResults.length === 0) return 0;
+      for (const result of currentResults) {
         const source = rows.find((row) => row.unit_id === result.id);
         const content = source?.content_text ?? '';
         const vector = embeddingToPgvector(result.embedding);
@@ -588,13 +661,42 @@ export class KnowledgeEmbeddingIndexer {
         .where(
           inArray(
             kbDocumentUnits.unit_id,
-            results.map((result) => result.id as KnowledgeDocumentUnitID)
+            currentResults.map((result) => result.id as KnowledgeDocumentUnitID)
           )
         )
         .run();
+      return currentResults.length;
     });
 
+    if (committed === 0) return 0;
     this.lastIndexedAtByTenant.set(this.currentTenantKey(), new Date());
-    return reused + results.length;
+    return reused + committed;
+  }
+
+  private async eligibleResultUnitIds(rows: PendingUnitRow[]): Promise<string[]> {
+    if (rows.length === 0) return [];
+    const currentRows = (await select(this.db, {
+      unit_id: kbDocumentUnits.unit_id,
+      content_md5: kbDocumentUnits.content_md5,
+      embedding_status: kbDocumentUnits.embedding_status,
+    })
+      .from(kbDocumentUnits)
+      .where(
+        inArray(
+          kbDocumentUnits.unit_id,
+          rows.map((row) => row.unit_id as KnowledgeDocumentUnitID)
+        )
+      )
+      .all()) as CurrentUnitRow[];
+    const sourceById = new Map(rows.map((row) => [row.unit_id, row]));
+    return currentRows
+      .filter((row) => {
+        const source = sourceById.get(row.unit_id);
+        return (
+          source?.content_md5 === row.content_md5 &&
+          (row.embedding_status === 'pending' || row.embedding_status === 'stale')
+        );
+      })
+      .map((row) => row.unit_id);
   }
 }

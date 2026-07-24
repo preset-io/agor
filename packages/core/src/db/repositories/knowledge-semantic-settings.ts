@@ -287,22 +287,15 @@ export class KnowledgeSemanticSettingsRepository {
   }
 
   /**
-   * Apply a patch inside a caller-owned transaction. This is used when the
-   * settings write and dependent Knowledge-unit updates must commit together.
+   * Acquire the stable tenant aggregate lock used by every operation that
+   * materializes state derived from semantic-search policy. Callers must pass
+   * their active transaction and retain it for all dependent writes.
    */
-  async patchInTransaction(
+  async lockAggregateForUpdate(
     txDb: Database,
-    patch: KnowledgeSemanticSettingsPatch,
-    updatedBy?: UserID | null,
-    validate?: (policy: KnowledgeSemanticPolicy) => void
-  ): Promise<KnowledgeSemanticSettingsMutation> {
-    const hasPolicyPatch = POLICY_FIELDS.some((field) => Object.hasOwn(patch, field));
+    updatedBy?: UserID | null
+  ): Promise<KnowledgeSemanticSettingsPublic> {
     const variables = new AppVariableRepository(txDb);
-
-    // The policy row is the stable aggregate lock for both policy and
-    // credential mutations. Every patch takes it before reading the combined
-    // state so sparse concurrent patches cannot derive side effects from
-    // different snapshots.
     await variables.setIfAbsent({
       namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
       key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
@@ -320,19 +313,38 @@ export class KnowledgeSemanticSettingsRepository {
       )!
     );
 
-    const currentStored = await this.findStoredWith(variables);
-    const currentPolicy = resolveKnowledgeSemanticPolicy(currentStored);
-    assertValidKnowledgeSemanticPolicy(currentPolicy);
-    const currentApiKey = await variables.find(
+    const policy = resolveKnowledgeSemanticPolicy(await this.findStoredWith(variables));
+    assertValidKnowledgeSemanticPolicy(policy);
+    const apiKey = await variables.find(
       KNOWLEDGE_EMBEDDINGS_NAMESPACE,
       KNOWLEDGE_EMBEDDINGS_API_KEY
     );
-    const previous: KnowledgeSemanticSettingsPublic = {
-      ...currentPolicy,
-      api_key_configured: Boolean(currentApiKey?.is_encrypted && currentApiKey.value_encrypted),
+    return {
+      ...policy,
+      api_key_configured: Boolean(apiKey?.is_encrypted && apiKey.value_encrypted),
     };
+  }
 
-    let policy = currentPolicy;
+  /**
+   * Apply a patch inside a caller-owned transaction. This is used when the
+   * settings write and dependent Knowledge-unit updates must commit together.
+   */
+  async patchInTransaction(
+    txDb: Database,
+    patch: KnowledgeSemanticSettingsPatch,
+    updatedBy?: UserID | null,
+    validate?: (policy: KnowledgeSemanticPolicy) => void
+  ): Promise<KnowledgeSemanticSettingsMutation> {
+    const hasPolicyPatch = POLICY_FIELDS.some((field) => Object.hasOwn(patch, field));
+    const variables = new AppVariableRepository(txDb);
+
+    // The policy row is the stable aggregate lock for both policy and
+    // credential mutations. Every patch takes it before reading the combined
+    // state so sparse concurrent patches cannot derive side effects from
+    // different snapshots.
+    const previous = await this.lockAggregateForUpdate(txDb, updatedBy);
+    const currentStored = await this.findStoredWith(variables);
+    let policy: KnowledgeSemanticPolicy = previous;
     if (hasPolicyPatch) {
       const next = applyKnowledgeSemanticPolicyPatch(currentStored, patch);
       policy = resolveKnowledgeSemanticPolicy(next);

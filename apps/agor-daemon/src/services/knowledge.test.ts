@@ -751,6 +751,67 @@ describe('Knowledge semantic indexing lifecycle', () => {
     }
   );
 
+  dbTest(
+    'serializes document-unit writes with concurrent chunking policy changes on SQLite',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'document-policy-owner');
+      const original = await seedDocument(db, owner, { content_text: '# Original\n\nshort' });
+      const content = `# Updated\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`;
+      const documents = new KnowledgeDocumentsService(db);
+      const settings = new KnowledgeSettingsService(db);
+
+      await Promise.all([
+        documents.patch(original.document_id, { content_text: content }, params(owner)),
+        settings.patch(null, {
+          chunking: { target_tokens: 40, max_tokens: 60, overlap_tokens: 0, min_tokens: 1 },
+        }),
+      ]);
+
+      const saved = await settings.find();
+      const document = await documents.get(original.document_id, params(owner));
+      const units = await select(db)
+        .from(kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, document.current_version_id))
+        .all();
+      const expected = knowledgeUnitsForMarkdown(
+        document.path,
+        content,
+        knowledgeChunkerOptionsFromSettings(saved)
+      );
+      expect(units.map((unit) => unit.content_md5).sort()).toEqual(
+        expected.map((unit) => unit.content_md5).sort()
+      );
+    }
+  );
+
+  dbTest('serializes manual reindex with chunking policy changes on SQLite', async ({ db }) => {
+    const owner = await seedUser(db, 'reindex-policy-owner');
+    const content = `# Reindex\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`;
+    const document = await seedDocument(db, owner, { content_text: content });
+    const settings = new KnowledgeSettingsService(db);
+
+    await Promise.all([
+      new KnowledgeReindexService(db).create(),
+      settings.patch(null, {
+        chunking: { target_tokens: 40, max_tokens: 60, overlap_tokens: 0, min_tokens: 1 },
+      }),
+    ]);
+
+    const saved = await settings.find();
+    const units = await select(db)
+      .from(kbDocumentUnits)
+      .where(eq(kbDocumentUnits.version_id, document.current_version_id))
+      .all();
+    const expected = knowledgeUnitsForMarkdown(
+      document.path,
+      content,
+      knowledgeChunkerOptionsFromSettings(saved)
+    );
+    expect(units.map((unit) => unit.content_md5).sort()).toEqual(
+      expected.map((unit) => unit.content_md5).sort()
+    );
+  });
+
   dbTest('indexing status separates pgvector extension from usable storage', async ({ db }) => {
     await withTempConfig({}, async () => {
       await new KnowledgeSettingsService(db).patch(null, {
