@@ -14,8 +14,8 @@
  *   - `direct`     — carries a `tenant_id` column and is deleted with
  *                    `WHERE tenant_id = $1`.
  *   - `transitive` — has no `tenant_id` column but reaches a scoped table via a
- *                    foreign-key chain; deleted with a subquery predicate that
- *                    resolves down to a scoped ancestor.
+ *                    foreign-key chain; detected so deletion can fail closed
+ *                    until that shape has an orphan-safe implementation.
  *   - `global`     — explicitly declared as holding no tenant data (see
  *                    {@link GLOBAL_TABLES}); left untouched.
  *
@@ -28,7 +28,7 @@
  * the PostgreSQL schema exclusively.
  */
 
-import { eq, inArray, is, type SQL } from 'drizzle-orm';
+import { eq, is, type SQL } from 'drizzle-orm';
 import { getTableConfig, type PgColumn, PgTable, type QueryBuilder } from 'drizzle-orm/pg-core';
 import * as postgresSchema from './schema.postgres';
 
@@ -51,21 +51,8 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  */
 export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>([]);
 
-/** How a table is tied to a tenant. */
-export type TenantTableScope = 'direct' | 'transitive';
-
 /** Full classification of a table, including non-tenant tables. */
-export type TableClassification = TenantTableScope | 'global';
-
-/** Link from a transitively-scoped child table to a scoped ancestor. */
-export interface TenantParentLink {
-  /** Single-column foreign key on the child table. */
-  fkColumn: PgColumn;
-  /** Physical name of the scoped (direct or transitive) parent table. */
-  parentTable: string;
-  /** Referenced primary/unique column on the parent table. */
-  parentPkColumn: PgColumn;
-}
+export type TableClassification = 'direct' | 'transitive' | 'global';
 
 /** A table that holds tenant data and must be included in deletion. */
 export interface TenantDeletionTable {
@@ -73,23 +60,17 @@ export interface TenantDeletionTable {
   name: string;
   /** Drizzle table object, used to build type-safe queries. */
   table: PgTable;
-  /** How the table is scoped to a tenant. */
-  scope: TenantTableScope;
-  /** Tenant column (present only for `direct` scope). */
-  tenantColumn?: PgColumn;
-  /** FK link to a scoped ancestor (present only for `transitive` scope). */
-  parentLink?: TenantParentLink;
+  /** Deletion entries are always scoped directly by this tenant column. */
+  scope: 'direct';
+  tenantColumn: PgColumn;
 }
 
 interface ForeignKeyMeta {
-  fkColumns: PgColumn[];
   parentTable: string;
-  parentColumns: PgColumn[];
   onDelete?: string;
 }
 
 interface TableMeta {
-  name: string;
   table: PgTable;
   columns: PgColumn[];
   foreignKeys: ForeignKeyMeta[];
@@ -105,6 +86,15 @@ function isBlockingOnDelete(onDelete: string | undefined): boolean {
   return onDelete === undefined || onDelete === 'no action' || onDelete === 'restrict';
 }
 
+/**
+ * Blocking and cascading edges both order a child before its parent. SET NULL
+ * and SET DEFAULT edges are deliberately excluded: they do not block deletion,
+ * and the schema contains cycles through those actions.
+ */
+function isOrderingOnDelete(onDelete: string | undefined): boolean {
+  return isBlockingOnDelete(onDelete) || onDelete === 'cascade';
+}
+
 let cachedTableMetas: Map<string, TableMeta> | null = null;
 
 function discoverTableMetas(): Map<string, TableMeta> {
@@ -116,14 +106,11 @@ function discoverTableMetas(): Map<string, TableMeta> {
     const foreignKeys: ForeignKeyMeta[] = config.foreignKeys.map((fk) => {
       const reference = fk.reference();
       return {
-        fkColumns: reference.columns as PgColumn[],
         parentTable: getTableConfig(reference.foreignTable).name,
-        parentColumns: reference.foreignColumns as PgColumn[],
         onDelete: fk.onDelete,
       };
     });
     metas.set(config.name, {
-      name: config.name,
       table: value,
       columns: config.columns as PgColumn[],
       foreignKeys,
@@ -191,42 +178,11 @@ export function classifyPostgresTables(): TableClassificationResult {
   };
 }
 
-function requireSingleColumn(columns: PgColumn[], context: string): PgColumn {
-  if (columns.length !== 1) {
-    throw new Error(
-      `Tenant deletion manifest cannot handle composite foreign key (${context}); expected a single column`
-    );
-  }
-  return columns[0];
-}
-
-function buildParentLink(
-  meta: TableMeta,
-  direct: Set<string>,
-  scoped: Set<string>
-): TenantParentLink {
-  // Prefer a foreign key to a directly-scoped parent for the shortest predicate,
-  // falling back to any scoped (transitive) parent.
-  const candidate =
-    meta.foreignKeys.find((fk) => direct.has(fk.parentTable)) ??
-    meta.foreignKeys.find((fk) => scoped.has(fk.parentTable));
-  if (!candidate) {
-    throw new Error(`Transitive table ${meta.name} has no foreign key to a scoped table`);
-  }
-  return {
-    fkColumn: requireSingleColumn(candidate.fkColumns, `${meta.name} -> ${candidate.parentTable}`),
-    parentTable: candidate.parentTable,
-    parentPkColumn: requireSingleColumn(
-      candidate.parentColumns,
-      `${candidate.parentTable} referenced by ${meta.name}`
-    ),
-  };
-}
-
 /**
- * Order manifest tables children-first so that, for every blocking foreign key,
- * the referencing table is deleted before the table it references. Implemented
- * as a Kahn topological sort; deterministic via name-sorted tie-breaking.
+ * Order manifest tables children-first so that, for every blocking or cascading
+ * foreign key, the referencing table is deleted before the table it references.
+ * Implemented as a Kahn topological sort; deterministic via name-sorted
+ * tie-breaking.
  */
 function orderChildrenFirst(
   entries: TenantDeletionTable[],
@@ -243,11 +199,11 @@ function orderChildrenFirst(
     const meta = metas.get(entry.name);
     if (!meta) continue;
     for (const fk of meta.foreignKeys) {
-      if (!isBlockingOnDelete(fk.onDelete)) continue;
+      if (!isOrderingOnDelete(fk.onDelete)) continue;
       const parent = fk.parentTable;
       if (parent === entry.name) {
         throw new Error(
-          `Self-referential blocking foreign key on ${entry.name}; tenant deletion order cannot be derived`
+          `Self-referential blocking or cascading foreign key on ${entry.name}; tenant deletion order cannot be derived`
         );
       }
       if (!inManifest.has(parent)) continue;
@@ -279,7 +235,7 @@ function orderChildrenFirst(
 
   if (order.length !== entries.length) {
     throw new Error(
-      'Cycle among blocking tenant foreign keys; cannot derive a safe deletion order'
+      'Cycle among blocking or cascading tenant foreign keys; cannot derive a safe deletion order'
     );
   }
   return order;
@@ -288,9 +244,10 @@ function orderChildrenFirst(
 let cachedManifest: TenantDeletionTable[] | null = null;
 
 /**
- * Build the ordered tenant-deletion manifest: every direct- and
- * transitively-scoped table, ordered so children are deleted before parents.
- * The result is memoized because the schema is static at runtime.
+ * Build the ordered tenant-deletion manifest: every directly-scoped table,
+ * ordered so children are deleted before parents. Transitively-scoped tables
+ * are detected above and rejected until deletion can verify them safely. The
+ * result is memoized because the schema is static at runtime.
  */
 export function buildTenantDeletionManifest(): TenantDeletionTable[] {
   if (cachedManifest) return cachedManifest;
@@ -324,9 +281,6 @@ export function buildTenantDeletionManifest(): TenantDeletionTable[] {
     );
   }
 
-  const directSet = new Set<string>(direct);
-  const scoped = new Set<string>([...direct, ...transitive]);
-
   const entries: TenantDeletionTable[] = [];
   for (const name of direct) {
     const meta = metas.get(name);
@@ -335,60 +289,36 @@ export function buildTenantDeletionManifest(): TenantDeletionTable[] {
     if (!tenantColumn) continue;
     entries.push({ name, table: meta.table, scope: 'direct', tenantColumn });
   }
-  for (const name of transitive) {
-    const meta = metas.get(name);
-    if (!meta) continue;
-    entries.push({
-      name,
-      table: meta.table,
-      scope: 'transitive',
-      parentLink: buildParentLink(meta, directSet, scoped),
-    });
+
+  if (entries.length === 0) {
+    throw new Error(
+      'Tenant deletion manifest is empty; refusing to certify an empty deletion plan'
+    );
   }
 
   cachedManifest = orderChildrenFirst(entries, metas);
   return cachedManifest;
 }
 
-/** Index a manifest by table name (used when resolving transitive predicates). */
+/** Index a manifest by table name. */
 export function indexManifest(manifest: TenantDeletionTable[]): Map<string, TenantDeletionTable> {
   return new Map(manifest.map((entry) => [entry.name, entry]));
 }
 
 /**
  * Build the boolean condition that scopes a table's rows to a single tenant.
- * Direct tables use `tenant_id = $1`; transitive tables recurse into a subquery
- * that resolves down to a scoped ancestor. The `queryBuilder` is used only to
- * construct subqueries and carries no database connection, so this function is
- * pure and can be rendered/asserted without a live database.
+ *
+ * The unused compatibility parameters can be removed with the executor call
+ * sites; deletion entries themselves are direct-only.
  */
 export function buildTenantScopeCondition(
-  queryBuilder: QueryBuilder,
+  _queryBuilder: QueryBuilder,
   entry: TenantDeletionTable,
   tenantId: string,
-  byName: Map<string, TenantDeletionTable>
+  _byName: Map<string, TenantDeletionTable>
 ): SQL {
-  if (entry.scope === 'direct') {
-    if (!entry.tenantColumn) {
-      throw new Error(`Direct tenant table ${entry.name} is missing its tenant column`);
-    }
-    return eq(entry.tenantColumn, tenantId);
+  if (!entry.tenantColumn) {
+    throw new Error(`Direct tenant table ${entry.name} is missing its tenant column`);
   }
-
-  const link = entry.parentLink;
-  if (!link) {
-    throw new Error(`Transitive tenant table ${entry.name} is missing its parent link`);
-  }
-  const parent = byName.get(link.parentTable);
-  if (!parent) {
-    throw new Error(
-      `Transitive tenant table ${entry.name} references unknown parent ${link.parentTable}`
-    );
-  }
-  const parentCondition = buildTenantScopeCondition(queryBuilder, parent, tenantId, byName);
-  const subquery = queryBuilder
-    .select({ pk: link.parentPkColumn })
-    .from(parent.table)
-    .where(parentCondition);
-  return inArray(link.fkColumn, subquery);
+  return eq(entry.tenantColumn, tenantId);
 }

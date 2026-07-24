@@ -74,38 +74,12 @@ describe('buildTenantScopeCondition', () => {
     scope: 'direct',
     tenantColumn: column(pg.sessions, 'tenant_id'),
   };
-  // Synthetic transitive entry (tasks scoped via its session_id FK to sessions)
-  // exercises the recursive subquery predicate without needing such a table to
-  // actually exist in the schema.
-  const transitiveEntry: TenantDeletionTable = {
-    name: 'tasks',
-    table: pg.tasks,
-    scope: 'transitive',
-    parentLink: {
-      fkColumn: column(pg.tasks, 'session_id'),
-      parentTable: 'sessions',
-      parentPkColumn: column(pg.sessions, 'session_id'),
-    },
-  };
-  const byName = new Map<string, TenantDeletionTable>([
-    ['sessions', directEntry],
-    ['tasks', transitiveEntry],
-  ]);
+  const byName = new Map<string, TenantDeletionTable>([['sessions', directEntry]]);
 
   it('scopes a direct table with tenant_id = $1', () => {
     const { sql, params } = dialect.sqlToQuery(
       buildTenantScopeCondition(queryBuilder, directEntry, 'acme', byName)
     );
-    expect(sql).toContain('"sessions"."tenant_id" =');
-    expect(params).toEqual(['acme']);
-  });
-
-  it('scopes a transitive table via a subquery down to a scoped ancestor', () => {
-    const { sql, params } = dialect.sqlToQuery(
-      buildTenantScopeCondition(queryBuilder, transitiveEntry, 'acme', byName)
-    );
-    expect(sql).toContain('"tasks"."session_id" in (select');
-    expect(sql).toContain('from "sessions"');
     expect(sql).toContain('"sessions"."tenant_id" =');
     expect(params).toEqual(['acme']);
   });
