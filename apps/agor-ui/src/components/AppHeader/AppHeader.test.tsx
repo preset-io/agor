@@ -17,6 +17,10 @@ vi.mock('../../contexts/ConnectionContext', () => ({
   useConnectionDisabled: () => false,
 }));
 
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({ themeMode: 'dark', setThemeMode: vi.fn() }),
+}));
+
 vi.mock('../BoardSwitcher', () => ({
   BoardSwitcher: () => <div data-testid="board-switcher" />,
 }));
@@ -35,55 +39,31 @@ vi.mock('../GlobalUserMenu', () => ({
 vi.mock('../MarkdownRenderer', () => ({
   MarkdownRenderer: () => <div data-testid="markdown-renderer" />,
 }));
-vi.mock('../ThemeSwitcher', () => ({
-  ThemeSwitcher: () => <div data-testid="theme-switcher" />,
-}));
 vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
 }));
 
-function renderHeader() {
+function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader />
+      <AppHeader {...props} />
     </MemoryRouter>
   );
 }
 
-describe('AppHeader Knowledge link', () => {
+describe('AppHeader settings dropdown', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
   });
 
-  it('renders a basename-aware href for modified clicks and new tabs', () => {
+  it('navigates to Knowledge via SPA navigation from the dropdown', async () => {
     renderHeader();
 
-    expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
-      'href',
-      '/ui/knowledge'
-    );
-  });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
-  it('uses SPA navigation and prevents default for plain left clicks', () => {
-    renderHeader();
+    const knowledgeItem = await screen.findByText('Knowledge');
+    fireEvent.click(knowledgeItem);
 
-    const eventWasNotCancelled = fireEvent.click(screen.getByRole('link', { name: 'Knowledge' }));
-
-    expect(eventWasNotCancelled).toBe(false);
     expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/knowledge');
-  });
-
-  it('lets modified clicks fall through to the browser', () => {
-    renderHeader();
-
-    const knowledgeLink = screen.getByRole('link', { name: 'Knowledge' });
-    // Remove the href after locating the link so jsdom does not attempt real navigation.
-    // This still exercises the click handler's modified-click behavior.
-    knowledgeLink.removeAttribute('href');
-
-    const eventWasNotCancelled = fireEvent.click(knowledgeLink, { metaKey: true });
-
-    expect(eventWasNotCancelled).toBe(true);
-    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
