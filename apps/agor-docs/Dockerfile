@@ -14,7 +14,15 @@ WORKDIR /app
 # (the workspace lock lives at repo root), so we accept --no-frozen-lockfile
 # for this dev-only image.
 COPY package.json ./
-RUN pnpm install --no-frozen-lockfile
+# Two lockfile-less install fixups, image-side only (the monorepo root owns
+# the real workspace file):
+# - nextra 4.6.1 breaks against zod 4.4.x ("expected nonoptional" 500s on
+#   every page); the root lockfile pins 4.1.12, so mirror that here.
+# - pnpm 11 hard-fails on unapproved dependency build scripts (esbuild,
+#   sharp), and 11.13 ignores the onlyBuiltDependencies allowlist in this
+#   standalone layout — approve all builds for this dev-only image.
+RUN printf 'overrides:\n  "zod@^4": 4.1.12\n' > pnpm-workspace.yaml \
+  && pnpm install --no-frozen-lockfile --config.dangerouslyAllowAllBuilds=true
 
 # Source is normally bind-mounted via docker-compose for hot reload; this COPY
 # is a fallback so the image is usable standalone (e.g. `docker run`).
@@ -22,4 +30,4 @@ COPY . .
 
 EXPOSE 3001
 
-CMD ["pnpm", "exec", "next", "dev", "-H", "0.0.0.0", "-p", "3001"]
+CMD ["node_modules/.bin/next", "dev", "-H", "0.0.0.0", "-p", "3001"]

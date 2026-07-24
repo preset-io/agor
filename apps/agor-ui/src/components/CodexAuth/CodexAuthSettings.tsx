@@ -4,8 +4,9 @@ import type {
   AgorClient,
   AuthCheckResult,
 } from '@agor-live/client';
-import { Alert, Button, Segmented, Space, Typography, theme } from 'antd';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Alert, Button, Popconfirm, Segmented, Space, Typography, theme } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
 import { CodexImportAuthJson } from './CodexImportAuthJson';
@@ -67,6 +68,8 @@ export function CodexAuthSettings({
   const [view, setView] = useState<CodexMethodView>(() => viewForMethod(authMethod, 'chatgpt'));
   const [probe, setProbe] = useState<AuthCheckResult | null>(null);
   const [probing, setProbing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // Keep the visible sub-pane in step with the persisted method (e.g. a
   // successful device/import flips it to subscription), while preserving which
@@ -75,53 +78,37 @@ export function CodexAuthSettings({
     setView((prev) => viewForMethod(authMethod, prev));
   }, [authMethod]);
 
-  // A transport failure is NOT proof of a missing login — leave the prior
-  // verdict untouched on error so the pane never flashes a false "not
-  // connected" state (mirrors App.handleCheckAuth's fail-safe contract).
-  // A monotonic generation guards against overlapping probes (a method switch
-  // mid-recheck): only the latest request commits its verdict or clears the
-  // spinner, so an older response can't land last and mislabel the banner.
-  const probeGenRef = useRef(0);
-  // Bump the generation synchronously when the client OR the effective method
-  // changes (and on unmount), before any in-flight probe can resolve, and clear
-  // the prior verdict. Two reasons a stale verdict must not survive a change:
-  //  - client swap: an old identity's probe still owns the current generation
-  //    in the window before the next probe starts (and if the replacement
-  //    client is null, runProbe returns before incrementing, so the stale
-  //    request would never be invalidated).
+  // Invalidate an in-flight probe — and clear the prior verdict — whenever the
+  // client OR the effective method changes (and on unmount). Two reasons a
+  // stale verdict must not survive a change:
+  //  - client swap: an old identity's probe must not land its verdict over the
+  //    replacement's, nor call setState after teardown.
   //  - method flip: a verdict captured under the PREVIOUS method must not be
   //    re-interpreted by the banner under the new one — e.g. a rejected api-key
   //    probe becoming a false "Login not found" after a ChatGPT sign-in flips
   //    the method to subscription (and persisting there if the re-probe then
   //    fails, since transport failures keep the last verdict). Clearing to null
   //    means the banner shows nothing until a verdict for the NEW method lands.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: client/authMethod are the change triggers; the body invalidates rather than reading them.
-  useLayoutEffect(() => {
-    probeGenRef.current++;
+  const { run } = useIdentityGuardedAsync([client, authMethod], () => {
     setProbe(null);
     setProbing(false);
-    // Invalidate on unmount from the layout cleanup (synchronous, during the
-    // commit) — a passive cleanup can be deferred past unmount, letting a
-    // settled probe commit its verdict/spinner after teardown.
-    return () => {
-      probeGenRef.current++;
-    };
-  }, [client, authMethod]);
+  });
   const runProbe = useCallback(async () => {
     if (!client) return;
-    const gen = ++probeGenRef.current;
     setProbing(true);
     try {
-      const result = (await client
-        .service('check-auth')
-        .create({ tool: 'codex' })) as AuthCheckResult;
-      if (probeGenRef.current === gen) setProbe(result);
+      const result = await run(
+        () => client.service('check-auth').create({ tool: 'codex' }) as Promise<AuthCheckResult>
+      );
+      setProbe(result);
     } catch {
-      // Unknown — keep the last verdict.
+      // A transport failure is NOT proof of a missing login — keep the last
+      // verdict so the pane never flashes a false "not connected" state
+      // (mirrors App.handleCheckAuth's fail-safe contract).
     } finally {
-      if (probeGenRef.current === gen) setProbing(false);
+      setProbing(false);
     }
-  }, [client]);
+  }, [client, run]);
 
   // Re-probe when the persisted method changes: the daemon checks whichever
   // credential the server's active method points at, so a verdict captured for
@@ -136,6 +123,28 @@ export function CodexAuthSettings({
   const handleAuthenticated = useCallback(() => {
     void runProbe();
   }, [runProbe]);
+
+  // Remove the Codex ChatGPT login from this server (delete-only, no token
+  // revocation). The daemon deletes the auth.json and clears the stored method —
+  // which arrives as a user patch that flips authMethod to the api_key default,
+  // so the pane re-syncs to the disconnected state and re-probes on its own (no
+  // local state to reset here).
+  const handleRemoveLogin = useCallback(async () => {
+    if (!client) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await client.service('codex-auth/logout').create({});
+    } catch (err) {
+      setRemoveError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Could not remove the Codex login — try again.'
+      );
+    } finally {
+      setRemoving(false);
+    }
+  }, [client]);
 
   // Selecting a method is a pure view switch — it never persists the auth
   // method. Persisting on selection is destructive in BOTH directions: choosing
@@ -225,18 +234,57 @@ export function CodexAuthSettings({
         Personal credentials are encrypted at rest and injected only into the agent runtime.
       </Text>
 
-      {connectionBanner && (
+      {(connectionBanner || authMethod === 'subscription') && (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           {connectionBanner}
-          <Button
-            type="link"
-            size="small"
-            loading={probing}
-            onClick={() => void runProbe()}
-            style={{ paddingInline: 0 }}
-          >
-            Recheck connection
-          </Button>
+          <Space size="middle" wrap>
+            <Button
+              type="link"
+              size="small"
+              loading={probing}
+              onClick={() => void runProbe()}
+              style={{ paddingInline: 0 }}
+            >
+              Recheck connection
+            </Button>
+            {/* Removal applies only to a ChatGPT login; API keys use ApiKeyFields' Clear. */}
+            {authMethod === 'subscription' && (
+              <Popconfirm
+                title="Remove Codex login?"
+                description={
+                  <div style={{ maxWidth: 340 }}>
+                    Signs Codex out on this server only — your other devices stay signed in. In
+                    shared-identity setups this is one login for the whole server, so removing it
+                    disconnects Codex for everyone on it. To revoke this login everywhere, use
+                    ChatGPT's security settings or run <Text code>codex logout</Text> on a machine
+                    where you're signed in.
+                  </div>
+                }
+                okText="Remove"
+                okButtonProps={{ danger: true, loading: removing }}
+                cancelText="Keep login"
+                onConfirm={handleRemoveLogin}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  danger
+                  loading={removing}
+                  style={{ paddingInline: 0 }}
+                >
+                  Remove login
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+          {removeError && (
+            <Alert
+              type="error"
+              showIcon
+              message={removeError}
+              style={{ fontSize: token.fontSizeSM }}
+            />
+          )}
         </Space>
       )}
 

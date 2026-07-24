@@ -76,6 +76,28 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  it('shows a pointer only when the environment label links to a running app', () => {
+    const { rerender } = render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://example.test',
+            environment_instance: { status: 'running' },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link')).toHaveStyle({ cursor: 'pointer' });
+
+    rerender(<EnvironmentPill {...defaultProps} />);
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
+  });
+
   it('can hide only the destructive nuke action while preserving other controls', () => {
     render(<EnvironmentPill {...defaultProps} showNukeEnvironment={false} />);
 

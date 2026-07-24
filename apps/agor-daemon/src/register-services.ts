@@ -79,6 +79,7 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
+import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
@@ -575,6 +576,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app
     .service('/codex-auth/device')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+
+  // Removes the caller's Codex login — deletes their auth.json as the right Unix
+  // identity and clears the stored codex auth method (emitting `patched` so the
+  // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
+  // grant, so other machines stay signed in.
+  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
+  app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)

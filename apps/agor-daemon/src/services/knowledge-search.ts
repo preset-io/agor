@@ -2,15 +2,15 @@
  * Knowledge search service
  */
 
-import { getBaseUrl, loadConfig } from '@agor/core/config';
+import { getBaseUrl } from '@agor/core/config';
 import {
-  AppVariableRepository,
   executeRaw,
   isPostgresDatabase,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
   type KnowledgeSearchQuery,
   KnowledgeSearchRepository,
+  KnowledgeSemanticSettingsRepository,
   sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -26,10 +26,7 @@ import {
 import { getKnowledgeUrl } from '@agor/core/utils/url';
 import {
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
   embeddingToPgvector,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
   OpenAIEmbeddingProvider,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
 } from '../knowledge/embeddings.js';
@@ -45,14 +42,14 @@ export class KnowledgeSearchService {
   private repo: KnowledgeSearchRepository;
   private documents: KnowledgeDocumentRepository;
   private namespaces: KnowledgeNamespaceRepository;
-  private variables: AppVariableRepository;
+  private semanticSettings: KnowledgeSemanticSettingsRepository;
   private embeddingProvider = new OpenAIEmbeddingProvider();
 
   constructor(private db: TenantScopeAwareDatabase) {
     this.repo = new KnowledgeSearchRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
-    this.variables = new AppVariableRepository(db);
+    this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
   }
 
   private async canRead(
@@ -155,26 +152,22 @@ export class KnowledgeSearchService {
         setup_hint: pgvector.setupHint,
       });
     }
-    const config = await loadConfig();
-    const semantic = config.knowledge?.semantic_search ?? {};
-    if (semantic.enabled !== true) {
+    const semantic = await this.semanticSettings.findPolicy();
+    if (!semantic.enabled) {
       throw new BadRequest(
         'Semantic Knowledge search is disabled. Enable it in Knowledge settings.'
       );
     }
-    const provider = semantic.provider ?? 'openai';
+    const provider = semantic.provider;
     if (provider !== 'openai') throw new BadRequest('Only OpenAI embeddings are implemented');
-    const apiKey = await this.variables.getPlain(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
-    );
+    const apiKey = await this.semanticSettings.getApiKey();
     if (!apiKey) throw new BadRequest('Knowledge embedding API key is not configured');
 
-    const model = semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL;
+    const model = semantic.model;
     if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(model)) {
       throw new BadRequest(`Unsupported OpenAI embedding model: ${model}`);
     }
-    const dimensions = semantic.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS;
+    const dimensions = semantic.dimensions;
     if (dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) {
       throw new BadRequest(
         'Only 1536-dimensional OpenAI embeddings are supported by the V1 vector table'

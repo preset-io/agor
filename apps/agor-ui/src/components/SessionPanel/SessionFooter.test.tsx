@@ -5,7 +5,7 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +53,7 @@ const baseProps = {
   sessionMcpServerIds: [] as string[],
   unauthedMcpServers: [],
   mcpServerById: new Map(),
+  userAuthenticatedMcpServerIds: new Set<string>(),
   isRunning: false,
   isStopping: false,
   stopRequestInFlight: false,
@@ -199,6 +200,33 @@ describe('SessionFooter', () => {
     const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
+  });
+
+  it('opens session settings from the final footer overflow action', async () => {
+    const onOpenSessionSettings = vi.fn();
+    render(<SessionFooter {...baseProps} onOpenSessionSettings={onOpenSessionSettings} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    const settingsButton = await screen.findByRole('button', { name: 'Session settings' });
+    const overflowButtons = within(overflowOptions).getAllByRole('button');
+
+    expect(overflowButtons[overflowButtons.length - 1]).toBe(settingsButton);
+    fireEvent.click(settingsButton);
+    expect(onOpenSessionSettings).toHaveBeenCalledWith('test-session-123');
+  });
+
+  it('does not expose session settings from the MCP control', async () => {
+    render(<SessionFooter {...baseProps} onOpenSessionSettings={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByTitle(/No MCP servers attached/));
+
+    expect(await screen.findByText('Session MCP servers')).toBeInTheDocument();
+    expect(screen.queryByText('Open session settings')).not.toBeInTheDocument();
   });
 });
 

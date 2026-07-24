@@ -241,6 +241,16 @@ export interface CodexAuthImportResult {
 }
 
 /**
+ * Result of removing a Codex login via the daemon's `/codex-auth/logout`
+ * endpoint. Delete-only and Agor-scoped: it removes the login from THIS server
+ * (deletes auth.json + clears the stored method) and does NOT revoke the OAuth
+ * tokens — the account stays signed in on other machines.
+ */
+export interface CodexAuthLogoutResult {
+  status: 'removed';
+}
+
+/**
  * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
  * `/codex-auth/device` endpoints.
  * - `idle`: no attempt exists for this user.

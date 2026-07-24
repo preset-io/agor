@@ -30,6 +30,7 @@ import type {
   KnowledgeNamespace,
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
+  KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
@@ -266,6 +267,33 @@ export type AgenticToolPresetsService = AgorService<
   never,
   PatchAgenticToolPreset
 >;
+
+/** Singleton workspace Knowledge semantic-search settings endpoint. */
+export interface KnowledgeSettingsService {
+  find(params?: Params): Promise<KnowledgeSemanticSettingsPublic>;
+  create(
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+  patch(
+    id: null,
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+}
+
+/** Singleton workspace Knowledge indexing status endpoint. */
+export interface KnowledgeIndexingStatusService {
+  find(params?: Params): Promise<KnowledgeIndexingStatus>;
+}
+
+/** Workspace-wide Knowledge reindex command endpoint. */
+export interface KnowledgeReindexService {
+  create(
+    data?: Record<string, never>,
+    params?: Params
+  ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
+}
 
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
@@ -597,6 +625,9 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'kb/settings'): KnowledgeSettingsService;
+  service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
+  service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 

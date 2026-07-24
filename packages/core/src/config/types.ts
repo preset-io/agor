@@ -55,8 +55,8 @@ export interface AgorDaemonSettings {
   /**
    * Browser-reachable base URL for daemon endpoints.
    *
-   * Used for OAuth callbacks, artifact API grants, and proxy URLs. It is also
-   * the fallback origin for browser UI links when ui.base_url is not set.
+   * Used for OAuth callbacks and artifact API grants. It is also the fallback
+   * origin for browser UI links when ui.base_url is not set.
    *
    * Defaults to `http://localhost:{port}` in development.
    * Should be set to your public domain in production (e.g., https://agor.example.com).
@@ -929,42 +929,6 @@ export interface AgorTeammateSettings {
 }
 
 /**
- * Per-vendor HTTP proxy configuration.
- *
- * Mounts a thin pass-through proxy at `/proxies/<vendor>/...` that forwards
- * bytes to `upstream/...`. Designed to let Sandpack artifacts call third-party
- * REST APIs that don't return CORS headers (Shortcut, Linear, Jira, etc.).
- *
- * Hard rules:
- *  - Pass-through bytes only — no transformation, no caching, no auth injection.
- *  - Read-only by default — `allowed_methods` defaults to `['GET']`.
- *  - Off by default — when no `proxies:` block is configured, the route is
- *    not mounted at all.
- */
-export interface AgorProxyConfig {
-  /**
-   * Bare scheme+host of the upstream API (no path prefix).
-   *
-   * Convention: `https://api.app.shortcut.com`, NOT
-   * `https://api.app.shortcut.com/api/v3`. The caller specifies the path
-   * tail. Must be `https://` — `http://` upstreams are rejected at startup.
-   */
-  upstream: string;
-
-  /** Optional human-readable label, surfaced in MCP discovery and docs. */
-  description?: string;
-
-  /** Optional link to the upstream's developer documentation. */
-  docs_url?: string;
-
-  /**
-   * HTTP methods the proxy will accept for this vendor. Defaults to `['GET']`
-   * (read-only-by-default rule). Operators opt into writes per vendor.
-   */
-  allowed_methods?: Array<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'>;
-}
-
-/**
  * Knowledge Base semantic search settings. Secrets are stored separately in the
  * encrypted app_variables table; this config only carries non-secret defaults.
  */
@@ -1045,21 +1009,8 @@ export interface AgorConfig {
   /** Public open-source telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
-  /** Knowledge Base semantic search settings. */
-  knowledge?: AgorKnowledgeSettings;
-
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
-
-  /**
-   * HTTP proxy passthroughs for third-party APIs that don't return CORS
-   * headers (Shortcut, Linear, Jira, etc.). Keyed by vendor slug used in
-   * the route path: `/proxies/<vendor>/...`.
-   *
-   * Off by default: omit this block to disable the feature entirely.
-   * See `apps/agor-docs/pages/guide/api-proxies.mdx`.
-   */
-  proxies?: Record<string, AgorProxyConfig>;
 }
 
 /**
@@ -1075,5 +1026,4 @@ export type ConfigKey =
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
-  | `telemetry.${keyof AgorTelemetrySettings}`
-  | `knowledge.${keyof AgorKnowledgeSettings}`;
+  | `telemetry.${keyof AgorTelemetrySettings}`;
