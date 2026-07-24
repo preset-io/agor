@@ -24,6 +24,7 @@
 
 import { theme } from 'antd';
 import { lazy, Suspense } from 'react';
+import { ErrorBoundary } from '../ErrorBoundary';
 import type { ThemedSyntaxHighlighterProps } from './ThemedSyntaxHighlighter.inner';
 
 export type { ThemedSyntaxHighlighterProps };
@@ -59,7 +60,9 @@ const PlainCodeFallback: React.FC<ThemedSyntaxHighlighterProps> = ({
 };
 
 export const ThemedSyntaxHighlighter: React.FC<ThemedSyntaxHighlighterProps> = (props) => (
-  <Suspense fallback={<PlainCodeFallback {...props} />}>
-    <ThemedSyntaxHighlighterInner {...props} />
-  </Suspense>
+  <ErrorBoundary fallbackRender={() => <PlainCodeFallback {...props} />}>
+    <Suspense fallback={<PlainCodeFallback {...props} />}>
+      <ThemedSyntaxHighlighterInner {...props} />
+    </Suspense>
+  </ErrorBoundary>
 );
