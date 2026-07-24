@@ -17,7 +17,8 @@ const projection = {
   original_content_bytes: 1_000_000,
   persisted_content_bytes: 800_000,
 };
-const notice = 'Result truncated for transcript storage; showing 781.3 KB of 976.6 KB.';
+const notice =
+  'Transcript storage retained 781.3 KB of 976.6 KB; the agent received the complete result.';
 const genericToolUse: ToolUse = { id: 'tool-1', name: 'UnknownTool', input: {} };
 const editToolUse: ToolUse = {
   id: 'tool-1',
@@ -114,16 +115,16 @@ describe('transcript projection notice', () => {
     const generic = render(
       <ToolUseRenderer toolUse={genericToolUse} toolResult={completeResult} />
     );
-    expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
     generic.unmount();
 
     const custom = render(<ToolUseRenderer toolUse={editToolUse} toolResult={completeResult} />);
-    expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
     custom.unmount();
 
     const standalone = message([completeResult]);
     const messageBlock = render(<MessageBlock message={standalone} />);
-    expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
     messageBlock.unmount();
 
     render(
@@ -145,7 +146,7 @@ describe('transcript projection notice', () => {
       />
     );
 
-    expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
   });
 
   it('derives terminal tool state from a failed task without a pending spinner', () => {

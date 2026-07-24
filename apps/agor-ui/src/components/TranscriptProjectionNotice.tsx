@@ -40,9 +40,9 @@ export function TranscriptProjectionNotice({
     >
       <WarningOutlined aria-hidden />
       <span>
-        Result truncated for transcript storage; showing{' '}
-        {formatTranscriptBytes(projection.persisted_content_bytes)} of{' '}
-        {formatTranscriptBytes(projection.original_content_bytes)}.
+        Transcript storage retained {formatTranscriptBytes(projection.persisted_content_bytes)} of{' '}
+        {formatTranscriptBytes(projection.original_content_bytes)}; the agent received the complete
+        result.
       </span>
     </div>
   );
