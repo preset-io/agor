@@ -577,9 +577,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     .service('/codex-auth/device')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
 
-  // Removes the caller's Codex login — best-effort revokes the OAuth tokens,
-  // deletes their auth.json as the right Unix identity, and clears the stored
-  // codex auth method (emitting `patched` so the UI re-probes to disconnected).
+  // Removes the caller's Codex login — deletes their auth.json as the right Unix
+  // identity and clears the stored codex auth method (emitting `patched` so the
+  // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
+  // grant, so other machines stay signed in.
   app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
