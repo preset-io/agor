@@ -50,6 +50,9 @@ export * from './repositories';
 export * from './schema';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
+// Tenant deletion (permanent, audited, idempotent per-tenant erasure)
+export * from './tenant-deletion';
+export * from './tenant-deletion-manifest';
 export * from './tenant-scope';
 export * from './tenant-unit-of-work';
 // User utilities
