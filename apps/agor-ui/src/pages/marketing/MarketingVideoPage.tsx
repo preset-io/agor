@@ -486,11 +486,7 @@ export const MarketingVideoPage = () => {
               staticActiveUsers={demoActiveUsers}
               connected={true}
               connecting={false}
-              currentBoardName={demoBoard.name}
-              currentBoardIcon={demoBoard.icon}
-              unreadCommentsCount={1}
               eventStreamEnabled={true}
-              hasUserMentions={true}
               currentBoardId={demoBoardId}
             />
             <main className="marketing-video-canvas">
