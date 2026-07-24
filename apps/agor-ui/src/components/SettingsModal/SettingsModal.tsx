@@ -314,6 +314,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         label: 'Admin',
         type: 'group' as const,
         children: [
+          {
+            key: 'users',
+            label: 'Users',
+            icon: <TeamOutlined />,
+          },
           ...(isAdmin
             ? [
                 {
@@ -328,11 +333,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 },
               ]
             : []),
-          {
-            key: 'users',
-            label: 'Users',
-            icon: <TeamOutlined />,
-          },
         ],
       },
       {
