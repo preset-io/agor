@@ -7,10 +7,10 @@
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
-import { brandMarkHref } from '../../branding/brand';
 import { buildLaunchInitUrl } from '../../utils/launchInitUrl';
 import { isDarkTheme } from '../../utils/theme';
 import { BrandLogo } from '../BrandLogo';
+import { BrandMark } from '../BrandMark';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
 import { GradientBackdrop } from '../GradientBackdrop/GradientBackdrop';
 
@@ -85,21 +85,7 @@ export function LoginPage({
         {/* Header */}
         <Space orientation="vertical" size="large" style={{ width: '100%', marginBottom: 24 }}>
           <div style={{ textAlign: 'center' }}>
-            <img
-              src={brandMarkHref()}
-              alt=""
-              width={72}
-              height={72}
-              style={{
-                width: 72,
-                height: 72,
-                marginBottom: 16,
-                objectFit: 'contain',
-                borderRadius: '50%',
-                display: 'block',
-                margin: '0 auto 16px',
-              }}
-            />
+            <BrandMark size={72} style={{ margin: '0 auto 16px' }} />
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
               <BrandLogo level={1} />
             </div>

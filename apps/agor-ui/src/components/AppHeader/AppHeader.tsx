@@ -10,13 +10,13 @@ import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } f
 import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
-import { brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
+import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -185,19 +185,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             cursor: 'pointer',
           }}
         >
-          <img
-            src={brandMarkHref()}
-            alt=""
-            width={50}
-            height={50}
-            style={{
-              width: 50,
-              height: 50,
-              borderRadius: '50%',
-              objectFit: 'contain',
-              display: 'block',
-            }}
-          />
+          <BrandMark size={50} />
           <BrandLogo level={3} style={{ marginTop: -6 }} />
         </button>
         {instanceLabel &&

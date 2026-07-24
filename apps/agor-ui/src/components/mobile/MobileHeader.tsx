@@ -1,7 +1,7 @@
 import type { User } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
-import { brandMarkHref } from '../../branding/brand';
+import { BrandMark } from '../BrandMark';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 const { Header } = Layout;
@@ -38,21 +38,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       }}
     >
       <Space size={8} align="center" style={{ flex: 1 }}>
-        {showLogo && (
-          <img
-            src={brandMarkHref()}
-            alt=""
-            width={32}
-            height={32}
-            style={{
-              width: 32,
-              height: 32, // Smaller for mobile
-              borderRadius: '50%',
-              objectFit: 'contain',
-              display: 'block',
-            }}
-          />
-        )}
+        {showLogo && <BrandMark size={32} />}
 
         <Title
           level={5}

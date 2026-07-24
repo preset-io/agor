@@ -7,8 +7,11 @@ describe.each([
   ['light', theme.defaultAlgorithm],
   ['dark', theme.darkAlgorithm],
 ] as const)('BrandLogo in the %s theme', (_name, algorithm) => {
-  it('uses the resolved semantic primary ramp without a pale fixed endpoint', () => {
+  it('moves along the primary hue toward theme-appropriate contrast', () => {
     const token = theme.getDesignToken({ algorithm });
+    const dark = _name === 'dark';
+    const midpoint = `oklch(from ${token.colorPrimary} calc(l ${dark ? '+ 0.18' : '- 0.10'}) c h)`;
+    const endpoint = `oklch(from ${token.colorPrimary} calc(l ${dark ? '+ 0.30' : '- 0.18'}) c h)`;
     const { getByRole } = render(
       <ConfigProvider theme={{ algorithm }}>
         <BrandLogo />
@@ -16,7 +19,8 @@ describe.each([
     );
 
     expect(getByRole('heading', { name: 'agor' })).toHaveStyle({
-      background: `linear-gradient(90deg, ${token.colorPrimaryActive} 0%, ${token.colorPrimary} 52%, ${token.colorPrimaryHover} 100%)`,
+      backgroundImage: `linear-gradient(90deg, ${token.colorPrimary} 0%, ${midpoint} 50%, ${endpoint} 100%)`,
+      backgroundClip: 'text',
     });
   });
 });

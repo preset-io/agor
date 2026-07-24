@@ -1,5 +1,6 @@
 import { theme } from 'antd';
 import type { CSSProperties } from 'react';
+import { isDarkTheme } from '../../utils/theme';
 
 export interface BrandLogoProps {
   /**
@@ -34,11 +35,17 @@ const LEVEL_SIZES = {
  */
 export const BrandLogo: React.FC<BrandLogoProps> = ({ level = 3, style, className }) => {
   const { token } = theme.useToken();
+  const dark = isDarkTheme(token);
+  const midpoint = `oklch(from ${token.colorPrimary} calc(l ${dark ? '+ 0.18' : '- 0.10'}) c h)`;
+  const endpoint = `oklch(from ${token.colorPrimary} calc(l ${dark ? '+ 0.30' : '- 0.18'}) c h)`;
   const gradientStyle: CSSProperties = {
     margin: 0,
     fontSize: LEVEL_SIZES[level],
     lineHeight: 1.35,
-    background: `linear-gradient(90deg, ${token.colorPrimaryActive} 0%, ${token.colorPrimary} 52%, ${token.colorPrimaryHover} 100%)`,
+    // Use backgroundImage rather than the `background` shorthand: React may
+    // apply shorthand properties after backgroundClip and reset `text` back
+    // to `border-box`, rendering this as a solid rectangle.
+    backgroundImage: `linear-gradient(90deg, ${token.colorPrimary} 0%, ${midpoint} 50%, ${endpoint} 100%)`,
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     backgroundClip: 'text',
