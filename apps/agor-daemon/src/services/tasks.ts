@@ -43,6 +43,7 @@ import type {
 import {
   ExecutorPulseKind,
   isTerminalTaskStatus,
+  MessageRole,
   SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
   type TaskMetadata,
@@ -465,6 +466,33 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) as Promise<Session>;
   }
 
+  private async injectStoppedCallbackNotice(task: Task, params?: TaskParams): Promise<void> {
+    if (task.status !== TaskStatus.STOPPED || task.metadata?.is_agor_callback !== true) return;
+
+    try {
+      await appendSystemMessage({
+        app: this.app,
+        db: this.db,
+        sessionId: task.session_id,
+        taskId: task.task_id,
+        content:
+          '⚠️ This orchestration callback was stopped. Its child result is retained, but follow-on routing may be incomplete.',
+        role: MessageRole.ASSISTANT,
+        metadata: {
+          is_meta: true,
+          is_agor_callback: true,
+          source: 'agor',
+        },
+        params: { ...(params ?? {}), provider: undefined },
+      });
+    } catch (error) {
+      console.warn(
+        `[TasksService] Failed to surface stopped callback ${shortId(task.task_id)}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
@@ -495,6 +523,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const suppressBtwCleanup = params?.suppressBtwCleanup === true;
       const isStop = status === TaskStatus.STOPPED;
       const isTermination = task.termination_request !== undefined;
+
+      await this.injectStoppedCallbackNotice(task, params);
 
       if (latestTaskId && latestTaskId !== task.task_id && !isTermination) {
         console.log(

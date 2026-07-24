@@ -1,7 +1,12 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { appendSystemMessage } from '../utils/append-system-message.js';
 import { TasksService } from './tasks';
+
+vi.mock('../utils/append-system-message.js', () => ({
+  appendSystemMessage: vi.fn(async () => ({})),
+}));
 
 const childSessionId = '018f0000-0000-7000-8000-000000000101';
 const parentSessionId = '018f0000-0000-7000-8000-000000000102';
@@ -123,12 +128,14 @@ function makeService(
     id: string;
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
+    db: object;
     completionCallbackDispatches: Map<string, Promise<unknown>>;
   };
   service.repository = repository;
   service.taskRepo = { ...repository, createPending };
   service.id = 'task_id';
   service.emit = vi.fn();
+  service.db = {};
   service.completionCallbackDispatches = new Map();
   service.app = {
     service: vi.fn((name: string) => {
@@ -158,6 +165,58 @@ function makeService(
 }
 
 describe('TasksService completion callbacks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('surfaces an interrupted callback task exactly once when it is stopped', async () => {
+    const { service } = makeService({
+      task: {
+        session_id: parentSessionId,
+        metadata: { is_agor_callback: true, source: 'agor' },
+      },
+      parentSession: {
+        status: 'running',
+        tasks: [taskId],
+        ready_for_prompt: false,
+      },
+    });
+
+    await service.patch(taskId, {
+      status: TaskStatus.STOPPED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+    await service.patch(taskId, {
+      status: TaskStatus.STOPPED,
+      completed_at: '2026-01-01T00:00:06.000Z',
+    });
+
+    expect(appendSystemMessage).toHaveBeenCalledTimes(1);
+    expect(appendSystemMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: parentSessionId,
+        taskId,
+        content: expect.stringContaining('follow-on routing may be incomplete'),
+        metadata: expect.objectContaining({
+          is_meta: true,
+          is_agor_callback: true,
+          source: 'agor',
+        }),
+      })
+    );
+  });
+
+  it('does not surface a callback interruption for an ordinary stopped task', async () => {
+    const { service } = makeService();
+
+    await service.patch(taskId, {
+      status: TaskStatus.STOPPED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    expect(appendSystemMessage).not.toHaveBeenCalled();
+  });
+
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
     const { service, createPending } = makeService();
