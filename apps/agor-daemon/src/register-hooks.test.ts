@@ -30,6 +30,7 @@ import {
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
+  TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
@@ -527,5 +528,28 @@ describe('canReceiveMcpTokenForSession', () => {
         callerRole: 'member',
       })
     ).toBe(false);
+  });
+});
+
+describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
+  // Regression: the codex-auth endpoints do network/process work after a short
+  // tenant DB read, then call getCurrentTenantId() to open their own units of
+  // work — so they must carry ambient tenant identity via the identity-only
+  // around hook. codex-auth/logout was missing here, so `Remove login` ran with
+  // no active tenant scope and threw "Missing active tenant context for Codex
+  // auth logout" — the delete-only logout never worked end-to-end.
+  it.each([
+    'codex-auth/device',
+    'codex-auth/import',
+    'codex-auth/logout',
+  ])('grants ambient tenant identity to %s', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+  });
+
+  it('keeps the codex-auth endpoints grouped together', () => {
+    const codexPaths = TENANT_IDENTITY_ONLY_SERVICE_PATHS.filter((path) =>
+      path.startsWith('codex-auth/')
+    );
+    expect(codexPaths).toEqual(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout']);
   });
 });
