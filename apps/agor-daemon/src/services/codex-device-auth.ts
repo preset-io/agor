@@ -49,7 +49,7 @@ import {
   type AppLike,
   persistVerifiedCodexAuth,
   resolveCodexUnixIdentity,
-} from './codex-auth-import.js';
+} from './codex-auth-shared.js';
 
 const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
 /** Codex CLI's public OAuth client id (codex-rs/login/src/auth/manager.rs). */

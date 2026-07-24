@@ -41,7 +41,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteCodexAuthFile } from '../utils/codex-auth-file.js';
-import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-import.js';
+import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
 interface UsersServiceLike {
