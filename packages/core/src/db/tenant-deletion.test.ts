@@ -1,5 +1,5 @@
 import { getTableConfig, type PgColumn, PgDialect, QueryBuilder } from 'drizzle-orm/pg-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as pg from './schema.postgres';
 import {
   assertNoRemainingTenantRows,
@@ -32,6 +32,13 @@ describe('assertValidTenantId', () => {
     ['%', 'wildcard percent'],
     ['ten%ant', 'embedded percent'],
     ['ten*ant', 'embedded star'],
+    ['line\nbreak', 'newline'],
+    ['carriage\rreturn', 'carriage return'],
+    ['tab\tcharacter', 'tab'],
+    ['nul\u0000character', 'NUL'],
+    ['escape\u001bcharacter', 'terminal escape'],
+    ['delete\u007fcharacter', 'DEL'],
+    ['bidi\u202eoverride', 'Unicode formatting control'],
   ])('rejects %s (%s)', (id) => {
     expect(() => assertValidTenantId(id)).toThrow(InvalidTenantIdError);
   });
@@ -39,6 +46,20 @@ describe('assertValidTenantId', () => {
   it('rejects non-string input', () => {
     expect(() => assertValidTenantId(undefined)).toThrow(InvalidTenantIdError);
     expect(() => assertValidTenantId(123 as unknown)).toThrow(InvalidTenantIdError);
+  });
+});
+
+describe('empty tenant deletion manifest', () => {
+  it('fails closed when schema discovery produces no entries', async () => {
+    vi.resetModules();
+    vi.doMock('./schema.postgres', () => ({}));
+    try {
+      const { buildTenantDeletionManifest } = await import('./tenant-deletion-manifest');
+      expect(() => buildTenantDeletionManifest()).toThrow(/manifest is empty/i);
+    } finally {
+      vi.doUnmock('./schema.postgres');
+      vi.resetModules();
+    }
   });
 });
 

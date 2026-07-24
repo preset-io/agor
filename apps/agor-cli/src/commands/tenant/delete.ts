@@ -34,6 +34,11 @@ function redactSecrets(message: string): string {
   return message.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, '$1[redacted]@');
 }
 
+/** Convert any thrown value to a secret-safe stderr message. */
+export function tenantDeleteErrorMessage(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error));
+}
+
 /** Wait until every stderr write queued so far has completed. */
 function flushStderr(): Promise<void> {
   return new Promise((resolve) => {
@@ -112,7 +117,7 @@ export default class TenantDelete extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      const message = tenantDeleteErrorMessage(error);
       this.logToStderr(chalk.red(`✗ ${message}`));
       if (error instanceof TenantDeletionVerificationError) {
         this.logToStderr(chalk.red(`  Remaining tables: ${error.tables.join(', ')}`));

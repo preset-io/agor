@@ -18,9 +18,14 @@ function allPostgresTableNames(): string[] {
   return names.sort();
 }
 
-/** Blocking `ON DELETE` actions constrain deletion order (see manifest module). */
-function isBlocking(onDelete: string | undefined): boolean {
-  return onDelete === undefined || onDelete === 'no action' || onDelete === 'restrict';
+/** Blocking and cascading actions constrain the defensive deletion order. */
+function isOrderingEdge(onDelete: string | undefined): boolean {
+  return (
+    onDelete === undefined ||
+    onDelete === 'no action' ||
+    onDelete === 'restrict' ||
+    onDelete === 'cascade'
+  );
 }
 
 describe('tenant deletion manifest classification', () => {
@@ -73,7 +78,7 @@ describe('tenant deletion manifest ordering', () => {
     }
   });
 
-  it('orders children before parents for every blocking foreign key', () => {
+  it('orders children before parents for every blocking or cascading foreign key', () => {
     for (const value of Object.values(postgresSchema)) {
       if (!is(value, PgTable)) continue;
       const config = getTableConfig(value);
@@ -81,7 +86,7 @@ describe('tenant deletion manifest ordering', () => {
       const childIndex = orderIndex.get(childName);
       if (childIndex === undefined) continue; // not a tenant-scoped table
       for (const fk of config.foreignKeys) {
-        if (!isBlocking(fk.onDelete)) continue;
+        if (!isOrderingEdge(fk.onDelete)) continue;
         const parentName = getTableConfig(fk.reference().foreignTable).name;
         if (parentName === childName) continue;
         const parentIndex = orderIndex.get(parentName);
