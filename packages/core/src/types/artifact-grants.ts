@@ -12,15 +12,7 @@ export const GRANT_ENV_VAR_NAMES = {
   agor_user_email: 'AGOR_USER_EMAIL',
   agor_artifact_id: 'AGOR_ARTIFACT_ID',
   agor_board_id: 'AGOR_BOARD_ID',
-} as const satisfies Record<keyof Omit<AgorGrants, 'agor_proxies'>, string>;
-
-/**
- * Vendor name → AGOR_PROXY_<VENDOR> env var name.
- * Vendor is uppercased, dashes/spaces normalised to underscores.
- */
-export function proxyGrantEnvName(vendor: string): string {
-  return `AGOR_PROXY_${vendor.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
-}
+} as const satisfies Record<keyof AgorGrants, string>;
 
 /**
  * Grants the daemon will inject without prompting for consent. These are
@@ -37,4 +29,4 @@ export const NO_CONSENT_GRANT_KEYS = ['agor_artifact_id', 'agor_board_id'] as co
  */
 export const ARTIFACT_SCOPED_ONLY_GRANT_KEYS = ['agor_token'] as const;
 
-export type ConsentRelevantGrantKey = Exclude<keyof AgorGrants, 'agor_proxies'>;
+export type ConsentRelevantGrantKey = keyof AgorGrants;

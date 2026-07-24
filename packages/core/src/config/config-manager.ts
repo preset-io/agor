@@ -280,7 +280,6 @@ function validateConfig(config: AgorConfig): void {
     'telemetry',
     'onboarding',
     'multi_tenancy',
-    'proxies',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -479,9 +478,6 @@ function validateConfig(config: AgorConfig): void {
     'auth_claim',
     'trusted_header',
   ]);
-  for (const [name, proxy] of Object.entries(config.proxies ?? {})) {
-    only(proxy, `proxies.${name}`, ['upstream', 'description', 'docs_url', 'allowed_methods']);
-  }
   if (unknownPaths.length > 0) {
     throw new Error(
       `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`

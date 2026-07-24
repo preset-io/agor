@@ -10,7 +10,7 @@ The original branch goal (build a "deserialize artifact → folder" MCP tool) wa
 
 1. **One canonical format.** Files map + DB metadata. No `sandpack.json` sidecar, no `dependencies` column-as-truth, no Agor-only manifest fields scattered across the file tree.
 2. **Standard JS env-var idiom.** `required_env_vars` declared on the artifact; daemon injects a per-viewer `.env` at render time. Apps read `import.meta.env.VITE_*` (Vite) or `process.env.*` (other bundlers). No more Handlebars-as-JS.
-3. **Explicit daemon capabilities.** `agor_grants` metadata enumerates what the daemon will inject (JWT, API URL, proxy URLs, etc.). Each grant maps to a well-known env var name. Auditable and stricter consent treatment for high-power grants.
+3. **Explicit daemon capabilities.** `agor_grants` metadata enumerates what the daemon will inject (JWT, API URL, and artifact metadata). Each grant maps to a well-known env var name. Auditable and stricter consent treatment for high-power grants.
 4. **TOFU consent for non-self artifacts.** The daemon won't inject secrets or capabilities into someone else's artifact without an explicit trust grant from the viewing user.
 5. **One-shot agent review** as a consent-time aide.
 6. **Clean port to CodeSandbox** as a side benefit — once artifacts are standard JS projects, "Open in CodeSandbox" is trivial.
@@ -40,7 +40,7 @@ The self-hosted Sandpack bundler had two flawed versions and the original VPN-dr
 ### 3. `agor.config.js` Handlebars rendering
 
 - Remove the per-fetch Handlebars rendering layer (`services/artifacts.ts:46-62, 664, 897-987`).
-- Anything that today relied on `{{user.env.X}}`, `{{agor.token}}`, `{{agor.apiUrl}}`, `{{agor.proxies.X.url}}`, `{{user.email}}`, `{{artifact.id}}`, `{{artifact.boardId}}` migrates to the new `required_env_vars` + `agor_grants` system below.
+- Anything that today relied on `{{user.env.X}}`, `{{agor.token}}`, `{{agor.apiUrl}}`, `{{user.email}}`, `{{artifact.id}}`, `{{artifact.boardId}}` migrates to the new `required_env_vars` + `agor_grants` system below.
 
 ### 4. `dependencies` and `entry` columns as the source of truth
 
@@ -110,14 +110,13 @@ The `vue3` / `svelte` / `solid` / `vue` / `angular` mappings were inherited from
 
 Discrete capability flags for daemon-supplied values. Each grant maps to a fixed env var name (with the template-appropriate prefix applied):
 
-| Grant key                               | Env var name                                | Behavior                                             |
-| --------------------------------------- | ------------------------------------------- | ---------------------------------------------------- |
-| `agor_token: true`                      | `AGOR_TOKEN`                                | Mint a 15-min daemon JWT for the **viewer**, inject. |
-| `agor_api_url: true`                    | `AGOR_API_URL`                              | Inject the daemon's base URL.                        |
-| `agor_proxies: ["openai", "anthropic"]` | `AGOR_PROXY_OPENAI`, `AGOR_PROXY_ANTHROPIC` | Inject proxy URLs for listed vendors.                |
-| `agor_user_email: true`                 | `AGOR_USER_EMAIL`                           | Inject viewer's email.                               |
-| `agor_artifact_id: true`                | `AGOR_ARTIFACT_ID`                          | Inject this artifact's ID.                           |
-| `agor_board_id: true`                   | `AGOR_BOARD_ID`                             | Inject the artifact's board ID.                      |
+| Grant key                | Env var name       | Behavior                                             |
+| ------------------------ | ------------------ | ---------------------------------------------------- |
+| `agor_token: true`       | `AGOR_TOKEN`       | Mint a 15-min daemon JWT for the **viewer**, inject. |
+| `agor_api_url: true`     | `AGOR_API_URL`     | Inject the daemon's base URL.                        |
+| `agor_user_email: true`  | `AGOR_USER_EMAIL`  | Inject viewer's email.                               |
+| `agor_artifact_id: true` | `AGOR_ARTIFACT_ID` | Inject this artifact's ID.                           |
+| `agor_board_id: true`    | `AGOR_BOARD_ID`    | Inject the artifact's board ID.                      |
 
 Conventional name + explicit declaration. Grants are part of the consent surface; consent rules below treat `agor_token` stricter than informational ones (`agor_artifact_id`, `agor_board_id`) which need no consent at all.
 
@@ -174,7 +173,7 @@ New section under user settings. Lists every active grant: scope, env vars cover
 - **Artifact card header**: badge indicating consent state — "Trusted (this artifact)", "Trusted (Alice)", "Untrusted — render without secrets to view," etc.
 - **Render without secrets** is a valid, common state. The card shows a small "🔓 trust to inject secrets" affordance that opens the consent modal.
 - **`required_env_vars` editor** in the artifact settings panel: chip list of var names with add/remove. Hint text reminds about the prefix-per-template convention.
-- **`agor_grants` editor** in the artifact settings panel: checkboxes for each grant key, multi-select for `agor_proxies`. Author-only (other viewers can't edit).
+- **`agor_grants` editor** in the artifact settings panel: checkboxes for each grant key. Author-only (other viewers can't edit).
 
 ---
 

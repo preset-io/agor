@@ -181,14 +181,11 @@ describe('detectLegacyFormat', () => {
         '/agor.config.js': [
           'export const t = "{{ agor.token }}";',
           'export const u = "{{ agor.apiUrl }}";',
-          'export const p = "{{ agor.proxies.openai.url }}";',
         ].join('\n'),
       },
     });
     expect(result.detected_grants).toContain('agor_token');
     expect(result.detected_grants).toContain('agor_api_url');
-    expect(result.detected_grants.some((g) => g.startsWith('agor_proxies:openai'))).toBe(true);
-    expect(result.upgrade_instructions).toMatch(/agor_proxies/);
   });
 
   it('returns is_legacy=false for a clean new-format artifact', () => {

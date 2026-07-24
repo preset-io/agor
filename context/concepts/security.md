@@ -117,9 +117,7 @@ artifact. Quick triage:
 
 Agor still keeps Sandpack on the non-credentialed side of CORS: browser cookies
 must not be sent to the multi-tenant hosted bundler. Artifacts should use
-explicit Bearer-token grants or configured `/proxies/<vendor>` URLs. The proxy
-feature solves third-party API CORS gaps (for example Shortcut), but it does not
-by itself bypass Chrome's hosted-Sandpack → local/private Agor URL protection.
+explicit Bearer-token grants rather than browser cookies.
 
 ---
 

@@ -85,11 +85,6 @@ export interface AgorGrants {
   agor_artifact_id?: boolean;
   /** Inject the artifact's board ID as AGOR_BOARD_ID (informational, no consent). */
   agor_board_id?: boolean;
-  /**
-   * Inject proxy URLs for listed vendors as AGOR_PROXY_<VENDOR> env vars.
-   * e.g. `["openai", "anthropic"]` → AGOR_PROXY_OPENAI, AGOR_PROXY_ANTHROPIC.
-   */
-  agor_proxies?: string[];
 }
 
 /**

@@ -32,7 +32,7 @@ import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/ty
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { ArtifactsService } from './artifacts';
+import { ArtifactsService, sanitizeAgorGrants } from './artifacts';
 
 /**
  * Build a fake Feathers app whose services all no-op on emit. The service
@@ -729,6 +729,15 @@ describe('ArtifactsService.land', () => {
 });
 
 describe('ArtifactsService.getPayload trust + .env synthesis', () => {
+  it('discards the removed proxy grant from untyped input', () => {
+    expect(
+      sanitizeAgorGrants({
+        agor_token: true,
+        agor_proxies: ['shortcut'],
+      })
+    ).toEqual({ agor_token: true });
+  });
+
   // Seed an artifact whose `created_by` is the author. The payload's trust
   // resolution should treat the author as 'self' and skip consent.
   dbTest('viewer-is-author → trust_state=self, .env injected', async ({ db }) => {
@@ -764,7 +773,7 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
       name: 'scoped-token-render',
       template: 'react',
       files: { '/index.js': 'console.log("token")' },
-      agor_grants: { agor_token: true, agor_proxies: ['shortcut'] },
+      agor_grants: { agor_token: true },
       public: true,
       created_by: 'user-owner',
     });
@@ -782,7 +791,7 @@ describe('ArtifactsService.getPayload trust + .env synthesis', () => {
     expect(decoded.type).toBe('artifact');
     expect(decoded.purpose).toBe('artifact-runtime');
     expect(decoded.artifact_id).toBe(created.artifact_id);
-    expect(decoded.proxies).toEqual(['shortcut']);
+    expect(decoded.proxies).toBeUndefined();
   });
 
   dbTest(

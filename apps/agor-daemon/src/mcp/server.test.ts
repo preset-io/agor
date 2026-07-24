@@ -98,6 +98,25 @@ describe('MCP tool registry', () => {
       }
     }
   });
+
+  it('does not advertise configured proxy tools, domains, or artifact grants', () => {
+    const registry = buildRegistry();
+
+    expect(registry.listDomains().map(({ domain }) => domain)).not.toContain('proxies');
+    expect(
+      registry
+        .search(undefined, { maxResults: Number.MAX_SAFE_INTEGER })
+        .some(({ name }) => name.startsWith('agor_proxies_'))
+    ).toBe(false);
+
+    const publishSchema = registry.get('agor_artifacts_publish')?.inputSchema;
+    const agorGrants = (
+      publishSchema?.properties as
+        | Record<string, { properties?: Record<string, unknown> }>
+        | undefined
+    )?.agorGrants;
+    expect(agorGrants?.properties).not.toHaveProperty('agor_proxies');
+  });
 });
 
 /**

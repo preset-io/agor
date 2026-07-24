@@ -18,13 +18,7 @@ import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
-import {
-  getBaseUrl,
-  loadConfig,
-  PAGINATION,
-  resolveProxies,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { getBaseUrl, loadConfig, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
   ArtifactRepository,
   ArtifactTrustGrantRepository,
@@ -61,7 +55,6 @@ import {
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
   NO_CONSENT_GRANT_KEYS,
-  proxyGrantEnvName,
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
@@ -1017,7 +1010,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       template: artifact.template,
       sandpack_config: artifact.sandpack_config ?? {},
       required_env_vars: artifact.required_env_vars ?? [],
-      agor_grants: artifact.agor_grants ?? {},
+      agor_grants: sanitizeAgorGrants(artifact.agor_grants),
       agor_runtime: artifact.agor_runtime ?? {},
     };
     const sidecarJson = `${JSON.stringify(sidecar, null, 2)}\n`;
@@ -1052,7 +1045,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const filesOut: Record<string, string> = { ...artifact.files };
     const requiredEnvVars = artifact.required_env_vars ?? [];
-    const grants = artifact.agor_grants ?? {};
+    const grants = sanitizeAgorGrants(artifact.agor_grants);
     const consentRelevantGrants = pickConsentRelevantGrants(grants);
 
     // "Needs consent" gates the trust prompt. "Has injectables" gates the
@@ -1233,8 +1226,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    *     empty string otherwise.
    *   - No-consent grants (artifact_id, board_id): always emitted with their
    *     real values regardless of trust state — they are pure metadata.
-   *   - Consent-gated grants (agor_token, agor_api_url, agor_user_email,
-   *     agor_proxies): emitted with real values when trusted, empty when not.
+   *   - Consent-gated grants (agor_token, agor_api_url, agor_user_email):
+   *     emitted with real values when trusted, empty when not.
    *     Empty keys are still emitted so the artifact can detect "untrusted"
    *     rather than crash on a ReferenceError.
    */
@@ -1295,11 +1288,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           lines.push(`${prefix}${fixedEnvName}=`);
         }
       }
-      if (consentGated.agor_proxies) {
-        for (const vendor of consentGated.agor_proxies) {
-          lines.push(`${prefix}${proxyGrantEnvName(vendor)}=`);
-        }
-      }
     }
 
     return lines.length > 0 ? `${lines.join('\n')}\n` : null;
@@ -1318,7 +1306,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const { grants, artifact, userId } = input;
 
     if (grants.agor_token && userId) {
-      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId, artifact, grants);
+      out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId, artifact);
     }
     if (grants.agor_api_url) {
       out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getBaseUrl();
@@ -1339,30 +1327,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       out[GRANT_ENV_VAR_NAMES.agor_board_id] = artifact.board_id;
     }
 
-    if (grants.agor_proxies && grants.agor_proxies.length > 0) {
-      try {
-        const config = await loadConfig();
-        const proxies = resolveProxies(config);
-        const baseUrl = await getBaseUrl();
-        const origin = new URL(baseUrl).origin;
-        const configuredVendors = new Set(proxies.map((p) => p.vendor));
-        for (const vendor of grants.agor_proxies) {
-          if (!configuredVendors.has(vendor)) continue;
-          out[proxyGrantEnvName(vendor)] = `${origin}/proxies/${vendor}`;
-        }
-      } catch (err) {
-        console.warn('[artifacts] failed to resolve proxy URLs for grant injection:', err);
-      }
-    }
-
     return out;
   }
 
-  private async mintViewerJwt(
-    userId: string,
-    artifact: Artifact,
-    grants: AgorGrants
-  ): Promise<string> {
+  private async mintViewerJwt(userId: string, artifact: Artifact): Promise<string> {
     const authConfig = this.app.get('authentication') as { secret?: string } | undefined;
     const jwtSecret = authConfig?.secret;
     if (!jwtSecret) {
@@ -1376,7 +1344,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         purpose: 'artifact-runtime',
         artifact_id: artifact.artifact_id,
         board_id: artifact.board_id,
-        proxies: grants.agor_proxies ?? [],
       },
       jwtSecret,
       '15m',
@@ -1510,8 +1477,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * and POST it. Returns the resulting sandbox URL on success.
    *
    * Caveats inherent to the eject path (caller should surface to users):
-   *  - daemon-supplied capabilities (AGOR_TOKEN / AGOR_PROXY_*) are stripped
-   *    server-side anyway and won't function on CodeSandbox;
+   *  - daemon-supplied capabilities such as AGOR_TOKEN are stripped server-side
+   *    anyway and won't function on CodeSandbox;
    *  - the synthesized `.env` and round-trip sidecars are dropped — they're
    *    Agor-only artifacts;
    *  - CodeSandbox's define endpoint is sometimes Cloudflare-throttled.
@@ -1895,7 +1862,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         entry: artifact.entry ?? null,
         sandpack_config: artifact.sandpack_config ?? null,
         required_env_vars: artifact.required_env_vars ?? [],
-        agor_grants: artifact.agor_grants ?? {},
+        agor_grants: sanitizeAgorGrants(artifact.agor_grants),
         agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
       }),
     });
@@ -2531,13 +2498,6 @@ export function sanitizeAgorGrants(input: unknown): AgorGrants {
   for (const key of Object.keys(GRANT_ENV_VAR_NAMES)) {
     if (src[key] === true) (out as Record<string, unknown>)[key] = true;
   }
-  if (Array.isArray(src.agor_proxies)) {
-    out.agor_proxies = (src.agor_proxies as unknown[])
-      .filter((v): v is string => typeof v === 'string' && v.length > 0)
-      .map((v) => v.toLowerCase().replace(/[^a-z0-9-_]+/g, ''))
-      // Re-filter post-normalisation: strings like "!!!" reduce to "" above.
-      .filter((v) => v.length > 0);
-  }
   return out;
 }
 
@@ -2589,12 +2549,6 @@ function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {
   for (const key of Object.keys(GRANT_ENV_VAR_NAMES) as (keyof typeof GRANT_ENV_VAR_NAMES)[]) {
     if ((needs as Record<string, unknown>)[key] && !(has as Record<string, unknown>)[key]) {
       return false;
-    }
-  }
-  if (needs.agor_proxies && needs.agor_proxies.length > 0) {
-    const hasSet = new Set(has.agor_proxies ?? []);
-    for (const v of needs.agor_proxies) {
-      if (!hasSet.has(v)) return false;
     }
   }
   return true;

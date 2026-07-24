@@ -251,6 +251,26 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
   });
 
+  it('rejects the removed proxies config surface as an unknown top-level key', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ proxies: { shortcut: { upstream: 'https://api.app.shortcut.com' } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: proxies/);
+  });
+
+  it('continues to accept daemon.trust_proxy_hops for deployment reverse proxies', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ daemon: { trust_proxy_hops: 2 } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
+  });
+
   it('reports every unrecognized nested key with its full path', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

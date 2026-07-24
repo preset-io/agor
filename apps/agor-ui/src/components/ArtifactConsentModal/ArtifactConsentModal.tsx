@@ -255,18 +255,7 @@ export function ArtifactConsentModal({
 function renderGrantBadges(grants: AgorGrants): ReactNode[] {
   const out: ReactNode[] = [];
   for (const [key, value] of Object.entries(grants)) {
-    if (key === 'agor_proxies') {
-      const list = (value as string[] | undefined) ?? [];
-      for (const vendor of list) {
-        out.push(
-          <Tag key={`proxy:${vendor}`} color="purple">
-            agor_proxies:{vendor}
-          </Tag>
-        );
-      }
-      continue;
-    }
-    if (!value) continue;
+    if (value !== true) continue;
     const isHighPower = HIGH_POWER_GRANT_KEYS.has(key as keyof AgorGrants);
     out.push(
       <Tag
