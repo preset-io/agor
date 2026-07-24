@@ -17,7 +17,7 @@ import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
-import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
+import { buildConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
@@ -210,6 +210,16 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const inlineAgentConfig = isInline
+        ? buildConfigFromFormValues(selectedAgent as AgenticToolName, {
+            modelConfig: values.modelConfig,
+            effort: values.effort,
+            permissionMode: values.permissionMode,
+            codexSandboxMode: values.codexSandboxMode,
+            codexApprovalPolicy: values.codexApprovalPolicy,
+            codexNetworkAccess: values.codexNetworkAccess,
+          })
+        : undefined;
 
       // Promote the inline config to the user's default when requested. Fire and
       // forget — session creation shouldn't block on the profile patch.
@@ -237,8 +247,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         title: values.title,
         initialPrompt: values.initialPrompt,
         // Daemon's applySessionConfigDefaults hook fills the tool default.
-        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
-        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
+        modelConfig: isInline
+          ? inlineAgentConfig?.modelConfig
+          : (values.modelConfig ?? agentDefaults?.modelConfig),
+        effort: isInline
+          ? undefined
+          : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,

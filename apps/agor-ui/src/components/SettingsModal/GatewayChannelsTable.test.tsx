@@ -47,13 +47,45 @@ vi.mock('../AgentSelectionGrid', () => ({
     </div>
   ),
 }));
-vi.mock('../AgenticToolConfigForm', () => ({
-  AgenticToolConfigForm: () => <div data-testid="agent-config" />,
-}));
-vi.mock('../AgenticToolConfigurationPicker', () => ({
-  INLINE_AGENTIC_CONFIGURATION: '__inline__',
-  AgenticToolConfigurationPicker: () => <div data-testid="agent-config" />,
-}));
+vi.mock('../AgenticToolConfigForm', async () => {
+  const actual = await vi.importActual<typeof import('../AgenticToolConfigForm')>(
+    '../AgenticToolConfigForm'
+  );
+  return {
+    ...actual,
+    AgenticToolConfigForm: () => <div data-testid="agent-config" />,
+  };
+});
+vi.mock('../AgenticToolConfigurationPicker', async () => {
+  const { Form } = await vi.importActual<typeof import('antd')>('antd');
+  const EffortField = ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string | undefined) => void;
+  }) => (
+    <select
+      aria-label="gateway-effort"
+      value={value ?? ''}
+      onChange={(event) => onChange?.(event.target.value || undefined)}
+    >
+      <option value="">Inherited</option>
+      <option value="medium">Medium</option>
+      <option value="xhigh">X-High</option>
+    </select>
+  );
+  return {
+    INLINE_AGENTIC_CONFIGURATION: '__inline__',
+    AgenticToolConfigurationPicker: () => (
+      <div data-testid="agent-config">
+        <Form.Item name="effort" noStyle>
+          <EffortField />
+        </Form.Item>
+      </div>
+    ),
+  };
+});
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -637,6 +669,33 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
       mcp_server_ids: ['mcp-server-1'],
+    });
+  });
+
+  it('rehydrates and persists a Codex reasoning-effort override', async () => {
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { onUpdate });
+    expandPanel('Agent Configuration');
+
+    const effort = screen.getByLabelText('gateway-effort');
+    expect(effort).toHaveValue('medium');
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+      },
     });
   });
 

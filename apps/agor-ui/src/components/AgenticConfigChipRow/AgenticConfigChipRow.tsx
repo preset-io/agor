@@ -7,7 +7,11 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  getDefaultModelForTool,
+  getDefaultPermissionMode,
+} from '@agor-live/client';
 import {
   ApiOutlined,
   ExperimentOutlined,
@@ -61,10 +65,6 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
   max: 'Max',
 };
 
-// The daemon treats an unset effort as "high" (see resolve-session-defaults),
-// so the chip resolves to that effective value rather than showing "default".
-const DEFAULT_EFFORT: EffortLevel = 'high';
-
 const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']);
 
 /**
@@ -99,6 +99,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const { token } = theme.useToken();
   const form = Form.useFormInstance();
   const isClaude = CLAUDE_TOOLS.has(tool);
+  const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[tool];
+  const effortLevels = toolCapabilities.reasoningEffortLevels;
+  const supportsEffort = Boolean(effortLevels?.length);
   const {
     inlineAllowed,
     loading,
@@ -144,7 +147,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const resolved = configForSource(source);
   const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
   const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
-  const resolvedEffort = (isInline ? formEffort : resolved.modelConfig?.effort) ?? DEFAULT_EFFORT;
+  const explicitEffort = isInline ? formEffort : resolved.modelConfig?.effort;
+  const resolvedEffort = explicitEffort ?? toolCapabilities.defaultReasoningEffort;
   const advisorModel = isInline ? formModelConfig?.advisorModel : undefined;
   const mcpCount = formMcp?.length ?? 0;
 
@@ -176,7 +180,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     ensureCustom();
     form.setFieldValue('permissionMode', mode);
   };
-  const onEffortChange = (effort: EffortLevel) => {
+  const onEffortChange = (effort: EffortLevel | undefined) => {
     ensureCustom();
     form.setFieldValue('effort', effort);
   };
@@ -299,10 +303,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           )}
         />
 
-        {isClaude && (
+        {supportsEffort && (
           <EditableChip
             icon={<ExperimentOutlined />}
-            label={`Effort: ${EFFORT_LABELS[resolvedEffort]}`}
+            label={`Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`}
             title="Reasoning effort"
             editable={inlineAllowed}
             managedNote={managedNote}
@@ -311,6 +315,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             renderContent={(close) => (
               <EffortSelector
                 value={resolvedEffort}
+                levels={effortLevels}
+                fallbackValue={toolCapabilities.defaultReasoningEffort}
+                allowInherited={!toolCapabilities.defaultReasoningEffort}
                 onChange={(effort) => {
                   onEffortChange(effort);
                   close();

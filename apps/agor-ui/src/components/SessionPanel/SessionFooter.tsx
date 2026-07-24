@@ -1,4 +1,5 @@
 import type {
+  AgenticToolCapabilities,
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -69,9 +70,9 @@ export interface SessionFooterProps {
   composerAttachmentsPresent?: boolean;
   composerAttachmentUploading?: boolean;
   connectionDisabled: boolean;
-  toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
+  toolCaps?: AgenticToolCapabilities;
   // Settings state
-  effortLevel: EffortLevel;
+  effortLevel?: EffortLevel;
   permissionMode: PermissionMode;
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
@@ -89,7 +90,7 @@ export interface SessionFooterProps {
   onSpawnOpen: () => void;
   onAttachFiles: () => void;
   onUploadOpen: () => void;
-  onEffortChange: (v: EffortLevel) => void;
+  onEffortChange: (v: EffortLevel | undefined) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   // Prompt textarea rendered between the two bars
@@ -281,8 +282,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       </div>
 
-      {/* Effort — only for claude-code */}
-      {session.agentic_tool === 'claude-code' && (
+      {toolCaps?.reasoningEffortLevels && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -309,6 +309,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             <EffortSelector
               value={effortLevel}
               onChange={onEffortChange}
+              levels={toolCaps.reasoningEffortLevels}
+              fallbackValue={toolCaps.defaultReasoningEffort}
+              allowInherited={!toolCaps.defaultReasoningEffort}
               size="small"
               compact
               plain

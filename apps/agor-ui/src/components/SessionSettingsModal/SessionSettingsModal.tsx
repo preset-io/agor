@@ -35,6 +35,7 @@ import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
@@ -132,11 +133,14 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
   }
 
   if (!presetId && values.modelConfig) {
+    const modelConfig = buildModelConfigFromFormValues({
+      modelConfig: values.modelConfig,
+      effort: values.effort,
+    });
     updates.model_config = {
-      ...values.modelConfig,
-      ...(values.effort ? { effort: values.effort } : {}),
+      ...modelConfig,
       updated_at: new Date().toISOString(),
-    };
+    } as NonNullable<Session['model_config']>;
   }
 
   if (!presetId && values.permissionMode) {
