@@ -105,7 +105,7 @@ describe('surface branding declarations', () => {
 });
 
 describe('index.html favicon', () => {
-  it('references the mark with a root-absolute href (Vite rebases to the base)', () => {
+  it('references the backed badge with a root-absolute href (Vite rebases to the base)', () => {
     // vitest runs with cwd at the package root, where index.html lives.
     const html = readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8');
     const iconMatch = html.match(/<link[^>]*rel=["']icon["'][^>]*>/i);
@@ -116,7 +116,7 @@ describe('index.html favicon', () => {
     // Root-absolute only. A relative href (e.g. "logo.svg") 404s on nested
     // SPA deep-links — exactly the Knowledge-surface favicon bug.
     expect(href.startsWith('/')).toBe(true);
-    expect(href.endsWith(BRAND.markFile)).toBe(true);
+    expect(href.endsWith(BRAND.badgeFile)).toBe(true);
     expect(type).toBe('image/svg+xml');
   });
 });

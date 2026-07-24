@@ -1,13 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LOGO_PATH } from '../lib/siteMetadata';
+import { LOGO_MARK_PATH, LOGO_PATH } from '../lib/siteMetadata';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const docsDir = path.resolve(__dirname, '..');
 const repoDir = path.resolve(docsDir, '../..');
 const canonicalLogoPath = path.join(docsDir, 'public', LOGO_PATH);
+const canonicalMarkPath = path.join(docsDir, 'public', LOGO_MARK_PATH);
 const uiLogoPath = path.join(repoDir, 'apps/agor-ui/public/logo.svg');
+const uiMarkPath = path.join(repoDir, 'apps/agor-ui/public/logo-mark.svg');
 const appleTouchIconPath = path.join(docsDir, 'public/apple-touch-icon.png');
 
 const errors: string[] = [];
@@ -16,35 +18,55 @@ function fail(message: string): void {
   errors.push(message);
 }
 
-if (!existsSync(canonicalLogoPath)) {
-  fail(`canonical logo is missing: ${canonicalLogoPath}`);
-} else {
-  const svg = readFileSync(canonicalLogoPath, 'utf8');
+function validateSvg(pathname: string, label: string): string | null {
+  if (!existsSync(pathname)) {
+    fail(`${label} is missing: ${pathname}`);
+    return null;
+  }
+
+  const svg = readFileSync(pathname, 'utf8');
   const rootTag = svg.match(/<svg\b[^>]*>/)?.[0] ?? '';
 
   if (!/\bwidth="734"/.test(rootTag) || !/\bheight="734"/.test(rootTag)) {
-    fail('canonical logo must declare 734 × 734 intrinsic dimensions');
+    fail(`${label} must declare 734 × 734 intrinsic dimensions`);
   }
   if (!/\bviewBox="0 0 734 734"/.test(rootTag)) {
-    fail('canonical logo must retain its square "0 0 734 734" viewBox');
+    fail(`${label} must retain its square "0 0 734 734" viewBox`);
   }
   if (!svg.includes('<title>Agor</title>')) {
-    fail('canonical logo must retain its standalone accessible title');
+    fail(`${label} must retain its standalone accessible title`);
   }
   if (!svg.includes('fill:none')) {
-    fail('canonical logo must retain its transparent outer canvas');
+    fail(`${label} must retain its transparent outer canvas`);
   }
-  if (!svg.includes('rgb(26,32,42)') || !svg.includes('rgb(54,183,175)')) {
-    fail('canonical logo must retain its fixed dark and teal brand fills');
+  if (!svg.includes('rgb(54,183,175)')) {
+    fail(`${label} must retain its fixed teal brand fill`);
   }
   if (svg.includes('currentColor')) {
-    fail('canonical logo must not inherit theme text color');
+    fail(`${label} must not inherit theme text color`);
   }
 
-  if (!existsSync(uiLogoPath)) {
-    fail(`agor-ui deployment copy is missing: ${uiLogoPath}`);
-  } else if (!readFileSync(uiLogoPath).equals(readFileSync(canonicalLogoPath))) {
-    fail('agor-ui public/logo.svg must be byte-identical to the canonical docs logo.svg');
+  return svg;
+}
+
+const badgeSvg = validateSvg(canonicalLogoPath, 'backed logo badge');
+const markSvg = validateSvg(canonicalMarkPath, 'transparent logo mark');
+
+if (badgeSvg && !badgeSvg.includes('rgb(26,32,42)')) {
+  fail('backed logo badge must retain its fixed dark backing circle');
+}
+if (markSvg?.includes('rgb(26,32,42)') || markSvg?.includes('stroke:black')) {
+  fail('transparent logo mark must not contain the dark backing circle or border');
+}
+
+for (const [docsAsset, uiAsset, label] of [
+  [canonicalLogoPath, uiLogoPath, 'logo.svg'],
+  [canonicalMarkPath, uiMarkPath, 'logo-mark.svg'],
+] as const) {
+  if (!existsSync(uiAsset)) {
+    fail(`agor-ui deployment copy is missing: ${uiAsset}`);
+  } else if (existsSync(docsAsset) && !readFileSync(uiAsset).equals(readFileSync(docsAsset))) {
+    fail(`agor-ui public/${label} must be byte-identical to the docs ${label}`);
   }
 }
 
@@ -74,7 +96,6 @@ const retiredAssets = [
   '.github/logo.png',
   '.github/logo_circle.png',
   'apps/agor-docs/public/favicon.png',
-  'apps/agor-docs/public/logo-mark.svg',
   'apps/agor-docs/public/logo.png',
   'apps/agor-ui/public/favicon.png',
 ];
@@ -93,4 +114,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log('Validated the canonical SVG, UI deployment copy, and Apple touch raster.');
+console.log('Validated the SVG mark/badge set, UI deployment copies, and Apple touch raster.');

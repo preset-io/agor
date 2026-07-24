@@ -1,12 +1,15 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: fixed SVG brand fills are the asset regression contract
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BRAND, brandMarkHref, surfaceTitle } from './brand';
+import { BRAND, brandBadgeHref, brandMarkHref, surfaceTitle } from './brand';
 
 describe('brandMarkHref', () => {
   it('prefixes the mark file with the Vite base path', () => {
-    expect(brandMarkHref('/ui/')).toBe('/ui/logo.svg');
-    expect(brandMarkHref('/')).toBe('/logo.svg');
+    expect(brandMarkHref('/ui/')).toBe('/ui/logo-mark.svg');
+    expect(brandMarkHref('/')).toBe('/logo-mark.svg');
+    expect(brandBadgeHref('/ui/')).toBe('/ui/logo.svg');
+    expect(brandBadgeHref('/')).toBe('/logo.svg');
   });
 
   it('returns an absolute (base-rooted) URL, never a bare relative href', () => {
@@ -21,11 +24,22 @@ describe('brandMarkHref', () => {
     expect(brandMarkHref()).toBe(`${import.meta.env.BASE_URL}${BRAND.markFile}`);
   });
 
-  it('keeps the package-local deployment copy identical to the canonical docs SVG', () => {
-    const uiLogo = readFileSync(path.resolve(process.cwd(), 'public/logo.svg'));
-    const canonicalLogo = readFileSync(path.resolve(process.cwd(), '../agor-docs/public/logo.svg'));
+  it.each([
+    'logo.svg',
+    'logo-mark.svg',
+  ])('keeps the package-local %s deployment copy identical to docs', (filename) => {
+    const uiLogo = readFileSync(path.resolve(process.cwd(), 'public', filename));
+    const docsLogo = readFileSync(path.resolve(process.cwd(), '../agor-docs/public', filename));
 
-    expect(uiLogo.equals(canonicalLogo)).toBe(true);
+    expect(uiLogo.equals(docsLogo)).toBe(true);
+  });
+
+  it('keeps the display mark transparent and the badge explicitly backed', () => {
+    const mark = readFileSync(path.resolve(process.cwd(), 'public/logo-mark.svg'), 'utf8');
+    const badge = readFileSync(path.resolve(process.cwd(), 'public/logo.svg'), 'utf8');
+
+    expect(mark).not.toContain('rgb(26,32,42)');
+    expect(badge).toContain('rgb(26,32,42)');
   });
 });
 

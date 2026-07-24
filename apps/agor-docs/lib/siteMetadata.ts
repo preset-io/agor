@@ -10,8 +10,10 @@ const DEFAULT_SITE_URL = 'https://agor.live';
  */
 export const BRAND_NAME = 'agor';
 export const THEME_COLOR = '#2e9a92';
-/** Canonical Agor mark for web rendering, including favicons. */
+/** Backed Agor badge for favicons and other plate-required contexts. */
 export const LOGO_PATH = '/logo.svg';
+/** Transparent Agor mark for normal docs and in-product rendering. */
+export const LOGO_MARK_PATH = '/logo-mark.svg';
 
 export const DEFAULT_TITLE = 'agor – The command center for AI enablement';
 

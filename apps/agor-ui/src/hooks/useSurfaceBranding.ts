@@ -9,7 +9,7 @@
  */
 
 import { useEffect } from 'react';
-import { brandMarkHref } from '../branding/brand';
+import { brandBadgeHref } from '../branding/brand';
 import type { RouteSurfaceDefinition } from '../surfaces/surfaceRegistry';
 
 export function useSurfaceBranding(surface: RouteSurfaceDefinition) {
@@ -18,7 +18,7 @@ export function useSurfaceBranding(surface: RouteSurfaceDefinition) {
 
     const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
     if (link) {
-      link.href = brandMarkHref();
+      link.href = brandBadgeHref();
       link.type = 'image/svg+xml';
     }
     document.title = surface.branding;

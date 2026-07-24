@@ -17,14 +17,16 @@ Open http://localhost:3001
 
 ## Brand assets
 
-`public/logo.svg` is the canonical Agor mark for normal web and in-product
-rendering. It has a square `734 × 734` viewBox, a transparent outer canvas, and
-fixed dark/teal fills so it remains legible in light and dark themes.
+`public/logo-mark.svg` is the transparent Agor mark for normal web and
+in-product rendering. `public/logo.svg` contains the same artwork on a fixed
+dark circular plate for favicons and other small contexts where the mark needs
+a predictable backdrop. Both have explicit `734 × 734` intrinsic dimensions
+and the same square viewBox.
 
-The standalone Vite app keeps a byte-identical deployment copy at
-`../agor-ui/public/logo.svg`; `pnpm validate:brand-assets` guards the two copies
-against drift. Do not add PNG logo/favicon copies for ordinary browser
-rendering.
+The standalone Vite app keeps byte-identical deployment copies of both SVGs in
+`../agor-ui/public/`; `pnpm validate:brand-assets` guards the copies and the
+transparent/backed distinction against drift. Do not add PNG logo/favicon
+copies for ordinary browser rendering.
 
 `public/apple-touch-icon.png` is the only compatibility raster. Apple touch
 icons require PNG output, so regenerate its transparent `180 × 180` render from

@@ -37,7 +37,7 @@ import {
   PRESET_URL,
   presetUtm,
 } from '../lib/links';
-import { getBasePath, LOGO_PATH } from '../lib/siteMetadata';
+import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
@@ -1518,7 +1518,7 @@ export function LandingPage() {
         <div className={styles.footerBrand}>
           {/* Decorative: the adjacent wordmark already names the product. */}
           {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-          <img src={`${basePath}${LOGO_PATH}`} alt="" width="44" height="44" />
+          <img src={`${basePath}${LOGO_MARK_PATH}`} alt="" width="44" height="44" />
           <div>
             <strong>agor</strong>
             <p>The command center for AI enablement.</p>

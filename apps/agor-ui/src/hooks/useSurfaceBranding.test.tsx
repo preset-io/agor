@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { brandMarkHref } from '../branding/brand';
+import { brandBadgeHref } from '../branding/brand';
 import { SURFACE_REGISTRY } from '../surfaces/surfaceRegistry';
 import { useSurfaceBranding } from './useSurfaceBranding';
 
@@ -42,7 +42,7 @@ describe('useSurfaceBranding', () => {
     renderHook(() => useSurfaceBranding(surface));
 
     expect(document.title).toBe(surface.branding);
-    expect(currentIconHref()).toBe(brandMarkHref());
+    expect(currentIconHref()).toBe(brandBadgeHref());
     expect(currentIconType()).toBe('image/svg+xml');
   });
 

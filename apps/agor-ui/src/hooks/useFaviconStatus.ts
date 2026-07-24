@@ -9,7 +9,7 @@
 
 import { theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { brandMarkHref } from '../branding/brand';
+import { brandBadgeHref } from '../branding/brand';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import { makeBoardSessionActivitySelector } from '../store/selectors';
 import { createFaviconWithDot } from '../utils/faviconDot';
@@ -27,7 +27,7 @@ export const getFaviconStatusColors = (readyColor: string) => ({
 });
 
 export function useFaviconStatus(currentBoardId: string | null) {
-  const [baseFaviconUrl] = useState(brandMarkHref());
+  const [baseFaviconUrl] = useState(brandBadgeHref());
   const { token } = theme.useToken();
 
   // Subscribe to the two derived flags rather than the whole session /

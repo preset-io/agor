@@ -1,4 +1,4 @@
-// biome-ignore-all lint/plugin/noHardcodedColorLiteral: explicit Agor wordmark gradient brand asset
+import { theme } from 'antd';
 import type { CSSProperties } from 'react';
 
 export interface BrandLogoProps {
@@ -29,15 +29,16 @@ const LEVEL_SIZES = {
 /**
  * BrandLogo component with gradient text effect
  *
- * Renders "agor" with a teal gradient from brand color to lighter cyan
+ * Renders "agor" with a theme-aware teal gradient
  * Uses a plain element instead of Ant Design Typography to ensure gradient works
  */
 export const BrandLogo: React.FC<BrandLogoProps> = ({ level = 3, style, className }) => {
+  const { token } = theme.useToken();
   const gradientStyle: CSSProperties = {
     margin: 0,
     fontSize: LEVEL_SIZES[level],
     lineHeight: 1.35,
-    background: 'linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%)',
+    background: `linear-gradient(90deg, ${token.colorPrimaryActive} 0%, ${token.colorPrimary} 52%, ${token.colorPrimaryHover} 100%)`,
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     backgroundClip: 'text',
