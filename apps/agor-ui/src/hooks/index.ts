@@ -12,6 +12,7 @@ export * from './useAuth';
 export * from './useAuthConfig';
 export * from './useBoardActions';
 export * from './useConfirmNukeEnvironment';
+export * from './useIdentityGuardedAsync';
 export * from './useInitialLoaderPhase';
 export * from './useLocalStorage';
 export * from './useMessages';

@@ -35,6 +35,9 @@ export const WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION = '__workspace_default__';
 export type AgenticToolDefaultConfigurationReference =
   | typeof USER_DEFAULT_AGENTIC_CONFIGURATION
   | typeof WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+export type AgenticToolConfigurationReference =
+  | AgenticToolPresetID
+  | AgenticToolDefaultConfigurationReference;
 
 export function normalizeAgenticToolDefaultConfigurationReference(
   reference: string

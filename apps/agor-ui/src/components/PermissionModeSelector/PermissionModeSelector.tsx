@@ -8,7 +8,7 @@ import {
   UnlockOutlined,
 } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
-import { Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
+import { Flex, Select, Space, Tooltip, Typography, theme } from 'antd';
 
 interface ModeOption {
   mode: PermissionMode;
@@ -52,42 +52,47 @@ export interface PermissionModeSelectorProps {
   onCodexChange?: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
 }
 
+// Each list is ordered most-oversight → least; the fully-autonomous "bypass"
+// mode is always last and rendered in the warning tone. `label` is the human
+// name shown to users; `mode` is the raw config value surfaced as muted text.
+// Descriptions use the two-part formula: "what runs without asking · best for".
+
 // Claude Code permission modes (Claude Agent SDK)
 const CLAUDE_CODE_MODES: ModeOption[] = [
   {
     mode: 'default',
-    label: 'default',
-    description: 'Prompt for each tool use (most restrictive)',
+    label: 'Manual',
+    description: 'Asks before every tool use · for high-stakes changes',
     icon: <LockOutlined />,
     tone: 'danger',
   },
   {
+    mode: 'plan',
+    label: 'Plan',
+    description: 'Explores and plans, runs nothing · for scoping work first',
+    icon: <ExperimentOutlined />,
+    tone: 'info',
+  },
+  {
     mode: 'acceptEdits',
-    label: 'acceptEdits',
-    description: 'Auto-accept file edits, ask for other tools (recommended)',
+    label: 'Accept edits',
+    description: 'Auto-approves file edits · for code you review in the diff',
     icon: <EditOutlined />,
     tone: 'success',
   },
   {
     mode: 'auto',
-    label: 'auto',
-    description: 'Model classifier approves/denies prompts, asks only when unsure',
+    label: 'Auto',
+    description: 'Approves routine steps, asks when unsure · for trusted work',
     icon: <SafetyOutlined />,
     tone: 'info',
   },
   {
     mode: 'bypassPermissions',
-    label: 'bypassPermissions',
-    description: 'Allow all operations without prompting',
+    label: 'Bypass permissions',
+    description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
-  },
-  {
-    mode: 'plan',
-    label: 'plan',
-    description: 'Generate plan without executing',
-    icon: <ExperimentOutlined />,
-    tone: 'info',
   },
 ];
 
@@ -95,29 +100,29 @@ const CLAUDE_CODE_MODES: ModeOption[] = [
 const CODEX_MODES: ModeOption[] = [
   {
     mode: 'ask',
-    label: 'untrusted',
-    description: 'Only run trusted commands (ls, cat, sed) without approval',
+    label: 'Untrusted',
+    description: 'Only runs trusted read commands · for maximum caution',
     icon: <LockOutlined />,
     tone: 'danger',
   },
   {
     mode: 'auto',
-    label: 'on-request',
-    description: 'Model decides when to ask for approval',
+    label: 'On request',
+    description: 'Asks before risky commands · for trusted everyday work',
     icon: <SafetyOutlined />,
     tone: 'success',
   },
   {
     mode: 'on-failure',
-    label: 'on-failure',
-    description: 'Run all commands, ask only when they fail',
+    label: 'On failure',
+    description: 'Runs commands, asks only when they fail · for fast iteration',
     icon: <EditOutlined />,
     tone: 'warning',
   },
   {
     mode: 'allow-all',
-    label: 'never',
-    description: 'Never ask for approval, failures returned to model',
+    label: 'Never ask',
+    description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
   },
@@ -127,22 +132,22 @@ const CODEX_MODES: ModeOption[] = [
 const GEMINI_MODES: ModeOption[] = [
   {
     mode: 'default',
-    label: 'default',
-    description: 'Prompt for each tool use (most restrictive)',
+    label: 'Manual',
+    description: 'Asks before every tool use · for high-stakes changes',
     icon: <LockOutlined />,
     tone: 'danger',
   },
   {
     mode: 'autoEdit',
-    label: 'autoEdit',
-    description: 'Auto-approve file edits, ask for shell/web tools',
+    label: 'Accept edits',
+    description: 'Auto-approves file edits, asks for shell/web · for reviewed code',
     icon: <EditOutlined />,
     tone: 'success',
   },
   {
     mode: 'yolo',
-    label: 'yolo',
-    description: 'Allow all operations without prompting',
+    label: 'Bypass permissions',
+    description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
   },
@@ -152,22 +157,22 @@ const GEMINI_MODES: ModeOption[] = [
 const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'default',
-    label: 'default',
-    description: 'Proxy all permission requests to Agor UI for approval',
+    label: 'Manual',
+    description: 'Proxies every approval to Agor · for high-stakes changes',
     icon: <LockOutlined />,
     tone: 'danger',
   },
   {
     mode: 'acceptEdits',
-    label: 'acceptEdits',
-    description: 'Auto-approve read/write operations, ask for shell/MCP (recommended)',
+    label: 'Accept edits',
+    description: 'Auto-approves read/write, asks for shell/MCP · for reviewed code',
     icon: <EditOutlined />,
     tone: 'success',
   },
   {
     mode: 'bypassPermissions',
-    label: 'bypassPermissions',
-    description: 'Auto-approve all operations without prompting',
+    label: 'Bypass permissions',
+    description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
   },
@@ -180,7 +185,7 @@ const CURSOR_MODES: ModeOption[] = [
   {
     mode: 'bypassPermissions',
     label: 'Autonomous',
-    description: 'Cursor SDK runs autonomously; Agor cannot intercept permission requests yet',
+    description: "Cursor SDK runs on its own · Agor can't intercept approvals yet",
     icon: <UnlockOutlined />,
     tone: 'warning',
   },
@@ -190,22 +195,22 @@ const CURSOR_MODES: ModeOption[] = [
 const OPENCODE_MODES: ModeOption[] = [
   {
     mode: 'default',
-    label: 'default',
-    description: 'Prompt for approval before each operation',
+    label: 'Manual',
+    description: 'Asks before each operation · for high-stakes changes',
     icon: <LockOutlined />,
     tone: 'danger',
   },
   {
     mode: 'autoEdit',
-    label: 'autoEdit',
-    description: 'Auto-approve all operations (recommended)',
+    label: 'Auto',
+    description: 'Auto-approves all operations · recommended for OpenCode',
     icon: <EditOutlined />,
     tone: 'success',
   },
   {
     mode: 'yolo',
-    label: 'yolo',
-    description: 'Fully bypass all permission checks',
+    label: 'Bypass permissions',
+    description: 'Fully bypasses permission checks · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
   },
@@ -272,6 +277,21 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
   }
 };
 
+/** Human-readable label for a raw permission mode value (for inline summaries). */
+export const getPermissionModeLabel = (
+  tool: PermissionModeSelectorProps['agentic_tool'],
+  mode: PermissionMode
+): string => getModesForTool(tool).find((option) => option.mode === mode)?.label ?? mode;
+
+/** Full option metadata (label/icon/tone) for a mode, for chip-style rendering. */
+export const getPermissionModeMeta = (
+  tool: PermissionModeSelectorProps['agentic_tool'],
+  mode: PermissionMode
+): ModeOption | undefined => getModesForTool(tool).find((option) => option.mode === mode);
+
+export const getPermissionModeColor = (tone: ModeOption['tone'], token: GlobalToken): string =>
+  getModeColor(tone, token);
+
 const getModeColor = (tone: ModeOption['tone'], token: GlobalToken): string => {
   switch (tone) {
     case 'danger':
@@ -311,144 +331,133 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const effectiveCodexSandboxMode = codexSandboxMode ?? codexDefaults.sandboxMode;
   const effectiveCodexApprovalPolicy = codexApprovalPolicy ?? codexDefaults.approvalPolicy;
 
-  // Compact mode: render as Select dropdown(s)
-  if (compact) {
-    // Codex with onCodexChange: render sandbox + approval dropdowns
-    // (used by SessionPanel for inline Codex controls)
-    if (agentic_tool === 'codex' && onCodexChange) {
-      return (
-        <Space size={4} direction={fullWidth ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
-          <Select
-            value={effectiveCodexSandboxMode}
-            onChange={(val) => onCodexChange(val, effectiveCodexApprovalPolicy)}
-            size={size}
-            placeholder="Sandbox"
-            popupMatchSelectWidth={false}
-            style={{
-              minWidth: 70,
-              width: fullWidth ? '100%' : undefined,
-              fontSize: token.fontSizeSM,
-            }}
-            optionLabelProp="label"
-            options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
-              label,
-              value,
-              title: description,
-            }))}
-            optionRender={(option) => (
-              <div style={{ lineHeight: 1.3 }}>
-                <div>{option.label}</div>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {option.data.title}
-                </Typography.Text>
-              </div>
-            )}
-          />
-          <Select
-            value={effectiveCodexApprovalPolicy}
-            onChange={(val) => onCodexChange(effectiveCodexSandboxMode, val)}
-            size={size}
-            placeholder="Approval"
-            popupMatchSelectWidth={false}
-            style={{
-              minWidth: 70,
-              width: fullWidth ? '100%' : undefined,
-              fontSize: token.fontSizeSM,
-            }}
-            optionLabelProp="label"
-            options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
-              label,
-              value,
-              title: description,
-            }))}
-            optionRender={(option) => (
-              <div style={{ lineHeight: 1.3 }}>
-                <div>{option.label}</div>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {option.data.title}
-                </Typography.Text>
-              </div>
-            )}
-          />
-        </Space>
-      );
-    }
-
-    // All other cases: single permission mode dropdown
-    // Collapsed state: icon-only with color. Dropdown: icon + label + description.
-    const currentMode = modes.find((m) => m.mode === effectiveValue);
+  // Codex dual-control (compact only): sandbox + approval dropdowns
+  // (used by SessionPanel for inline Codex controls).
+  if (compact && agentic_tool === 'codex' && onCodexChange) {
     return (
-      <Tooltip
-        title={
-          currentMode ? `${currentMode.label} — ${currentMode.description}` : 'Permission mode'
-        }
-      >
+      <Space size={4} direction={fullWidth ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
         <Select
-          value={effectiveValue}
-          onChange={onChange}
-          style={{ fontSize: token.fontSizeSM, width: fullWidth ? '100%' : undefined }}
+          value={effectiveCodexSandboxMode}
+          onChange={(val) => onCodexChange(val, effectiveCodexApprovalPolicy)}
           size={size}
+          placeholder="Sandbox"
           popupMatchSelectWidth={false}
-          optionLabelProp="label"
-          options={modes.map(({ mode, label, description, icon, tone }) => {
-            const color = getModeColor(tone, token);
-            return {
-              label: plain ? (
-                label
-              ) : iconOnly ? (
-                <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
-              ) : (
-                <Space size={token.marginXXS} style={{ fontSize: token.fontSizeSM }}>
-                  <span style={{ color }}>{icon}</span>
-                  <span>{label}</span>
-                </Space>
-              ),
-              value: mode,
-              title: description,
-              icon,
-              color,
-            };
-          })}
-          optionRender={(option) => {
-            const modeData = modes.find((m) => m.mode === option.value);
-            return (
-              <Space size={6} align="start">
-                {modeData && (
-                  <span style={{ color: getModeColor(modeData.tone, token) }}>{modeData.icon}</span>
-                )}
-                <div style={{ lineHeight: 1.3 }}>
-                  <div>{modeData?.label}</div>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {modeData?.description}
-                  </Typography.Text>
-                </div>
-              </Space>
-            );
+          style={{
+            minWidth: 70,
+            width: fullWidth ? '100%' : undefined,
+            fontSize: token.fontSizeSM,
           }}
+          optionLabelProp="label"
+          options={CODEX_SANDBOX_MODES.map(({ value, label, description }) => ({
+            label,
+            value,
+            title: description,
+          }))}
+          optionRender={(option) => (
+            <div style={{ lineHeight: 1.3 }}>
+              <div>{option.label}</div>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {option.data.title}
+              </Typography.Text>
+            </div>
+          )}
         />
-      </Tooltip>
+        <Select
+          value={effectiveCodexApprovalPolicy}
+          onChange={(val) => onCodexChange(effectiveCodexSandboxMode, val)}
+          size={size}
+          placeholder="Approval"
+          popupMatchSelectWidth={false}
+          style={{
+            minWidth: 70,
+            width: fullWidth ? '100%' : undefined,
+            fontSize: token.fontSizeSM,
+          }}
+          optionLabelProp="label"
+          options={CODEX_APPROVAL_POLICIES.map(({ value, label, description }) => ({
+            label,
+            value,
+            title: description,
+          }))}
+          optionRender={(option) => (
+            <div style={{ lineHeight: 1.3 }}>
+              <div>{option.label}</div>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {option.data.title}
+              </Typography.Text>
+            </div>
+          )}
+        />
+      </Space>
     );
   }
 
-  // Full mode: render as Radio group with descriptions
+  // Everything else is one rich Select. Full-width form contexts (non-compact)
+  // show the two-part description and the raw mode value; tight toolbar
+  // contexts (compact) collapse to an icon or plain label via `iconOnly`/`plain`.
+  const effectiveFullWidth = fullWidth || !compact;
+  const currentMode = modes.find((m) => m.mode === effectiveValue);
   return (
-    <Radio.Group value={effectiveValue} onChange={(e) => onChange?.(e.target.value)}>
-      <Space orientation="vertical" style={{ width: '100%' }}>
-        {modes.map(({ mode, label, description, icon, tone }) => (
-          <Radio key={mode} value={mode}>
-            <Space>
-              <span style={{ color: getModeColor(tone, token) }}>{icon}</span>
-              <div>
-                <Typography.Text strong>{label}</Typography.Text>
-                <br />
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {description}
+    <Tooltip
+      title={currentMode ? `${currentMode.label} — ${currentMode.description}` : 'Permission mode'}
+    >
+      <Select
+        value={effectiveValue}
+        onChange={onChange}
+        style={{ fontSize: token.fontSizeSM, width: effectiveFullWidth ? '100%' : undefined }}
+        size={size}
+        popupMatchSelectWidth={false}
+        optionLabelProp="label"
+        options={modes.map(({ mode, label, description, icon, tone }) => {
+          const color = getModeColor(tone, token);
+          return {
+            label: plain ? (
+              label
+            ) : iconOnly ? (
+              <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
+            ) : (
+              <Space size={token.marginXXS} style={{ fontSize: token.fontSizeSM }}>
+                <span style={{ color }}>{icon}</span>
+                <span>{label}</span>
+              </Space>
+            ),
+            value: mode,
+            title: description,
+          };
+        })}
+        optionRender={(option) => {
+          const modeData = modes.find((m) => m.mode === option.value);
+          if (!modeData) return null;
+          const color = getModeColor(modeData.tone, token);
+          return (
+            <Flex
+              justify="space-between"
+              align="start"
+              gap={12}
+              style={{ minWidth: iconOnly ? undefined : 260 }}
+            >
+              <Space size={6} align="start">
+                <span style={{ color }}>{modeData.icon}</span>
+                {/* whiteSpace:normal lets the two-part description wrap instead
+                    of truncating with antd's default option ellipsis. */}
+                <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
+                  <div style={{ color: modeData.tone === 'warning' ? color : undefined }}>
+                    {modeData.label}
+                  </div>
+                  <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
+                    {modeData.description}
+                  </Typography.Text>
+                </div>
+              </Space>
+              {!iconOnly && (
+                <Typography.Text type="secondary" code style={{ fontSize: 11 }}>
+                  {modeData.mode}
                 </Typography.Text>
-              </div>
-            </Space>
-          </Radio>
-        ))}
-      </Space>
-    </Radio.Group>
+              )}
+            </Flex>
+          );
+        }}
+      />
+    </Tooltip>
   );
 };

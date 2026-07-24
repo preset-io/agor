@@ -5,7 +5,7 @@ import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type AppVariableInsert, type AppVariableRow, appVariables } from '../schema';
-import { RepositoryError } from './base';
+import { currentTenantInsert, RepositoryError } from './base';
 
 export interface AppVariable {
   variable_id: string;
@@ -104,6 +104,7 @@ export class AppVariableRepository {
     }
 
     const insertRow: AppVariableInsert = {
+      ...currentTenantInsert(),
       variable_id: generateId(),
       namespace: data.namespace,
       key: data.key,
@@ -125,6 +126,7 @@ export class AppVariableRepository {
     const now = new Date();
     const encrypted = data.encrypted === true;
     const insertRow: AppVariableInsert = {
+      ...currentTenantInsert(),
       variable_id: generateId(),
       namespace: data.namespace,
       key: data.key,

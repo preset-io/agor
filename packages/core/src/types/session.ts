@@ -16,6 +16,7 @@ import type {
   GeminiPermissionMode,
   OpenCodePermissionMode,
 } from './agentic-tool';
+import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
@@ -511,6 +512,15 @@ export interface Session {
   };
 }
 
+/** Session data accepted before defaults and configuration references are materialized. */
+export type CreateSessionInput = Omit<
+  Partial<Session>,
+  'agentic_tool_preset_id' | 'model_config'
+> & {
+  agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
+  model_config?: Partial<NonNullable<Session['model_config']>> | null;
+};
+
 /**
  * Minimal persisted session state needed to decide whether a new task can
  * start immediately.
@@ -709,8 +719,8 @@ export interface SpawnConfig {
   /** Agentic tool to use (defaults to parent's tool) */
   agent?: AgenticToolName;
 
-  /** Live tenant preset. Same-tool children inherit the parent's preset by default. */
-  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
+  /** Configuration source. Same-tool children inherit the parent's preset by default. */
+  presetId?: AgenticToolConfigurationReference;
 
   /** Permission mode override (defaults based on config preset) */
   permissionMode?: PermissionMode;

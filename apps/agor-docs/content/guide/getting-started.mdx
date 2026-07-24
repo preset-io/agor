@@ -7,7 +7,7 @@ import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Getting Started
 
-Install Agor, open the UI, and follow the onboarding wizard. Your **first AI teammate** will help you get your bearings and get everything else set up.
+Install Agor, open the UI, and follow the onboarding wizard. Your **first AI teammate** will help you get your bearings and get everything else set up. (New here? [Raising Your First AI Teammate](/guide/first-teammate) explains why one teammate is the whole onboarding.)
 
 ## Install
 
@@ -15,32 +15,40 @@ Install Agor, open the UI, and follow the onboarding wizard. Your **first AI tea
 
 ## Follow the onboarding wizard
 
-The first time you open the UI, the **Onboarding Wizard** runs. It picks between cloning the [teammate framework repo](https://github.com/preset-io/agor-teammate) or pointing at one of your own, then walks through **Clone → Board → Branch → API Keys → Launch** and drops you into a live session.
+The first time you open the UI, the **Onboarding Wizard** runs — five quick steps that end with your first AI teammate ready to work:
+
+1. **You.** Pick how you work: *I write code*, *I manage projects*, *I lead a team*, or *Building solo*. The rest of the setup — and your teammate's first briefing — is tailored to this.
+2. **AI.** Connect a model: Claude (recommended), GPT, Gemini, or a custom endpoint. Paste an API key, use a Claude subscription token, or sign in with ChatGPT; Agor verifies the credential on the spot.
+3. **Workspace.** Name your AI teammate and pick its emoji. Agor creates a board named after it — the teammate's home for every branch and session it works on.
+4. **Tools.** Persona-tailored MCP integration suggestions (Slack first, plus the likes of GitHub, Sentry, HubSpot, Linear, or Figma). Connect what you want now, or skip — everything is available later in **Settings → MCP**.
+5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your new board and launches its first session with the agent you connected.
+
+Every step except the last can be skipped — the wizard never blocks you on a decision.
 
 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
   <img
-    src="/screenshots/onboarding-welcome.png"
-    alt="Onboarding: Welcome, set up your AI teammate or use your own repo"
+    src="/screenshots/onboarding-persona.png"
+    alt="Onboarding step 1: persona cards — I write code, I manage projects, I lead a team, Building solo"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
-    src="/screenshots/onboarding-branch.png"
-    alt="Onboarding: Branch, name a personal branch"
+    src="/screenshots/onboarding-connect-ai.png"
+    alt="Onboarding step 2: Connect your AI — Claude selected (Recommended) with API key and Subscription token tabs; GPT and Gemini below"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
-    src="/screenshots/onboarding-api-keys.png"
-    alt="Onboarding: API Keys, pick an agent and paste a key (or skip)"
+    src="/screenshots/onboarding-name-teammate.png"
+    alt="Onboarding step 3: Name your AI teammate — name and emoji, with its own board"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
   <img
-    src="/screenshots/onboarding-launch.png"
-    alt="Onboarding: Launch, your AI teammate is ready"
+    src="/screenshots/onboarding-mcp-tools.png"
+    alt="Onboarding step 4: Connect your tools via MCP — persona-tailored suggestions like Slack, HubSpot, Amplitude, Figma"
     style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
   />
 </div>
 
-Once you're in the session, your AI teammate introduces itself, asking for a name and emoji, who you are, and what you'd like to get started on. From there it can register more repos, set up boards, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp).
+When the board opens, your teammate's first session picks up where the wizard left off — it already knows its name, how you work, and which tools you flagged. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp).
 
 ## Customize your install
 

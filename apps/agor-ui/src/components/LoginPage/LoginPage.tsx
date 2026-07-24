@@ -5,42 +5,23 @@
  */
 
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Divider, Form, Input, Space, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
+import { buildLaunchInitUrl } from '../../utils/launchInitUrl';
+import { isDarkTheme } from '../../utils/theme';
 import { BrandLogo } from '../BrandLogo';
-import { ParticleBackground } from './ParticleBackground';
+import { GlassPanel } from '../GlassSurface/GlassPanel';
+import { GradientBackdrop } from '../GradientBackdrop/GradientBackdrop';
 
 const { Text } = Typography;
-
-function currentReturnToPath(): string | null {
-  if (typeof window === 'undefined') return null;
-
-  // Send only a relative Agor route to the external launcher. Avoiding an
-  // absolute URL keeps this from becoming an open-redirect primitive if the
-  // launcher blindly follows `return_to`.
-  const pathname = window.location.pathname.startsWith('//') ? '/' : window.location.pathname;
-  return `${pathname}${window.location.search}${window.location.hash}`;
-}
-
-function addReturnToParam(loginRedirectUrl: string): string {
-  const returnTo = currentReturnToPath();
-  if (!returnTo) return loginRedirectUrl;
-
-  try {
-    const url = new URL(loginRedirectUrl);
-    url.searchParams.set('return_to', returnTo);
-    return url.toString();
-  } catch {
-    return loginRedirectUrl;
-  }
-}
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<boolean>;
   loading?: boolean;
   error?: string | null;
   externalLaunchLoginRedirectUrl?: string;
+  externalLaunchReturnHostParam?: string;
 }
 
 export function LoginPage({
@@ -48,6 +29,7 @@ export function LoginPage({
   loading = false,
   error,
   externalLaunchLoginRedirectUrl,
+  externalLaunchReturnHostParam,
 }: LoginPageProps) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +37,7 @@ export function LoginPage({
   const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
   const externalLaunchHref = externalLaunchLoginRedirectUrl
-    ? addReturnToParam(externalLaunchLoginRedirectUrl)
+    ? buildLaunchInitUrl(externalLaunchLoginRedirectUrl, externalLaunchReturnHostParam)
     : undefined;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
@@ -78,40 +60,23 @@ export function LoginPage({
         alignItems: 'center',
         justifyContent: 'center',
         background: token.colorBgLayout,
-        padding: '16px',
+        padding: 'clamp(12px, 3vw, 24px)',
+        boxSizing: 'border-box',
         position: 'relative',
         overflow: 'auto',
       }}
     >
-      {/* Particle background */}
-      <ParticleBackground />
+      <GradientBackdrop />
 
-      {/* Attribution */}
-      <a
-        href="https://particles.js.org"
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          position: 'fixed',
-          bottom: 16,
-          right: 16,
-          fontSize: 10,
-          color: token.colorTextQuaternary,
-          textDecoration: 'none',
-          zIndex: 0,
-          transition: 'color 0.3s',
-        }}
-      >
-        🤍 tsparticles
-      </a>
-
-      <Card
+      <GlassPanel
+        surfaceAlpha={isDarkTheme(token) ? 0.68 : 0.82}
+        highlights={{ intensity: 'subtle' }}
         style={{
           width: '100%',
           maxWidth: 420,
           borderRadius: token.borderRadiusLG,
           boxShadow: token.boxShadowSecondary,
-          position: 'relative',
+          border: `1px solid ${token.colorBorderSecondary}`,
           zIndex: 1,
           margin: 'auto',
         }}
@@ -225,7 +190,7 @@ export function LoginPage({
             </Form>
           </>
         )}
-      </Card>
+      </GlassPanel>
     </div>
   );
 }

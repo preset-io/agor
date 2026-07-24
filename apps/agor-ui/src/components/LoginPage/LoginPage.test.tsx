@@ -1,10 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { theme } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withAlpha } from '../GlassSurface/glassStyles';
 import { LoginPage } from './LoginPage';
-
-vi.mock('./ParticleBackground', () => ({
-  ParticleBackground: () => null,
-}));
 
 describe('LoginPage external launch redirect', () => {
   const currentPath = () =>
@@ -14,11 +12,24 @@ describe('LoginPage external launch redirect', () => {
     window.history.replaceState({}, '', '/');
   });
   it('keeps the local login form as the default when no redirect is configured', () => {
-    render(<LoginPage onLogin={vi.fn()} />);
+    const { container } = render(<LoginPage onLogin={vi.fn()} />);
 
     expect(screen.getByPlaceholderText('Email address')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Return to workspace' })).not.toBeInTheDocument();
+    expect(container.querySelector('[data-gradient-backdrop="page"]')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(container.firstElementChild).toHaveStyle({ boxSizing: 'border-box' });
+    expect(container.querySelector('.ant-card')?.getAttribute('style')).toContain(
+      `background: ${withAlpha(theme.getDesignToken().colorBgContainer, 0.82)}`
+    );
+    expect(container.querySelector('[data-glass-highlights="subtle"]')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(screen.queryByText(/tsparticles/i)).not.toBeInTheDocument();
   });
 
   it('shows the external launch return action as the primary path when configured', () => {

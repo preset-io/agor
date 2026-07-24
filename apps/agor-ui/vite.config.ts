@@ -80,7 +80,6 @@ export default defineConfig({
             return 'editor';
           if (id.includes('react-syntax-highlighter')) return 'syntax';
           if (id.includes('emoji-picker-react') || id.includes('emojibase')) return 'emoji';
-          if (id.includes('@tsparticles/')) return 'particles';
           if (id.includes('@xterm/')) return 'xterm';
           if (id.includes('@codesandbox/sandpack')) return 'sandpack';
           // Vega is only reached through the fenced `vega-lite` renderer. Keep

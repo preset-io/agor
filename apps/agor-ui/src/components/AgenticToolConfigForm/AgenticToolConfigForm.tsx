@@ -45,6 +45,11 @@ export interface AgenticToolConfigFormProps {
    * dynamic discovery (e.g., default-settings preview, schedule editor).
    */
   client?: AgorClient | null;
+  /**
+   * Render the Claude advisor model inline with the model selector. Surfaces
+   * that relocate it into their own "Advanced" area pass `false`.
+   */
+  showAdvisor?: boolean;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -60,6 +65,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   client,
+  showAdvisor = true,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
@@ -75,7 +81,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
             : undefined
         }
       >
-        <ModelSelector agentic_tool={agenticTool} client={client} />
+        <ModelSelector agentic_tool={agenticTool} client={client} showAdvisor={showAdvisor} />
       </Form.Item>
 
       <Form.Item
@@ -83,7 +89,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label="Permission Mode"
         help={showHelpText ? 'Control how the agent handles tool execution approvals' : undefined}
       >
-        <PermissionModeSelector agentic_tool={agenticTool} compact={compact} />
+        <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
       </Form.Item>
 
       {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (

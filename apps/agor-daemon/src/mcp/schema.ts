@@ -133,13 +133,55 @@ export function mcpOptionalNonNegativeInt(fieldName: string, description: string
     .describe(description);
 }
 
-export function mcpLimit(defaultValue = 50) {
-  return mcpOptionalPositiveInt('limit', `Maximum number of results (default: ${defaultValue})`);
+export function mcpPositiveIntWithDefault(
+  fieldName: string,
+  defaultValue: number,
+  maxValue?: number
+) {
+  if (!Number.isSafeInteger(defaultValue) || defaultValue <= 0) {
+    throw new Error(`MCP ${fieldName} default must be a positive safe integer`);
+  }
+  if (maxValue !== undefined && (!Number.isSafeInteger(maxValue) || maxValue <= 0)) {
+    throw new Error(`MCP ${fieldName} maximum must be a positive safe integer`);
+  }
+  if (maxValue !== undefined && defaultValue > maxValue) {
+    throw new Error(`MCP ${fieldName} default ${defaultValue} exceeds maximum ${maxValue}`);
+  }
+
+  const limit = z
+    .number({
+      error: `${fieldName} must be a positive integer when provided.`,
+    })
+    .int(`${fieldName} must be an integer.`)
+    .positive(`${fieldName} must be greater than 0.`);
+  const boundedLimit =
+    maxValue === undefined
+      ? limit
+      : limit.max(maxValue, `${fieldName} must be less than or equal to ${maxValue}.`);
+
+  return boundedLimit.optional().default(defaultValue);
+}
+
+export function mcpLimit(defaultValue = 50, maxValue?: number) {
+  return mcpPositiveIntWithDefault('limit', defaultValue, maxValue).describe(
+    `Maximum number of results (default: ${defaultValue}${
+      maxValue === undefined ? '' : `, max: ${maxValue}`
+    })`
+  );
 }
 
 export function mcpOffset(defaultValue = 0) {
-  return mcpOptionalNonNegativeInt(
-    'offset',
-    `Number of results to skip (default: ${defaultValue})`
-  );
+  if (!Number.isSafeInteger(defaultValue) || defaultValue < 0) {
+    throw new Error('MCP offset default must be a non-negative safe integer');
+  }
+
+  return z
+    .number({
+      error: 'offset must be a non-negative integer when provided.',
+    })
+    .int('offset must be an integer.')
+    .nonnegative('offset must be greater than or equal to 0.')
+    .optional()
+    .default(defaultValue)
+    .describe(`Number of results to skip (default: ${defaultValue})`);
 }

@@ -218,6 +218,38 @@ export interface AgorExternalLaunchSettings {
    * sign-in is unavailable, missing, expired, or invalid.
    */
   login_redirect_url?: string;
+
+  /**
+   * Forward the normalized inbound browser Host to the exchange endpoint as an
+   * opaque `request_host` field. Enable when the launch issuer binds a code to
+   * the exact route the browser entered (host-bound launch). Default: false.
+   *
+   * The value is read from a trusted local request header — never from an
+   * arbitrary client-supplied body field — so the daemon cannot be tricked into
+   * presenting a code minted for one host through a different host.
+   */
+  forward_request_host?: boolean;
+
+  /**
+   * Request header the daemon reads the normalized browser Host from when
+   * `forward_request_host` is enabled. The trusted proxy / edge in front of the
+   * daemon owns host normalization and must overwrite this header. Default:
+   * `host`. Set to e.g. `x-forwarded-host` only when a trusted edge sets it.
+   */
+  trusted_host_header?: string;
+
+  /**
+   * Query parameter appended to `login_redirect_url` carrying the current
+   * browser host as an opaque return context, so a direct visit to a workspace
+   * host that has no local session can start the issuer's launch-init flow and
+   * be returned to the exact host it came from. The issuer must allow-list this
+   * value against its own routing records. Default: `return_host`.
+   *
+   * Must not be `return_to`: that name is reserved for the relative deep-link
+   * the UI forwards to the launch-init endpoint, and reusing it would overwrite
+   * the deep-link with the host. Rejected during config validation.
+   */
+  return_host_param?: string;
 }
 
 /**
@@ -896,42 +928,6 @@ export interface AgorTeammateSettings {
 }
 
 /**
- * Per-vendor HTTP proxy configuration.
- *
- * Mounts a thin pass-through proxy at `/proxies/<vendor>/...` that forwards
- * bytes to `upstream/...`. Designed to let Sandpack artifacts call third-party
- * REST APIs that don't return CORS headers (Shortcut, Linear, Jira, etc.).
- *
- * Hard rules:
- *  - Pass-through bytes only — no transformation, no caching, no auth injection.
- *  - Read-only by default — `allowed_methods` defaults to `['GET']`.
- *  - Off by default — when no `proxies:` block is configured, the route is
- *    not mounted at all.
- */
-export interface AgorProxyConfig {
-  /**
-   * Bare scheme+host of the upstream API (no path prefix).
-   *
-   * Convention: `https://api.app.shortcut.com`, NOT
-   * `https://api.app.shortcut.com/api/v3`. The caller specifies the path
-   * tail. Must be `https://` — `http://` upstreams are rejected at startup.
-   */
-  upstream: string;
-
-  /** Optional human-readable label, surfaced in MCP discovery and docs. */
-  description?: string;
-
-  /** Optional link to the upstream's developer documentation. */
-  docs_url?: string;
-
-  /**
-   * HTTP methods the proxy will accept for this vendor. Defaults to `['GET']`
-   * (read-only-by-default rule). Operators opt into writes per vendor.
-   */
-  allowed_methods?: Array<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'>;
-}
-
-/**
  * Knowledge Base semantic search settings. Secrets are stored separately in the
  * encrypted app_variables table; this config only carries non-secret defaults.
  */
@@ -1012,21 +1008,8 @@ export interface AgorConfig {
   /** Public open-source telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
-  /** Knowledge Base semantic search settings. */
-  knowledge?: AgorKnowledgeSettings;
-
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
-
-  /**
-   * HTTP proxy passthroughs for third-party APIs that don't return CORS
-   * headers (Shortcut, Linear, Jira, etc.). Keyed by vendor slug used in
-   * the route path: `/proxies/<vendor>/...`.
-   *
-   * Off by default: omit this block to disable the feature entirely.
-   * See `apps/agor-docs/pages/guide/api-proxies.mdx`.
-   */
-  proxies?: Record<string, AgorProxyConfig>;
 }
 
 /**
@@ -1042,5 +1025,4 @@ export type ConfigKey =
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
-  | `telemetry.${keyof AgorTelemetrySettings}`
-  | `knowledge.${keyof AgorKnowledgeSettings}`;
+  | `telemetry.${keyof AgorTelemetrySettings}`;

@@ -1,17 +1,14 @@
-import { loadConfig } from '@agor/core/config';
 import {
-  AppVariableRepository,
   isPostgresDatabase,
+  KnowledgeSemanticSettingsRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, KnowledgeEmbeddingStatus, Params } from '@agor/core/types';
-import {
-  isUsableOpenAIEmbeddingConfig,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-} from '../knowledge/embeddings.js';
+import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
 export interface KnowledgeReindexResult {
@@ -22,36 +19,35 @@ export interface KnowledgeReindexResult {
 export type KnowledgeReindexParams = Params & AuthenticatedParams;
 
 export class KnowledgeReindexService {
-  private variables: AppVariableRepository;
-
   constructor(
     private db: TenantScopeAwareDatabase,
     private app?: Application
-  ) {
-    this.variables = new AppVariableRepository(db);
+  ) {}
+
+  private async reindexInTransaction(db: TenantScopedDatabase): Promise<KnowledgeReindexResult> {
+    const semantic = await new KnowledgeSemanticSettingsRepository(db).lockAggregateForUpdate(db);
+    const embeddingConfigured =
+      isPostgresDatabase(db) &&
+      isUsableOpenAIEmbeddingConfig(semantic, semantic.api_key_configured) &&
+      (await ensureKnowledgePgvectorStorage(db)).available;
+    const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';
+
+    const queued = await rebuildCurrentKnowledgeUnits(db, semantic, { embeddingConfigured });
+
+    return { queued, status };
   }
 
   async create(_data?: unknown, _params?: KnowledgeReindexParams): Promise<KnowledgeReindexResult> {
-    const config = await loadConfig();
-    const semantic = config.knowledge?.semantic_search ?? {};
-    const apiKey = await this.variables.find(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
+    const result = await runKnowledgePolicyTransaction(this.db, (tx) =>
+      this.reindexInTransaction(tx)
     );
-    const embeddingConfigured =
-      isPostgresDatabase(this.db) &&
-      isUsableOpenAIEmbeddingConfig(semantic, Boolean(apiKey?.value_encrypted)) &&
-      (await ensureKnowledgePgvectorStorage(this.db)).available;
-    const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';
-
-    const queued = await rebuildCurrentKnowledgeUnits(this.db, config, { embeddingConfigured });
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
     ) as { wake?: () => void } | undefined;
-    if (embeddingConfigured && queued > 0) indexer?.wake?.();
+    if (result.status === 'pending' && result.queued > 0) indexer?.wake?.();
 
-    return { queued, status };
+    return result;
   }
 }
 

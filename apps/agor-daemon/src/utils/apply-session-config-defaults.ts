@@ -41,10 +41,11 @@
 import { BadRequest } from '@agor/core/feathers';
 import {
   formatUnsupportedAgorCodexModelMessage,
+  isResolvedModelConfig,
   isUnsupportedAgorCodexModel,
 } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
-import type { AgenticToolName, HookContext, Session, User } from '@agor/core/types';
+import type { AgenticToolName, CreateSessionInput, HookContext, User } from '@agor/core/types';
 
 interface UsersService {
   get: (id: string, params?: unknown) => Promise<User | null | undefined>;
@@ -68,11 +69,11 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       // Bulk create not supported for sessions; bail rather than guessing.
       return context;
     }
-    const data = context.data as Partial<Session> | undefined;
+    const data = context.data as CreateSessionInput | undefined;
     if (!data) return context;
 
     const hasPermission = data.permission_config != null;
-    const hasModel = !!data.model_config?.model;
+    const hasResolvedModel = isResolvedModelConfig(data.model_config);
 
     const agenticTool = data.agentic_tool as AgenticToolName | undefined;
     if (!agenticTool) return context; // can't resolve defaults without a tool
@@ -92,7 +93,7 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       return context;
     }
 
-    if (hasPermission && hasModel) return context; // nothing to fill
+    if (hasPermission && hasResolvedModel) return context; // nothing to fill
 
     // Identify the user whose defaults to apply. External calls go through
     // injectCreatedBy() first, which stamps `data.created_by` from
@@ -140,7 +141,7 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
         );
       }
     }
-    if (!hasModel && resolved.model_config) {
+    if (!hasResolvedModel && resolved.model_config) {
       data.model_config = resolved.model_config;
     }
 

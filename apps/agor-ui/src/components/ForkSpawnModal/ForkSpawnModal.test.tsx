@@ -104,4 +104,25 @@ describe('ForkSpawnModal prompt preservation', { timeout: 10_000 }, () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('do the thing'));
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
   });
+
+  it('shows the config source Select + resolved chips when spawning with a custom config', async () => {
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={mockSession as Session}
+        currentUser={null}
+        onConfirm={vi.fn().mockResolvedValue(undefined)}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    // The old picker is gone; switching to "Custom config" reveals the chip row.
+    fireEvent.click(screen.getByText('Custom config'));
+    await screen.findByText('Configuration');
+    expect(screen.getByTestId('model-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('permission-chip')).toBeInTheDocument();
+  });
 });

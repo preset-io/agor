@@ -225,6 +225,7 @@ describe('loadConfig', () => {
     'credentials',
     'opencode',
     'codex',
+    'knowledge',
   ])('rejects the removed %s config surface', async (key) => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
@@ -248,6 +249,26 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('rejects the removed proxies config surface as an unknown top-level key', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ proxies: { shortcut: { upstream: 'https://api.app.shortcut.com' } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: proxies/);
+  });
+
+  it('continues to accept daemon.trust_proxy_hops for deployment reverse proxies', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ daemon: { trust_proxy_hops: 2 } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
   });
 
   it('reports every unrecognized nested key with its full path', async () => {
@@ -348,6 +369,72 @@ describe('loadConfig', () => {
     );
 
     await expect(loadConfig()).rejects.toThrow(/external_launch\.login_redirect_url.*http/i);
+  });
+
+  it('rejects external_launch.return_host_param equal to the reserved return_to', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'return_to' },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/return_host_param.*return_to/i);
+  });
+
+  it('accepts a custom external_launch.return_host_param', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'workspace_host' },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.return_host_param).toBe('workspace_host');
+  });
+
+  it('allows an empty external_launch.return_host_param (falls back to the default)', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: '' },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.return_host_param).toBe('');
+  });
+
+  it('rejects an external_launch.return_host_param with invalid characters', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'return host&x' },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/return_host_param.*letters/i);
   });
 });
 

@@ -12,7 +12,8 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "gen:streamdown-css": "node scripts/gen-streamdown-css.mjs"
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",
@@ -28,9 +29,6 @@
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
-    "@tsparticles/engine": "^3.9.0",
-    "@tsparticles/react": "^3.0.0",
-    "@tsparticles/slim": "^3.9.0",
     "@types/diff": "^6.0.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@uiw/react-codemirror": "^4.25.11",
@@ -65,6 +63,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/d3-force": "^3.0.10",
@@ -73,6 +72,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^27.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.1.4",
     "vite-plugin-compression": "^0.5.1",

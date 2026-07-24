@@ -19,6 +19,7 @@ import type {
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  EffortLevel,
   PermissionMode,
   Session,
   User,
@@ -26,21 +27,22 @@ import type {
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
-import { Collapse, Divider, Form, Modal, Typography } from 'antd';
+import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
 import React from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
+import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import {
-  AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
+  persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
 import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CallbackTargetDisplay } from '../CallbackToggleButton';
 import { CodexSettingsForm } from '../CodexSettingsForm';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { SessionMcpServersField } from '../MCPServerSelect';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
@@ -68,10 +70,12 @@ interface FormValues {
   title: string;
   mcpServerIds: string[];
   modelConfig: Session['model_config'];
+  effort?: EffortLevel;
   permissionMode: PermissionMode;
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
   codexNetworkAccess: boolean;
+  saveAsDefault?: boolean;
   custom_context: string;
   callbackConfig: {
     enabled: boolean;
@@ -95,12 +99,16 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
     title: session.title || '',
     mcpServerIds: sessionMcpServerIds,
     modelConfig: session.model_config,
+    // Effort is surfaced as its own form field (the effort chip binds to it),
+    // then folded back into model_config on save.
+    effort: session.model_config?.effort,
     permissionMode,
     codexSandboxMode: session.permission_config?.codex?.sandboxMode ?? codexDefaults.sandboxMode,
     codexApprovalPolicy:
       session.permission_config?.codex?.approvalPolicy ?? codexDefaults.approvalPolicy,
     codexNetworkAccess:
       session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
+    saveAsDefault: false,
     custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,
@@ -126,6 +134,7 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
   if (!presetId && values.modelConfig) {
     updates.model_config = {
       ...values.modelConfig,
+      ...(values.effort ? { effort: values.effort } : {}),
       updated_at: new Date().toISOString(),
     };
   }
@@ -190,10 +199,15 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // Entity maps come from the store rather than being drilled through the App
   // shell. The whole session→MCP map is sliced to this session's ids here so
   // the rest of the component keeps working with a plain `string[]`.
+  const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
   const mcpServerById = useAgorStore(selectMcpServerById);
   const sessionMcpServerIds =
     useAgorStore(selectSessionMcpServerIds).get(session.session_id) ?? EMPTY_MCP_SERVER_IDS;
   const [form] = Form.useForm();
+  const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
+  const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
+
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)
   );
@@ -264,10 +278,30 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         onUpdate(session.session_id, updates);
       }
 
+      // Promote the inline config to the user's default when requested.
       if (
-        onUpdateSessionMcpServers &&
-        values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
+        values.saveAsDefault &&
+        values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION &&
+        currentUser &&
+        client
       ) {
+        const formValues: AgenticFormValues = {
+          modelConfig: values.modelConfig ?? undefined,
+          effort: values.effort,
+          permissionMode: values.permissionMode,
+          codexSandboxMode: values.codexSandboxMode,
+          codexApprovalPolicy: values.codexApprovalPolicy,
+          codexNetworkAccess: values.codexNetworkAccess,
+        };
+        void persistUserDefaultFromForm(
+          client,
+          currentUser,
+          session.agentic_tool,
+          formValues
+        ).catch(() => showError('Failed to save your default configuration'));
+      }
+
+      if (onUpdateSessionMcpServers) {
         onUpdateSessionMcpServers(session.session_id, values.mcpServerIds || []);
       }
 
@@ -280,6 +314,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         }
       }
 
+      form.setFieldValue('saveAsDefault', false);
       onClose();
     });
   };
@@ -294,7 +329,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // Build secondary (collapsed) sections
   const secondaryItems: NonNullable<CollapseProps['items']> = [];
 
-  if (isCodex) {
+  if (isCodex && isInlineConfig) {
     secondaryItems.push({
       key: 'codex-settings',
       label: (
@@ -371,31 +406,33 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       cancelText="Cancel"
       width={600}
     >
-      <Form form={form} layout="vertical" initialValues={initialValues}>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={initialValues}
+        // Suffix-style required mark ("Label *"), matching NewSessionModal.
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && (
+              <span style={{ color: token.colorError, marginInlineStart: token.marginXXS }}>*</span>
+            )}
+          </>
+        )}
+      >
         {/* PRIMARY ZONE — essential settings, always visible */}
         <SessionMetadataForm showHelpText={false} titleRequired={false} titleLabel="Title" />
         <Form.Item label="Session IDs">
           <SessionIdsList session={session} />
         </Form.Item>
-        {client ? (
-          <AgenticToolConfigurationPicker
-            tool={session.agentic_tool}
-            mcpServerById={mcpServerById}
-            showHelpText={false}
-            compact
-            client={client}
-          />
-        ) : (
-          <>
-            <AgenticToolConfigForm
-              agenticTool={session.agentic_tool}
-              showHelpText={false}
-              compact
-              client={client}
-            />
-            <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={false} />
-          </>
-        )}
+        {/* Configuration source Select + resolved chips — parity with NewSessionModal */}
+        <AgenticConfigChipRow
+          tool={session.agentic_tool}
+          mcpServerById={mcpServerById}
+          currentUser={currentUser}
+          client={client ?? null}
+          enableSaveAsDefault
+        />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
         <Divider dashed style={{ margin: '8px 0 16px' }} />

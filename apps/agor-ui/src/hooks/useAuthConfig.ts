@@ -15,6 +15,12 @@ interface AuthConfig {
   externalLaunch?: {
     enabled?: boolean;
     loginRedirectUrl?: string;
+    /**
+     * Query parameter name the UI appends to `loginRedirectUrl` carrying the
+     * current browser host as an opaque return context for direct-host entry.
+     * The launch issuer allow-lists this value against its routing records.
+     */
+    returnHostParam?: string;
   };
 }
 

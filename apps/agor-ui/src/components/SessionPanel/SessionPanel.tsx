@@ -977,7 +977,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           {
             key: 'settings',
             icon: <SettingOutlined />,
-            label: 'Session Settings',
+            label: 'Session settings',
             onClick: () => onOpenSettings(session.session_id),
           },
         ]

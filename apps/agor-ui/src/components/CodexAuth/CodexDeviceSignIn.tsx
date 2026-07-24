@@ -1,7 +1,14 @@
 import type { AgorClient, CodexDeviceAuthStatus } from '@agor-live/client';
-import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
-import { Alert, Button, Typography, theme } from 'antd';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  CheckCircleOutlined,
+  CheckOutlined,
+  CopyOutlined,
+  LoadingOutlined,
+} from '@ant-design/icons';
+import { Alert, Button, Flex, Tooltip, Typography, theme } from 'antd';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
+import { useCopyToClipboard } from '../../utils/clipboard';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -59,6 +66,11 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   const [status, setStatus] = useState<CodexDeviceAuthStatus>({ phase: 'idle' });
   const [starting, setStarting] = useState(false);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
+  // Use the app's clipboard util, not AntD's `copyable`: on HTTP/local-network
+  // dev URLs (non-secure context) AntD awaits navigator.clipboard's rejection
+  // first, which consumes the click's user activation and makes its execCommand
+  // fallback fail too. copyToClipboard tries execCommand first when insecure.
+  const [codeCopied, copyCode] = useCopyToClipboard();
 
   const deviceService = useMemo(
     () =>
@@ -71,35 +83,27 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     [client]
   );
 
-  // Tracks the service the pane currently talks to, so an in-flight
-  // requestCode issued against a swapped-out client can't land its state
-  // updates over the replacement's. A layout effect syncs the identity
-  // before paint and before the passive effects below; resetting `starting`
-  // here matters because a stale request's guarded finally deliberately
-  // won't clear it, and a replacement that ADOPTS an attempt never calls
-  // requestCode — without the reset the spinner would cover a live code.
-  // Reset status/countdown too: a client/identity swap must not leave the
-  // previous client's pending code (and its polling loop) on screen — the
-  // adopt-or-request effect below then decides what THIS service should show.
-  // Without this, an autoStart=false surface that doesn't re-request would
-  // keep displaying and polling the old code against the new service.
-  const latestServiceRef = useRef(deviceService);
-  useLayoutEffect(() => {
-    latestServiceRef.current = deviceService;
+  // Guard every request against the service the pane currently talks to: an
+  // in-flight call issued against a swapped-out client must not land its state
+  // over the replacement's, and a client/identity swap must not leave the
+  // previous client's pending code (and its polling loop) on screen. The
+  // on-change reset clears status/countdown — the adopt-or-request effect below
+  // then decides what THIS service should show — and resets `starting` because a
+  // replacement that ADOPTS an attempt never calls requestCode, so without the
+  // reset the spinner would cover a live code.
+  const { run, isCurrent } = useIdentityGuardedAsync([deviceService], () => {
     setStarting(false);
     setStatus({ phase: 'idle' });
     setRemainingMs(null);
-  }, [deviceService]);
+  });
 
   const requestCode = useCallback(async () => {
     if (!deviceService) return;
     setStarting(true);
     try {
-      const next = (await deviceService.create({})) as CodexDeviceAuthStatus;
-      if (latestServiceRef.current !== deviceService) return;
+      const next = (await run(() => deviceService.create({}))) as CodexDeviceAuthStatus;
       setStatus(next);
     } catch (err) {
-      if (latestServiceRef.current !== deviceService) return;
       setStatus({
         phase: 'error',
         hint:
@@ -108,24 +112,22 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
             : 'Could not start the ChatGPT sign-in — try again.',
       });
     } finally {
-      if (latestServiceRef.current === deviceService) setStarting(false);
+      setStarting(false);
     }
-  }, [deviceService]);
+  }, [deviceService, run]);
 
   // On mount (and on client swap), adopt a still-live attempt (user toggled
   // away and back) instead of burning a fresh code; otherwise request one.
   // Continuations are guarded by both `cancelled` (StrictMode / normal cleanup)
-  // and the service ref: React runs the client-swap layout reset before this
-  // effect's cleanup, so a stale find() resolving in that window must not
-  // restore the previous client's code — matching requestCode's own guard.
+  // and `run` (service swap): a find() resolving after the service swapped never
+  // restores the previous client's code — matching requestCode's own guard.
   useEffect(() => {
     if (!deviceService) return;
     let cancelled = false;
-    const stillCurrent = () => !cancelled && latestServiceRef.current === deviceService;
     void (async () => {
       try {
-        const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (!stillCurrent()) return;
+        const existing = (await run(() => deviceService.find())) as CodexDeviceAuthStatus;
+        if (cancelled) return;
         // Adopt a live pending attempt always; adopt a terminal success only for
         // eager (wizard) mounts — a management surface must stay able to restart.
         if (existing.phase === 'pending' || (existing.phase === 'success' && autoStart)) {
@@ -135,12 +137,12 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       } catch {
         // No adoptable attempt — fall through to a fresh request.
       }
-      if (stillCurrent() && autoStart) await requestCode();
+      if (!cancelled && autoStart) await requestCode();
     })();
     return () => {
       cancelled = true;
     };
-  }, [deviceService, requestCode, autoStart]);
+  }, [deviceService, requestCode, autoStart, run]);
 
   // Poll while pending; terminal phases stop the loop. A self-scheduling
   // timeout (next poll armed only after the previous response lands) keeps
@@ -154,7 +156,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     const tick = async () => {
       try {
         const next = (await deviceService.find()) as CodexDeviceAuthStatus;
-        if (cancelled || latestServiceRef.current !== deviceService) return;
+        if (cancelled || !isCurrent()) return;
         setStatus((prev) =>
           prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
             ? prev
@@ -170,7 +172,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [status.phase, deviceService]);
+  }, [status.phase, deviceService, isCurrent]);
 
   // 1s countdown while a code is live.
   useEffect(() => {
@@ -223,19 +225,30 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
         <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>
           Open the link below, sign in to ChatGPT, and enter this one-time code:
         </Text>
-        <Text
-          copyable
-          aria-label="ChatGPT sign-in code"
-          style={{
-            color: token.colorText,
-            fontFamily: 'monospace',
-            fontSize: 26,
-            fontWeight: 600,
-            letterSpacing: 4,
-          }}
-        >
-          {status.userCode}
-        </Text>
+        <Flex align="center" gap={8}>
+          <Text
+            aria-label="ChatGPT sign-in code"
+            style={{
+              color: token.colorText,
+              fontFamily: 'monospace',
+              fontSize: 26,
+              fontWeight: 600,
+              letterSpacing: 4,
+            }}
+          >
+            {status.userCode}
+          </Text>
+          <Tooltip title={codeCopied ? 'Copied' : 'Copy code'}>
+            <Button
+              type="text"
+              aria-label="Copy sign-in code"
+              icon={codeCopied ? <CheckOutlined /> : <CopyOutlined />}
+              onClick={() => {
+                if (status.userCode) void copyCode(status.userCode);
+              }}
+            />
+          </Tooltip>
+        </Flex>
         {status.verificationUrl && (
           <Typography.Link
             href={status.verificationUrl}

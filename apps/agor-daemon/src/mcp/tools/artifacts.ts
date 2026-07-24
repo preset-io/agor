@@ -81,14 +81,10 @@ const SandpackConfigSchema = z
 
 const AgorGrantsSchema = z
   .object({
-    agor_token: z.boolean().optional(),
     agor_api_url: z.boolean().optional(),
     agor_user_email: z.boolean().optional(),
     agor_artifact_id: z.boolean().optional(),
     agor_board_id: z.boolean().optional(),
-    agor_proxies: z
-      .array(mcpRequiredString('agorGrants.agor_proxies[]', 'Configured proxy vendor slug'))
-      .optional(),
   })
   .optional();
 
@@ -120,12 +116,10 @@ Recommended: create the folder inside your branch so files can be version-contro
 DECLARATIVE CONFIG:
 - \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
-    \`agor_token: true\`     → mints a 15-min artifact-runtime token for the viewer; injected as \`AGOR_TOKEN\`. Accepted by artifact/proxy runtime paths, not as a general daemon API credential. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
     \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.
     \`agor_artifact_id: true\` → \`AGOR_ARTIFACT_ID\` (informational, no consent).
     \`agor_board_id: true\`   → \`AGOR_BOARD_ID\` (informational, no consent).
-    \`agor_proxies: ["openai", ...]\` → injects \`AGOR_PROXY_OPENAI\` etc. for HTTP proxy URLs.
 - \`sandpackConfig\`: author-controlled SandpackProvider config (template, customSetup, theme, options). Sanitized on write — UI-affecting / private-account props are stripped.
 
 CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
@@ -769,7 +763,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
     {
       description: `Export an artifact to CodeSandbox via their "define API". Returns a sandbox URL and ID. Useful for sharing or demoing — the artifact runs in CodeSandbox's standard environment, not Agor.
 
-CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
+CAVEAT: daemon-supplied capabilities won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
       inputSchema: z.object({
         artifactId: mcpRequiredId(
           'artifactId',

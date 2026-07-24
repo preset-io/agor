@@ -46,4 +46,27 @@ describe('launch auth utilities', () => {
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh');
   });
+
+  it('stores tokens in localStorage and writes no cookie during the exchange', async () => {
+    const cookieBefore = document.cookie;
+    const client = {
+      service: vi.fn(() => ({
+        create: vi.fn(async () => ({
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          user: { user_id: 'u1', email: 'u@example.test' },
+        })),
+      })),
+    } as any;
+
+    await exchangeLaunchCode(client, 'code');
+
+    // Verifiable claim: the exchange persists the runtime session in
+    // origin-scoped localStorage and writes no cookie. (Cross-host isolation
+    // follows from localStorage being per-origin, but that is a browser
+    // property this unit test cannot itself exercise.)
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh');
+    expect(document.cookie).toBe(cookieBefore);
+  });
 });

@@ -130,6 +130,21 @@ async function findAndClickButton(text: string | RegExp) {
 }
 
 describe('OnboardingWizard', () => {
+  it('uses the shared animated glass highlights behind its content', () => {
+    const { baseElement } = renderWizard();
+
+    expect(baseElement.querySelector('[data-glass-highlights="strong"]')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(baseElement.querySelectorAll('[data-glass-highlight]')).toHaveLength(2);
+    expect(
+      Array.from(baseElement.querySelectorAll('style'))
+        .map((style) => style.textContent)
+        .join('\n')
+    ).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it('starts on the persona step; selecting a persona advances to LLM and saves onboarding progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });

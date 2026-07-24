@@ -233,6 +233,7 @@ function validateConfig(config: AgorConfig): void {
     credentials?: unknown;
     opencode?: unknown;
     codex?: unknown;
+    knowledge?: unknown;
     execution?: AgorConfig['execution'] & { cursor_sdk_enabled?: unknown };
   };
   if (removedProviderConfig.credentials !== undefined) {
@@ -250,6 +251,11 @@ function validateConfig(config: AgorConfig): void {
   if (removedProviderConfig.codex !== undefined) {
     throw new Error(
       "Config error: 'codex' has been removed. Codex home directories are managed per-session automatically."
+    );
+  }
+  if (removedProviderConfig.knowledge !== undefined) {
+    throw new Error(
+      "Config error: 'knowledge' has been removed. Configure semantic search in workspace Knowledge settings."
     );
   }
   if (removedProviderConfig.execution?.cursor_sdk_enabled !== undefined) {
@@ -272,10 +278,8 @@ function validateConfig(config: AgorConfig): void {
     'paths',
     'analytics',
     'telemetry',
-    'knowledge',
     'onboarding',
     'multi_tenancy',
-    'proxies',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -335,6 +339,9 @@ function validateConfig(config: AgorConfig): void {
     'allow_admin_roles',
     'trust_verified_email_for_linking',
     'login_redirect_url',
+    'forward_request_host',
+    'trusted_host_header',
+    'return_host_param',
   ]);
   only(config.database, 'database', ['dialect', 'sqlite', 'postgresql']);
   only(config.database?.sqlite, 'database.sqlite', ['path', 'walMode', 'busyTimeout']);
@@ -465,35 +472,12 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
   ]);
-  only(config.knowledge, 'knowledge', ['semantic_search']);
-  only(config.knowledge?.semantic_search, 'knowledge.semantic_search', [
-    'enabled',
-    'provider',
-    'model',
-    'dimensions',
-    'chunking',
-    'indexing',
-  ]);
-  only(config.knowledge?.semantic_search?.chunking, 'knowledge.semantic_search.chunking', [
-    'target_tokens',
-    'max_tokens',
-    'overlap_tokens',
-    'min_tokens',
-  ]);
-  only(config.knowledge?.semantic_search?.indexing, 'knowledge.semantic_search.indexing', [
-    'paused',
-    'batch_size',
-    'concurrency',
-  ]);
   only(config.multi_tenancy, 'multi_tenancy', [
     'mode',
     'static_tenant_id',
     'auth_claim',
     'trusted_header',
   ]);
-  for (const [name, proxy] of Object.entries(config.proxies ?? {})) {
-    only(proxy, `proxies.${name}`, ['upstream', 'description', 'docs_url', 'allowed_methods']);
-  }
   if (unknownPaths.length > 0) {
     throw new Error(
       `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`
@@ -531,6 +515,42 @@ function validateConfig(config: AgorConfig): void {
     'login_redirect_url',
     'external_launch.login_redirect_url'
   );
+
+  validateExternalLaunchReturnHostParam(config);
+}
+
+/**
+ * Query-parameter name the UI reserves for the relative deep-link it forwards
+ * to the launch-init endpoint (see apps/agor-ui/src/utils/launchInitUrl.ts). The
+ * host param must never reuse this name: the UI sets `return_to` first and then
+ * the host param, so an equal name would overwrite the deep-link with the host.
+ */
+const RESERVED_RETURN_TO_PARAM = 'return_to';
+
+function validateExternalLaunchReturnHostParam(config: AgorConfig): void {
+  const raw = config.external_launch?.return_host_param;
+  if (raw === undefined) return;
+  if (typeof raw !== 'string') {
+    throw new Error('Config error: external_launch.return_host_param must be a string');
+  }
+  // An empty value intentionally falls back to the default (`return_host`) at
+  // resolve time, so it is left untouched here.
+  if (raw === '') return;
+  if (raw === RESERVED_RETURN_TO_PARAM) {
+    throw new Error(
+      `Config error: external_launch.return_host_param must not be "${RESERVED_RETURN_TO_PARAM}" — ` +
+        'that name is reserved for the relative deep-link the UI forwards to the launch-init ' +
+        'endpoint, and reusing it would overwrite the deep-link with the return host.'
+    );
+  }
+  // Conservative query-parameter-name charset: the value becomes a URL query
+  // key, so restrict it to opaque identifier characters and reject separators.
+  if (!/^[A-Za-z0-9_.-]+$/.test(raw)) {
+    throw new Error(
+      'Config error: external_launch.return_host_param may only contain letters, digits, ' +
+        'underscore, hyphen, and dot'
+    );
+  }
 }
 
 function validateOptionalHttpUrl(

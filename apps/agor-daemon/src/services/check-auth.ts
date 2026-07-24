@@ -35,7 +35,7 @@ import type {
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { parseCodexAuthJson, readCodexAuthFile } from '../utils/codex-auth-file.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
-import { resolveCodexUnixIdentity } from './codex-auth-import.js';
+import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;

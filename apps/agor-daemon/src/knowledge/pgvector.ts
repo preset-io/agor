@@ -1,4 +1,12 @@
-import { executeRaw, isPostgresDatabase, sql, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  executeRaw,
+  isPostgresDatabase,
+  sql,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+} from '@agor/core/db';
+
+type KnowledgeTenantDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 export interface KnowledgePgvectorCapability {
   available: boolean;
@@ -32,7 +40,7 @@ export function semanticUnavailableMessage(reason?: string | null): string {
   return `Semantic Knowledge search is unavailable${reason ? `: ${reason}` : ''}. ${SETUP_HINT}`;
 }
 
-async function ensureEmbeddingTenantIsolation(db: TenantScopeAwareDatabase): Promise<void> {
+async function ensureEmbeddingTenantIsolation(db: KnowledgeTenantDatabase): Promise<void> {
   await executeRaw(
     db,
     sql`ALTER TABLE kb_unit_embeddings ADD COLUMN IF NOT EXISTS tenant_id text DEFAULT 'default' NOT NULL`
@@ -55,9 +63,7 @@ async function ensureEmbeddingTenantIsolation(db: TenantScopeAwareDatabase): Pro
   );
 }
 
-async function readCapability(
-  db: TenantScopeAwareDatabase
-): Promise<KnowledgePgvectorStorageState> {
+async function readCapability(db: KnowledgeTenantDatabase): Promise<KnowledgePgvectorStorageState> {
   if (!isPostgresDatabase(db)) {
     return {
       available: false,
@@ -123,13 +129,13 @@ async function readCapability(
 }
 
 export async function getKnowledgePgvectorCapability(
-  db: TenantScopeAwareDatabase
+  db: KnowledgeTenantDatabase
 ): Promise<KnowledgePgvectorCapability> {
   return readCapability(db);
 }
 
 export async function ensureKnowledgePgvectorStorage(
-  db: TenantScopeAwareDatabase
+  db: KnowledgeTenantDatabase
 ): Promise<KnowledgePgvectorCapability> {
   if (!isPostgresDatabase(db)) return readCapability(db);
 

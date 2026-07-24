@@ -10,21 +10,28 @@ import type {
 } from '@agor-live/client';
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
-import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
+import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
-  AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
+  persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
+import {
+  getUserAgenticToolDefault,
+  getUserDefaultConfigurationSource,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CodexSettingsForm } from '../CodexSettingsForm';
 import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
@@ -90,13 +97,36 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
+  const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [isCreating, setIsCreating] = useState(false);
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
+  const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
+    valid: true,
+  });
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({ sessionId: null, showError });
-  const isFormValid = !!selectedAgent;
+
+  // Stable callback so the chip row's reporting effect doesn't loop.
+  const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {
+    setConfigValidity((prev) =>
+      prev.valid === valid && prev.reason === reason ? prev : { valid, reason }
+    );
+  }, []);
+
+  // The only genuinely-required input is an agent (always preselected); the
+  // configuration is the one thing that can become unresolvable (admin edge).
+  // Everything else defaults, so the happy path needs zero input.
+  const missingReason = !selectedAgent
+    ? 'Select an agent to continue'
+    : !configValidity.valid
+      ? configValidity.reason
+      : undefined;
+  const canCreate = !missingReason;
+
+  const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
+  const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
   // Reset form when modal opens, using user defaults if available
   // Only depends on `open` — branch/user refs may change while modal is open
@@ -111,15 +141,20 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     clearAttachments();
 
     // Get default config for the selected agent
-    const agentDefaults = currentUser?.default_agentic_config?.['claude-code'];
+    const agentDefaults = getUserAgenticToolDefault(currentUser, 'claude-code').configuration;
     const baseValues = getFormValuesFromConfig('claude-code', agentDefaults);
 
     // MCP inheritance: branch config > user defaults
     const branchMcpIds = branch?.mcp_server_ids;
 
+    form.resetFields();
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, 'claude-code'),
+      // Never carry a checked save-as-default across opens — it could silently
+      // overwrite the user's default on a later create.
+      saveAsDefault: false,
       ...baseValues,
       mcpServerIds:
         branchMcpIds && branchMcpIds.length > 0
@@ -132,12 +167,13 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (selectedAgent) {
       const tool = selectedAgent as AgenticToolName;
-      const agentDefaults = currentUser?.default_agentic_config?.[tool];
+      const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
       const baseValues = getFormValuesFromConfig(tool, agentDefaults);
 
       // MCP inheritance: branch config > user defaults
       form.setFieldsValue({
         ...baseValues,
+        agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, tool),
         // Clear codex fields when switching away from codex
         ...(tool !== 'codex' && {
           codexSandboxMode: undefined,
@@ -156,7 +192,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       setIsCreating(true);
 
       // Get user defaults for the selected agent (fallback if form fields weren't mounted)
-      const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+      const agentDefaults = getUserAgenticToolDefault(
+        currentUser,
+        selectedAgent as AgenticToolName
+      ).configuration;
 
       // MCP fallback must respect branch > user defaults (same as open-reset effect)
       const branchMcpIds = branch?.mcp_server_ids;
@@ -170,13 +209,31 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
+      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+
+      // Promote the inline config to the user's default when requested. Fire and
+      // forget — session creation shouldn't block on the profile patch.
+      if (values.saveAsDefault && isInline && currentUser && client) {
+        const formValues: AgenticFormValues = {
+          modelConfig: values.modelConfig,
+          effort: values.effort as EffortLevel | undefined,
+          permissionMode: values.permissionMode,
+          codexSandboxMode: values.codexSandboxMode,
+          codexApprovalPolicy: values.codexApprovalPolicy,
+          codexNetworkAccess: values.codexNetworkAccess,
+        };
+        void persistUserDefaultFromForm(
+          client,
+          currentUser,
+          selectedAgent as AgenticToolName,
+          formValues
+        ).catch(() => showError('Failed to save your default configuration'));
+      }
+
       const config: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
-        agenticToolPresetId:
-          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
-            ? undefined
-            : values.agenticToolPresetId,
+        agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
         title: values.title,
         initialPrompt: values.initialPrompt,
         // Daemon's applySessionConfigDefaults hook fills the tool default.
@@ -216,70 +273,98 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     onClose();
   };
 
+  const advancedBits: string[] = [];
+  if (envVarNames.length > 0) {
+    advancedBits.push(`${envVarNames.length} env var${envVarNames.length === 1 ? '' : 's'}`);
+  }
+  if (selectedAgent === 'codex' && isInlineConfig) advancedBits.push('Codex sandbox');
+  const advancedSummary = `Advanced${advancedBits.length > 0 ? ` · ${advancedBits.join(' · ')}` : ''}`;
+
   return (
     <Modal
-      title="Create New Session"
+      title={branch ? `New Session · ${branch.name}` : 'Create New Session'}
       open={open}
-      onOk={handleCreate}
       onCancel={handleCancel}
-      okText="Create Session"
-      cancelText="Cancel"
       width={700}
       maskClosable={false}
-      okButtonProps={{
-        disabled: !isFormValid || isCreating,
-        loading: isCreating,
-      }}
+      footer={
+        <Flex justify="flex-end" gap={token.marginXS}>
+          <Button onClick={handleCancel}>Cancel</Button>
+          {/* Disabled buttons don't emit hover events, so the wrapper span carries
+              the Tooltip that explains what's blocking creation. */}
+          <Tooltip title={missingReason}>
+            <span style={{ display: 'inline-block' }}>
+              <Button
+                type="primary"
+                onClick={handleCreate}
+                disabled={!canCreate || isCreating}
+                loading={isCreating}
+                style={canCreate ? undefined : { pointerEvents: 'none' }}
+              >
+                Create Session
+              </Button>
+            </span>
+          </Tooltip>
+        </Flex>
+      }
     >
-      <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
-        {/* Branch Info */}
-        {branch && (
-          <Alert
-            title={
-              <>
-                Creating session in branch: <strong>{branch.name}</strong> ({branch.ref})
-              </>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        style={{ marginTop: 16 }}
+        // Render the required mark as a suffix ("Label *", before any info icon)
+        // rather than antd's default "* Label" prefix.
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && (
+              <span style={{ color: token.colorError, marginInlineStart: token.marginXXS }}>*</span>
+            )}
+          </>
         )}
-
-        {/* Agent Selection */}
-        <Form.Item label="Select Coding Agent" required>
+      >
+        {/* Agent Selection — dense tiles (pick who you're talking to first) */}
+        <Form.Item label="Coding Agent" required>
           <AgentSelectionGrid
             agents={availableAgents}
             selectedAgentId={selectedAgent}
             onSelect={setSelectedAgent}
-            columns={2}
-            showHelperText={true}
-            showComparisonLink={true}
+            columns={4}
+            size="small"
+            showComparisonLink={false}
           />
         </Form.Item>
 
-        <AgenticToolConfigurationPicker
+        {/* Configuration — source Select + resolved chips */}
+        <AgenticConfigChipRow
           tool={(selectedAgent as AgenticToolName) || 'claude-code'}
           mcpServerById={mcpServerById}
-          showHelpText={true}
+          currentUser={currentUser}
           client={client}
+          enableSaveAsDefault
+          onConfigValidityChange={handleConfigValidity}
         />
 
         {/* Session Title */}
-        <Form.Item name="title" label="Title (optional)">
+        <Form.Item
+          name="title"
+          label="Title"
+          tooltip="Auto-generated from your first prompt when left blank."
+        >
           <Input placeholder="e.g., Add authentication system" />
         </Form.Item>
 
         {/* Initial Prompt */}
         <Form.Item
           name="initialPrompt"
-          label="Initial Prompt (optional)"
-          help="First message to send to the agent when session starts"
+          label="Initial Prompt"
+          tooltip={`Optional — the first message sent when the session starts. Type @ to reference files or knowledge, or paste (${PASTE_SHORTCUT}) a screenshot. Sessions can also start idle and be prompted later.`}
         >
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
-            placeholder={`e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete, or ${PASTE_SHORTCUT} to paste a screenshot)`}
+            placeholder="e.g., Build a JWT authentication system"
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}
             sessionId={null}
@@ -291,7 +376,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
         {attachments.length > 0 && (
-          <div style={{ padding: '8px 0' }}>
+          <div style={{ paddingBlock: token.paddingXS }}>
             <SessionAttachmentTray
               attachments={attachments}
               onRemove={removeAttachment}
@@ -306,22 +391,31 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
-            ...(currentUser && client
-              ? [
-                  {
-                    key: 'env-vars',
-                    label: <Typography.Text strong>Environment Variables</Typography.Text>,
-                    children: (
+            {
+              key: 'advanced',
+              label: <Typography.Text type="secondary">{advancedSummary}</Typography.Text>,
+              children: (
+                <>
+                  {currentUser && client && (
+                    <Form.Item
+                      label="Environment Variables"
+                      tooltip="Exported into this session's executor process."
+                    >
                       <SessionEnvVarsSelector
                         ownerUserId={currentUser.user_id}
                         client={client}
                         value={envVarNames}
                         onChange={setEnvVarNames}
                       />
-                    ),
-                  },
-                ]
-              : []),
+                    </Form.Item>
+                  )}
+
+                  {selectedAgent === 'codex' && isInlineConfig && (
+                    <CodexSettingsForm showHelpText={false} />
+                  )}
+                </>
+              ),
+            },
           ]}
           style={{ marginTop: 16 }}
         />

@@ -1,8 +1,58 @@
-import { describe, expect, it } from 'vitest';
+import {
+  getCurrentTenantDatabase,
+  getCurrentTenantId,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
+import { DEFAULT_KNOWLEDGE_SEMANTIC_POLICY } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   buildKnowledgeEmbeddingReuseSql,
+  isKnowledgeEmbeddingMaterializationSnapshotCurrent,
+  KnowledgeEmbeddingIndexer,
   mergeEmbeddingReuseIntoNextMetadata,
 } from './knowledge-embedding-indexer';
+
+describe('isKnowledgeEmbeddingMaterializationSnapshotCurrent', () => {
+  it('rejects policy, credential, and chunking changes but ignores batch-size tuning', () => {
+    const snapshot = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY;
+
+    expect(
+      isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+        snapshot,
+        { ...snapshot, model: 'text-embedding-3-large' },
+        'key-a',
+        'key-a'
+      )
+    ).toBe(false);
+    expect(
+      isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+        snapshot,
+        {
+          ...snapshot,
+          chunking: { ...snapshot.chunking, target_tokens: 640 },
+        },
+        'key-a',
+        'key-a'
+      )
+    ).toBe(false);
+    expect(
+      isKnowledgeEmbeddingMaterializationSnapshotCurrent(snapshot, snapshot, 'key-a', 'key-b')
+    ).toBe(false);
+    expect(
+      isKnowledgeEmbeddingMaterializationSnapshotCurrent(
+        snapshot,
+        {
+          ...snapshot,
+          indexing: { ...snapshot.indexing, batch_size: 64 },
+        },
+        'key-a',
+        'key-a'
+      )
+    ).toBe(true);
+  });
+});
 
 function sqlText(query: { queryChunks?: unknown[] }): string {
   return (query.queryChunks ?? [])
@@ -110,5 +160,94 @@ describe('mergeEmbeddingReuseIntoNextMetadata', () => {
       total_chunks: 27,
       updated_at: '2026-06-08T00:01:00.000Z',
     });
+  });
+});
+
+describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
+  dbTest('runs only after commit with request tenant scopes detached', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const observedScopes: Array<{ tenantId: string | undefined; hasDatabase: boolean }> = [];
+      const tick = vi.fn(async () => {
+        observedScopes.push({
+          tenantId: getCurrentTenantId() as string | undefined,
+          hasDatabase: Boolean(getCurrentTenantDatabase()),
+        });
+      });
+      indexer.tick = tick;
+
+      await runWithTenantContext('request-tenant', () =>
+        runWithTenantDatabaseScope(db, 'request-tenant', async () => {
+          indexer.wake();
+          expect(tick).not.toHaveBeenCalled();
+        })
+      );
+
+      expect(tick).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(tick).toHaveBeenCalledTimes(1);
+      expect(observedScopes).toEqual([{ tenantId: undefined, hasDatabase: false }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  dbTest('does not wake when the surrounding tenant transaction rolls back', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const tick = vi.fn(async () => {});
+      indexer.tick = tick;
+
+      await expect(
+        runWithTenantContext('request-tenant', () =>
+          runWithTenantDatabaseScope(db, 'request-tenant', async () => {
+            indexer.wake();
+            throw new Error('rollback');
+          })
+        )
+      ).rejects.toThrow('rollback');
+
+      await vi.runAllTimersAsync();
+      expect(tick).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  dbTest('reruns after a wake arrives during an active tick', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      let releaseFirst!: () => void;
+      let signalStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      const holdFirst = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let calls = 0;
+      indexer.indexBatch = vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          signalStarted();
+          await holdFirst;
+        }
+        return 0;
+      });
+
+      const firstTick = indexer.tick();
+      await firstStarted;
+      indexer.wake();
+      releaseFirst();
+      await firstTick;
+      await vi.runAllTimersAsync();
+
+      expect(indexer.indexBatch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

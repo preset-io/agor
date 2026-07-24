@@ -5,9 +5,8 @@
  * immutable document version and advances `current_version_id`.
  */
 
-import { loadConfig, PAGINATION } from '@agor/core/config';
+import { PAGINATION } from '@agor/core/config';
 import {
-  AppVariableRepository,
   type CreateKnowledgeDocumentInput,
   isPostgresDatabase,
   type KnowledgeDocumentFilters,
@@ -15,7 +14,9 @@ import {
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
+  KnowledgeSemanticSettingsRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
@@ -38,14 +39,11 @@ import {
   titleFromKnowledgeContent,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import {
-  isUsableOpenAIEmbeddingConfig,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-} from '../knowledge/embeddings.js';
+import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import {
-  knowledgeChunkerOptionsFromConfig,
+  knowledgeChunkerOptionsFromSettings,
   knowledgeUnitsForMarkdown,
 } from '../knowledge/units.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -125,7 +123,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   KnowledgeDocumentParams
 > {
   private repo: KnowledgeDocumentRepository;
-  private variables: AppVariableRepository;
+  private semanticSettings: KnowledgeSemanticSettingsRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
   private graph: KnowledgeGraphRepository;
@@ -144,10 +142,29 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
     });
     this.repo = repo;
-    this.variables = new AppVariableRepository(db);
+    this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
     this.graph = new KnowledgeGraphRepository(db);
+  }
+
+  /**
+   * Serialize document/unit writes with semantic policy mutations. PostgreSQL
+   * requests normally arrive inside the tenant hook's transaction; direct
+   * calls and SQLite use an explicit transaction so the aggregate lock, the
+   * document version, and its derived units share one commit boundary.
+   */
+  private async runPolicyDependentWrite<T>(
+    work: (service: KnowledgeDocumentsService) => Promise<T>
+  ): Promise<T> {
+    return runKnowledgePolicyTransaction(this.db, async (tx: TenantScopedDatabase) => {
+      const service = new KnowledgeDocumentsService(
+        tx as unknown as TenantScopeAwareDatabase,
+        this.app
+      );
+      await service.semanticSettings.lockAggregateForUpdate(tx);
+      return work(service);
+    });
   }
 
   private isAdmin(user?: User): boolean {
@@ -264,17 +281,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
    */
 
   private async isEmbeddingConfigured(): Promise<boolean> {
-    const config = await loadConfig();
     if (!isPostgresDatabase(this.db)) return false;
-    const apiKey = await this.variables.find(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
-    );
+    const settings = await this.semanticSettings.find();
     return (
-      isUsableOpenAIEmbeddingConfig(
-        config.knowledge?.semantic_search ?? {},
-        Boolean(apiKey?.value_encrypted)
-      ) && (await ensureKnowledgePgvectorStorage(this.db)).available
+      isUsableOpenAIEmbeddingConfig(settings, settings.api_key_configured) &&
+      (await ensureKnowledgePgvectorStorage(this.db)).available
     );
   }
 
@@ -283,15 +294,18 @@ export class KnowledgeDocumentsService extends DrizzleService<
     content?: string | null
   ): Promise<void> {
     if (typeof content !== 'string' || !doc.current_version_id) return;
-    const config = await loadConfig();
+    const settings = await this.semanticSettings.findPolicy();
     const chunks = knowledgeUnitsForMarkdown(
       doc.path,
       content,
-      knowledgeChunkerOptionsFromConfig(config)
+      knowledgeChunkerOptionsFromSettings(settings)
     );
-    await this.repo.replaceUnitsForVersion(doc.current_version_id, chunks, {
+    await this.repo.replaceUnitsForVersionInTransaction(this.db, doc.current_version_id, chunks, {
       embeddingConfigured: await this.isEmbeddingConfigured(),
     });
+  }
+
+  private wakeIndexer(): void {
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
     ) as { wake?: () => void } | undefined;
@@ -477,6 +491,19 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
+    const write = (service: KnowledgeDocumentsService) => service.writePutDocument(data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
+    if (typeof data.content_text === 'string') this.wakeIndexer();
+    return result;
+  }
+
+  private async writePutDocument(
+    data: KnowledgeDocumentWriteData,
+    params?: KnowledgeDocumentParams
+  ): Promise<KnowledgeDocument> {
     const userId = this.attributionUserId(params, data.created_by);
 
     const parsed = parseKnowledgeUri(data.uri);
@@ -598,13 +625,37 @@ export class KnowledgeDocumentsService extends DrizzleService<
       | Array<CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput>,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument | KnowledgeDocument[]> {
-    if (Array.isArray(data)) {
-      return Promise.all(data.map((item) => this.createOne(item, params)));
-    }
-    return this.createOne(data, params);
+    const write = async (service: KnowledgeDocumentsService) => {
+      if (!Array.isArray(data)) return service.createOne(data, params);
+      const created: KnowledgeDocument[] = [];
+      for (const item of data) created.push(await service.createOne(item, params));
+      return created;
+    };
+    const materializesUnits =
+      (Array.isArray(data) && data.some((item) => typeof item.content_text === 'string')) ||
+      (!Array.isArray(data) && typeof data.content_text === 'string');
+    const result = materializesUnits
+      ? await this.runPolicyDependentWrite(write)
+      : await write(this);
+    if (materializesUnits) this.wakeIndexer();
+    return result;
   }
 
   async patch(
+    id: NullableId,
+    data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
+    params?: KnowledgeDocumentParams
+  ) {
+    const write = (service: KnowledgeDocumentsService) => service.writePatch(id, data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
+    if (typeof data.content_text === 'string') this.wakeIndexer();
+    return result;
+  }
+
+  private async writePatch(
     id: NullableId,
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
@@ -635,6 +686,20 @@ export class KnowledgeDocumentsService extends DrizzleService<
   }
 
   async update(
+    id: Id,
+    data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
+    params?: KnowledgeDocumentParams
+  ) {
+    const write = (service: KnowledgeDocumentsService) => service.writeUpdate(id, data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
+    if (typeof data.content_text === 'string') this.wakeIndexer();
+    return result;
+  }
+
+  private async writeUpdate(
     id: Id,
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams

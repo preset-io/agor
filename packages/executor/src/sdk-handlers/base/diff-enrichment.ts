@@ -75,6 +75,7 @@ interface TextFileSnapshot {
 interface EditFilesBaselineEntry {
   gitRoot: string;
   files: Map<string, TextFileSnapshot>;
+  fileListComplete: boolean;
   createdAt: number;
 }
 
@@ -166,7 +167,9 @@ async function getGitRootFromGit(workingDirectory: string): Promise<string | nul
   }
 }
 
-async function listTurnBaselineFiles(gitRoot: string): Promise<string[]> {
+async function listTurnBaselineFiles(
+  gitRoot: string
+): Promise<{ files: string[]; complete: boolean }> {
   try {
     const { git } = createGit(gitRoot);
     const output = await git.raw(['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
@@ -174,15 +177,17 @@ async function listTurnBaselineFiles(gitRoot: string): Promise<string[]> {
     const seen = new Set<string>();
 
     for (const rawPath of output.split('\0')) {
-      if (files.length >= MAX_TURN_BASELINE_FILES) break;
       if (!rawPath || seen.has(rawPath) || !isSafeRepoRelativePath(rawPath)) continue;
+      if (files.length >= MAX_TURN_BASELINE_FILES) {
+        return { files, complete: false };
+      }
       seen.add(rawPath);
       files.push(rawPath);
     }
 
-    return files;
+    return { files, complete: true };
   } catch {
-    return [];
+    return { files: [], complete: false };
   }
 }
 
@@ -339,9 +344,10 @@ export async function registerEditFilesTurnBaseline(
     const gitRoot = await getGitRootFromGit(workingDirectory);
     if (!gitRoot) return;
 
+    const listedFiles = await listTurnBaselineFiles(gitRoot);
     const files = new Map<string, TextFileSnapshot>();
     let totalBytes = 0;
-    for (const relativePath of await listTurnBaselineFiles(gitRoot)) {
+    for (const relativePath of listedFiles.files) {
       const absolutePath = path.join(gitRoot, relativePath);
       const snapshot = readTextFileSnapshot(absolutePath);
       if (snapshot.content !== undefined) {
@@ -358,6 +364,7 @@ export async function registerEditFilesTurnBaseline(
     pendingEditFilesBaselines.set(getBaselineKey(context), {
       gitRoot,
       files,
+      fileListComplete: listedFiles.complete,
       createdAt: Date.now(),
     });
   } catch {
@@ -649,42 +656,69 @@ function enrichEditFilesResult(
     pendingEditFilesSnapshots.delete(getSnapshotKey(toolUseId, context));
   }
   const snapshots = snapshotEntry?.snapshots;
-
-  if (snapshots?.length) {
-    const snapshotDiffs = enrichFromEditFilesSnapshots(snapshots);
-    refreshEditFilesBaselineFromSnapshots(context, snapshots);
-    if (snapshotDiffs.length > 0) {
-      block.diff = {
-        structuredPatch: snapshotDiffs[0].structuredPatch,
-        files: snapshotDiffs,
-      };
-      return;
-    }
-  }
-
   const baselineSnapshots = snapshotsFromEditFilesBaseline(changes, context);
-  if (baselineSnapshots.length > 0) {
-    const baselineDiffs = enrichFromEditFilesSnapshots(baselineSnapshots);
-    refreshEditFilesBaselineFromSnapshots(context, baselineSnapshots);
-    if (baselineDiffs.length > 0) {
-      block.diff = {
-        structuredPatch: baselineDiffs[0].structuredPatch,
-        files: baselineDiffs,
-      };
-      return;
-    }
-  }
-
-  // Find git root once for relative path resolution
-  const gitRoot = getGitRoot(workingDirectory);
+  const baseline = pendingEditFilesBaselines.get(getBaselineKey(context));
+  const gitRoot = baseline?.gitRoot ?? getGitRoot(workingDirectory);
   if (!gitRoot) return; // Not in a git repo or git unavailable
 
+  const invocationSnapshotsByPath = new Map<string, EditFilesSnapshot>();
+  for (const snapshot of snapshots ?? []) {
+    const relativePath = resolveRepoRelativePath(gitRoot, snapshot.absolutePath);
+    if (relativePath) invocationSnapshotsByPath.set(relativePath, snapshot);
+  }
+
+  const baselineSnapshotsByPath = new Map<string, EditFilesSnapshot>();
+  for (const snapshot of baselineSnapshots) {
+    const relativePath = resolveRepoRelativePath(gitRoot, snapshot.absolutePath);
+    if (relativePath) baselineSnapshotsByPath.set(relativePath, snapshot);
+  }
+
   const fileDiffs: FileDiff[] = [];
+  const refreshSnapshots: EditFilesSnapshot[] = [];
+  const processedPaths = new Set<string>();
 
   for (const change of changes) {
     if (!change.path) continue;
 
     const kind = normalizeChangeKind(change.kind);
+    const filePath = change.path;
+    const resolvedPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(workingDirectory || gitRoot, filePath);
+    const relativePath = resolveRepoRelativePath(gitRoot, resolvedPath);
+    if (!relativePath || processedPaths.has(relativePath)) continue;
+    processedPaths.add(relativePath);
+
+    const invocationSnapshot = invocationSnapshotsByPath.get(relativePath);
+    const baselineSnapshot = baselineSnapshotsByPath.get(relativePath);
+    const refreshSnapshot = baselineSnapshot ??
+      invocationSnapshot ?? {
+        path: relativePath,
+        kind,
+        absolutePath: resolvedPath,
+        beforeExists: false,
+      };
+    refreshSnapshots.push(refreshSnapshot);
+
+    // Resolve each file independently. A multi-file item can be observed while
+    // Codex is between mutations, leaving some invocation snapshots pre-edit
+    // and others post-edit. Prefer a valid invocation diff for this path, then
+    // fall back to the turn baseline only for this path.
+    const invocationDiff = invocationSnapshot
+      ? enrichFromEditFilesSnapshots([invocationSnapshot])[0]
+      : undefined;
+    if (invocationDiff) {
+      fileDiffs.push(invocationDiff);
+      continue;
+    }
+
+    const baselineDiff = baselineSnapshot
+      ? enrichFromEditFilesSnapshots([baselineSnapshot])[0]
+      : undefined;
+    if (baselineDiff) {
+      fileDiffs.push(baselineDiff);
+      continue;
+    }
 
     // Without a pre-edit snapshot, Codex SDK file_change items only tell us
     // path + kind. Diffing updates/deletes against HEAD is misleading in dirty
@@ -693,15 +727,7 @@ function enrichEditFilesResult(
     // trustworthy post-edit-only representation.
     if (kind !== 'add') continue;
 
-    const filePath = change.path;
-    const resolvedPath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(workingDirectory || gitRoot, filePath);
-
     try {
-      // Only render files inside the repo.
-      if (!resolveRepoRelativePath(gitRoot, resolvedPath)) continue;
-
       const after = readTextFileSnapshot(resolvedPath);
       if (!after.exists || after.content === undefined) continue;
       const content = after.content;
@@ -716,6 +742,11 @@ function enrichEditFilesResult(
       // Best effort — skip files that fail
     }
   }
+
+  // Advance the baseline once, after every file has been compared against its
+  // chosen pre-image. This prevents one path's late snapshot from destroying
+  // another path's still-needed turn baseline.
+  refreshEditFilesBaselineFromSnapshots(context, refreshSnapshots);
 
   if (fileDiffs.length > 0) {
     // Also set structuredPatch to the first file's hunks for backward compat
@@ -832,13 +863,19 @@ function snapshotsFromEditFilesBaseline(
     const relativePath = resolveRepoRelativePath(baseline.gitRoot, absolutePath);
     if (!relativePath) continue;
 
-    const before = baseline.files.get(relativePath) ?? { exists: false };
+    const before = baseline.files.get(relativePath);
+    if (!before && !baseline.fileListComplete) {
+      // An absent entry is only authoritative when enumeration completed. If
+      // capture hit its file cap or failed, the path may already have existed.
+      // Omitting an uncertain diff is safer than fabricating a whole-file add.
+      continue;
+    }
     snapshots.push({
       path: relativePath,
       kind: normalizeChangeKind(change.kind),
       absolutePath,
-      beforeExists: before.exists,
-      beforeContent: before.content,
+      beforeExists: before?.exists ?? false,
+      beforeContent: before?.content,
     });
   }
 
