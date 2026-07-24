@@ -3,6 +3,26 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ZoneTriggerModal } from './ZoneTriggerModal';
 
+function EffortField({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange?: (value: string | undefined) => void;
+}) {
+  return (
+    <select
+      aria-label="zone-effort"
+      value={value ?? ''}
+      onChange={(event) => onChange?.(event.target.value || undefined)}
+    >
+      <option value="">Inherited</option>
+      <option value="medium">Medium</option>
+      <option value="xhigh">X-High</option>
+    </select>
+  );
+}
+
 // Isolate the modal's own smart-default selection logic from its heavy config
 // children — the regression lives entirely in ZoneTriggerModal's render-time
 // useMemo, which runs regardless of what these children render.
@@ -28,23 +48,6 @@ vi.mock('../../AgenticToolConfigForm', async () => {
     '../../AgenticToolConfigForm'
   );
   const { Form } = await vi.importActual<typeof import('antd')>('antd');
-  const EffortField = ({
-    value,
-    onChange,
-  }: {
-    value?: string;
-    onChange?: (value: string | undefined) => void;
-  }) => (
-    <select
-      aria-label="zone-effort"
-      value={value ?? ''}
-      onChange={(event) => onChange?.(event.target.value || undefined)}
-    >
-      <option value="">Inherited</option>
-      <option value="medium">Medium</option>
-      <option value="xhigh">X-High</option>
-    </select>
-  );
   return {
     ...actual,
     AgenticToolConfigForm: () => (
@@ -56,23 +59,6 @@ vi.mock('../../AgenticToolConfigForm', async () => {
 });
 vi.mock('../../AgenticToolConfigurationPicker', async () => {
   const { Form } = await vi.importActual<typeof import('antd')>('antd');
-  const EffortField = ({
-    value,
-    onChange,
-  }: {
-    value?: string;
-    onChange?: (value: string | undefined) => void;
-  }) => (
-    <select
-      aria-label="zone-effort"
-      value={value ?? ''}
-      onChange={(event) => onChange?.(event.target.value || undefined)}
-    >
-      <option value="">Inherited</option>
-      <option value="medium">Medium</option>
-      <option value="xhigh">X-High</option>
-    </select>
-  );
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
     AgenticToolConfigurationPicker: () => (
