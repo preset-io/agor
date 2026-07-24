@@ -1,6 +1,6 @@
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
+import { Button, Dropdown, Layout, Modal, Select, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -247,21 +247,28 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'teammate' | 'branch'>('teammate');
 
   const handleNewSession = useCallback(
     (defaultType: 'teammate' | 'branch' = 'teammate') => {
-      setCreateType(defaultType);
+      // Teammates open the unified CreateDialog directly on the teammate tab —
+      // no board pre-pick, because a teammate gets its own new board by default
+      // (consistent with the canvas/panel flow, and it lands the user on that
+      // new board). Only branches, which legitimately target an existing board,
+      // route through the board-picker modal below.
+      if (defaultType === 'teammate') {
+        props.onOpenCreateDialog('teammate');
+        return;
+      }
       setSelectedBoardId(defaultBoardId);
       setCreateOpen(true);
     },
-    [defaultBoardId]
+    [defaultBoardId, props.onOpenCreateDialog]
   );
 
   const handleConfirmCreate = useCallback(() => {
     setCreateOpen(false);
-    props.onOpenCreateDialog(createType, selectedBoardId);
-  }, [props.onOpenCreateDialog, createType, selectedBoardId]);
+    props.onOpenCreateDialog('branch', selectedBoardId);
+  }, [props.onOpenCreateDialog, selectedBoardId]);
 
   return (
     <>
@@ -445,7 +452,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
       </div>
 
       <Modal
-        title={createType === 'branch' ? 'New branch' : 'New AI teammate'}
+        title="New branch"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={420}
@@ -476,7 +483,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   disabled={!selectedBoardId}
                   onClick={handleConfirmCreate}
                 >
-                  {createType === 'teammate' ? 'Start AI teammate' : 'Create branch'}
+                  Create branch
                 </Button>,
               ]
         }
@@ -489,15 +496,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           </div>
         ) : (
           <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Segmented
-              value={createType}
-              onChange={(v) => setCreateType(v as 'teammate' | 'branch')}
-              block
-              options={[
-                { value: 'teammate', label: 'AI teammate', icon: <RobotOutlined /> },
-                { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
-              ]}
-            />
             <div>
               <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
                 Which board?
