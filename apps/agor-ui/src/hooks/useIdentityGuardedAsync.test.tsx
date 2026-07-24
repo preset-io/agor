@@ -100,6 +100,29 @@ describe('useIdentityGuardedAsync', () => {
     expect(onB).toHaveBeenCalledWith('B');
   });
 
+  it('supersedes an older in-flight run with a newer one under an unchanged identity', async () => {
+    const { result } = renderHook(() => useIdentityGuardedAsync([1]));
+
+    // Two overlapping runs against the SAME identity (e.g. a stale probe still
+    // in flight when a re-probe fires after a successful sign-in). The older one
+    // must never commit even if it resolves last — newest-wins.
+    const first = deferred<string>();
+    const onFirst = vi.fn();
+    result.current.run(() => first.promise).then(onFirst, onFirst);
+
+    const second = deferred<string>();
+    const onSecond = vi.fn();
+    result.current.run(() => second.promise).then(onSecond, onSecond);
+
+    first.resolve('stale verdict');
+    await flush();
+    expect(onFirst).not.toHaveBeenCalled();
+
+    second.resolve('fresh verdict');
+    await flush();
+    expect(onSecond).toHaveBeenCalledWith('fresh verdict');
+  });
+
   it('fires onIdentityChange on mount and on every identity change, not on a same-identity render', () => {
     const onIdentityChange = vi.fn();
     const { rerender } = renderHook(({ id }) => useIdentityGuardedAsync([id], onIdentityChange), {
