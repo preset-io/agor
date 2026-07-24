@@ -12,10 +12,12 @@ import {
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBaseUrl,
   getBranchesDir,
   getBranchPath,
   getConfigPath,
   getConfigValue,
+  getDaemonBaseUrl,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
@@ -655,6 +657,8 @@ describe('requirePublicBaseUrl', () => {
 
   it('returns AGOR_BASE_URL env when set', async () => {
     process.env.AGOR_BASE_URL = 'https://agor.example.com';
+    await expect(getBaseUrl()).resolves.toBe('https://agor.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
   });
 
@@ -667,6 +671,8 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
 
@@ -679,10 +685,31 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
   });
 
+  it('separates UI links from daemon endpoints when both base URLs are configured', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: { base_url: 'http://[::1]:3030' },
+        ui: { base_url: 'http://localhost:5173' },
+      }),
+      'utf-8'
+    );
+
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:5173');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://[::1]:3030');
+    await expect(requirePublicBaseUrl()).resolves.toBe('http://[::1]:3030');
+  });
+
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:3030');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://localhost:3030');
     await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
   });
 

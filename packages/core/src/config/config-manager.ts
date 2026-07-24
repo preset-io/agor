@@ -927,15 +927,54 @@ function validateBaseUrl(url: string): string {
 }
 
 /**
- * Get base URL for external/user-facing links
+ * Resolve the daemon base URL from config, preserving the legacy
+ * `ui.base_url` fallback used by older one-origin installations.
+ */
+function resolveDaemonBaseUrl(config: AgorConfig): string {
+  if (config.daemon?.base_url) {
+    return validateBaseUrl(config.daemon.base_url);
+  }
+
+  if (config.ui?.base_url) {
+    return validateBaseUrl(config.ui.base_url);
+  }
+
+  const defaults = getDefaultConfig();
+  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
+  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
+  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
+
+  return `http://${host}:${port}`;
+}
+
+/**
+ * Get the daemon base URL for browser-reachable API endpoints.
+ *
+ * Resolution order:
+ * 1. AGOR_BASE_URL environment variable (highest priority)
+ * 2. daemon.base_url from config.yaml
+ * 3. ui.base_url from legacy one-origin configs
+ * 4. Default daemon host and port
+ */
+export async function getDaemonBaseUrl(): Promise<string> {
+  if (process.env.AGOR_BASE_URL) {
+    return validateBaseUrl(process.env.AGOR_BASE_URL);
+  }
+
+  return resolveDaemonBaseUrl(await loadConfig());
+}
+
+/**
+ * Get base URL for external/user-facing UI links
  *
  * Used to generate clickable URLs to sessions, boards, and other resources
  * that are sent to external platforms like Slack, email, etc.
  *
  * Resolution order:
  * 1. AGOR_BASE_URL environment variable (highest priority)
- * 2. daemon.base_url from config.yaml
- * 3. Default: http://localhost:{port} (constructed from daemon port)
+ * 2. ui.base_url from config.yaml
+ * 3. daemon.base_url from config.yaml
+ * 4. Default: http://localhost:{port} (constructed from daemon port)
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
@@ -947,23 +986,13 @@ export async function getBaseUrl(): Promise<string> {
 
   const config = await loadConfig();
 
-  // 2. Check config.yaml
-  if (config.daemon?.base_url) {
-    return validateBaseUrl(config.daemon.base_url);
-  }
-
-  // 3. Backward-compatible UI public URL used by older configs.
+  // Prefer an explicitly configured browser UI origin. This differs from the
+  // daemon origin in the two-process development setup.
   if (config.ui?.base_url) {
     return validateBaseUrl(config.ui.base_url);
   }
 
-  // 4. Default: construct from daemon port (no validation needed for default)
-  const defaults = getDefaultConfig();
-  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
-  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
-
-  return `http://${host}:${port}`;
+  return resolveDaemonBaseUrl(config);
 }
 
 /**
@@ -985,14 +1014,15 @@ export class PublicBaseUrlNotConfiguredError extends Error {
 /**
  * Get the daemon's public, browser-reachable base URL.
  *
- * Strict variant of {@link getBaseUrl} — required for any URL that will be handed
+ * Strict variant of {@link getDaemonBaseUrl} — required for any URL that will be handed
  * to a remote system (e.g. an OAuth `redirect_uri` registered with an upstream
  * provider) and then loaded by an end-user's browser.
  *
  * Resolution:
  * 1. `AGOR_BASE_URL` environment variable
  * 2. `daemon.base_url` from `~/.agor/config.yaml`
- * 3. **Throws** {@link PublicBaseUrlNotConfiguredError}
+ * 3. Legacy `ui.base_url` fallback
+ * 4. **Throws** {@link PublicBaseUrlNotConfiguredError}
  *
  * Unlike {@link getBaseUrl}, this never silently falls back to
  * `http://localhost:{port}` — that fallback is broken for any browser not on

@@ -53,10 +53,10 @@ export interface AgorDaemonSettings {
   public_url?: string;
 
   /**
-   * Base URL for external/user-facing links (e.g., session URLs in Slack messages).
+   * Browser-reachable base URL for daemon endpoints.
    *
-   * Used to generate clickable URLs to sessions, boards, and other resources
-   * that are sent to external platforms like Slack, email, etc.
+   * Used for OAuth callbacks, artifact API grants, and proxy URLs. It is also
+   * the fallback origin for browser UI links when ui.base_url is not set.
    *
    * Defaults to `http://localhost:{port}` in development.
    * Should be set to your public domain in production (e.g., https://agor.example.com).
@@ -140,9 +140,10 @@ export interface AgorUISettings {
   /**
    * Public user-facing base URL for the UI.
    *
-   * Legacy/compatibility alias for daemon.base_url in older configs. New
-   * installs should prefer daemon.base_url so all external link builders share
-   * one setting.
+   * Set this when the browser UI is served from a different origin than the
+   * daemon, such as the two-process development setup. When omitted, browser
+   * links fall back to daemon.base_url. It also remains a compatibility
+   * fallback for older one-origin installations.
    */
   base_url?: string;
 

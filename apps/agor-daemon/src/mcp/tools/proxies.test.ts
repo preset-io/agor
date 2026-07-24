@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/config', () => ({
-  getBaseUrl: async () => 'http://localhost:3030',
+  getDaemonBaseUrl: async () => 'http://localhost:3030',
   loadConfig: async () => ({}),
   resolveProxies: () => [],
 }));

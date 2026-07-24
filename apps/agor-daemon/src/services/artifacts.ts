@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
 import {
-  getBaseUrl,
+  getDaemonBaseUrl,
   loadConfig,
   PAGINATION,
   resolveProxies,
@@ -1321,7 +1321,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       out[GRANT_ENV_VAR_NAMES.agor_token] = await this.mintViewerJwt(userId, artifact, grants);
     }
     if (grants.agor_api_url) {
-      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getBaseUrl();
+      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getDaemonBaseUrl();
     }
     if (grants.agor_user_email && userId) {
       try {
@@ -1343,7 +1343,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       try {
         const config = await loadConfig();
         const proxies = resolveProxies(config);
-        const baseUrl = await getBaseUrl();
+        const baseUrl = await getDaemonBaseUrl();
         const origin = new URL(baseUrl).origin;
         const configuredVendors = new Set(proxies.map((p) => p.vendor));
         for (const vendor of grants.agor_proxies) {

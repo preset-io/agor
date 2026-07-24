@@ -12,7 +12,12 @@
  * artifact code are not the place to surface operator-tuning knobs.
  */
 
-import { getBaseUrl, loadConfig, type ResolvedProxy, resolveProxies } from '@agor/core/config';
+import {
+  getDaemonBaseUrl,
+  loadConfig,
+  type ResolvedProxy,
+  resolveProxies,
+} from '@agor/core/config';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { mcpRequiredString } from '../schema.js';
@@ -29,7 +34,7 @@ interface ProxyDescriptor {
 }
 
 async function describe(proxy: ResolvedProxy): Promise<ProxyDescriptor> {
-  const baseUrl = await getBaseUrl();
+  const baseUrl = await getDaemonBaseUrl();
   const origin = new URL(baseUrl).origin;
   return {
     vendor: proxy.vendor,
