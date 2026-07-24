@@ -47,6 +47,8 @@ import type {
   TemplateRenderResponse,
   TenantAgenticToolSettings,
   TenantAgenticToolSettingsPatch,
+  TenantCorsSettings,
+  TenantCorsSettingsPatch,
   User,
   UserAvatarSettings,
   UserAvatarSyncRequest,
@@ -214,6 +216,7 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'tenant-cors-settings': TenantCorsSettings;
 }
 
 /**
@@ -267,6 +270,11 @@ export type AgenticToolPresetsService = AgorService<
   never,
   PatchAgenticToolPreset
 >;
+
+export interface TenantCorsSettingsService {
+  get(id: 'current', params?: Params): Promise<TenantCorsSettings>;
+  patch(id: 'current', data: TenantCorsSettingsPatch, params?: Params): Promise<TenantCorsSettings>;
+}
 
 /** Singleton workspace Knowledge semantic-search settings endpoint. */
 export interface KnowledgeSettingsService {
@@ -630,6 +638,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
+  service(path: 'tenant-cors-settings'): TenantCorsSettingsService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;

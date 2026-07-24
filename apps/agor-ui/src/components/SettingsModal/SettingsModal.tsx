@@ -25,6 +25,7 @@ import {
   InfoCircleOutlined,
   MessageOutlined,
   RobotOutlined,
+  SafetyCertificateOutlined,
   TeamOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -56,6 +57,7 @@ import { ArtifactsTable } from './ArtifactsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
+import { CorsSettingsSection } from './CorsSettingsSection';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
@@ -319,6 +321,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                   label: 'Groups',
                   icon: <TeamOutlined />,
                 },
+                {
+                  key: 'cors',
+                  label: 'CORS',
+                  icon: <SafetyCertificateOutlined />,
+                },
               ]
             : []),
           {
@@ -451,6 +458,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'groups':
         return <GroupsTable client={client} currentUser={currentUser} userById={userById} />;
+      case 'cors':
+        return isAdmin ? <CorsSettingsSection client={client} /> : null;
       case 'users':
         return (
           <UsersTable

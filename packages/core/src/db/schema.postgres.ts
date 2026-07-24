@@ -1258,6 +1258,49 @@ export const appVariables = pgTable(
   })
 );
 
+/** Tenant-admin-managed exact CORS origins. */
+export const tenantCorsSettings = pgTable(
+  'tenant_cors_settings',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    settings_id: text('settings_id').notNull().default('current'),
+    revision: integer('revision').notNull().default(0),
+    origins: t.json<string[]>('origins').notNull(),
+    updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.settings_id] }),
+    tenantIdx: index('tenant_cors_settings_tenant_id_idx').on(table.tenant_id),
+  })
+);
+
+/** Append-only audit history for tenant CORS settings mutations. */
+export const tenantCorsAuditEvents = pgTable(
+  'tenant_cors_audit_events',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    event_id: varchar('event_id', { length: 36 }).primaryKey(),
+    revision: integer('revision').notNull(),
+    added_origins: t.json<string[]>('added_origins').notNull(),
+    removed_origins: t.json<string[]>('removed_origins').notNull(),
+    // Deliberately not an FK: audit attribution must survive user deletion.
+    actor_user_id: varchar('actor_user_id', { length: 36 }),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    tenantIdx: index('tenant_cors_audit_tenant_id_idx').on(table.tenant_id),
+    tenantRevisionUnique: uniqueIndex('tenant_cors_audit_tenant_revision_unique').on(
+      table.tenant_id,
+      table.revision
+    ),
+    createdAtIdx: index('tenant_cors_audit_created_at_idx').on(table.created_at),
+  })
+);
+
 /** Tenant-owned, live agentic-tool runtime configuration presets. */
 export const agenticToolPresets = pgTable(
   'agentic_tool_presets',
@@ -2445,6 +2488,10 @@ export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
+export type TenantCorsSettingsRow = typeof tenantCorsSettings.$inferSelect;
+export type TenantCorsSettingsInsert = typeof tenantCorsSettings.$inferInsert;
+export type TenantCorsAuditEventRow = typeof tenantCorsAuditEvents.$inferSelect;
+export type TenantCorsAuditEventInsert = typeof tenantCorsAuditEvents.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;
 export type AgenticToolPresetInsert = typeof agenticToolPresets.$inferInsert;
 export type GroupRow = typeof groups.$inferSelect;

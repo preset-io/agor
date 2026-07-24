@@ -3932,6 +3932,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               credentials: resolvedSecurity.cors.credentials,
               originCount: resolvedSecurity.cors.origins.length,
               allowSandpack: resolvedSecurity.cors.allowSandpack,
+              tenantOriginsEnabled: resolvedSecurity.cors.tenantOriginsEnabled,
             },
           },
         };

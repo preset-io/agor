@@ -16,6 +16,7 @@ export const SETTINGS_SECTIONS = [
   'agentic-tools',
   'gateway',
   'groups',
+  'cors',
   'users',
   'about',
 ] as const;

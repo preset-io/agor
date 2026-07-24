@@ -45,6 +45,8 @@ export interface CorsConfigOptions {
 export interface CorsConfigResult {
   /** The resolved CORS origin configuration passed to `cors()` middleware. */
   origin: CorsOrigin;
+  /** Human-readable effective operator/built-in origin entries for Settings. */
+  operatorOrigins: string[];
   /** Localhost origins for local development */
   localhostOrigins: string[];
   /**
@@ -65,6 +67,11 @@ export interface CorsConfigResult {
    * trusted origins instead of echoing it for everyone.
    */
   isAllowedOrigin: (origin: string) => boolean;
+  /**
+   * Full browser CORS predicate, including noncredentialed capability origins.
+   * Unlike `isAllowedOrigin`, this is not suitable for Private Network Access.
+   */
+  isCorsAllowedOrigin: (origin: string) => boolean;
   /** Additional options (methods, allowedHeaders, maxAge) to pass to cors(). */
   extraOptions: Pick<CorsOptions, 'methods' | 'allowedHeaders' | 'maxAge'>;
 }
@@ -140,6 +147,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     );
     return {
       origin: resolved.mode === 'wildcard' ? '*' : true,
+      operatorOrigins: [resolved.mode === 'wildcard' ? '*' : 'Any origin (reflected)'],
       localhostOrigins,
       credentialsAllowed: false,
       isWildcard: true,
@@ -149,6 +157,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
       // origin reach a private/loopback target — even in wildcard mode, only
       // localhost (the configured UI dev port range) gets the PNA header.
       isAllowedOrigin: (origin: string) => localhostOrigins.includes(origin),
+      isCorsAllowedOrigin: () => true,
       extraOptions,
     };
   }
@@ -162,10 +171,12 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
         if (requestOrigin === 'null') return callback(null, true);
         callback(new Error('Not allowed by CORS'));
       },
+      operatorOrigins: ['null'],
       localhostOrigins,
       credentialsAllowed: resolved.credentials,
       isWildcard: false,
       isAllowedOrigin: () => false,
+      isCorsAllowedOrigin: (origin: string) => origin === 'null',
       extraOptions,
     };
   }
@@ -173,6 +184,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   // --- List mode: localhost + sandpack + user-provided. ------
   const exactOrigins = new Set(localhostOrigins);
   const patterns: RegExp[] = [];
+  const configuredOrigins: string[] = [];
 
   // Tightened localhost regex: only the daemon port + configured UI port range,
   // not "any port". We accept both http and https for localhost so that
@@ -194,8 +206,10 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     const regex = parseRegexPattern(entry);
     if (regex) {
       patterns.push(regex);
+      configuredOrigins.push(entry);
     } else {
       exactOrigins.add(entry);
+      configuredOrigins.push(entry);
     }
   }
 
@@ -229,10 +243,19 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
 
   return {
     origin,
+    operatorOrigins: [
+      ...new Set([
+        ...localhostOrigins,
+        ...localhostOrigins.map((entry) => entry.replace('http://', 'https://')),
+        ...(resolved.allowSandpack ? ['https://*.codesandbox.io'] : []),
+        ...configuredOrigins,
+      ]),
+    ].sort(),
     localhostOrigins,
     credentialsAllowed: resolved.credentials,
     isWildcard: false,
     isAllowedOrigin: (o: string) => isAllowedOrigin(o) && !isSandpack(o),
+    isCorsAllowedOrigin: isAllowedOrigin,
     extraOptions,
   };
 }

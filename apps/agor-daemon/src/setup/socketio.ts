@@ -14,6 +14,7 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
+import type { IncomingMessage } from 'node:http';
 import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -25,6 +26,7 @@ import type {
   PresenceUpdatedEvent,
   TenantContext,
 } from '@agor/core/types';
+import type { CorsOptionsDelegate } from 'cors';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
@@ -103,6 +105,14 @@ export interface SocketIOOptions {
   buildInfo?: BuildInfo;
   /** Resolved app-level multi-tenancy configuration for socket tenant binding. */
   multiTenancy?: ResolvedMultiTenancyConfig;
+  /**
+   * Request-aware origin admission. Unlike Socket.IO's CORS origin callback,
+   * this receives the full handshake request, including trusted tenant-routing
+   * headers used by tenant-scoped CORS.
+   */
+  allowRequest?: (request: IncomingMessage) => Promise<boolean>;
+  /** Request-aware Engine.IO CORS policy, including browser preflight. */
+  corsOptionsDelegate?: CorsOptionsDelegate<IncomingMessage>;
 }
 
 /**
@@ -313,19 +323,39 @@ export function createSocketIOConfig(
   let socketServer: Server | null = null;
 
   const serverOptions = {
-    cors: {
-      origin: corsOrigin,
-      methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-      // Mirror the HTTP CORS layer's credential decision. In wildcard mode
-      // credentials must be off — leaving this hard-coded `true` creates a
-      // policy-drift across transports.
-      credentials: credentialsAllowed,
-    },
+    cors:
+      options.corsOptionsDelegate ??
+      ({
+        origin: corsOrigin,
+        methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+        // Mirror the HTTP CORS layer's credential decision. In wildcard mode
+        // credentials must be off — leaving this hard-coded `true` creates a
+        // policy-drift across transports.
+        credentials: credentialsAllowed,
+      } as const),
     // Socket.io server options for better connection management
     pingTimeout: 60000, // How long to wait for pong before considering connection dead
     pingInterval: 25000, // How often to ping clients
     maxHttpBufferSize: 1e6, // 1MB max message size
     transports: ['websocket', 'polling'], // Prefer WebSocket
+    ...(options.allowRequest
+      ? {
+          allowRequest: (
+            request: IncomingMessage,
+            callback: (error: string | null, success: boolean) => void
+          ) => {
+            void options.allowRequest!(request)
+              .then((allowed) => callback(null, allowed))
+              .catch((error) => {
+                console.error(
+                  'Socket.IO CORS policy lookup failed:',
+                  error instanceof Error ? error.message : String(error)
+                );
+                callback('Origin not allowed', false);
+              });
+          },
+        }
+      : {}),
   };
 
   const callback = (io: Server) => {

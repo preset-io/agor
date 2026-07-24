@@ -196,6 +196,50 @@ describe('resolveSecurity — CORS', () => {
     expect(cors.origins).toEqual([]);
     expect(cors.credentials).toBe(true);
     expect(cors.allowSandpack).toBe(true);
+    expect(cors.tenantOriginsEnabled).toBe(false);
+  });
+
+  it('enables tenant-managed origins in list mode', () => {
+    const { cors } = resolveSecurity({
+      security: { cors: { tenant_origins: { enabled: true } } },
+    });
+    expect(cors.tenantOriginsEnabled).toBe(true);
+  });
+
+  it('rejects tenant-managed origins in wildcard, reflect, and null-origin modes', () => {
+    for (const mode of ['wildcard', 'reflect', 'null-origin'] as const) {
+      expect(() =>
+        resolveSecurity({
+          security: {
+            cors: {
+              mode,
+              credentials: !(mode === 'wildcard' || mode === 'reflect'),
+              tenant_origins: { enabled: true },
+            },
+          },
+        })
+      ).toThrow(/requires security\.cors\.mode="list"/);
+    }
+  });
+
+  it('requires a trusted pre-auth header in required multi-tenant mode', () => {
+    expect(() =>
+      resolveSecurity({
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        security: { cors: { tenant_origins: { enabled: true } } },
+      })
+    ).toThrow(/requires multi_tenancy\.trusted_header/);
+
+    expect(
+      resolveSecurity({
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          auth_claim: 'tenant_id',
+          trusted_header: 'x-tenant-id',
+        },
+        security: { cors: { tenant_origins: { enabled: true } } },
+      }).cors.tenantOriginsEnabled
+    ).toBe(true);
   });
 
   it('mode=wildcard forces credentials=false with a warning when user left it default', () => {

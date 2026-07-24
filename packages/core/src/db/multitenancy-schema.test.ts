@@ -24,11 +24,15 @@ function migrationTenantTables(): string[] {
   const presetsMigration = readRepoFile(
     'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
   );
+  const tenantCorsMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0067_tenant_cors_settings.sql'
+  );
   return [
     ...new Set(
       [
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...tenantCorsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ].map((m) => m[1])
     ),
   ].sort();
@@ -38,6 +42,7 @@ function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0067_tenant_cors_settings.sql'),
   ].join('\n');
   return [
     ...new Set(

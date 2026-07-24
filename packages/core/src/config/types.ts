@@ -700,6 +700,18 @@ export interface AgorCspSettings {
 export type AgorCorsMode = 'list' | 'wildcard' | 'reflect' | 'null-origin';
 
 /**
+ * Operator gate for tenant-admin-managed CORS origins.
+ *
+ * Tenant origins themselves are stored in the database and managed live from
+ * the application Settings UI. This block only decides whether that capability
+ * is available; it is intentionally not a second origin-policy hierarchy.
+ */
+export interface AgorTenantCorsOriginsSettings {
+  /** Allow tenant admins to manage exact origins for their tenant. Default: false. */
+  enabled?: boolean;
+}
+
+/**
  * CORS configuration.
  *
  * Supersedes the legacy `daemon.cors_origins` and `daemon.cors_allow_sandpack`
@@ -749,6 +761,12 @@ export interface AgorCorsSettings {
    * Defaults to true so first-party artifacts work out of the box.
    */
   allow_sandpack?: boolean;
+
+  /**
+   * Tenant-admin-managed exact origins. The origin values live in typed,
+   * tenant-scoped database storage and take effect without a daemon restart.
+   */
+  tenant_origins?: AgorTenantCorsOriginsSettings;
 }
 
 /**

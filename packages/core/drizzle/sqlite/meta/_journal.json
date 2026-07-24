@@ -491,6 +491,13 @@
       "when": 1784300000000,
       "tag": "0071_task_dispatching",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1784900000000,
+      "tag": "0072_tenant_cors_settings",
+      "breakpoints": true
     }
   ]
 }

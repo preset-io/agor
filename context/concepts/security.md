@@ -76,6 +76,8 @@ security:
     allowed_headers: ['Authorization', 'Content-Type', 'X-MCP-Token']
     max_age_seconds: 600
     allow_sandpack: true # include *.codesandbox.io (default true)
+    tenant_origins:
+      enabled: true # tenant admins manage exact origins live in Settings
 ```
 
 **Mode semantics:**
@@ -90,6 +92,30 @@ security:
 `credentials: true` + `mode: wildcard` (or `reflect`) is rejected at config
 load with a clear error — the CORS spec explicitly forbids this combination
 because it would allow credentialed requests from any origin.
+
+### Tenant-admin-managed origins
+
+`security.cors.origins` remains the operator-owned baseline and applies to
+every tenant. Setting `security.cors.tenant_origins.enabled: true` adds an
+admin-only **Settings → CORS** page where tenant admins manage exact HTTP(S)
+origins for their own tenant. Those entries are stored in typed tenant-scoped
+database tables, audited, cached per tenant, and applied live without rewriting
+`config.yaml` or restarting the daemon.
+
+Tenant entries are exact origins only: no paths, query strings, wildcards,
+regular expressions, or `Origin: null`. Operator origins retain their existing
+exact/regex compatibility behavior.
+
+In `multi_tenancy.mode: required_from_auth`, live tenant CORS requires
+`multi_tenancy.trusted_header`. The trusted ingress must overwrite that header
+and add it to preflight requests; browser preflight normally has no
+authentication claim from which the daemon could otherwise resolve a tenant.
+The daemon refuses to start if tenant origins are enabled without this
+pre-authentication routing context. Static mode uses the configured static
+tenant automatically.
+
+CORS is a browser policy, not authentication or authorization. Service role
+checks and tenant database/RLS isolation still apply to every accepted request.
 
 ### Sandpack, local/private Agor URLs, and Chrome Private Network Access
 
@@ -216,8 +242,8 @@ flip `report_only: false` when the floor is quiet.
 ## Backwards compatibility
 
 The legacy `daemon.cors_origins` and `daemon.cors_allow_sandpack` keys from
-#1027 still work. When present they're merged into the resolved CORS config
-with a deprecation warning at daemon startup. The `CORS_ORIGIN` environment
+#1027 still work as fallbacks when their new equivalents are absent, with a
+deprecation warning at daemon startup. The `CORS_ORIGIN` environment
 variable continues to win over all config sources for deployment
 compatibility.
 
@@ -264,6 +290,8 @@ is imported by:
 
 - `apps/agor-daemon/src/setup/security-headers.ts` — consumes `ResolvedCsp`
 - `apps/agor-daemon/src/setup/cors.ts` — consumes `ResolvedCors`
+- `apps/agor-daemon/src/setup/tenant-cors.ts` — live tenant policy lookup and request admission
+- `apps/agor-daemon/src/services/tenant-cors-settings.ts` — admin Settings API
 - `apps/agor-daemon/src/register-routes.ts` — surfaces it on `/health`
 - `apps/agor-ui/src/components/SettingsModal/AboutTab.tsx` — renders it
 
@@ -278,6 +306,7 @@ error message.
 
 - `apps/agor-daemon/src/setup/security-headers.ts` — CSP middleware
 - `apps/agor-daemon/src/setup/cors.ts` — CORS policy builder
+- `apps/agor-daemon/src/setup/tenant-cors.ts` — tenant-aware CORS policy engine
 - `packages/core/src/config/security-resolver.ts` — config resolver
 - [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx) — daemon auth, RBAC, OS-level isolation tiers
 - [`context/guides/rbac-and-unix-isolation.md`](../guides/rbac-and-unix-isolation.md) — implementation guide

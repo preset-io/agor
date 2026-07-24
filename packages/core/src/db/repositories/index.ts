@@ -30,6 +30,7 @@ export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
 export * from './tenant-agentic-tools';
+export * from './tenant-cors-settings';
 export * from './thread-session-map';
 export * from './user-api-keys';
 export * from './user-mcp-oauth-tokens';

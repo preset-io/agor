@@ -77,6 +77,7 @@ interface HealthInfo {
       credentials: boolean;
       originCount: number;
       allowSandpack: boolean;
+      tenantOriginsEnabled: boolean;
     };
   };
 }
@@ -338,13 +339,21 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                         {healthInfo.security.cors.allowSandpack && ', + Sandpack'})
                       </Typography.Text>
                     </Descriptions.Item>
+                    <Descriptions.Item label="Workspace CORS Management">
+                      {healthInfo.security.cors.tenantOriginsEnabled ? (
+                        <Tag color="success">Enabled</Tag>
+                      ) : (
+                        <Tag>Disabled</Tag>
+                      )}
+                    </Descriptions.Item>
                   </Descriptions>
                   <Typography.Paragraph
                     type="secondary"
                     style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}
                   >
-                    Configure via <code>security.csp</code> and <code>security.cors</code> in{' '}
-                    <code>~/.agor/config.yaml</code>. See{' '}
+                    Operator defaults are configured with <code>security.csp</code> and{' '}
+                    <code>security.cors</code> in <code>~/.agor/config.yaml</code>. When enabled,
+                    workspace admins manage their own origins from Settings → CORS. See{' '}
                     <a
                       href="https://github.com/preset-io/agor/blob/main/context/concepts/security.md"
                       target="_blank"

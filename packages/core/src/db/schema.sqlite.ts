@@ -1236,6 +1236,36 @@ export const appVariables = sqliteTable(
   })
 );
 
+/** Tenant-admin-managed exact CORS origins (singleton in SQLite static mode). */
+export const tenantCorsSettings = sqliteTable('tenant_cors_settings', {
+  settings_id: text('settings_id').primaryKey().default('current'),
+  revision: integer('revision').notNull().default(0),
+  origins: t.json<string[]>('origins').notNull(),
+  updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+    onDelete: 'set null',
+  }),
+  created_at: t.timestamp('created_at').notNull(),
+  updated_at: t.timestamp('updated_at').notNull(),
+});
+
+/** Append-only audit history for tenant CORS settings mutations. */
+export const tenantCorsAuditEvents = sqliteTable(
+  'tenant_cors_audit_events',
+  {
+    event_id: text('event_id', { length: 36 }).primaryKey(),
+    revision: integer('revision').notNull(),
+    added_origins: t.json<string[]>('added_origins').notNull(),
+    removed_origins: t.json<string[]>('removed_origins').notNull(),
+    // Deliberately not an FK: audit attribution must survive user deletion.
+    actor_user_id: text('actor_user_id', { length: 36 }),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    revisionIdx: uniqueIndex('tenant_cors_audit_revision_unique').on(table.revision),
+    createdAtIdx: index('tenant_cors_audit_created_at_idx').on(table.created_at),
+  })
+);
+
 /** Tenant-owned, live agentic-tool runtime configuration presets. */
 export const agenticToolPresets = sqliteTable(
   'agentic_tool_presets',
@@ -2368,6 +2398,10 @@ export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
+export type TenantCorsSettingsRow = typeof tenantCorsSettings.$inferSelect;
+export type TenantCorsSettingsInsert = typeof tenantCorsSettings.$inferInsert;
+export type TenantCorsAuditEventRow = typeof tenantCorsAuditEvents.$inferSelect;
+export type TenantCorsAuditEventInsert = typeof tenantCorsAuditEvents.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;
 export type AgenticToolPresetInsert = typeof agenticToolPresets.$inferInsert;
 export type GroupRow = typeof groups.$inferSelect;

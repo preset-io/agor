@@ -8,6 +8,8 @@
 import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
+  type ResolvedCors,
+  type ResolvedMultiTenancyConfig,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
 } from '@agor/core/config';
@@ -125,10 +127,12 @@ import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
+import { createTenantCorsSettingsService } from './services/tenant-cors-settings.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
+import type { TenantCorsPolicyStore } from './setup/tenant-cors.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -164,6 +168,10 @@ export interface RegisterServicesContext {
   branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
+  resolvedCors: ResolvedCors;
+  operatorCorsOrigins: string[];
+  multiTenancy: ResolvedMultiTenancyConfig;
+  tenantCorsPolicyStore: TenantCorsPolicyStore;
 }
 
 /**
@@ -545,6 +553,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
+  app.use(
+    '/tenant-cors-settings',
+    createTenantCorsSettingsService(db, {
+      resolvedCors: ctx.resolvedCors,
+      operatorOrigins: ctx.operatorCorsOrigins,
+      multiTenancy: ctx.multiTenancy,
+      policyStore: ctx.tenantCorsPolicyStore,
+    }),
+    { methods: ['get', 'patch'] }
+  );
+  app.service('/tenant-cors-settings').hooks({ before: { all: [ctx.requireAuth] } });
   app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));
   app.service('/agentic-tool-presets').hooks({ before: { all: [ctx.requireAuth] } });
 

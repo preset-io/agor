@@ -27,6 +27,7 @@ import {
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
+  requireHumanTenantCorsAdmin,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -247,6 +248,39 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining(['kb/settings', 'kb/indexing/status', 'kb/indexing/reindex'])
     );
+  });
+
+  it('wraps tenant CORS settings in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toContain('tenant-cors-settings');
+  });
+});
+
+describe('requireHumanTenantCorsAdmin', () => {
+  const contextFor = (
+    user: { role: string; _isServiceAccount?: boolean } | undefined,
+    provider: string | null | undefined = 'rest'
+  ) =>
+    ({
+      params: { provider, user },
+    }) as import('@agor/core/types').HookContext;
+
+  it('allows a user administrator', () => {
+    const context = contextFor({ role: 'admin' });
+    expect(requireHumanTenantCorsAdmin(context)).toBe(context);
+  });
+
+  it('rejects members and external service identities', () => {
+    expect(() => requireHumanTenantCorsAdmin(contextFor({ role: 'member' }))).toThrow(
+      /admin access/
+    );
+    expect(() =>
+      requireHumanTenantCorsAdmin(contextFor({ role: 'service', _isServiceAccount: true }))
+    ).toThrow(/User administrator authentication/);
+  });
+
+  it('preserves trusted internal service composition', () => {
+    const context = contextFor(undefined, null);
+    expect(requireHumanTenantCorsAdmin(context)).toBe(context);
   });
 });
 

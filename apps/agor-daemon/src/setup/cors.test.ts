@@ -108,6 +108,7 @@ describe('buildCorsConfig', () => {
     // but the public isAllowedOrigin predicate (used to gate PNA + credentials)
     // excludes them.
     expect(result.isAllowedOrigin('https://2-19-8-sandpack.codesandbox.io')).toBe(false);
+    expect(result.isCorsAllowedOrigin('https://2-19-8-sandpack.codesandbox.io')).toBe(true);
   });
 
   it('honours security.cors.origins with exact strings and regex patterns', () => {
@@ -125,6 +126,14 @@ describe('buildCorsConfig', () => {
     expect(result.isAllowedOrigin('https://dash.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://api.internal.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://other.example.com')).toBe(false);
+    expect(result.operatorOrigins).toEqual(
+      expect.arrayContaining([
+        'https://dash.example.com',
+        '/\\.internal\\.example\\.com$/',
+        'https://*.codesandbox.io',
+        'http://localhost:5173',
+      ])
+    );
   });
 
   it('passes methods/allowedHeaders/maxAge through to cors() extraOptions', () => {

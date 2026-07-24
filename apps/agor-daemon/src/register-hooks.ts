@@ -399,6 +399,19 @@ export interface RegisterHooksContext {
 }
 
 /**
+ * Tenant CORS is an administrator-owned security boundary. Executor service
+ * identities deliberately do not inherit the usual service-account RBAC
+ * bypass for this setting.
+ */
+export function requireHumanTenantCorsAdmin(context: HookContext): HookContext {
+  const params = context.params as AuthenticatedParams;
+  if (params.provider && params.user?._isServiceAccount) {
+    throw new Forbidden('User administrator authentication is required');
+  }
+  return requireMinimumRole(ROLES.ADMIN, 'manage workspace CORS origins')(context);
+}
+
+/**
  * Register all FeathersJS service hooks.
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
@@ -422,6 +435,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'boards/:id/group-grants',
   'app-variables',
   'agentic-tool-settings',
+  'tenant-cors-settings',
   'agentic-tool-presets',
   'mcp-servers',
   'mcp-servers/discover',
@@ -703,6 +717,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('agentic-tool-settings')?.hooks({
     before: {
       patch: [requireMinimumRole(ROLES.ADMIN, 'manage workspace agentic tools')],
+    },
+  });
+
+  safeService('tenant-cors-settings')?.hooks({
+    before: {
+      all: [requireHumanTenantCorsAdmin],
     },
   });
 

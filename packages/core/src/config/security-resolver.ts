@@ -158,6 +158,8 @@ export interface ResolvedCors {
   maxAgeSeconds?: number;
   /** Whether Sandpack origins are accepted. */
   allowSandpack: boolean;
+  /** Whether tenant admins may manage live, tenant-scoped exact origins. */
+  tenantOriginsEnabled: boolean;
 }
 
 export interface ResolvedSecurity {
@@ -432,6 +434,24 @@ export function resolveSecurity(
     credentials = false;
   }
 
+  const tenantOriginsEnabled = corsSettings.tenant_origins?.enabled === true;
+  if (tenantOriginsEnabled && mode !== 'list') {
+    throw new Error(
+      `security.cors.tenant_origins.enabled=true requires security.cors.mode="list"; ` +
+        `mode="${mode}" cannot preserve tenant-scoped origin isolation.`
+    );
+  }
+  if (
+    tenantOriginsEnabled &&
+    config.multi_tenancy?.mode === 'required_from_auth' &&
+    !config.multi_tenancy.trusted_header
+  ) {
+    throw new Error(
+      'security.cors.tenant_origins.enabled=true with multi_tenancy.required_from_auth ' +
+        'requires multi_tenancy.trusted_header so tenant identity is available on browser preflight requests.'
+    );
+  }
+
   const corsResult: ResolvedCors = {
     mode,
     origins,
@@ -440,6 +460,7 @@ export function resolveSecurity(
     allowedHeaders: corsSettings.allowed_headers,
     maxAgeSeconds: corsSettings.max_age_seconds,
     allowSandpack,
+    tenantOriginsEnabled,
   };
 
   return { csp: cspResult, cors: corsResult };

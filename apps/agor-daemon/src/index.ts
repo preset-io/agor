@@ -51,7 +51,6 @@ import {
 import { buildGitConfigParameters } from '@agor/core/git/pure';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, User } from '@agor/core/types';
-import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
@@ -61,13 +60,19 @@ import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
-import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
+import { buildCorsConfig } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
+import {
+  createTenantAwareCorsMiddleware,
+  createTenantAwareSocketCorsOptions,
+  TenantCorsPolicyEngine,
+  TenantCorsPolicyStore,
+} from './setup/tenant-cors.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { runPostStartJob, startup } from './startup.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
@@ -319,16 +324,18 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   });
 
   // CORS
-  const {
-    origin: corsOrigin,
-    credentialsAllowed,
-    isWildcard,
-    isAllowedOrigin,
-    extraOptions: corsExtraOptions,
-  } = buildCorsConfig({
+  const corsConfig = buildCorsConfig({
     uiPort: UI_PORT,
     daemonPort: DAEMON_PORT,
     resolved: resolvedSecurity.cors,
+  });
+  const { origin: corsOrigin, credentialsAllowed, isWildcard } = corsConfig;
+  let tenantCorsPolicyStore: TenantCorsPolicyStore | undefined;
+  const tenantCorsPolicyEngine = new TenantCorsPolicyEngine({
+    resolved: resolvedSecurity.cors,
+    base: corsConfig,
+    multiTenancy,
+    getStore: () => tenantCorsPolicyStore,
   });
 
   // Refuse to boot when a hardened deployment is configured to reflect any
@@ -354,38 +361,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
   }
 
-  // Per-request middleware (runs BEFORE cors()):
-  //   1. Echo Access-Control-Allow-Private-Network ONLY for explicit allow-list
-  //      origins (never for Sandpack, never for unknown wildcard origins).
-  //   2. Patch res.setHeader so that Access-Control-Allow-Credentials is
-  //      suppressed on Sandpack-origin responses — INCLUDING preflights. The
-  //      previous post-cors() removeHeader middleware never ran for OPTIONS,
-  //      because cors() short-circuits the preflight chain via res.end().
-  //      Patching setHeader catches headers cors() sets on its way to end().
-  app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (
-      typeof origin === 'string' &&
-      req.headers['access-control-request-private-network'] === 'true' &&
-      isAllowedOrigin(origin)
-    ) {
-      res.setHeader('Access-Control-Allow-Private-Network', 'true');
-    }
-
-    if (typeof origin === 'string' && isSandpackOrigin(origin)) {
-      const originalSetHeader = res.setHeader.bind(res);
-      // biome-ignore lint/suspicious/noExplicitAny: setHeader has many overloads
-      (res as any).setHeader = (name: string, value: any) => {
-        if (typeof name === 'string' && name.toLowerCase() === 'access-control-allow-credentials') {
-          return res;
-        }
-        return originalSetHeader(name, value);
-      };
-    }
-    next();
-  });
-
-  app.use(cors({ origin: corsOrigin, credentials: credentialsAllowed, ...corsExtraOptions }));
+  app.use(
+    createTenantAwareCorsMiddleware(
+      tenantCorsPolicyEngine,
+      corsConfig,
+      resolvedSecurity.cors
+    ) as never
+  );
 
   // Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, HSTS).
   // Must run after CORS so preflights still get the Access-Control-* headers.
@@ -570,6 +552,12 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     corsOrigin,
     jwtSecret,
     credentialsAllowed,
+    corsOptionsDelegate: createTenantAwareSocketCorsOptions(
+      tenantCorsPolicyEngine,
+      corsConfig,
+      resolvedSecurity.cors
+    ),
+    allowRequest: (request) => tenantCorsPolicyEngine.isIncomingMessageAllowed(request),
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
     // transport too. Without this the terminal:* relay events would still
@@ -590,6 +578,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
   });
+  const activeTenantCorsPolicyStore = new TenantCorsPolicyStore(db);
+  tenantCorsPolicyStore = activeTenantCorsPolicyStore;
 
   // --------------------------------------------------------------------------
   // RBAC flags
@@ -678,6 +668,10 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
+    resolvedCors: resolvedSecurity.cors,
+    operatorCorsOrigins: corsConfig.operatorOrigins,
+    multiTenancy,
+    tenantCorsPolicyStore: activeTenantCorsPolicyStore,
   });
 
   // --------------------------------------------------------------------------

@@ -42,6 +42,7 @@ export type {
   ServiceTypes,
   SessionsService,
   TasksService,
+  TenantCorsSettingsService,
 } from '@agor/core/client';
 export * from '@agor/core/client';
 // `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).

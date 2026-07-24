@@ -27,6 +27,7 @@ export type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   TemplatesService,
+  TenantCorsSettingsService,
 } from '../api/index.js';
 export {
   createClient,

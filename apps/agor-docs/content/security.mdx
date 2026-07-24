@@ -222,6 +222,34 @@ Per-user API keys and env vars are encrypted at rest and only decrypted when nee
 
 Users with the `admin` role can manage other users, configure MCP servers, view system health, and (in `simple` mode) effectively reach everything on disk via terminal. Limit admin assignments and use Unix isolation modes for shared environments.
 
+### Browser Origins (CORS)
+
+Operators can allow origins for every workspace with `security.cors.origins`.
+To let workspace admins manage their own origins in the application, enable:
+
+```yaml
+security:
+  cors:
+    mode: list
+    origins:
+      - https://operator-console.example.com
+    tenant_origins:
+      enabled: true
+```
+
+Admins can then add or remove exact origins from **Settings → CORS**. Changes
+are stored for that workspace and take effect live; they do not require editing
+`config.yaml` or restarting the daemon.
+
+Only add websites you trust. Depending on how authentication is configured, an
+allowed website may make browser requests using a signed-in user's access.
+CORS does not replace authentication, permissions, or tenant isolation.
+
+Hosted multi-tenant deployments must provide trusted tenant-routing context on
+browser preflight requests. See
+[`context/concepts/security.md`](https://github.com/preset-io/agor/blob/main/context/concepts/security.md)
+for the operator-level routing and compatibility details.
+
 ---
 
 ## Deployment Guidance

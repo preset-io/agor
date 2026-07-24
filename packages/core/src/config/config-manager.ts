@@ -434,7 +434,9 @@ function validateConfig(config: AgorConfig): void {
     'allowed_headers',
     'max_age_seconds',
     'allow_sandpack',
+    'tenant_origins',
   ]);
+  only(config.security?.cors?.tenant_origins, 'security.cors.tenant_origins', ['enabled']);
   only(config.security?.git_config_parameters, 'security.git_config_parameters', [
     'extras',
     'override',
