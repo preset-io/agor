@@ -181,11 +181,13 @@ export class KnowledgeSettingsService {
     const updatedBy = (user?.user_id as UserID | undefined) ?? null;
     const apply = async (
       db: KnowledgeSettingsDatabase
-    ): Promise<KnowledgeSemanticSettingsPublic> => {
+    ): Promise<{ saved: KnowledgeSemanticSettingsPublic; shouldWake: boolean }> => {
       const settings = new KnowledgeSemanticSettingsRepository(db);
-      const current = await settings.find();
-      const saved = await settings.patchInTransaction(db, data, updatedBy, (policy) =>
-        this.validateProviderCapability(policy)
+      const { previous: current, saved } = await settings.patchInTransaction(
+        db,
+        data,
+        updatedBy,
+        (policy) => this.validateProviderCapability(policy)
       );
       const identityChanged =
         current.enabled !== saved.enabled ||
@@ -205,29 +207,39 @@ export class KnowledgeSettingsService {
               embeddingConfigured: configured,
             })
           : await this.markCurrentUnitsForEmbedding(db, configured ? 'pending' : 'not_configured');
-        if (queued > 0 && configured) this.wakeIndexer();
+        return { saved, shouldWake: queued > 0 && configured };
       }
 
-      return saved;
+      return { saved, shouldWake: false };
     };
 
     try {
+      let result: { saved: KnowledgeSemanticSettingsPublic; shouldWake: boolean };
       if (!isSQLiteDatabase(this.db)) {
         const ambientDb = getCurrentTenantDatabase();
-        return ambientDb && isPostgresDatabase(ambientDb)
-          ? await apply(this.db)
-          : await runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase));
-      }
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase), {
-            sqliteImmediate: true,
-          });
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+        result =
+          ambientDb && isPostgresDatabase(ambientDb)
+            ? await apply(this.db)
+            : await runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase));
+      } else {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            result = await runDatabaseTransaction(
+              this.db,
+              (tx) => apply(tx as TenantScopedDatabase),
+              {
+                sqliteImmediate: true,
+              }
+            );
+            break;
+          } catch (error) {
+            if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+          }
         }
       }
+      if (result.shouldWake) this.wakeIndexer();
+      return result.saved;
     } catch (error) {
       if (error instanceof KnowledgeSemanticPolicyValidationError) {
         throw new BadRequest(error.message);

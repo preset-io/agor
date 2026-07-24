@@ -27,6 +27,11 @@ export const KNOWLEDGE_SEMANTIC_SETTINGS_KEY = 'policy';
 export const KNOWLEDGE_EMBEDDINGS_NAMESPACE = 'knowledge.embeddings';
 export const KNOWLEDGE_EMBEDDINGS_API_KEY = 'api_key';
 
+export interface KnowledgeSemanticSettingsMutation {
+  previous: KnowledgeSemanticSettingsPublic;
+  saved: KnowledgeSemanticSettingsPublic;
+}
+
 const POLICY_FIELDS = [
   'enabled',
   'provider',
@@ -290,49 +295,59 @@ export class KnowledgeSemanticSettingsRepository {
     patch: KnowledgeSemanticSettingsPatch,
     updatedBy?: UserID | null,
     validate?: (policy: KnowledgeSemanticPolicy) => void
-  ): Promise<KnowledgeSemanticSettingsPublic> {
+  ): Promise<KnowledgeSemanticSettingsMutation> {
     const hasPolicyPatch = POLICY_FIELDS.some((field) => Object.hasOwn(patch, field));
     const variables = new AppVariableRepository(txDb);
-    let policy: KnowledgeSemanticPolicy;
+
+    // The policy row is the stable aggregate lock for both policy and
+    // credential mutations. Every patch takes it before reading the combined
+    // state so sparse concurrent patches cannot derive side effects from
+    // different snapshots.
+    await variables.setIfAbsent({
+      namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+      key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
+      value: '{}',
+      content_type: 'application/json',
+      updated_by: updatedBy ?? null,
+    });
+    await lockRowForUpdate(
+      txDb,
+      this.db,
+      appVariables,
+      and(
+        eq(appVariables.namespace, KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE),
+        eq(appVariables.key, KNOWLEDGE_SEMANTIC_SETTINGS_KEY)
+      )!
+    );
+
+    const currentStored = await this.findStoredWith(variables);
+    const currentPolicy = resolveKnowledgeSemanticPolicy(currentStored);
+    assertValidKnowledgeSemanticPolicy(currentPolicy);
+    const currentApiKey = await variables.find(
+      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+      KNOWLEDGE_EMBEDDINGS_API_KEY
+    );
+    const previous: KnowledgeSemanticSettingsPublic = {
+      ...currentPolicy,
+      api_key_configured: Boolean(currentApiKey?.is_encrypted && currentApiKey.value_encrypted),
+    };
+
+    let policy = currentPolicy;
     if (hasPolicyPatch) {
-      await variables.setIfAbsent({
-        namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
-        key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
-        value: '{}',
-        content_type: 'application/json',
-        updated_by: updatedBy ?? null,
-      });
-      await lockRowForUpdate(
-        txDb,
-        this.db,
-        appVariables,
-        and(
-          eq(appVariables.namespace, KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE),
-          eq(appVariables.key, KNOWLEDGE_SEMANTIC_SETTINGS_KEY)
-        )!
-      );
-      const current = await this.findStoredWith(variables);
-      const next = applyKnowledgeSemanticPolicyPatch(current, patch);
+      const next = applyKnowledgeSemanticPolicyPatch(currentStored, patch);
       policy = resolveKnowledgeSemanticPolicy(next);
       assertValidKnowledgeSemanticPolicy(policy);
       validate?.(policy);
-      if (Object.keys(next).length === 0) {
-        await variables.delete(
-          KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
-          KNOWLEDGE_SEMANTIC_SETTINGS_KEY
-        );
-      } else {
-        await variables.set({
-          namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
-          key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
-          value: JSON.stringify(next),
-          content_type: 'application/json',
-          updated_by: updatedBy ?? null,
-        });
-      }
+      // Keep the default-valued row as the aggregate mutation lock. Reads do
+      // not materialize it; the first write does.
+      await variables.set({
+        namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+        key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
+        value: JSON.stringify(next),
+        content_type: 'application/json',
+        updated_by: updatedBy ?? null,
+      });
     } else {
-      policy = resolveKnowledgeSemanticPolicy(await this.findStoredWith(variables));
-      assertValidKnowledgeSemanticPolicy(policy);
       validate?.(policy);
     }
 
@@ -366,8 +381,11 @@ export class KnowledgeSemanticSettingsRepository {
       KNOWLEDGE_EMBEDDINGS_API_KEY
     );
     return {
-      ...policy,
-      api_key_configured: Boolean(apiKey?.is_encrypted && apiKey.value_encrypted),
+      previous,
+      saved: {
+        ...policy,
+        api_key_configured: Boolean(apiKey?.is_encrypted && apiKey.value_encrypted),
+      },
     };
   }
 
@@ -376,7 +394,8 @@ export class KnowledgeSemanticSettingsRepository {
     updatedBy?: UserID | null,
     validate?: (policy: KnowledgeSemanticPolicy) => void
   ): Promise<KnowledgeSemanticSettingsPublic> {
-    const apply = (txDb: Database) => this.patchInTransaction(txDb, patch, updatedBy, validate);
+    const apply = async (txDb: Database) =>
+      (await this.patchInTransaction(txDb, patch, updatedBy, validate)).saved;
 
     const ambientDb = getCurrentTenantDatabase();
     if (ambientDb && isPostgresDatabase(ambientDb)) return apply(ambientDb);

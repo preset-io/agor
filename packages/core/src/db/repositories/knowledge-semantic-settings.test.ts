@@ -116,7 +116,7 @@ describe('KnowledgeSemanticSettingsRepository', () => {
         KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
         KNOWLEDGE_SEMANTIC_SETTINGS_KEY
       )
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ value_text: '{}' });
   });
 
   dbTest('fails closed on malformed stored policy JSON', async ({ db }) => {

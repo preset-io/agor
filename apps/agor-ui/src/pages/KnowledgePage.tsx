@@ -3978,6 +3978,13 @@ export function KnowledgePage({
                         >
                           <InputNumber min={1} max={128} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
+                        <Form.Item
+                          name={['indexing', 'paused']}
+                          label="Pause indexing"
+                          valuePropName="checked"
+                        >
+                          <Switch />
+                        </Form.Item>
                       </Flex>
                     </Form>
                     <Flex justify="space-between" align="center">

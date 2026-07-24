@@ -1,4 +1,5 @@
 import {
+  enqueueAfterTenantDatabaseCommit,
   executeRaw,
   generateId,
   getCurrentTenantId,
@@ -9,6 +10,8 @@ import {
   kbDocumentUnits,
   kbDocumentVersions,
   kbEmbeddingSpaces,
+  runWithoutTenantContext,
+  runWithoutTenantDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   select,
@@ -221,14 +224,28 @@ export class KnowledgeEmbeddingIndexer {
   }
 
   wake(): void {
-    if (this.wakeScheduled) return;
-    this.wakeScheduled = true;
-    setTimeout(() => {
-      this.wakeScheduled = false;
-      this.tick().catch((error) => {
-        console.error('[knowledge-indexer] wake failed:', error);
+    const schedule = () => {
+      // Timers inherit AsyncLocalStorage. Explicitly detach both the request's
+      // operation identity and its (possibly committed) transaction before the
+      // indexer establishes its own tenant context in tick().
+      runWithoutTenantContext(() => {
+        runWithoutTenantDatabaseScope(() => {
+          if (this.wakeScheduled) return;
+          this.wakeScheduled = true;
+          setTimeout(() => {
+            this.wakeScheduled = false;
+            this.tick().catch((error) => {
+              console.error('[knowledge-indexer] wake failed:', error);
+            });
+          }, 0);
+        });
       });
-    }, 0);
+    };
+
+    // A settings/document mutation can call wake from an outer tenant
+    // transaction. Never let the indexer observe work until that transaction
+    // commits; rollback discards the callback.
+    if (!enqueueAfterTenantDatabaseCommit(schedule)) schedule();
   }
 
   private currentTenantKey(): string {

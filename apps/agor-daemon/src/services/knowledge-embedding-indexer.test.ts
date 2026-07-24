@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import {
+  getCurrentTenantDatabase,
+  getCurrentTenantId,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
+import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   buildKnowledgeEmbeddingReuseSql,
+  KnowledgeEmbeddingIndexer,
   mergeEmbeddingReuseIntoNextMetadata,
 } from './knowledge-embedding-indexer';
 
@@ -110,5 +118,59 @@ describe('mergeEmbeddingReuseIntoNextMetadata', () => {
       total_chunks: 27,
       updated_at: '2026-06-08T00:01:00.000Z',
     });
+  });
+});
+
+describe('KnowledgeEmbeddingIndexer wake scheduling', () => {
+  dbTest('runs only after commit with request tenant scopes detached', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const observedScopes: Array<{ tenantId: string | undefined; hasDatabase: boolean }> = [];
+      const tick = vi.fn(async () => {
+        observedScopes.push({
+          tenantId: getCurrentTenantId() as string | undefined,
+          hasDatabase: Boolean(getCurrentTenantDatabase()),
+        });
+      });
+      indexer.tick = tick;
+
+      await runWithTenantContext('request-tenant', () =>
+        runWithTenantDatabaseScope(db, 'request-tenant', async () => {
+          indexer.wake();
+          expect(tick).not.toHaveBeenCalled();
+        })
+      );
+
+      expect(tick).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(tick).toHaveBeenCalledTimes(1);
+      expect(observedScopes).toEqual([{ tenantId: undefined, hasDatabase: false }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  dbTest('does not wake when the surrounding tenant transaction rolls back', async ({ db }) => {
+    vi.useFakeTimers();
+    try {
+      const indexer = new KnowledgeEmbeddingIndexer(db, { tenantId: 'bootstrap-tenant' });
+      const tick = vi.fn(async () => {});
+      indexer.tick = tick;
+
+      await expect(
+        runWithTenantContext('request-tenant', () =>
+          runWithTenantDatabaseScope(db, 'request-tenant', async () => {
+            indexer.wake();
+            throw new Error('rollback');
+          })
+        )
+      ).rejects.toThrow('rollback');
+
+      await vi.runAllTimersAsync();
+      expect(tick).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

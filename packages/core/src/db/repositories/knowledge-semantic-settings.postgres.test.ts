@@ -65,5 +65,31 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         await expect(repository.getApiKey()).resolves.toBe('tenant-b-secret');
       });
     });
+
+    it('serializes credential-only and policy-only patches through one tenant lock', async () => {
+      const tenant = `knowledge-settings-concurrent-${suffix}`;
+
+      await Promise.all([
+        runWithTenantDatabaseScope(db, tenant, async (tenantDb) => {
+          await new KnowledgeSemanticSettingsRepository(tenantDb).patch({
+            api_key: 'concurrent-secret',
+          });
+        }),
+        runWithTenantDatabaseScope(db, tenant, async (tenantDb) => {
+          await new KnowledgeSemanticSettingsRepository(tenantDb).patch({
+            enabled: true,
+          });
+        }),
+      ]);
+
+      await runWithTenantDatabaseScope(db, tenant, async (tenantDb) => {
+        const repository = new KnowledgeSemanticSettingsRepository(tenantDb);
+        await expect(repository.find()).resolves.toMatchObject({
+          enabled: true,
+          api_key_configured: true,
+        });
+        await expect(repository.getApiKey()).resolves.toBe('concurrent-secret');
+      });
+    });
   }
 );

@@ -39,4 +39,20 @@ describe('Knowledge semantic settings UI helpers', () => {
     );
     expect(patch.api_key).toBeNull();
   });
+
+  it('preserves a paused indexing policy when saving other settings', () => {
+    const patch = buildKnowledgeSemanticSettingsPatch(
+      {
+        ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS,
+        indexing: {
+          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.indexing,
+          paused: true,
+        },
+      },
+      '',
+      false
+    );
+
+    expect(patch.indexing).toEqual({ paused: true, batch_size: 32 });
+  });
 });
