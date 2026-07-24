@@ -123,7 +123,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Claude Code' }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code default')).toBeChecked();
     }, ASYNC);
@@ -202,7 +202,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Claude Code' }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code model claude-sonnet-5')).toBeChecked();
     }, ASYNC);
@@ -230,7 +230,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('saves General settings and closes from the footer', async () => {
+  it('saves a new password from the Security panel and closes from the footer', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {});
     const onClose = vi.fn();
@@ -246,6 +246,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+
     const passwordInput = screen.getByPlaceholderText('••••••••') as HTMLInputElement;
     fireEvent.change(passwordInput, { target: { value: 'new-password' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -260,7 +263,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the modal open when saving General settings fails', async () => {
+  it('keeps the modal open when saving Profile settings fails', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {
       throw new Error('save failed');
@@ -290,7 +293,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     consoleError.mockRestore();
   });
 
-  it('keeps the modal open when saving Audio settings fails', async () => {
+  it('keeps the modal open when saving Preferences settings fails', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {
       throw new Error('save failed');
@@ -309,8 +312,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /audio/i }));
-    await screen.findByRole('heading', { name: 'Audio' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
@@ -373,7 +376,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     renderWithApp(<Harness />);
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /env vars/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /environment variables/i }));
     await screen.findByRole('heading', { name: 'Environment Variables' });
 
     fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
@@ -391,5 +394,49 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     expect(screen.getByRole('heading', { name: 'Environment Variables' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the target-user identity and admin-only access when an admin edits another user', async () => {
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // Approved addition: the modal makes clear whose settings are being edited.
+    expect(screen.getByText('Editing Bob')).toBeInTheDocument();
+    // Groups & Access is admin-only nav; the force-password control lives there.
+    fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
+    await screen.findByRole('heading', { name: 'Groups & Access' });
+    expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+  });
+
+  it('filters the sidebar via the search box', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'token' },
+    });
+
+    expect(screen.getByRole('menuitem', { name: /api tokens/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^profile$/i })).not.toBeInTheDocument();
   });
 });
