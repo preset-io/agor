@@ -19,6 +19,7 @@ export function useSurfaceBranding(surface: RouteSurfaceDefinition) {
     const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
     if (link) {
       link.href = brandMarkHref();
+      link.type = 'image/svg+xml';
     }
     document.title = surface.branding;
   }, [surface]);

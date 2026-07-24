@@ -51,6 +51,7 @@ export function useFaviconStatus(currentBoardId: string | null) {
       const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
       if (link) {
         link.href = dataUrl;
+        link.type = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/svg+xml';
       }
     };
 

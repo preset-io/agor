@@ -6,7 +6,7 @@ import { brandMarkHref } from '../branding/brand';
 import { SURFACE_REGISTRY } from '../surfaces/surfaceRegistry';
 import { useSurfaceBranding } from './useSurfaceBranding';
 
-function setIconLink(href: string): void {
+function setIconLink(href: string, type = 'image/png'): void {
   let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
   if (!link) {
     link = document.createElement('link');
@@ -14,10 +14,15 @@ function setIconLink(href: string): void {
     document.head.appendChild(link);
   }
   link.setAttribute('href', href);
+  link.type = type;
 }
 
 function currentIconHref(): string | null {
   return document.querySelector("link[rel~='icon']")?.getAttribute('href') ?? null;
+}
+
+function currentIconType(): string | null {
+  return document.querySelector("link[rel~='icon']")?.getAttribute('type') ?? null;
 }
 
 const STATIC_SURFACES = SURFACE_REGISTRY.filter((s) => s.branding !== 'dynamic');
@@ -38,6 +43,7 @@ describe('useSurfaceBranding', () => {
 
     expect(document.title).toBe(surface.branding);
     expect(currentIconHref()).toBe(brandMarkHref());
+    expect(currentIconType()).toBe('image/svg+xml');
   });
 
   it('leaves favicon + title untouched for the dynamic Workspace surface', () => {
@@ -51,6 +57,7 @@ describe('useSurfaceBranding', () => {
     // useBoardTitle; this hook must not stomp them.
     expect(document.title).toBe('workspace-managed');
     expect(currentIconHref()).toBe('/board-status-dot.png');
+    expect(currentIconType()).toBe('image/png');
   });
 
   it('no-ops gracefully when no favicon link exists yet', () => {
