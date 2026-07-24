@@ -4,6 +4,8 @@ description: The short path to succeeding with Agor — raise one named AI teamm
 heroImage: '/screenshots/onboarding-name-teammate.png'
 ---
 
+import { ScreenshotGallery } from '../../components/ScreenshotGallery';
+
 # Raising Your First AI Teammate
 
 Picture the teammate your team keeps wishing for: one who captures decisions before they evaporate, keeps an eye on the work systems everyone forgets to update, drafts the weekly report nobody wants to write, and owns the follow-through that always slips. Now imagine it has a name, a memory, and a visible place on your team.
@@ -14,12 +16,31 @@ That is the practical center of Agor. Not "adopt an AI platform" — raise **one
 
 Agor has a lot of surface area: boards, repos, branches, Knowledge, cards, artifacts, gateway channels, schedules. You don't need to understand any of that today.
 
-The [onboarding wizard](/guide/getting-started) starts by helping you create a [teammate](/guide/teammates) and give it a name.
+The [onboarding wizard](/guide/getting-started) starts by helping you create a [teammate](/guide/teammates) and give it a name. A few quick steps and you have a colleague to work with:
 
-<img
-  src="/screenshots/onboarding-name-teammate.png"
-  alt="Onboarding wizard step: Name your AI teammate — a name and emoji, with its own board to work on"
-  style={{ maxWidth: '480px', width: '100%', borderRadius: '8px', margin: '16px 0' }}
+<ScreenshotGallery
+  shots={[
+    {
+      src: '/screenshots/onboarding-persona.png',
+      alt: 'Onboarding: persona cards — I write code, I manage projects, I lead a team, Building solo',
+      caption: 'Tell it how you work',
+    },
+    {
+      src: '/screenshots/onboarding-connect-ai.png',
+      alt: 'Onboarding: Connect your AI — Claude, GPT, or Gemini via your own key or subscription',
+      caption: 'Connect your own model',
+    },
+    {
+      src: '/screenshots/onboarding-name-teammate.png',
+      alt: 'Onboarding: Name your AI teammate — a name and emoji, with its own board',
+      caption: 'Give it a name',
+    },
+    {
+      src: '/screenshots/onboarding-ready.png',
+      alt: "Onboarding: You're ready to build — AI connected, workspace ready",
+      caption: 'Meet your teammate',
+    },
+  ]}
 />
 
 That name matters more than it sounds. Your teammate can drive Agor the same way you can — anything you could click through, it can do over the [Agor MCP server](/guide/internal-mcp) — so it becomes your portal into the product. Want a repo registered, a board organized, a schedule set up? Ask it, in plain language.
