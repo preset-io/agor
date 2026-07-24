@@ -21,6 +21,7 @@ import {
   handleGitRepoDelete,
   handleGitRepoRealignOrigin,
 } from './git.js';
+import { handleOpenCodeAuth } from './opencode-auth.js';
 import {
   handleUnixSyncBoard,
   handleUnixSyncBranch,
@@ -157,6 +158,7 @@ async function handlePromptCommand(
 // ═══════════════════════════════════════════════════════════
 
 registerCommand('prompt', handlePromptCommand);
+registerCommand('opencode.auth', handleOpenCodeAuth);
 registerCommand('git.clone', handleGitClone);
 registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);

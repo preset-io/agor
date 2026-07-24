@@ -168,6 +168,30 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// OpenCode Provider Authentication Payload
+// ═══════════════════════════════════════════════════════════
+
+export const OpenCodeAuthPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('opencode.auth'),
+  dataHome: z.string().min(1),
+  params: z.discriminatedUnion('operation', [
+    z.object({ operation: z.literal('discover') }),
+    z.object({
+      operation: z.literal('connect-api-key'),
+      providerId: z.string().trim().min(1).max(200),
+      apiKey: z.string().trim().min(1),
+      metadata: z.record(z.string(), z.string()).optional(),
+    }),
+    z.object({
+      operation: z.literal('disconnect'),
+      providerId: z.string().trim().min(1).max(200),
+    }),
+  ]),
+});
+
+export type OpenCodeAuthPayload = z.infer<typeof OpenCodeAuthPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Git Clone Payload
 // ═══════════════════════════════════════════════════════════
 
@@ -905,6 +929,7 @@ export type ZellijTabPayload = z.infer<typeof ZellijTabPayloadSchema>;
  */
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
+  OpenCodeAuthPayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
@@ -970,6 +995,7 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
 export function getSupportedCommands(): string[] {
   return [
     'prompt',
+    'opencode.auth',
     'git.clone',
     'git.branch.add',
     'git.branch.remove',

@@ -463,6 +463,7 @@ const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
   'codex-auth/device',
   'codex-auth/import',
+  'opencode-auth',
   'claude-models',
   'copilot-models',
   'cursor-models',

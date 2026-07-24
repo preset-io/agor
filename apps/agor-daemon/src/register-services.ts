@@ -5,6 +5,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { homedir } from 'node:os';
 import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
@@ -115,6 +116,7 @@ import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
+import { createOpenCodeAuthService } from './services/opencode-auth.js';
 import { createReposService } from './services/repos.js';
 import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
@@ -137,6 +139,8 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import { resolveOpenCodeTaskCredentialNamespace } from './utils/opencode-credential-namespace.js';
+import { admitOpenCodeExecutor } from './utils/opencode-executor-admission.js';
 import {
   computeFileHash,
   findCodexSessionFile,
@@ -563,6 +567,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/check-auth', createCheckAuthService(db));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
+  app.use('/opencode-auth', createOpenCodeAuthService(db));
+  app.service('/opencode-auth').hooks({ before: { all: [ctx.requireAuth] } });
+  app.service('/opencode-auth').publish(() => []);
+
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the Unix identity that runs Codex and flips their auth
   // method to subscription. Token material never leaves the daemon.
@@ -778,27 +786,28 @@ function createExecuteHandler(
       session.agentic_tool as import('@agor/core/types').AgenticToolName,
       config.execution?.stateless_fs_mode
     );
-
-    // Generate session token for executor authentication
-    const appWithExecutor = app as unknown as {
-      sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
-    };
-    if (!appWithExecutor.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    // Hook chain enforces auth before we get here.
-    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
-      sessionId,
-      (params as AuthenticatedParams).user!.user_id,
+    const sessionToken = await admitOpenCodeExecutor(
       {
-        taskId: data.taskId,
-        branchId: session.branch_id,
-        // Executor JWTs authenticate on every daemon API call over the runtime
-        // connection, so low per-call max-use limits make normal execution
-        // fail after startup. Keep expiry + in-memory revocation for these
-        // scoped runtime credentials; revisit max-use semantics once they can
-        // be counted per connection/task instead of per service method.
-        maxUses: -1,
+        tool: session.agentic_tool as import('@agor/core/types').AgenticToolName,
+        tenantId,
+        config,
+      },
+      async () => {
+        // Hook chain enforces auth before we get here.
+        return sessionTokenService.generateToken(
+          sessionId,
+          (params as AuthenticatedParams).user!.user_id,
+          {
+            taskId: data.taskId,
+            branchId: session.branch_id,
+            // Executor JWTs authenticate on every daemon API call over the runtime
+            // connection, so low per-call max-use limits make normal execution
+            // fail after startup. Keep expiry + in-memory revocation for these
+            // scoped runtime credentials; revisit max-use semantics once they can
+            // be counted per connection/task instead of per service method.
+            maxUses: -1,
+          }
+        );
       }
     );
 
@@ -835,6 +844,7 @@ function createExecuteHandler(
     });
 
     const executorUnixUser = impersonationResult.unixUser;
+    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;
     const permissionModeForPayload =
@@ -943,6 +953,15 @@ function createExecuteHandler(
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
+      ...(session.agentic_tool === 'opencode'
+        ? {
+            dataHome: resolveOpenCodeTaskCredentialNamespace({
+              tenantId: tenantId!,
+              session,
+              homeDir: executorHomeDir ?? homedir(),
+            }).dataHome,
+          }
+        : {}),
       env: executorEnv,
       params: {
         sessionId,
@@ -960,9 +979,6 @@ function createExecuteHandler(
         messageSource: data.messageSource,
       },
     };
-
-    // Stateless FS mode: resolve executor home dir for session file path
-    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
 
     // Stateless FS mode: restore session file from DB before executor starts
     if (config.execution?.stateless_fs_mode && session.sdk_session_id) {
@@ -1128,7 +1144,7 @@ function createExecuteHandler(
           }
         }
 
-        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+        sessionTokenService.revokeToken(sessionToken);
       },
     });
 

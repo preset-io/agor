@@ -32,6 +32,7 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  dataHome?: string;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
@@ -110,6 +111,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      dataHome?: string;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
     }

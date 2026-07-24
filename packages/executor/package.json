@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:opencode-runtime": "tsx scripts/opencode-managed-runtime-harness.mjs --module src/sdk-handlers/opencode/opencode-tool.ts --permission-module src/permissions/permission-service.ts --streaming-module src/handlers/sdk/base-executor.ts --containment-module ../../apps/agor-daemon/src/executor-tracking.ts",
+    "test:opencode-auth": "tsx scripts/opencode-provider-auth-harness.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

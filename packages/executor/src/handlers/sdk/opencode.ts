@@ -28,6 +28,7 @@ export async function executeOpenCodeTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  dataHome?: string;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
@@ -102,6 +103,7 @@ export async function executeOpenCodeTask(params: {
         mcpToken: session.mcp_token,
         permissionMode: params.permissionMode,
         signal: params.abortController.signal,
+        dataHome: params.dataHome,
         persistOpenCodeSessionId: async (openCodeSessionId) => {
           await client.service('sessions').patch(sessionId, {
             sdk_session_id: openCodeSessionId,

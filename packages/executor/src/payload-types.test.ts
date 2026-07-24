@@ -636,6 +636,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(19);
+    expect(commands).toContain('opencode.auth');
+    expect(commands.length).toBe(20);
   });
 });

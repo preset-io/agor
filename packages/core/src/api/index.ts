@@ -32,6 +32,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  OpenCodeProviderSettings,
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
@@ -212,6 +213,7 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'opencode-auth': OpenCodeProviderSettings;
 }
 
 /**
@@ -265,6 +267,15 @@ export type AgenticToolPresetsService = AgorService<
   never,
   PatchAgenticToolPreset
 >;
+
+export interface OpenCodeAuthService {
+  find(params?: Params): Promise<OpenCodeProviderSettings>;
+  create(
+    data: { providerId: string; apiKey: string; metadata?: Record<string, string> },
+    params?: Params
+  ): Promise<OpenCodeProviderSettings>;
+  remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
+}
 
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
@@ -598,6 +609,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'boards'): BoardsService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
+  service(path: 'opencode-auth'): OpenCodeAuthService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
