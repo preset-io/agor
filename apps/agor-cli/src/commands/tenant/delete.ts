@@ -34,6 +34,13 @@ function redactSecrets(message: string): string {
   return message.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, '$1[redacted]@');
 }
 
+/** Wait until every stderr write queued so far has completed. */
+function flushStderr(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stderr.write('', () => resolve());
+  });
+}
+
 export default class TenantDelete extends Command {
   static override description =
     'Permanently delete all data belonging to a single tenant (PostgreSQL multi-tenant deployments). Idempotent and verified. ' +
@@ -68,6 +75,7 @@ export default class TenantDelete extends Command {
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
         this.logToStderr(chalk.red(`✗ ${error.message}`));
+        await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
       throw error;
@@ -101,9 +109,10 @@ export default class TenantDelete extends Command {
           `✓ ${dryRun ? 'Dry run complete' : 'Tenant data deleted and verified'} — ${totalRows} row(s)`
         )
       );
+      await flushStderr();
       process.exit(0);
     } catch (error) {
-      const message = error instanceof Error ? redactSecrets(error.message) : String(error);
+      const message = redactSecrets(error instanceof Error ? error.message : String(error));
       this.logToStderr(chalk.red(`✗ ${message}`));
       if (error instanceof TenantDeletionVerificationError) {
         this.logToStderr(chalk.red(`  Remaining tables: ${error.tables.join(', ')}`));
@@ -115,6 +124,7 @@ export default class TenantDelete extends Command {
           )
         );
       }
+      await flushStderr();
       process.exit(EXIT_FAILURE);
     }
   }
