@@ -12,7 +12,6 @@ import {
   resolveActiveKnowledgeDocument,
   resolveKnowledgeSpaceAfterNamespacesLoad,
   resolveKnowledgeSpaceAfterRouteOrNamespacesLoad,
-  shouldAutoOpenKnowledgeSettings,
   shouldDeferKnowledgeUrlMirrorForRoute,
   shouldShowKnowledgeGraphView,
   shouldShowKnowledgeRouteDocumentLoading,
@@ -357,17 +356,5 @@ describe('KnowledgePage namespace select helpers', () => {
     expect(filterSelectOptionBySearchText('product knowledge', option)).toBe(true);
     expect(filterSelectOptionBySearchText('product-docs', option)).toBe(true);
     expect(filterSelectOptionBySearchText('engineering', option)).toBe(false);
-  });
-});
-
-describe('KnowledgePage settings deep-link', () => {
-  it('recognizes the ?settings=1 query param', () => {
-    expect(shouldAutoOpenKnowledgeSettings(new URLSearchParams('settings=1'))).toBe(true);
-  });
-
-  it('ignores absent or non-1 settings param', () => {
-    expect(shouldAutoOpenKnowledgeSettings(new URLSearchParams(''))).toBe(false);
-    expect(shouldAutoOpenKnowledgeSettings(new URLSearchParams('settings=0'))).toBe(false);
-    expect(shouldAutoOpenKnowledgeSettings(new URLSearchParams('settings=true'))).toBe(false);
   });
 });

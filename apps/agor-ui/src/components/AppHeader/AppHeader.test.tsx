@@ -58,13 +58,13 @@ describe('AppHeader settings dropdown', () => {
     mockSetThemeMode.mockClear();
   });
 
-  it('shows Knowledge Base and Knowledge Settings as flat items', async () => {
+  it('shows Knowledge Base as a flat item without Knowledge Settings', async () => {
     renderHeader();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
     expect(await screen.findByText('Knowledge Base')).toBeInTheDocument();
-    expect(screen.getByText('Knowledge Settings')).toBeInTheDocument();
+    expect(screen.queryByText('Knowledge Settings')).not.toBeInTheDocument();
   });
 
   it('navigates to /knowledge via SPA navigation when Knowledge Base is clicked', async () => {
@@ -99,17 +99,6 @@ describe('AppHeader settings dropdown', () => {
 
     expect(eventWasNotCancelled).toBe(true);
     expect(mockNavigate).not.toHaveBeenCalled();
-  });
-
-  it('navigates to /knowledge?settings=1 when Knowledge Settings is clicked', async () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
-
-    const knowledgeSettings = await screen.findByText('Knowledge Settings');
-    fireEvent.click(knowledgeSettings);
-
-    expect(mockNavigate).toHaveBeenCalledWith('/knowledge?settings=1');
   });
 
   it('invokes onEventStreamClick when Live Events is clicked', async () => {

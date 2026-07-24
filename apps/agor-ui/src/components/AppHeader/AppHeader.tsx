@@ -176,12 +176,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
       ),
     },
     {
-      key: 'knowledge-settings',
-      label: 'Knowledge Settings',
-      onClick: () => navigate('/knowledge?settings=1'),
-    },
-    { type: 'divider' as const },
-    {
       key: 'documentation',
       label: (
         <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
