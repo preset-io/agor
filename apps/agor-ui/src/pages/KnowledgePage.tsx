@@ -38,11 +38,9 @@ import {
   FolderOutlined,
   HistoryOutlined,
   LoadingOutlined,
-  QuestionCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
-  SettingOutlined,
   TeamOutlined,
   UpOutlined,
   UserOutlined,
@@ -85,6 +83,7 @@ import {
   PanelResizeHandle,
 } from 'react-resizable-panels';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { buildThemeMenuItems, SettingsDropdown } from '../components/AppHeader/SettingsDropdown';
 import { ArchiveActionButton } from '../components/ArchiveButton';
 import {
   AutocompleteTextarea,
@@ -98,8 +97,8 @@ import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { HighlightMatch } from '../components/HighlightMatch';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
-import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
+import { useTheme } from '../contexts/ThemeContext';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { useAgorStore } from '../store/agorStore';
 import { selectUserById } from '../store/selectors';
@@ -585,6 +584,10 @@ export function isKnowledgeDocumentsResponseCurrent(args: {
   );
 }
 
+export function shouldAutoOpenKnowledgeSettings(searchParams: URLSearchParams): boolean {
+  return searchParams.get('settings') === '1';
+}
+
 export function buildKnowledgeNamespaceSelectOptions(namespaces: KnowledgeNamespaceOptionSource[]) {
   return [...namespaces]
     .sort((a, b) => {
@@ -725,6 +728,7 @@ export function KnowledgePage({
   // re-rendering on every user write.
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
+  const { themeMode, setThemeMode } = useTheme();
   const { confirm } = useThemedModal();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1380,6 +1384,25 @@ export function KnowledgePage({
     void loadNamespaceGroups();
     void loadNamespaceUsers();
   }, [loadNamespaceGroups, loadNamespaceUsers, loadNamespaces, refreshKnowledgeSettings]);
+
+  useEffect(() => {
+    if (shouldAutoOpenKnowledgeSettings(routeSearchParams)) {
+      openKnowledgeSettings();
+      const params = new URLSearchParams(location.search);
+      params.delete('settings');
+      const cleaned = params.toString();
+      navigate(`${location.pathname}${cleaned ? `?${cleaned}` : ''}${location.hash}`, {
+        replace: true,
+      });
+    }
+  }, [
+    routeSearchParams,
+    openKnowledgeSettings,
+    navigate,
+    location.pathname,
+    location.search,
+    location.hash,
+  ]);
 
   const saveKnowledgeSettings = useCallback(async () => {
     if (!client) return;
@@ -3064,27 +3087,33 @@ export function KnowledgePage({
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             />
           </Tooltip>
-          <Tooltip title="Documentation" placement="bottom">
-            <Button
-              type="text"
-              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-              href="https://agor.live/guide/getting-started"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            />
-          </Tooltip>
-          <ThemeSwitcher />
-          {hasMinimumRole(currentUser?.role, ROLES.ADMIN) && (
-            <Tooltip title="Knowledge settings" placement="bottom">
-              <Button
-                type="text"
-                icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-                onClick={openKnowledgeSettings}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              />
-            </Tooltip>
-          )}
+          <SettingsDropdown
+            items={[
+              {
+                key: 'documentation',
+                label: (
+                  <a
+                    href="https://agor.live/guide/getting-started"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Documentation
+                  </a>
+                ),
+              },
+              buildThemeMenuItems(themeMode, setThemeMode),
+              ...(hasMinimumRole(currentUser?.role, ROLES.ADMIN)
+                ? [
+                    { type: 'divider' as const },
+                    {
+                      key: 'knowledge-settings',
+                      label: 'Knowledge Settings',
+                      onClick: openKnowledgeSettings,
+                    },
+                  ]
+                : []),
+            ]}
+          />
           <GlobalUserMenu
             user={currentUser}
             onUserSettingsClick={onUserSettingsClick}

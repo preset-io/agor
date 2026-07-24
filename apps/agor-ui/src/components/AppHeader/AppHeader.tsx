@@ -1,13 +1,12 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
-import { CheckOutlined, SettingOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Divider, Dropdown, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
+import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { type ThemeMode, useTheme } from '../../contexts/ThemeContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -18,6 +17,7 @@ import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
+import { buildThemeMenuItems, SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
 
@@ -91,128 +91,6 @@ const RecentBoardPills: React.FC<{
   );
 };
 
-const themeCheckIcon = <CheckOutlined />;
-const themeBlankIcon = <span style={{ width: 14, display: 'inline-block' }} />;
-
-const SettingsDropdown: React.FC<{
-  eventStreamEnabled: boolean;
-  mutationDisabled: boolean;
-  themeMode: ThemeMode;
-  setThemeMode: (mode: ThemeMode) => void;
-  onEventStreamClick?: () => void;
-  onSettingsClick?: () => void;
-  onThemeEditorClick?: () => void;
-  navigate: (path: string) => void;
-  knowledgeHref: string;
-  token: ReturnType<typeof theme.useToken>['token'];
-}> = ({
-  eventStreamEnabled,
-  mutationDisabled,
-  themeMode,
-  setThemeMode,
-  onEventStreamClick,
-  onSettingsClick,
-  onThemeEditorClick,
-  navigate,
-  knowledgeHref,
-  token,
-}) => {
-  const items: MenuProps['items'] = [
-    ...(eventStreamEnabled
-      ? [
-          {
-            key: 'event-stream',
-            label: 'Live Events',
-            disabled: mutationDisabled,
-            onClick: onEventStreamClick,
-          },
-        ]
-      : []),
-    {
-      key: 'knowledge',
-      label: (
-        <a
-          href={knowledgeHref}
-          onClick={(event) => {
-            if (event.defaultPrevented) return;
-            if (
-              event.button !== 0 ||
-              event.metaKey ||
-              event.ctrlKey ||
-              event.shiftKey ||
-              event.altKey
-            ) {
-              return;
-            }
-            event.preventDefault();
-            navigate('/knowledge');
-          }}
-        >
-          Knowledge
-        </a>
-      ),
-    },
-    {
-      key: 'documentation',
-      label: (
-        <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
-          Documentation
-        </a>
-      ),
-    },
-    {
-      key: 'theme',
-      label: 'Theme',
-      children: [
-        {
-          key: 'theme-dark',
-          label: 'Dark',
-          icon: themeMode === 'dark' ? themeCheckIcon : themeBlankIcon,
-          onClick: () => setThemeMode('dark'),
-        },
-        {
-          key: 'theme-light',
-          label: 'Light',
-          icon: themeMode === 'light' ? themeCheckIcon : themeBlankIcon,
-          onClick: () => setThemeMode('light'),
-        },
-        {
-          key: 'theme-custom',
-          label: 'Custom',
-          icon: themeMode === 'custom' ? themeCheckIcon : themeBlankIcon,
-          onClick: () => setThemeMode('custom'),
-          disabled: !onThemeEditorClick,
-        },
-        { type: 'divider' as const },
-        {
-          key: 'theme-edit',
-          label: 'Edit Custom Theme',
-          onClick: onThemeEditorClick,
-          disabled: !onThemeEditorClick,
-        },
-      ],
-    },
-    { type: 'divider' },
-    {
-      key: 'settings',
-      label: 'Settings',
-      disabled: mutationDisabled,
-      onClick: onSettingsClick,
-    },
-  ];
-
-  return (
-    <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
-      <Button
-        type="text"
-        icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-        aria-label="Settings menu"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      />
-    </Dropdown>
-  );
-};
-
 const AppHeaderInner: React.FC<AppHeaderProps> = ({
   user,
   presenceClient = null,
@@ -260,6 +138,66 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
   const mutationDisabled = useConnectionDisabled();
+
+  const settingsItems: MenuProps['items'] = [
+    ...(eventStreamEnabled
+      ? [
+          {
+            key: 'event-stream',
+            label: 'Live Events',
+            disabled: mutationDisabled,
+            onClick: onEventStreamClick,
+          },
+          { type: 'divider' as const },
+        ]
+      : []),
+    {
+      key: 'knowledge-base',
+      label: (
+        <a
+          href={knowledgeHref}
+          onClick={(event) => {
+            if (event.defaultPrevented) return;
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              return;
+            }
+            event.preventDefault();
+            navigate('/knowledge');
+          }}
+        >
+          Knowledge Base
+        </a>
+      ),
+    },
+    {
+      key: 'knowledge-settings',
+      label: 'Knowledge Settings',
+      onClick: () => navigate('/knowledge?settings=1'),
+    },
+    { type: 'divider' as const },
+    {
+      key: 'documentation',
+      label: (
+        <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
+          Documentation
+        </a>
+      ),
+    },
+    buildThemeMenuItems(themeMode, setThemeMode, onThemeEditorClick),
+    { type: 'divider' as const },
+    {
+      key: 'settings',
+      label: 'Settings',
+      disabled: mutationDisabled,
+      onClick: onSettingsClick,
+    },
+  ];
 
   return (
     <Header
@@ -370,18 +308,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           onSettingsClick={onSettingsClick}
         />
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-        <SettingsDropdown
-          eventStreamEnabled={eventStreamEnabled}
-          mutationDisabled={mutationDisabled}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-          onEventStreamClick={onEventStreamClick}
-          onSettingsClick={onSettingsClick}
-          onThemeEditorClick={onThemeEditorClick}
-          navigate={navigate}
-          knowledgeHref={knowledgeHref}
-          token={token}
-        />
+        <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}
           disabled={mutationDisabled}

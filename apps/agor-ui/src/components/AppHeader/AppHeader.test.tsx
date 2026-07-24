@@ -58,38 +58,58 @@ describe('AppHeader settings dropdown', () => {
     mockSetThemeMode.mockClear();
   });
 
-  it('navigates to Knowledge via SPA navigation from the dropdown', async () => {
+  it('shows Knowledge Base and Knowledge Settings as flat items', async () => {
     renderHeader();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
-    const knowledgeItem = await screen.findByText('Knowledge');
-    fireEvent.click(knowledgeItem);
+    expect(await screen.findByText('Knowledge Base')).toBeInTheDocument();
+    expect(screen.getByText('Knowledge Settings')).toBeInTheDocument();
+  });
+
+  it('navigates to /knowledge via SPA navigation when Knowledge Base is clicked', async () => {
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+
+    const knowledgeBase = await screen.findByText('Knowledge Base');
+    fireEvent.click(knowledgeBase);
 
     expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/knowledge');
   });
 
-  it('renders Knowledge as a basename-aware link for modified clicks and new tabs', async () => {
+  it('renders Knowledge Base as a basename-aware link for modified clicks and new tabs', async () => {
     renderHeader();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
-    const knowledgeLink = await screen.findByRole('link', { name: 'Knowledge' });
-    expect(knowledgeLink).toHaveAttribute('href', '/ui/knowledge');
+    const knowledgeBaseLink = await screen.findByRole('link', { name: 'Knowledge Base' });
+    expect(knowledgeBaseLink).toHaveAttribute('href', '/ui/knowledge');
   });
 
-  it('lets modified clicks on Knowledge fall through to the browser', async () => {
+  it('lets modified clicks on Knowledge Base fall through to the browser', async () => {
     renderHeader();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
-    const knowledgeLink = await screen.findByRole('link', { name: 'Knowledge' });
-    knowledgeLink.removeAttribute('href');
+    const knowledgeBaseLink = await screen.findByRole('link', { name: 'Knowledge Base' });
+    knowledgeBaseLink.removeAttribute('href');
 
-    const eventWasNotCancelled = fireEvent.click(knowledgeLink, { metaKey: true });
+    const eventWasNotCancelled = fireEvent.click(knowledgeBaseLink, { metaKey: true });
 
     expect(eventWasNotCancelled).toBe(true);
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('navigates to /knowledge?settings=1 when Knowledge Settings is clicked', async () => {
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+
+    const knowledgeSettings = await screen.findByText('Knowledge Settings');
+    fireEvent.click(knowledgeSettings);
+
+    expect(mockNavigate).toHaveBeenCalledWith('/knowledge?settings=1');
   });
 
   it('invokes onEventStreamClick when Live Events is clicked', async () => {
@@ -104,7 +124,7 @@ describe('AppHeader settings dropdown', () => {
     expect(onEventStreamClick).toHaveBeenCalledOnce();
   });
 
-  it('invokes onSettingsClick when Settings is clicked', async () => {
+  it('invokes onSettingsClick when main Settings is clicked', async () => {
     const onSettingsClick = vi.fn();
     renderHeader({ onSettingsClick });
 
