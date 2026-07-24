@@ -27,6 +27,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -400,14 +401,6 @@ const ONB_ANIM_CSS = `
     from { stroke-dashoffset: 239; }
     to   { stroke-dashoffset: 0;   }
   }
-  @keyframes onb-orb1 {
-    0%, 100% { transform: translate(0,0) scale(1);     opacity: 0.8; }
-    50%       { transform: translate(-28px,-18px) scale(1.15); opacity: 1;   }
-  }
-  @keyframes onb-orb2 {
-    0%, 100% { transform: translate(0,0) scale(1);    opacity: 0.5; }
-    50%       { transform: translate(20px,28px) scale(1.1); opacity: 0.8; }
-  }
   @keyframes onb-p0 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(0px,-72px) scale(0);opacity:0} }
   @keyframes onb-p1 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(51px,-51px) scale(0);opacity:0} }
   @keyframes onb-p2 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(72px,0px) scale(0);opacity:0} }
@@ -420,8 +413,6 @@ const ONB_ANIM_CSS = `
   .onb-step  { animation: onb-fade-in 0.22s cubic-bezier(0.16,1,0.3,1) both; }
   .onb-check { animation: onb-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) both; }
   .onb-draw  { animation: onb-draw 0.75s cubic-bezier(0.4,0,0.2,1) 0.1s both; }
-  .onb-orb1  { animation: onb-orb1 9s ease-in-out infinite; }
-  .onb-orb2  { animation: onb-orb2 12s ease-in-out infinite; }
 
   /* Glass hover — only on unselected cards; no transform (per UX preference) */
   button.onb-card[aria-pressed='false']:hover {
@@ -441,8 +432,6 @@ const ONB_ANIM_CSS = `
     .onb-step,
     .onb-check,
     .onb-draw,
-    .onb-orb1,
-    .onb-orb2,
     .onb-particle {
       animation: none !important;
     }
@@ -1995,8 +1984,8 @@ export function OnboardingWizard({
 
   return (
     <>
-      {/* The wizard is always mounted; only inject the ambient-orb keyframes
-          while it's actually open so a closed wizard adds nothing to the DOM. */}
+      {/* The wizard is always mounted; only inject its step/celebration
+          keyframes while open so a closed wizard adds nothing to the DOM. */}
       {open && <style>{ONB_ANIM_CSS}</style>}
       <Modal
         open={open}
@@ -2021,43 +2010,9 @@ export function OnboardingWizard({
           body: { padding: 0 },
         }}
       >
-        {/* Wrapper enables absolute-positioned orbs behind all content */}
+        {/* Wrapper enables shared ambient highlights behind all content */}
         <div style={{ position: 'relative' }}>
-          {/* Animated ambient glow orbs */}
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              overflow: 'hidden',
-              pointerEvents: 'none',
-              borderRadius: 20,
-            }}
-          >
-            <div
-              className="onb-orb1"
-              style={{
-                position: 'absolute',
-                width: 360,
-                height: 360,
-                borderRadius: '50%',
-                background: 'radial-gradient(circle, rgba(46,154,146,0.3) 0%, transparent 70%)',
-                bottom: -130,
-                right: -90,
-              }}
-            />
-            <div
-              className="onb-orb2"
-              style={{
-                position: 'absolute',
-                width: 220,
-                height: 220,
-                borderRadius: '50%',
-                background: 'radial-gradient(circle, rgba(79,109,245,0.18) 0%, transparent 70%)',
-                top: -70,
-                left: -50,
-              }}
-            />
-          </div>
+          <GlassPanelHighlights intensity="strong" animated={open} />
 
           {/* Dismiss button — only shown when onDismiss is provided and not on the final step */}
           {onDismiss && currentStep !== 'done' && (
