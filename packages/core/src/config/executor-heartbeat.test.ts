@@ -50,13 +50,17 @@ describe('resolveExecutorHeartbeatConfig', () => {
 });
 
 describe('resolveSdkWatchdogConfig', () => {
-  it('defaults to conservative observe-only policy', () => {
+  it('defaults to enforced supervision', () => {
     expect(resolveSdkWatchdogConfig()).toEqual({
-      mode: 'observe',
+      mode: 'enforce',
       first_progress_timeout_ms: 180_000,
       abort_grace_ms: 15_000,
       claude_idle_timeout_ms: 3_600_000,
     });
+  });
+
+  it.each(['observe', 'disabled'] as const)('preserves explicit %s policy', (mode) => {
+    expect(resolveSdkWatchdogConfig({ sdk_watchdog: { mode } }).mode).toBe(mode);
   });
 
   it('supports disabling Claude idle without disabling first progress', () => {

@@ -21,9 +21,14 @@ const { Text } = Typography;
 interface CompactionBlockProps {
   messages: Message[]; // Array of system messages (start, complete)
   agentic_tool?: string;
+  isTaskRunning: boolean;
 }
 
-export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agentic_tool }) => {
+export const CompactionBlock: React.FC<CompactionBlockProps> = ({
+  messages,
+  agentic_tool,
+  isTaskRunning,
+}) => {
   const { token } = theme.useToken();
 
   // Find start and complete messages
@@ -92,13 +97,13 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
     }
   }
 
-  // Otherwise, show in-progress state (spinner)
-  const spinnerContent = (
+  // Otherwise, show in-progress state without implying progress after a stall.
+  const inProgressContent = (
     <Space>
-      <Spin size="small" />
+      {isTaskRunning && <Spin size="small" />}
       <Text type="secondary">Compacting conversation context...</Text>
     </Space>
   );
 
-  return <SystemMessage content={spinnerContent} agenticTool={agentic_tool} />;
+  return <SystemMessage content={inProgressContent} agenticTool={agentic_tool} />;
 };

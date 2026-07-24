@@ -80,7 +80,7 @@ export function resolveSdkWatchdogConfig(
     );
   }
   return {
-    mode: raw?.mode ?? 'observe',
+    mode: raw?.mode ?? 'enforce',
     first_progress_timeout_ms: positiveSafeInteger(
       raw?.first_progress_timeout_ms,
       180_000,

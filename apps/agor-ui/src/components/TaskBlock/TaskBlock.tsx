@@ -28,9 +28,10 @@ import {
   GithubOutlined,
   RobotOutlined,
   UpOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Collapse, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Collapse, Flex, Spin, Typography, theme } from 'antd';
 import React, { useMemo, useRef } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
@@ -492,6 +493,24 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     // Get normalized SDK response (computed by executor, stored in DB)
     const normalized = task.normalized_sdk_response || null;
+    const sdkFailure = task.sdk_failure;
+    const isActionableSdkFailure =
+      sdkFailure?.reason === 'no_first_progress' || sdkFailure?.reason === 'progress_stalled';
+    const laterObserveProgress =
+      task.status === TaskStatus.RUNNING &&
+      isActionableSdkFailure &&
+      sdkFailure?.watchdog_action === 'would_fire' &&
+      sdkFailure.termination === 'not_requested' &&
+      task.latest_executor_pulse?.kind === 'progress' &&
+      Date.parse(task.latest_executor_pulse.observed_at) > Date.parse(sdkFailure.detected_at);
+    const activeSdkFailure =
+      sdkFailure &&
+      isActionableSdkFailure &&
+      (task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING) &&
+      !laterObserveProgress
+        ? sdkFailure
+        : undefined;
+    const presentTaskAsRunning = task.status === TaskStatus.RUNNING && !activeSdkFailure;
 
     // Use computed context window from database (already summed across tasks since last compaction)
     // If undefined, it means the backend computation failed or hasn't run yet
@@ -567,6 +586,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
               latestExecutorPulse={task.latest_executor_pulse}
             />
+            {activeSdkFailure && (
+              <Tag icon={<WarningOutlined />} color="warning" style={{ fontSize: 11 }}>
+                Agent progress stalled
+              </Tag>
+            )}
             {scheduledFromBranch && scheduledRunAt && (
               <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
             )}
@@ -661,6 +685,20 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               },
               children: (
                 <div style={{ paddingTop: token.sizeUnit }}>
+                  {activeSdkFailure && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title="Agent progress stalled"
+                      description={
+                        task.status === TaskStatus.STOPPING
+                          ? 'Stopping executor. The task remains stopping until process absence is verified.'
+                          : 'Monitoring only. The executor is still running, but the agent is not making progress. Check the heartbeat and SDK pulse details above.'
+                      }
+                      style={{ marginBottom: token.sizeUnit * 2 }}
+                    />
+                  )}
+
                   {/* Show loading spinner while fetching messages */}
                   {messagesLoading && (
                     <div
@@ -728,7 +766,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               agentic_tool={agentic_tool}
                               userById={userById}
                               currentUserId={task.created_by}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={presentTaskAsRunning}
                               sessionId={sessionId}
                               onPermissionDecision={onPermissionDecision}
                               isFirstPendingPermission={isFirstPending}
@@ -748,7 +786,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <AgentChain
                               messages={block.messages}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={presentTaskAsRunning}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                             />
                           </div>
@@ -762,6 +800,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                             <CompactionBlock
                               messages={block.messages}
                               agentic_tool={agentic_tool}
+                              isTaskRunning={presentTaskAsRunning}
                             />
                           </div>
                         );
@@ -770,14 +809,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     })}
 
                   {/* Keep latest TODO visible even after completion (Claude parity). */}
-                  <StickyTodoRenderer messages={messages} taskStatus={task.status} />
+                  <StickyTodoRenderer
+                    messages={messages}
+                    taskStatus={task.status}
+                    isTaskRunning={presentTaskAsRunning}
+                  />
 
                   {/* Show typing indicator whenever task is actively running.
                       Marked as a conversation block so its unmount at stream
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
-                  {task.status === TaskStatus.RUNNING && (
-                    <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
+                  {presentTaskAsRunning && (
+                    <div
+                      data-conversation-block
+                      role="status"
+                      aria-label="Agent is working"
+                      style={{ margin: `${token.sizeUnit}px 0` }}
+                    >
                       <Bubble
                         placement="start"
                         avatar={

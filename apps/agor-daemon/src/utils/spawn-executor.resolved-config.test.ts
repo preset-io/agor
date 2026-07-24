@@ -75,13 +75,13 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
-  it('freezes heartbeat and observe-only watchdog defaults into the payload', () => {
+  it('freezes heartbeat and enforced watchdog defaults into the payload', () => {
     const slice = buildResolvedConfigSlice();
     expect(slice).toEqual({
       execution: {
         executor_heartbeat: { enabled: true, interval_ms: 10_000 },
         sdk_watchdog: {
-          mode: 'observe',
+          mode: 'enforce',
           first_progress_timeout_ms: 180_000,
           abort_grace_ms: 15_000,
           claude_idle_timeout_ms: 3_600_000,
