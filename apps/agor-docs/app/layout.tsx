@@ -1,6 +1,7 @@
 import { Head } from 'nextra/components';
 import 'nextra-theme-docs/style.css';
 import { Hanken_Grotesk, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
+import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
@@ -129,6 +130,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <DocsAuroraBackground />
         {children}
+        {/* Microsoft Clarity analytics (project xroxavynkf). */}
+        <Script id="ms-clarity" strategy="afterInteractive">
+          {`(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script","xroxavynkf");`}
+        </Script>
       </body>
     </html>
   );
