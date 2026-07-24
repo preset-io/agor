@@ -1045,7 +1045,10 @@ post-progress deadline.
 An active diagnosis is shown separately from the executor heartbeat: a current
 heartbeat means the wrapper is communicating, not that the agent is making
 progress. For an actionable observe-only diagnosis, a later meaningful progress
-pulse clears the active warning while preserving the recorded diagnosis.
+pulse clears only the active UI warning while preserving the recorded diagnosis.
+It does not rearm the first-progress deadline. Provider post-progress detection
+is currently Claude-only through `claude_idle_timeout_ms`; Codex
+post-first-progress detection remains deferred.
 
 SDK activity facts share the existing executor heartbeat transport. Disabling
 `execution.executor_heartbeat.enabled` therefore disables persisted pulse

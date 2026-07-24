@@ -49,6 +49,16 @@ describe('SdkWatchdog', () => {
     expect(decisions).toHaveLength(1);
   });
 
+  it('does not rearm observe mode after late progress', () => {
+    const { watchdog, decisions } = harness({}, 'claude-code');
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(1_000);
+    expect(decisions).toHaveLength(1);
+    watchdog.record('progress', 'item.started');
+    vi.advanceTimersByTime(10_000);
+    expect(decisions.map(({ reason }) => reason)).toEqual(['no_first_progress']);
+  });
+
   it('disarms first-progress policy after meaningful progress', () => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
