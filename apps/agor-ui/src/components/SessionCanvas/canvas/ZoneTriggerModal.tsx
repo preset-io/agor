@@ -174,6 +174,8 @@ export const ZoneTriggerModal = ({
 
       // Get user defaults for this agent as fallback
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+      const recentAgentSession =
+        mostRecentSession?.agentic_tool === selectedAgent ? mostRecentSession : undefined;
 
       // MCP inheritance: branch config > user defaults
       const effectiveMcpServerIds =
@@ -183,9 +185,10 @@ export const ZoneTriggerModal = ({
 
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
-        permissionMode: mostRecentSession?.permission_config?.mode || agentDefaults?.permissionMode,
-        modelConfig: mostRecentSession?.model_config || agentDefaults?.modelConfig,
-        effort: mostRecentSession?.model_config?.effort ?? agentDefaults?.modelConfig?.effort,
+        permissionMode:
+          recentAgentSession?.permission_config?.mode || agentDefaults?.permissionMode,
+        modelConfig: recentAgentSession?.model_config || agentDefaults?.modelConfig,
+        effort: recentAgentSession?.model_config?.effort ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: form.getFieldValue('mcpServerIds') ?? effectiveMcpServerIds,
       };
 

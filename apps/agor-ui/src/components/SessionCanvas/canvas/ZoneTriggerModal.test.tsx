@@ -133,6 +133,89 @@ describe('ZoneTriggerModal smart-default session selection', () => {
 });
 
 describe('ZoneTriggerModal reasoning effort', () => {
+  it('does not inherit model or effort from another agent while preserving MCP inheritance', async () => {
+    const claudeSession = {
+      ...makeSession('s-claude', 'completed', '2026-06-20T00:00:00.000Z', 'Claude session'),
+      agentic_tool: 'claude-code',
+      model_config: { mode: 'alias', model: 'claude-opus-4-8', effort: 'max' },
+      permission_config: { mode: 'bypassPermissions' },
+    } as unknown as Session;
+    const onExecute = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <ZoneTriggerModal
+        open
+        onCancel={() => {}}
+        client={null}
+        branchId={BRANCH_ID}
+        branch={{ mcp_server_ids: ['branch-mcp'] } as never}
+        sessionsByBranch={new Map([[BRANCH_ID, [claudeSession]]])}
+        zoneName="Zone"
+        trigger={{ template: 'prompt' } as never}
+        availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
+        mcpServerById={new Map()}
+        onExecute={onExecute}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Create a new session'));
+    fireEvent.click(screen.getByRole('button', { name: 'codex' }));
+    fireEvent.click(screen.getByText('Agentic Tool Configuration (optional)'));
+    await waitFor(() => expect(screen.getByLabelText('zone-effort')).toHaveValue(''));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() =>
+      expect(onExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'codex',
+          modelConfig: undefined,
+          permissionMode: undefined,
+          mcpServerIds: ['branch-mcp'],
+        })
+      )
+    );
+  });
+
+  it('inherits model and effort from the newest session for the selected agent', async () => {
+    const codexSession = {
+      ...makeSession('s-codex', 'completed', '2026-06-20T00:00:00.000Z', 'Codex session'),
+      agentic_tool: 'codex',
+      model_config: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      permission_config: { mode: 'allow-all' },
+    } as unknown as Session;
+    const onExecute = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <ZoneTriggerModal
+        open
+        onCancel={() => {}}
+        client={null}
+        branchId={BRANCH_ID}
+        branch={undefined}
+        sessionsByBranch={new Map([[BRANCH_ID, [codexSession]]])}
+        zoneName="Zone"
+        trigger={{ template: 'prompt' } as never}
+        availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
+        mcpServerById={new Map()}
+        onExecute={onExecute}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Create a new session'));
+    fireEvent.click(screen.getByRole('button', { name: 'codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() =>
+      expect(onExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'codex',
+          modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+          permissionMode: 'allow-all',
+        })
+      )
+    );
+  });
+
   it('folds an explicit Codex effort into a new session model config', async () => {
     const onExecute = vi.fn().mockResolvedValue(undefined);
     render(

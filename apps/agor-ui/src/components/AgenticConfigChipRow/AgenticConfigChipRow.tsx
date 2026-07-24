@@ -50,6 +50,8 @@ export interface AgenticConfigChipRowProps {
   fieldName?: string;
   /** Offer "Save as my default" under the chips while Custom is active. */
   enableSaveAsDefault?: boolean;
+  /** Hide effort where changes cannot affect the active runtime. */
+  showEffort?: boolean;
   /**
    * Reports the same source validity enforced by the registered form field so
    * callers can disable submission proactively. `reason` explains why.
@@ -94,6 +96,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   currentUser,
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
+  showEffort = true,
   onConfigValidityChange,
 }) => {
   const { token } = theme.useToken();
@@ -101,7 +104,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const isClaude = CLAUDE_TOOLS.has(tool);
   const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[tool];
   const effortLevels = toolCapabilities.reasoningEffortLevels;
-  const supportsEffort = Boolean(effortLevels?.length);
+  const supportsEffort = showEffort && Boolean(effortLevels?.length);
   const {
     inlineAllowed,
     loading,

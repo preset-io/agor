@@ -436,6 +436,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           currentUser={currentUser}
           client={client ?? null}
           enableSaveAsDefault
+          showEffort={session.agentic_tool !== 'claude-code-cli'}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
