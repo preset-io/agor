@@ -3,11 +3,11 @@ import { CheckOutlined, SettingOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Dropdown, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { useTheme } from '../../contexts/ThemeContext';
+import { type ThemeMode, useTheme } from '../../contexts/ThemeContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -97,12 +97,13 @@ const themeBlankIcon = <span style={{ width: 14, display: 'inline-block' }} />;
 const SettingsDropdown: React.FC<{
   eventStreamEnabled: boolean;
   mutationDisabled: boolean;
-  themeMode: string;
-  setThemeMode: (mode: 'light' | 'dark' | 'custom') => void;
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
   onEventStreamClick?: () => void;
   onSettingsClick?: () => void;
   onThemeEditorClick?: () => void;
   navigate: (path: string) => void;
+  knowledgeHref: string;
   token: ReturnType<typeof theme.useToken>['token'];
 }> = ({
   eventStreamEnabled,
@@ -113,6 +114,7 @@ const SettingsDropdown: React.FC<{
   onSettingsClick,
   onThemeEditorClick,
   navigate,
+  knowledgeHref,
   token,
 }) => {
   const items: MenuProps['items'] = [
@@ -128,14 +130,35 @@ const SettingsDropdown: React.FC<{
       : []),
     {
       key: 'knowledge',
-      label: 'Knowledge',
-      onClick: () => navigate('/knowledge'),
+      label: (
+        <a
+          href={knowledgeHref}
+          onClick={(event) => {
+            if (event.defaultPrevented) return;
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              return;
+            }
+            event.preventDefault();
+            navigate('/knowledge');
+          }}
+        >
+          Knowledge
+        </a>
+      ),
     },
     {
       key: 'documentation',
-      label: 'Documentation',
-      onClick: () =>
-        window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer'),
+      label: (
+        <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
+          Documentation
+        </a>
+      ),
     },
     {
       key: 'theme',
@@ -214,6 +237,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
+  const knowledgeHref = useHref('/knowledge');
   const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
@@ -355,6 +379,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           onSettingsClick={onSettingsClick}
           onThemeEditorClick={onThemeEditorClick}
           navigate={navigate}
+          knowledgeHref={knowledgeHref}
           token={token}
         />
         <GlobalUserMenu
