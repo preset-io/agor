@@ -85,6 +85,10 @@ Semantic-search policy is workspace-scoped. Admins choose the enabled state, Ope
 
 The deployment still supplies the underlying capability. Vector search requires PostgreSQL with pgvector available; SQLite can retain workspace settings and build text-search units, but it cannot perform semantic or hybrid vector search.
 
+> **Upgrading from YAML-based semantic settings:** Before restarting Agor, record any values under `knowledge.semantic_search`, then remove the entire top-level `knowledge:` block from `config.yaml`. Agor rejects that removed configuration instead of silently applying one operator policy to every workspace. After startup, a workspace admin can re-enter the policy in **Knowledge → Settings → Semantic search**. Existing encrypted workspace embedding API keys remain stored and do not need to be copied into YAML.
+
+> **Multi-tenant indexer limitation:** In `required_from_auth` deployments, semantic policy and queued units are isolated correctly per workspace, but the singleton background indexer currently drains only the startup/bootstrap tenant. Other workspaces can safely configure semantic search and queue work, but automatic all-tenant queue discovery is still pending. Static/single-workspace deployments are unaffected.
+
 ---
 
 ## Graph and links

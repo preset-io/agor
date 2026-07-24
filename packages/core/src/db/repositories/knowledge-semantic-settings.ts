@@ -6,7 +6,11 @@ import type {
   StoredKnowledgeSemanticPolicy,
   UserID,
 } from '../../types';
-import { DEFAULT_KNOWLEDGE_SEMANTIC_POLICY, KNOWLEDGE_EMBEDDING_PROVIDERS } from '../../types';
+import {
+  assertValidKnowledgeSemanticPolicy,
+  DEFAULT_KNOWLEDGE_SEMANTIC_POLICY,
+  KNOWLEDGE_EMBEDDING_PROVIDERS,
+} from '../../types';
 import type { Database } from '../client';
 import {
   isPostgresDatabase,
@@ -32,7 +36,7 @@ const POLICY_FIELDS = [
   'indexing',
 ] as const;
 const CHUNKING_FIELDS = ['target_tokens', 'max_tokens', 'overlap_tokens', 'min_tokens'] as const;
-const INDEXING_FIELDS = ['paused', 'batch_size', 'concurrency'] as const;
+const INDEXING_FIELDS = ['paused', 'batch_size'] as const;
 
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -254,7 +258,9 @@ export class KnowledgeSemanticSettingsRepository {
   }
 
   async findPolicy(): Promise<KnowledgeSemanticPolicy> {
-    return resolveKnowledgeSemanticPolicy(await this.findStoredWith(this.variables));
+    const policy = resolveKnowledgeSemanticPolicy(await this.findStoredWith(this.variables));
+    assertValidKnowledgeSemanticPolicy(policy);
+    return policy;
   }
 
   async hasApiKey(): Promise<boolean> {
@@ -275,74 +281,102 @@ export class KnowledgeSemanticSettingsRepository {
     return { ...policy, api_key_configured: apiKeyConfigured };
   }
 
-  async patch(
+  /**
+   * Apply a patch inside a caller-owned transaction. This is used when the
+   * settings write and dependent Knowledge-unit updates must commit together.
+   */
+  async patchInTransaction(
+    txDb: Database,
     patch: KnowledgeSemanticSettingsPatch,
     updatedBy?: UserID | null,
     validate?: (policy: KnowledgeSemanticPolicy) => void
   ): Promise<KnowledgeSemanticSettingsPublic> {
     const hasPolicyPatch = POLICY_FIELDS.some((field) => Object.hasOwn(patch, field));
-
-    const apply = async (txDb: Database) => {
-      const variables = new AppVariableRepository(txDb);
-      let policy: KnowledgeSemanticPolicy;
-      if (hasPolicyPatch) {
-        await variables.setIfAbsent({
+    const variables = new AppVariableRepository(txDb);
+    let policy: KnowledgeSemanticPolicy;
+    if (hasPolicyPatch) {
+      await variables.setIfAbsent({
+        namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+        key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
+        value: '{}',
+        content_type: 'application/json',
+        updated_by: updatedBy ?? null,
+      });
+      await lockRowForUpdate(
+        txDb,
+        this.db,
+        appVariables,
+        and(
+          eq(appVariables.namespace, KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE),
+          eq(appVariables.key, KNOWLEDGE_SEMANTIC_SETTINGS_KEY)
+        )!
+      );
+      const current = await this.findStoredWith(variables);
+      const next = applyKnowledgeSemanticPolicyPatch(current, patch);
+      policy = resolveKnowledgeSemanticPolicy(next);
+      assertValidKnowledgeSemanticPolicy(policy);
+      validate?.(policy);
+      if (Object.keys(next).length === 0) {
+        await variables.delete(
+          KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+          KNOWLEDGE_SEMANTIC_SETTINGS_KEY
+        );
+      } else {
+        await variables.set({
           namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
           key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
-          value: '{}',
+          value: JSON.stringify(next),
           content_type: 'application/json',
           updated_by: updatedBy ?? null,
         });
-        await lockRowForUpdate(
-          txDb,
-          this.db,
-          appVariables,
-          and(
-            eq(appVariables.namespace, KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE),
-            eq(appVariables.key, KNOWLEDGE_SEMANTIC_SETTINGS_KEY)
-          )!
-        );
-        const current = await this.findStoredWith(variables);
-        const next = applyKnowledgeSemanticPolicyPatch(current, patch);
-        policy = resolveKnowledgeSemanticPolicy(next);
-        validate?.(policy);
-        if (Object.keys(next).length === 0) {
-          await variables.delete(
-            KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
-            KNOWLEDGE_SEMANTIC_SETTINGS_KEY
-          );
-        } else {
-          await variables.set({
-            namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
-            key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
-            value: JSON.stringify(next),
-            content_type: 'application/json',
-            updated_by: updatedBy ?? null,
-          });
-        }
-      } else {
-        policy = resolveKnowledgeSemanticPolicy(await this.findStoredWith(variables));
-        validate?.(policy);
       }
+    } else {
+      policy = resolveKnowledgeSemanticPolicy(await this.findStoredWith(variables));
+      assertValidKnowledgeSemanticPolicy(policy);
+      validate?.(policy);
+    }
 
-      if (patch.api_key !== undefined) {
-        await variables.setEncrypted(
-          KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-          KNOWLEDGE_EMBEDDINGS_API_KEY,
-          normalizeApiKey(patch.api_key),
-          updatedBy ?? null
-        );
-      }
-
-      const apiKey = await variables.find(
-        KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-        KNOWLEDGE_EMBEDDINGS_API_KEY
+    if (patch.api_key !== undefined) {
+      await variables.setIfAbsent({
+        namespace: KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+        key: KNOWLEDGE_EMBEDDINGS_API_KEY,
+        value: null,
+        encrypted: true,
+        updated_by: updatedBy ?? null,
+      });
+      await lockRowForUpdate(
+        txDb,
+        this.db,
+        appVariables,
+        and(
+          eq(appVariables.namespace, KNOWLEDGE_EMBEDDINGS_NAMESPACE),
+          eq(appVariables.key, KNOWLEDGE_EMBEDDINGS_API_KEY)
+        )!
       );
-      return {
-        ...policy,
-        api_key_configured: Boolean(apiKey?.is_encrypted && apiKey.value_encrypted),
-      };
+      await variables.setEncrypted(
+        KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+        KNOWLEDGE_EMBEDDINGS_API_KEY,
+        normalizeApiKey(patch.api_key),
+        updatedBy ?? null
+      );
+    }
+
+    const apiKey = await variables.find(
+      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
+      KNOWLEDGE_EMBEDDINGS_API_KEY
+    );
+    return {
+      ...policy,
+      api_key_configured: Boolean(apiKey?.is_encrypted && apiKey.value_encrypted),
     };
+  }
+
+  async patch(
+    patch: KnowledgeSemanticSettingsPatch,
+    updatedBy?: UserID | null,
+    validate?: (policy: KnowledgeSemanticPolicy) => void
+  ): Promise<KnowledgeSemanticSettingsPublic> {
+    const apply = (txDb: Database) => this.patchInTransaction(txDb, patch, updatedBy, validate);
 
     const ambientDb = getCurrentTenantDatabase();
     if (ambientDb && isPostgresDatabase(ambientDb)) return apply(ambientDb);

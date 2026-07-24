@@ -18,7 +18,7 @@ describe('Knowledge semantic settings UI helpers', () => {
       model: 'text-embedding-3-small',
       dimensions: 1536,
       chunking: { target_tokens: 640, max_tokens: 1200 },
-      indexing: { paused: false, batch_size: 32, concurrency: 1 },
+      indexing: { paused: false, batch_size: 32 },
     });
   });
 

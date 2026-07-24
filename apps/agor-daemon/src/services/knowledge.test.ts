@@ -23,6 +23,7 @@ import type { KnowledgeDocument, User, UserID } from '@agor/core/types';
 import { parseKnowledgeUri, ROLES } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { knowledgeChunkerOptionsFromSettings, knowledgeUnitsForMarkdown } from '../knowledge/units';
 import { KnowledgeDocumentsService } from './knowledge-documents';
 import { KnowledgeEmbeddingIndexer } from './knowledge-embedding-indexer';
 import { KnowledgeGraphService } from './knowledge-graph';
@@ -716,6 +717,39 @@ describe('Knowledge semantic indexing lifecycle', () => {
       );
     });
   });
+
+  dbTest(
+    'commits concurrent chunking policy and rebuilt units atomically on SQLite',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'chunk-policy-owner');
+      const content = `# Big\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`;
+      const doc = await seedDocument(db, owner, { content_text: content });
+      const settings = new KnowledgeSettingsService(db);
+
+      await Promise.all([
+        settings.patch(null, {
+          chunking: { target_tokens: 40, max_tokens: 60, overlap_tokens: 0, min_tokens: 1 },
+        }),
+        settings.patch(null, {
+          chunking: { target_tokens: 80, max_tokens: 100, overlap_tokens: 10, min_tokens: 1 },
+        }),
+      ]);
+
+      const saved = await settings.find();
+      const units = await select(db)
+        .from(kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, doc.current_version_id))
+        .all();
+      const expected = knowledgeUnitsForMarkdown(
+        doc.path,
+        content,
+        knowledgeChunkerOptionsFromSettings(saved)
+      );
+      expect(units.map((unit) => unit.content_md5).sort()).toEqual(
+        expected.map((unit) => unit.content_md5).sort()
+      );
+    }
+  );
 
   dbTest('indexing status separates pgvector extension from usable storage', async ({ db }) => {
     await withTempConfig({}, async () => {

@@ -16,6 +16,7 @@ import type {
 import {
   hasMinimumRole,
   KNOWLEDGE_DOCUMENT_KINDS,
+  KNOWLEDGE_OPENAI_EMBEDDING_MODELS,
   normalizeKnowledgeDocumentIconEmoji,
   normalizeKnowledgeFolderPath,
   ROLES,
@@ -222,16 +223,15 @@ const clampPercent = (value: number, min: number, max: number) =>
 const widthToPercent = (widthPx: number, viewportWidth: number) =>
   (widthPx / Math.max(viewportWidth, 1)) * 100;
 
-const OPENAI_EMBEDDING_MODEL_OPTIONS = [
-  {
-    label: 'text-embedding-3-small — recommended',
-    value: 'text-embedding-3-small',
-  },
-  {
-    label: 'text-embedding-3-large — higher quality',
-    value: 'text-embedding-3-large',
-  },
-];
+const OPENAI_EMBEDDING_MODEL_LABELS = {
+  'text-embedding-3-small': 'text-embedding-3-small — recommended',
+  'text-embedding-3-large': 'text-embedding-3-large — higher quality',
+} satisfies Record<(typeof KNOWLEDGE_OPENAI_EMBEDDING_MODELS)[number], string>;
+
+const OPENAI_EMBEDDING_MODEL_OPTIONS = KNOWLEDGE_OPENAI_EMBEDDING_MODELS.map((model) => ({
+  label: OPENAI_EMBEDDING_MODEL_LABELS[model],
+  value: model,
+}));
 
 const kindLabels: Record<KnowledgeDocumentKind, string> = {
   doc: 'Page',
@@ -1313,11 +1313,9 @@ export function KnowledgePage({
         client.service('kb/settings').find(),
         client.service('kb/indexing/status').find(),
       ]);
-      const nextSettings = normalizeKnowledgeSemanticSettings(
-        settings as unknown as KnowledgeSemanticSettingsPublic
-      );
+      const nextSettings = normalizeKnowledgeSemanticSettings(settings);
       setKnowledgeSettings(nextSettings);
-      setIndexingStatus(status as unknown as KnowledgeIndexingStatus);
+      setIndexingStatus(status);
       settingsForm.setFieldsValue(nextSettings);
     } catch (err) {
       console.error('Failed to load Knowledge semantic settings:', err);
@@ -1373,7 +1371,7 @@ export function KnowledgePage({
         settingsClearApiKey
       );
       const next = await client.service('kb/settings').create(patch);
-      setKnowledgeSettings(next as KnowledgeSemanticSettingsPublic);
+      setKnowledgeSettings(next);
       setSettingsApiKeyDraft('');
       setSettingsClearApiKey(false);
       await refreshKnowledgeSettings();

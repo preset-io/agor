@@ -30,7 +30,7 @@ describe('KnowledgeSemanticSettingsRepository', () => {
           overlap_tokens: 100,
           min_tokens: 80,
         },
-        indexing: { paused: false, batch_size: 32, concurrency: 1 },
+        indexing: { paused: false, batch_size: 32 },
       });
 
       await expect(
@@ -120,7 +120,8 @@ describe('KnowledgeSemanticSettingsRepository', () => {
   });
 
   dbTest('fails closed on malformed stored policy JSON', async ({ db }) => {
-    await new AppVariableRepository(db).set({
+    const variables = new AppVariableRepository(db);
+    await variables.set({
       namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
       key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
       value: JSON.stringify({ enabled: 'yes' }),
@@ -130,5 +131,62 @@ describe('KnowledgeSemanticSettingsRepository', () => {
     await expect(new KnowledgeSemanticSettingsRepository(db).findPolicy()).rejects.toThrow(
       'Invalid stored Knowledge semantic-search enabled value'
     );
+
+    await variables.set({
+      namespace: KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+      key: KNOWLEDGE_SEMANTIC_SETTINGS_KEY,
+      value: JSON.stringify({ chunking: { target_tokens: 1300, max_tokens: 1200 } }),
+      content_type: 'application/json',
+    });
+    await expect(new KnowledgeSemanticSettingsRepository(db).findPolicy()).rejects.toThrow(
+      'Knowledge chunking target_tokens must be less than or equal to max_tokens'
+    );
+  });
+
+  dbTest('enforces portable policy invariants for direct repository callers', async ({ db }) => {
+    const repository = new KnowledgeSemanticSettingsRepository(db);
+
+    await expect(
+      repository.patch({
+        chunking: { target_tokens: 1300, max_tokens: 1200 },
+      })
+    ).rejects.toThrow('Knowledge chunking target_tokens must be less than or equal to max_tokens');
+
+    await expect(repository.find()).resolves.toMatchObject({
+      enabled: false,
+      chunking: { target_tokens: 850, max_tokens: 1200 },
+    });
+    await expect(
+      new AppVariableRepository(db).find(
+        KNOWLEDGE_SEMANTIC_SETTINGS_NAMESPACE,
+        KNOWLEDGE_SEMANTIC_SETTINGS_KEY
+      )
+    ).resolves.toBeNull();
+  });
+
+  dbTest('serializes concurrent first writes and partial policy patches', async ({ db }) => {
+    const repository = new KnowledgeSemanticSettingsRepository(db);
+
+    await Promise.all([
+      repository.patch({ api_key: 'workspace-secret-a' }),
+      repository.patch({ api_key: 'workspace-secret-b' }),
+      repository.patch({ model: 'text-embedding-3-large' }),
+      repository.patch({ chunking: { target_tokens: 640 } }),
+    ]);
+
+    await expect(repository.find()).resolves.toMatchObject({
+      model: 'text-embedding-3-large',
+      api_key_configured: true,
+      chunking: { target_tokens: 640 },
+    });
+    await expect(repository.getApiKey()).resolves.toMatch(/^workspace-secret-[ab]$/);
+
+    const variables = new AppVariableRepository(db);
+    await expect(
+      variables.find(KNOWLEDGE_EMBEDDINGS_NAMESPACE, KNOWLEDGE_EMBEDDINGS_API_KEY)
+    ).resolves.toMatchObject({
+      is_encrypted: true,
+      value_text: null,
+    });
   });
 });

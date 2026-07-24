@@ -8,6 +8,7 @@ import {
   type ReplaceKnowledgeUnitInput,
   select,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { KnowledgeDocumentVersionID, KnowledgeSemanticPolicy } from '@agor/core/types';
 import { chunkMarkdownForKnowledge, type MarkdownChunkerOptions } from './markdown-chunker.js';
@@ -47,7 +48,7 @@ export function knowledgeUnitsForMarkdown(
 }
 
 export async function rebuildCurrentKnowledgeUnits(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   settings: KnowledgeSemanticPolicy,
   options: { embeddingConfigured: boolean }
 ): Promise<number> {
@@ -69,7 +70,8 @@ export async function rebuildCurrentKnowledgeUnits(
     const version = row.kb_document_versions as typeof kbDocumentVersions.$inferSelect;
     if (!document.current_version_id || typeof version.content_text !== 'string') continue;
     const units = knowledgeUnitsForMarkdown(document.path, version.content_text, chunkerOptions);
-    await documents.replaceUnitsForVersion(
+    await documents.replaceUnitsForVersionInTransaction(
+      db,
       document.current_version_id as KnowledgeDocumentVersionID,
       units,
       {

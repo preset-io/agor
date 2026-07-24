@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import { DEFAULT_KNOWLEDGE_SEMANTIC_POLICY } from '@agor/core/types';
+import {
+  DEFAULT_KNOWLEDGE_SEMANTIC_POLICY,
+  KNOWLEDGE_OPENAI_EMBEDDING_MODELS,
+} from '@agor/core/types';
 
 export interface EmbeddingInput {
   id: string;
@@ -29,10 +32,7 @@ export interface EmbeddingProvider {
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY.model;
 export const DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY.dimensions;
-export const SUPPORTED_OPENAI_EMBEDDING_MODELS = new Set([
-  'text-embedding-3-small',
-  'text-embedding-3-large',
-]);
+export const SUPPORTED_OPENAI_EMBEDDING_MODELS = new Set<string>(KNOWLEDGE_OPENAI_EMBEDDING_MODELS);
 
 export function isUsableOpenAIEmbeddingConfig(
   semantic: {
