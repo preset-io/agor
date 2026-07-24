@@ -34,6 +34,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  OpenCodeProviderSettings,
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
@@ -214,6 +215,7 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'opencode-auth': OpenCodeProviderSettings;
 }
 
 /**
@@ -293,6 +295,15 @@ export interface KnowledgeReindexService {
     data?: Record<string, never>,
     params?: Params
   ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
+}
+
+export interface OpenCodeAuthService {
+  find(params?: Params): Promise<OpenCodeProviderSettings>;
+  create(
+    data: { providerId: string; apiKey: string; metadata?: Record<string, string> },
+    params?: Params
+  ): Promise<OpenCodeProviderSettings>;
+  remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
 }
 
 /**
@@ -630,6 +641,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
+  service(path: 'opencode-auth'): OpenCodeAuthService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;

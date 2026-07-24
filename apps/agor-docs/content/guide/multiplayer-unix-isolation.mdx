@@ -400,6 +400,23 @@ Agor defines three permission levels per branch:
 - Session continuity requires consistent user context
 - Credentials belong to session creator
 
+### OpenCode provider credentials
+
+OpenCode API keys are configured from the current user's settings and stored by
+the packaged OpenCode runtime in an opaque tenant-and-user namespace. A task
+always routes to the namespace of the immutable session owner
+(`session.created_by`), not the user who submitted the prompt.
+
+- In `strict` mode, the session owner's Unix identity, ownership checks, and
+  `0700`/`0600` permissions enforce the filesystem boundary.
+- In `simple` and `insulated` modes, namespaces remain logically separate, but
+  users sharing the same Unix identity must trust one another.
+- A “Configured in OpenCode” status means the native runtime reports a saved
+  credential. It does not verify a request with the provider.
+- Native OpenCode credential storage is unavailable when multi-tenancy uses
+  `required_from_auth`; configuration and task execution reject before starting
+  OpenCode.
+
 ---
 
 ## Troubleshooting

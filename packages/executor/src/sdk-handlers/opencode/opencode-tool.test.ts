@@ -1221,7 +1221,15 @@ describe('OpenCodeTool managed turn', () => {
   });
 
   it('normalizes invocation-resolution failures before fatal rethrow', async () => {
-    const rawError = new Error('attached MCP unavailable: mcp-secret');
+    const previousDeclared = process.env.AGOR_USER_ENV_KEYS;
+    const previousDeclaredValue = process.env.OPENCODE_DECLARED_VALUE;
+    const previousNamedValue = process.env.OPENCODE_RESOLVER_TOKEN;
+    process.env.AGOR_USER_ENV_KEYS = 'OPENCODE_DECLARED_VALUE';
+    process.env.OPENCODE_DECLARED_VALUE = 'declared-process-secret';
+    process.env.OPENCODE_RESOLVER_TOKEN = 'secret-named-process-value';
+    const rawError = new Error(
+      'attached MCP unavailable: mcp-secret declared-process-secret secret-named-process-value'
+    );
     Object.assign(rawError, {
       response: {
         headers: { authorization: 'Bearer mcp-secret' },
@@ -1234,19 +1242,31 @@ describe('OpenCodeTool managed turn', () => {
       resolveInvocationConfig: vi.fn().mockRejectedValue(rawError),
     });
 
-    let rejection: unknown;
     try {
-      await tool.runTurn(input());
-    } catch (error) {
-      rejection = error;
-    }
+      let rejection: unknown;
+      try {
+        await tool.runTurn(input());
+      } catch (error) {
+        rejection = error;
+      }
 
-    expect(rejection).toBeInstanceOf(Error);
-    expect(rejection).not.toBe(rawError);
-    expect(Object.keys(rejection as Error)).toEqual([]);
-    expect(inspect(rejection, { depth: null })).not.toContain('mcp-secret');
-    expect(spawnCalls).toHaveLength(0);
-    expect(client.session.prompt).not.toHaveBeenCalled();
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBe(rawError);
+      expect(Object.keys(rejection as Error)).toEqual([]);
+      const inspected = inspect(rejection, { depth: null });
+      expect(inspected).not.toContain('mcp-secret');
+      expect(inspected).not.toContain('declared-process-secret');
+      expect(inspected).not.toContain('secret-named-process-value');
+      expect(spawnCalls).toHaveLength(0);
+      expect(client.session.prompt).not.toHaveBeenCalled();
+    } finally {
+      if (previousDeclared === undefined) delete process.env.AGOR_USER_ENV_KEYS;
+      else process.env.AGOR_USER_ENV_KEYS = previousDeclared;
+      if (previousDeclaredValue === undefined) delete process.env.OPENCODE_DECLARED_VALUE;
+      else process.env.OPENCODE_DECLARED_VALUE = previousDeclaredValue;
+      if (previousNamedValue === undefined) delete process.env.OPENCODE_RESOLVER_TOKEN;
+      else process.env.OPENCODE_RESOLVER_TOKEN = previousNamedValue;
+    }
   });
 
   it('normalizes managed spawn failures before fatal rethrow', async () => {

@@ -68,6 +68,7 @@ describe('AgorExecutor watchdog handoff', () => {
       taskId: 'task-1',
       prompt: 'prompt',
       tool: 'opencode',
+      dataHome: '/opaque/opencode-home',
       daemonUrl: 'http://daemon',
       resolvedConfig: {
         execution: {
@@ -88,6 +89,10 @@ describe('AgorExecutor watchdog handoff', () => {
     await executor.executeTask();
 
     expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', 'opencode');
+    expect(runtime.execute).toHaveBeenCalledWith(
+      'opencode',
+      expect.objectContaining({ dataHome: '/opaque/opencode-home' })
+    );
     expect(runtime.recordPulse.mock.invocationCallOrder[0]).toBeLessThan(
       runtime.execute.mock.invocationCallOrder[0]!
     );

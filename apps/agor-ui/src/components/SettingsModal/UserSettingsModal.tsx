@@ -57,6 +57,7 @@ import { CodexAuthSettings } from '../CodexAuth';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { SessionMcpServersField } from '../MCPServerSelect';
+import { OpenCodeProviderSettings } from '../OpenCodeAuth/OpenCodeProviderSettings';
 import { ToolIcon } from '../ToolIcon';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
@@ -1094,7 +1095,33 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           </>
         );
 
-        // Tools with no auth/config fields (e.g. OpenCode) skip the tab strip entirely.
+        if (canonicalTool === 'opencode') {
+          const managesOwnSettings = user?.user_id === currentUser?.user_id;
+          return (
+            <Tabs
+              items={[
+                {
+                  key: 'auth',
+                  label: 'Providers',
+                  children: !managesOwnSettings ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      title="OpenCode connections can only be managed by that user."
+                    />
+                  ) : client ? (
+                    <OpenCodeProviderSettings client={client} />
+                  ) : (
+                    <Alert type="warning" showIcon title="Not connected to Agor." />
+                  ),
+                },
+                { key: 'defaults', label: 'Defaults', children: defaultsPane },
+              ]}
+            />
+          );
+        }
+
+        // Tools with no auth/config fields skip the tab strip entirely.
         if (allToolFields.length === 0) {
           return defaultsPane;
         }

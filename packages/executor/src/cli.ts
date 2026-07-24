@@ -195,6 +195,7 @@ async function handlePromptPayload(
     permissionMode: payload.params.permissionMode,
     daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
+    dataHome: payload.dataHome,
     resolvedConfig: payload.resolvedConfig,
   });
 

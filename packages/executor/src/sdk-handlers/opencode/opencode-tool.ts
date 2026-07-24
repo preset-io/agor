@@ -6,13 +6,8 @@
  * behind this single runtime owner.
  */
 
-import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
-import { randomBytes as nodeRandomBytes } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
-import { access, readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import type { SpawnOptions } from 'node:child_process';
+import type { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { shortId } from '@agor/core';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -49,12 +44,20 @@ import {
   type OpenCodeEventEffect,
   reconcileOpenCodeMessages,
 } from './event-translator.js';
+import {
+  createOpenCodeSanitizer,
+  type ManagedChild,
+  type ManagedOpenCodeServer,
+  type OpenCodeSanitizer,
+  resolvePackagedOpenCodeBinary,
+  startManagedOpenCodeServer,
+} from './managed-server.js';
 
-const OPENCODE_VERSION = '1.14.33';
+export { resolvePackagedOpenCodeBinary };
+
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_EVENT_DRAIN_MS = 10;
-const MAX_STARTUP_OUTPUT = 4_096;
 const AGOR_PERMISSION_INTERCEPTION = {
   '*': 'ask',
   read: 'ask',
@@ -79,27 +82,6 @@ type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
 
 export class OpenCodePermissionRejectedError extends Error {}
 
-type ManagedChild = {
-  stdout: NodeJS.ReadableStream | null;
-  stderr: NodeJS.ReadableStream | null;
-  exitCode: number | null;
-  kill(signal: NodeJS.Signals): boolean;
-  once(
-    event: 'exit',
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void
-  ): unknown;
-  once(
-    event: 'close',
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void
-  ): unknown;
-  once(event: 'error', listener: (error: Error) => void): unknown;
-  removeListener(
-    event: 'exit',
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void
-  ): unknown;
-  removeListener(event: 'error', listener: (error: Error) => void): unknown;
-};
-
 export type RunOpenCodeTurnInput = {
   agorSessionId: SessionID;
   taskId: TaskID;
@@ -112,6 +94,7 @@ export type RunOpenCodeTurnInput = {
   model?: string;
   mcpToken?: string;
   permissionMode?: PermissionMode;
+  dataHome?: string;
   signal: AbortSignal;
   persistOpenCodeSessionId: (sessionId: string) => Promise<void>;
 };
@@ -152,73 +135,6 @@ export type OpenCodeToolDependencies = {
   eventDrainMs?: number;
 };
 
-type PackageLocation = { packageJsonPath: string; version: string };
-
-function collectConfigSecrets(value: unknown): string[] {
-  if (typeof value === 'string') {
-    const credential = /^(?:Bearer|Basic)\s+(.+)$/i.exec(value)?.[1];
-    return credential ? [value, credential] : [value];
-  }
-  if (!value || typeof value !== 'object') return [];
-  if (Array.isArray(value)) return value.flatMap((item) => collectConfigSecrets(item));
-  return Object.values(value).flatMap((item) => collectConfigSecrets(item));
-}
-
-function collectEnvironmentSecrets(environment: NodeJS.ProcessEnv): string[] {
-  const declared = new Set(
-    (environment.AGOR_USER_ENV_KEYS ?? '')
-      .split(',')
-      .map((key) => key.trim())
-      .filter(Boolean)
-  );
-  return Object.entries(environment).flatMap(([key, value]) =>
-    value && (declared.has(key) || /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)$/i.test(key))
-      ? [value]
-      : []
-  );
-}
-
-type TurnSanitizer = {
-  text(value: string): string;
-  error(value: unknown): Error;
-};
-
-function createTurnSanitizer(secrets: readonly string[]): TurnSanitizer {
-  const uniqueSecrets = [...new Set(secrets.filter(Boolean))].sort((a, b) => b.length - a.length);
-  const text = (value: string) =>
-    uniqueSecrets.reduce((safe, secret) => safe.replaceAll(secret, '[REDACTED]'), value);
-  const error = (value: unknown): Error => {
-    const failure = value instanceof Error ? value : new Error(String(value));
-    const seen = new WeakSet<Error>();
-    const normalize = (unsafe: Error): Error => {
-      if (seen.has(unsafe)) return new Error('[Circular error cause]');
-      seen.add(unsafe);
-
-      const safe = new Error(text(unsafe.message));
-      Object.defineProperty(safe, 'name', {
-        value: text(unsafe.name || 'Error'),
-        configurable: true,
-        writable: true,
-      });
-      if (unsafe.stack) safe.stack = text(unsafe.stack);
-      if (unsafe.cause !== undefined) {
-        const safeCause =
-          unsafe.cause instanceof Error
-            ? normalize(unsafe.cause)
-            : new Error(text(String(unsafe.cause)));
-        Object.defineProperty(safe, 'cause', {
-          value: safeCause,
-          configurable: true,
-          writable: true,
-        });
-      }
-      return safe;
-    };
-    return normalize(failure);
-  };
-  return { text, error };
-}
-
 function automaticallyAllowsOpenCodePermission(
   permissionMode: PermissionMode | undefined,
   permission: string
@@ -255,70 +171,6 @@ function asUnknownAsyncIterable(value: unknown): AsyncIterable<unknown> {
   throw new Error('OpenCode event subscription returned no iterable stream');
 }
 
-async function findPackageLocation(
-  entryPath: string,
-  packageName: string
-): Promise<PackageLocation> {
-  let current = dirname(entryPath);
-  for (;;) {
-    const packageJsonPath = join(current, 'package.json');
-    try {
-      const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
-        name?: string;
-        version?: string;
-      };
-      if (parsed.name === packageName && parsed.version) {
-        return { packageJsonPath, version: parsed.version };
-      }
-    } catch {
-      // Keep walking toward the package root.
-    }
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(`OpenCode package ${packageName} is not installed correctly`);
-}
-
-export async function resolvePackagedOpenCodeBinary(): Promise<string> {
-  const require = createRequire(import.meta.url);
-  let cli: PackageLocation;
-  let sdk: PackageLocation;
-  try {
-    cli = await findPackageLocation(require.resolve('opencode-ai/package.json'), 'opencode-ai');
-    sdk = await findPackageLocation(
-      fileURLToPath(import.meta.resolve('@opencode-ai/sdk')),
-      '@opencode-ai/sdk'
-    );
-  } catch (error) {
-    throw new Error(
-      `OpenCode ${OPENCODE_VERSION} is not fully installed; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
-  }
-
-  if (cli.version !== OPENCODE_VERSION || sdk.version !== OPENCODE_VERSION) {
-    throw new Error(
-      `OpenCode SDK/CLI mismatch: expected ${OPENCODE_VERSION}, found SDK ${sdk.version} and CLI ${cli.version}`
-    );
-  }
-
-  const packageRoot = dirname(cli.packageJsonPath);
-  const binary =
-    process.platform === 'win32'
-      ? join(packageRoot, 'bin', 'opencode.exe')
-      : join(packageRoot, 'bin', '.opencode');
-  try {
-    await access(binary, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
-  } catch (error) {
-    throw new Error(
-      `Packaged OpenCode ${OPENCODE_VERSION} native binary is missing or not executable; reinstall Agor with optional dependencies enabled`,
-      { cause: error }
-    );
-  }
-  return binary;
-}
-
 /**
  * Session context for an Agor session mapped to OpenCode
  */
@@ -332,19 +184,16 @@ interface SessionContext {
 
 export class OpenCodeTool {
   private client: OpenCodeClient | null = null;
-  private readonly dependencies: Required<
-    Pick<
-      OpenCodeToolDependencies,
-      | 'resolveBinary'
-      | 'spawn'
-      | 'createClient'
-      | 'resolveInvocationConfig'
-      | 'randomBytes'
-      | 'readinessTimeoutMs'
-      | 'shutdownTimeoutMs'
-      | 'eventDrainMs'
-    >
-  >;
+  private readonly dependencies: Pick<
+    OpenCodeToolDependencies,
+    'resolveBinary' | 'spawn' | 'randomBytes'
+  > & {
+    createClient: typeof createOpencodeClient;
+    resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<InvocationConfig>;
+    readinessTimeoutMs: number;
+    shutdownTimeoutMs: number;
+    eventDrainMs: number;
+  };
   private sessionContexts: Map<string, SessionContext> = new Map(); // Agor session ID → session context
   /** MCP repository dependencies for resolving user-defined MCP servers */
   private sessionMCPRepo?: SessionMCPServerRepository;
@@ -367,16 +216,14 @@ export class OpenCodeTool {
     this.tasksService = dependencies.tasksService;
     this.sessionsService = dependencies.sessionsService;
     this.dependencies = {
-      resolveBinary: dependencies.resolveBinary ?? resolvePackagedOpenCodeBinary,
-      spawn:
-        dependencies.spawn ??
-        ((executable, args, options) => nodeSpawn(executable, [...args], options)),
+      resolveBinary: dependencies.resolveBinary,
+      spawn: dependencies.spawn,
       createClient: dependencies.createClient ?? createOpencodeClient,
       resolveInvocationConfig:
         dependencies.resolveInvocationConfig ??
         ((input) =>
           this.buildInvocationConfig(input.agorSessionId, input.mcpToken, input.directory)),
-      randomBytes: dependencies.randomBytes ?? nodeRandomBytes,
+      randomBytes: dependencies.randomBytes,
       readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
       shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
@@ -387,8 +234,10 @@ export class OpenCodeTool {
     input: RunOpenCodeTurnInput,
     streamingCallbacks?: StreamingCallbacks
   ): Promise<OpenCodeTurnResult> {
-    const environmentSecrets = collectEnvironmentSecrets(process.env);
-    const preliminarySanitizer = createTurnSanitizer([input.mcpToken ?? '', ...environmentSecrets]);
+    const preliminarySanitizer = createOpenCodeSanitizer([
+      input.mcpToken ?? '',
+      input.dataHome ?? '',
+    ]);
     let resolvedInvocationConfig: InvocationConfig;
     try {
       resolvedInvocationConfig = await this.dependencies.resolveInvocationConfig(input);
@@ -413,40 +262,34 @@ export class OpenCodeTool {
       },
     };
     const configContent = JSON.stringify(invocationConfig);
-    const password = this.dependencies.randomBytes(32).toString('base64url');
-    const username = 'agor';
-    const authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-    const turnSecrets = [
-      password,
-      authorization,
-      input.mcpToken ?? '',
-      configContent,
-      ...collectConfigSecrets(invocationConfig),
-      ...environmentSecrets,
-    ];
-    const sanitizer = createTurnSanitizer(turnSecrets);
-    let child: ManagedChild;
+    let managedServer: ManagedOpenCodeServer;
     try {
-      const executable = await this.dependencies.resolveBinary();
-      child = this.dependencies.spawn(executable, ['serve', '--hostname=127.0.0.1', '--port=0'], {
-        cwd: input.directory,
-        detached: false,
-        env: {
-          ...process.env,
-          OPENCODE_CONFIG_CONTENT: configContent,
-          // OpenCode resolves this dedicated runtime override when creating
-          // session permission rules. Keep it alongside the config content so
-          // permissive project/agent rules cannot bypass Agor interception.
-          OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
-          OPENCODE_SERVER_USERNAME: username,
-          OPENCODE_SERVER_PASSWORD: password,
+      managedServer = await startManagedOpenCodeServer(
+        {
+          directory: input.directory,
+          dataHome: input.dataHome,
+          environment: {
+            OPENCODE_CONFIG_CONTENT: configContent,
+            // OpenCode resolves this dedicated runtime override when creating
+            // session permission rules. Keep it alongside the config content so
+            // permissive project/agent rules cannot bypass Agor interception.
+            OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
+          },
+          secrets: [input.mcpToken ?? '', configContent, invocationConfig],
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+        {
+          resolveBinary: this.dependencies.resolveBinary,
+          spawn: this.dependencies.spawn,
+          randomBytes: this.dependencies.randomBytes,
+          readinessTimeoutMs: this.dependencies.readinessTimeoutMs,
+          shutdownTimeoutMs: this.dependencies.shutdownTimeoutMs,
+        }
+      );
     } catch (error) {
-      throw sanitizer.error(error);
+      this.permissionService?.cancelPendingRequests(input.agorSessionId);
+      throw preliminarySanitizer.error(error);
     }
-    const close = this.createBoundedClose(child);
+    const { authorization, baseUrl, close, sanitizer } = managedServer;
     let stopEventCollector = async () => {};
     let turnCompleted = false;
     let cleanupPromise: Promise<void> | undefined;
@@ -488,7 +331,6 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
-      const baseUrl = await this.waitForReadiness(child, turnSecrets);
       this.client = this.dependencies.createClient({
         baseUrl,
         directory: input.directory,
@@ -574,99 +416,6 @@ export class OpenCodeTool {
     } catch {
       // Local child cleanup remains authoritative.
     }
-  }
-
-  private waitForReadiness(child: ManagedChild, secrets: string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-      let output = '';
-      let settled = false;
-      const redact = (value: string) =>
-        secrets.reduce(
-          (safe, secret) => (secret ? safe.replaceAll(secret, '[REDACTED]') : safe),
-          value
-        );
-      const diagnostic = () => {
-        const tail = redact(output.slice(-MAX_STARTUP_OUTPUT)).trim();
-        return tail ? `: ${tail}` : '';
-      };
-      const cleanup = () => {
-        clearTimeout(timer);
-        child.stdout?.off('data', onData);
-        child.stderr?.off('data', onData);
-        child.removeListener('exit', onExit);
-        child.removeListener('error', onError);
-      };
-      const fail = (message: string) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error(`${message}${diagnostic()}`));
-      };
-      const onData = (chunk: Buffer | string) => {
-        output = `${output}${chunk.toString()}`.slice(-MAX_STARTUP_OUTPUT);
-        const matches = [
-          ...output.matchAll(/(?:^|\n)opencode server listening on (https?:\/\/[^\s]+)/g),
-        ];
-        const raw = matches.at(-1)?.[1]?.replace(/[),.;]+$/, '');
-        if (!raw) return;
-        try {
-          const url = new URL(raw);
-          if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) {
-            fail('OpenCode reported a non-loopback readiness URL');
-            return;
-          }
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(url.origin);
-        } catch {
-          fail('OpenCode reported malformed readiness output');
-        }
-      };
-      const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
-        fail(
-          `OpenCode server exited before readiness (code ${code ?? 'null'}, signal ${signal ?? 'none'})`
-        );
-      const onError = (error: Error) => fail(`OpenCode server failed to start: ${error.message}`);
-      const timer = setTimeout(
-        () =>
-          fail(
-            `OpenCode server readiness timed out after ${this.dependencies.readinessTimeoutMs}ms`
-          ),
-        this.dependencies.readinessTimeoutMs
-      );
-      child.stdout?.on('data', onData);
-      child.stderr?.on('data', onData);
-      child.once('exit', onExit);
-      child.once('error', onError);
-    });
-  }
-
-  private createBoundedClose(child: ManagedChild): () => Promise<void> {
-    let exitObserved = child.exitCode !== null;
-    const exited = exitObserved
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-          const observe = () => {
-            exitObserved = true;
-            resolve();
-          };
-          child.once('exit', observe);
-          child.once('close', observe);
-        });
-    let closePromise: Promise<void> | undefined;
-    return () => {
-      closePromise ??= (async () => {
-        if (exitObserved || child.exitCode !== null) return;
-        child.kill('SIGTERM');
-        if (await this.settlesWithin(exited, this.dependencies.shutdownTimeoutMs)) return;
-        child.kill('SIGKILL');
-        if (!(await this.settlesWithin(exited, this.dependencies.shutdownTimeoutMs))) {
-          throw new Error('OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup');
-        }
-      })();
-      return closePromise;
-    };
   }
 
   private async settlesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
@@ -833,7 +582,7 @@ export class OpenCodeTool {
     context: SessionContext,
     streamingCallbacks: StreamingCallbacks | undefined,
     registerStopEventCollector: (stop: () => Promise<void>) => void,
-    sanitizer: TurnSanitizer
+    sanitizer: OpenCodeSanitizer
   ): Promise<OpenCodeTurnResult['finalMessage']> {
     const client = this.getClientForDirectory(context.branchPath);
     const request = {

@@ -128,6 +128,7 @@ describe('executeOpenCodeTask', () => {
       prompt: 'Do the work',
       permissionMode: 'default',
       abortController,
+      dataHome: '/opaque/opencode-home',
       resolvedConfig: { execution: { permission_timeout_ms: 1234 } },
     });
 
@@ -143,6 +144,7 @@ describe('executeOpenCodeTask', () => {
       mcpToken: 'mcp-token',
       permissionMode: 'default',
       signal: abortController.signal,
+      dataHome: '/opaque/opencode-home',
     });
     expect(mocks.permissionServiceCtor).toHaveBeenCalledWith(expect.any(Function), 1234);
     expect(mocks.permissionRegister).toHaveBeenCalledWith(
