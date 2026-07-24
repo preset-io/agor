@@ -5,7 +5,8 @@ import type {
   AuthCheckResult,
 } from '@agor-live/client';
 import { Alert, Button, Popconfirm, Segmented, Space, Typography, theme } from 'antd';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
 import { CodexImportAuthJson } from './CodexImportAuthJson';
@@ -77,53 +78,37 @@ export function CodexAuthSettings({
     setView((prev) => viewForMethod(authMethod, prev));
   }, [authMethod]);
 
-  // A transport failure is NOT proof of a missing login — leave the prior
-  // verdict untouched on error so the pane never flashes a false "not
-  // connected" state (mirrors App.handleCheckAuth's fail-safe contract).
-  // A monotonic generation guards against overlapping probes (a method switch
-  // mid-recheck): only the latest request commits its verdict or clears the
-  // spinner, so an older response can't land last and mislabel the banner.
-  const probeGenRef = useRef(0);
-  // Bump the generation synchronously when the client OR the effective method
-  // changes (and on unmount), before any in-flight probe can resolve, and clear
-  // the prior verdict. Two reasons a stale verdict must not survive a change:
-  //  - client swap: an old identity's probe still owns the current generation
-  //    in the window before the next probe starts (and if the replacement
-  //    client is null, runProbe returns before incrementing, so the stale
-  //    request would never be invalidated).
+  // Invalidate an in-flight probe — and clear the prior verdict — whenever the
+  // client OR the effective method changes (and on unmount). Two reasons a
+  // stale verdict must not survive a change:
+  //  - client swap: an old identity's probe must not land its verdict over the
+  //    replacement's, nor call setState after teardown.
   //  - method flip: a verdict captured under the PREVIOUS method must not be
   //    re-interpreted by the banner under the new one — e.g. a rejected api-key
   //    probe becoming a false "Login not found" after a ChatGPT sign-in flips
   //    the method to subscription (and persisting there if the re-probe then
   //    fails, since transport failures keep the last verdict). Clearing to null
   //    means the banner shows nothing until a verdict for the NEW method lands.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: client/authMethod are the change triggers; the body invalidates rather than reading them.
-  useLayoutEffect(() => {
-    probeGenRef.current++;
+  const { run } = useIdentityGuardedAsync([client, authMethod], () => {
     setProbe(null);
     setProbing(false);
-    // Invalidate on unmount from the layout cleanup (synchronous, during the
-    // commit) — a passive cleanup can be deferred past unmount, letting a
-    // settled probe commit its verdict/spinner after teardown.
-    return () => {
-      probeGenRef.current++;
-    };
-  }, [client, authMethod]);
+  });
   const runProbe = useCallback(async () => {
     if (!client) return;
-    const gen = ++probeGenRef.current;
     setProbing(true);
     try {
-      const result = (await client
-        .service('check-auth')
-        .create({ tool: 'codex' })) as AuthCheckResult;
-      if (probeGenRef.current === gen) setProbe(result);
+      const result = await run(
+        () => client.service('check-auth').create({ tool: 'codex' }) as Promise<AuthCheckResult>
+      );
+      setProbe(result);
     } catch {
-      // Unknown — keep the last verdict.
+      // A transport failure is NOT proof of a missing login — keep the last
+      // verdict so the pane never flashes a false "not connected" state
+      // (mirrors App.handleCheckAuth's fail-safe contract).
     } finally {
-      if (probeGenRef.current === gen) setProbing(false);
+      setProbing(false);
     }
-  }, [client]);
+  }, [client, run]);
 
   // Re-probe when the persisted method changes: the daemon checks whichever
   // credential the server's active method points at, so a verdict captured for
