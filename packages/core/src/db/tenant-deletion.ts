@@ -138,17 +138,36 @@ export function assertNoRemainingTenantRows(remaining: string[]): void {
 
 async function resolveSchemaVersion(db: Database): Promise<string> {
   const status = await checkMigrationStatus(db);
-  // Fail closed on DB-ahead-of-binary schema skew: if the database was migrated
-  // by a newer release, this binary's compiled schema (and thus the deletion
-  // manifest) omits tables the database now has. Deleting + verifying against an
-  // incomplete manifest would falsely certify success while tenant data
-  // survives in tables this binary cannot see. (`hasPending` catches only the
-  // opposite, binary-ahead-of-DB case, which already fails loudly.)
+  // Fail closed unless the schema is in lockstep in BOTH directions: the binary's
+  // compiled schema (and thus the deletion manifest) must match exactly the
+  // schema the database currently has applied. That requires !dbAheadOfBinary AND
+  // !hasPending.
+  //
+  // DB ahead of binary: the database was migrated by a newer release, so this
+  // binary's schema omits tables the database now has. Deleting + verifying
+  // against that incomplete manifest would falsely certify success while tenant
+  // data survives in tables this binary cannot see.
   if (status.dbAheadOfBinary) {
     throw new Error(
       'Database schema is newer than this binary: the database has migrations this release does not know about. ' +
         'Refusing to run tenant deletion because the deletion manifest may be incomplete and could falsely certify success. ' +
         'Upgrade this binary to match the database, then retry.'
+    );
+  }
+  // Binary ahead of DB (pending migrations): this binary has migrations the DB
+  // has not applied. If a pending migration DROPS or RENAMES a tenant-scoped
+  // table, the live database still holds that table with tenant data, but this
+  // binary's compiled schema no longer lists it under that name — so the manifest
+  // omits it, deletion skips it, and verification (scanning the same manifest)
+  // reports false success while tenant data survives. (The ADD-a-table case does
+  // fail loudly with 'relation does not exist', but the DROP/RENAME case does
+  // not — hence this guard.)
+  if (status.hasPending) {
+    throw new Error(
+      `Refusing to delete tenant data: the database has ${status.pending.length} pending migration(s); ` +
+        "the running binary's schema does not match the database. " +
+        'Run migrations so the binary and database schemas match before deleting a tenant ' +
+        '(a pending migration may drop or rename a tenant-scoped table, which would make deletion silently incomplete).'
     );
   }
   const applied = status.applied;
