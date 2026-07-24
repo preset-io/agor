@@ -2,29 +2,37 @@
  * Permanent, audited, idempotent deletion of all data belonging to a single
  * tenant.
  *
- * Operators of a multi-tenant Agor deployment need a verifiable way to remove a
- * tenant entirely (offboarding, data-removal requests, regulatory erasure). This
- * module performs that removal against a deletion plan assembled from the
- * runtime-derived {@link buildTenantDeletionManifest tenant manifest} and the
- * registry of tenant tables created imperatively at runtime:
+ * Operators of a standalone multi-tenant PostgreSQL runtime need a verifiable
+ * way to remove a tenant entirely (offboarding, data-removal requests,
+ * regulatory erasure). This module performs that removal against a deletion
+ * plan assembled from the runtime-derived
+ * {@link buildTenantDeletionManifest tenant manifest} and the registry of
+ * tenant tables created imperatively at runtime:
  *
  *   1. Validate the tenant id (refuse empty / whitespace / wildcard values).
  *   2. Reconcile the plan against the live PostgreSQL catalog and fail closed if
  *      any tenant-contract table is missing or malformed.
  *   3. Delete every tenant-scoped row inside a single tenant-scoped transaction,
- *      children before parents, so foreign keys are never violated.
- *   4. Re-scan the whole plan in a fresh transaction and fail unless zero
- *      rows remain for the tenant.
+ *      following the compiled schema's defensive child-before-parent order.
+ *   4. Reconcile the live catalog again, independently rebuild the verification
+ *      plan, and re-scan committed state in a fresh transaction. Fail unless the
+ *      catalog contract is unchanged and zero tenant rows remain.
  *
  * Running it twice on the same tenant is safe: the second run deletes zero rows
  * and still reports success. Multi-tenancy is PostgreSQL-only, so the command
  * refuses to run against a SQLite database.
  *
- * Precondition — quiesce the tenant first: this operation verifies tenant state
- * at scan time; it does not by itself fence out a concurrent writer. The
- * operator must stop new tenant-scoped work in the deployment BEFORE running,
- * otherwise a writer active during or after verification can recreate tenant
- * rows that the verification pass will not see.
+ * Preconditions:
+ *
+ * - Quiesce tenant writes and relevant schema changes for the entire operation.
+ *   The table locks and second catalog scan narrow races but do not fence a
+ *   writer or DDL that commits after final verification.
+ * - Maintain a tenant-consistent foreign-key graph: every foreign-key reference
+ *   from a tenant-scoped row to another tenant-scoped row must connect rows with
+ *   the same tenant id. PostgreSQL row-level security does not enforce that
+ *   equality when a foreign key is created and does not constrain referential
+ *   actions such as cascades. This routine validates the supported RLS policy
+ *   contract, but it does not prove row-level foreign-key consistency.
  *
  * The result object is a frozen machine-readable contract (see
  * {@link TenantDeletionResult}) intended to be parsed by external automation. It
@@ -32,17 +40,11 @@
  * connection strings, or other secrets.
  */
 
-import { count, sql } from 'drizzle-orm';
-import { QueryBuilder } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import type { Database } from './client';
-import { deleteFrom, executeRaw, isPostgresDatabase, select } from './database-wrapper';
+import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
-import {
-  buildTenantDeletionManifest,
-  buildTenantScopeCondition,
-  indexManifest,
-  type TenantDeletionTable,
-} from './tenant-deletion-manifest';
+import { buildTenantDeletionManifest, type TenantDeletionTable } from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -206,7 +208,20 @@ function boolValue(value: unknown): boolean {
   return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
 }
 
+interface CatalogPolicy {
+  name: string;
+  command: string;
+  permissive: boolean;
+  publicOnly: boolean;
+  roles: string;
+  usingExpression: string | null;
+  checkExpression: string | null;
+  usingTree: string | null;
+  checkTree: string | null;
+}
+
 interface CatalogRelation {
+  relationId: string;
   schemaName: string;
   tableName: string;
   relkind: string;
@@ -214,29 +229,31 @@ interface CatalogRelation {
   rlsForced: boolean;
   hasTenantColumn: boolean;
   tenantColumnTextNotNull: boolean;
-  hasTenantPolicyMarker: boolean;
-  hasTenantIsolationPolicy: boolean;
   participatesInInheritance: boolean;
+  foreignKeyContract: string;
+  policies: CatalogPolicy[];
 }
 
 /**
  * Read every non-system ordinary or partitioned relation that claims some part
- * of the tenant contract. Catalog names are used for comparison and diagnostics
- * only; executed deletion SQL never uses them.
+ * of the tenant contract. Every system-catalog reference is explicitly
+ * pg_catalog-qualified so a hostile search_path or temporary relation cannot
+ * redirect the audit.
  */
 async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
   const result = await executeRaw(
     db,
     sql`
       SELECT
+        c.oid::pg_catalog.text AS relation_id,
         n.nspname AS schema_name,
         c.relname AS table_name,
-        c.relkind::text AS relkind,
+        c.relkind::pg_catalog.text AS relkind,
         c.relrowsecurity AS rls_enabled,
         c.relforcerowsecurity AS rls_forced,
         EXISTS (
           SELECT 1
-          FROM pg_attribute a
+          FROM pg_catalog.pg_attribute a
           WHERE a.attrelid = c.oid
             AND a.attname = 'tenant_id'
             AND a.attnum > 0
@@ -244,39 +261,50 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
         ) AS has_tenant_column,
         EXISTS (
           SELECT 1
-          FROM pg_attribute a
+          FROM pg_catalog.pg_attribute a
           WHERE a.attrelid = c.oid
             AND a.attname = 'tenant_id'
             AND a.attnum > 0
             AND NOT a.attisdropped
-            AND a.atttypid = 'text'::regtype
+            AND a.atttypid = 'pg_catalog.text'::pg_catalog.regtype
             AND a.attnotnull
         ) AS tenant_column_text_not_null,
         EXISTS (
           SELECT 1
-          FROM pg_policy p
-          WHERE p.polrelid = c.oid
-            AND (
-              p.polname LIKE 'tenant_isolation_%'
-              OR COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
-              OR COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
-            )
-        ) AS has_tenant_policy_marker,
-        EXISTS (
-          SELECT 1
-          FROM pg_policy p
-          WHERE p.polrelid = c.oid
-            AND p.polname LIKE 'tenant_isolation_%'
-            AND COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
-            AND COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
-        ) AS has_tenant_isolation_policy,
-        EXISTS (
-          SELECT 1
-          FROM pg_inherits i
+          FROM pg_catalog.pg_inherits i
           WHERE i.inhrelid = c.oid OR i.inhparent = c.oid
-        ) AS participates_in_inheritance
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
+        ) AS participates_in_inheritance,
+        COALESCE(
+          (
+            SELECT pg_catalog.string_agg(
+              pg_catalog.concat_ws(
+                ':',
+                fk.oid::pg_catalog.text,
+                fk.conrelid::pg_catalog.text,
+                fk.confrelid::pg_catalog.text,
+                pg_catalog.pg_get_constraintdef(fk.oid, false)
+              ),
+              E'\n'
+              ORDER BY fk.oid
+            )
+            FROM pg_catalog.pg_constraint fk
+            WHERE fk.contype = 'f'
+              AND (fk.conrelid = c.oid OR fk.confrelid = c.oid)
+          ),
+          ''
+        ) AS foreign_key_contract,
+        p.polname AS policy_name,
+        p.polcmd::pg_catalog.text AS policy_command,
+        p.polpermissive AS policy_permissive,
+        p.polroles::pg_catalog.text AS policy_roles,
+        p.polroles = ARRAY[0::pg_catalog.oid] AS policy_public_only,
+        pg_catalog.pg_get_expr(p.polqual, p.polrelid) AS policy_using_expression,
+        pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) AS policy_check_expression,
+        p.polqual::pg_catalog.text AS policy_using_tree,
+        p.polwithcheck::pg_catalog.text AS policy_check_tree
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_catalog.pg_policy p ON p.polrelid = c.oid
       WHERE c.relkind IN ('r', 'p')
         AND n.nspname <> 'information_schema'
         AND n.nspname NOT LIKE 'pg_%'
@@ -284,7 +312,7 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
           c.relforcerowsecurity
           OR EXISTS (
             SELECT 1
-            FROM pg_attribute a
+            FROM pg_catalog.pg_attribute a
             WHERE a.attrelid = c.oid
               AND a.attname = 'tenant_id'
               AND a.attnum > 0
@@ -292,30 +320,169 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
           )
           OR EXISTS (
             SELECT 1
-            FROM pg_policy p
-            WHERE p.polrelid = c.oid
+            FROM pg_catalog.pg_policy marker_policy
+            WHERE marker_policy.polrelid = c.oid
               AND (
-                p.polname LIKE 'tenant_isolation_%'
-                OR COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
-                OR COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
+                marker_policy.polname LIKE 'tenant_isolation_%'
+                OR COALESCE(
+                    pg_catalog.pg_get_expr(
+                      marker_policy.polqual,
+                      marker_policy.polrelid
+                    ),
+                    ''
+                  ) LIKE '%agor.tenant_id%'
+                OR COALESCE(
+                    pg_catalog.pg_get_expr(
+                      marker_policy.polwithcheck,
+                      marker_policy.polrelid
+                    ),
+                    ''
+                  ) LIKE '%agor.tenant_id%'
               )
           )
         )
+      ORDER BY n.nspname, c.relname, p.polname
     `
   );
 
-  return rowsOf(result).map((row) => ({
-    schemaName: String(row.schema_name),
-    tableName: String(row.table_name),
-    relkind: String(row.relkind),
-    rlsEnabled: boolValue(row.rls_enabled),
-    rlsForced: boolValue(row.rls_forced),
-    hasTenantColumn: boolValue(row.has_tenant_column),
-    tenantColumnTextNotNull: boolValue(row.tenant_column_text_not_null),
-    hasTenantPolicyMarker: boolValue(row.has_tenant_policy_marker),
-    hasTenantIsolationPolicy: boolValue(row.has_tenant_isolation_policy),
-    participatesInInheritance: boolValue(row.participates_in_inheritance),
-  }));
+  const relations = new Map<string, CatalogRelation>();
+  for (const row of rowsOf(result)) {
+    const relationId = String(row.relation_id);
+    let relation = relations.get(relationId);
+    if (!relation) {
+      relation = {
+        relationId,
+        schemaName: String(row.schema_name),
+        tableName: String(row.table_name),
+        relkind: String(row.relkind),
+        rlsEnabled: boolValue(row.rls_enabled),
+        rlsForced: boolValue(row.rls_forced),
+        hasTenantColumn: boolValue(row.has_tenant_column),
+        tenantColumnTextNotNull: boolValue(row.tenant_column_text_not_null),
+        participatesInInheritance: boolValue(row.participates_in_inheritance),
+        foreignKeyContract: String(row.foreign_key_contract),
+        policies: [],
+      };
+      relations.set(relationId, relation);
+    }
+    if (row.policy_name !== null && row.policy_name !== undefined) {
+      relation.policies.push({
+        name: String(row.policy_name),
+        command: String(row.policy_command),
+        permissive: boolValue(row.policy_permissive),
+        publicOnly: boolValue(row.policy_public_only),
+        roles: String(row.policy_roles),
+        usingExpression:
+          row.policy_using_expression === null || row.policy_using_expression === undefined
+            ? null
+            : String(row.policy_using_expression),
+        checkExpression:
+          row.policy_check_expression === null || row.policy_check_expression === undefined
+            ? null
+            : String(row.policy_check_expression),
+        usingTree:
+          row.policy_using_tree === null || row.policy_using_tree === undefined
+            ? null
+            : String(row.policy_using_tree),
+        checkTree:
+          row.policy_check_tree === null || row.policy_check_tree === undefined
+            ? null
+            : String(row.policy_check_tree),
+      });
+    }
+  }
+  return [...relations.values()];
+}
+
+const CANONICAL_TENANT_POLICY_EXPRESSION =
+  "tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default')";
+
+function stripOuterParentheses(expression: string): string {
+  let current = expression;
+  while (current.startsWith('(') && current.endsWith(')')) {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let index = 0; index < current.length; index += 1) {
+      const character = current[index];
+      if (character === '(') depth += 1;
+      if (character === ')') depth -= 1;
+      if (depth === 0 && index < current.length - 1) {
+        closesAtEnd = false;
+        break;
+      }
+    }
+    if (!closesAtEnd) break;
+    current = current.slice(1, -1);
+  }
+  return current;
+}
+
+/**
+ * pg_get_expr is the server's structural deparser. Normalize only formatting,
+ * identifier quoting, built-in qualification, and text casts that vary between
+ * supported PostgreSQL releases; do not reorder or simplify operators.
+ */
+function normalizePolicyExpression(expression: string | null): string | null {
+  if (expression === null) return null;
+  const normalized = expression
+    .replaceAll('"', '')
+    .replace(/::(?:pg_catalog\.)?text\b/gi, '')
+    .replace(/\bpg_catalog\.current_setting\b/gi, 'current_setting')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return stripOuterParentheses(normalized);
+}
+
+function assertSupportedPolicies(relation: CatalogRelation): void {
+  const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
+
+  const restrictive = relation.policies.filter((policy) => !policy.permissive);
+  if (restrictive.length > 0) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName} has unsupported restrictive row-security policy/policies: ${restrictive
+        .map((policy) => policy.name)
+        .sort()
+        .join(', ')}`
+    );
+  }
+
+  const expectedName = `tenant_isolation_${relation.tableName}`;
+  const isolationPolicies = relation.policies.filter((policy) => policy.name === expectedName);
+  if (isolationPolicies.length !== 1) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName} must have exactly one ${expectedName} policy`
+    );
+  }
+
+  const isolation = isolationPolicies[0];
+  if (isolation.command !== '*') {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must apply to ALL commands`
+    );
+  }
+  if (!isolation.permissive) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must be permissive`
+    );
+  }
+  if (!isolation.publicOnly) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must apply only to PUBLIC`
+    );
+  }
+  if (
+    normalizePolicyExpression(isolation.usingExpression) !== CANONICAL_TENANT_POLICY_EXPRESSION ||
+    normalizePolicyExpression(isolation.checkExpression) !== CANONICAL_TENANT_POLICY_EXPRESSION
+  ) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName}.${expectedName} must use the canonical tenant_id equality for both USING and WITH CHECK`
+    );
+  }
+}
+
+interface CatalogAudit {
+  liveTenantTables: ReadonlySet<string>;
+  fingerprint: string;
 }
 
 /**
@@ -325,7 +492,7 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
 async function auditLiveTenantCatalog(
   db: Database,
   planNames: ReadonlySet<string>
-): Promise<ReadonlySet<string>> {
+): Promise<CatalogAudit> {
   const relations = await readTenantCatalog(db);
   const liveTenantTables = new Set<string>();
 
@@ -361,11 +528,7 @@ async function auditLiveTenantCatalog(
         `Refusing tenant deletion: ${qualifiedName} must enable and force row-level security`
       );
     }
-    if (!relation.hasTenantPolicyMarker || !relation.hasTenantIsolationPolicy) {
-      throw new TenantDeletionCatalogError(
-        `Refusing tenant deletion: ${qualifiedName} lacks a complete tenant_isolation_* policy referencing agor.tenant_id`
-      );
-    }
+    assertSupportedPolicies(relation);
     liveTenantTables.add(relation.tableName);
   }
 
@@ -382,38 +545,35 @@ async function auditLiveTenantCatalog(
     );
   }
 
-  return liveTenantTables;
-}
+  const fingerprint = JSON.stringify(
+    relations.map((relation) => ({
+      relationId: relation.relationId,
+      schemaName: relation.schemaName,
+      tableName: relation.tableName,
+      relkind: relation.relkind,
+      rlsEnabled: relation.rlsEnabled,
+      rlsForced: relation.rlsForced,
+      hasTenantColumn: relation.hasTenantColumn,
+      tenantColumnTextNotNull: relation.tenantColumnTextNotNull,
+      participatesInInheritance: relation.participatesInInheritance,
+      // Fingerprinting all incoming/outgoing FK definitions detects timing
+      // changes; it does not assert that row values are tenant-consistent.
+      foreignKeyContract: relation.foreignKeyContract,
+      policies: relation.policies.map((policy) => ({
+        name: policy.name,
+        command: policy.command,
+        permissive: policy.permissive,
+        publicOnly: policy.publicOnly,
+        roles: policy.roles,
+        // Internal parse trees are stable within this live server and avoid a
+        // search_path-sensitive deparse in the between-phase fingerprint.
+        usingTree: policy.usingTree,
+        checkTree: policy.checkTree,
+      })),
+    }))
+  );
 
-async function countTenantRows(
-  db: Database,
-  queryBuilder: QueryBuilder,
-  entry: TenantDeletionTable,
-  tenantId: string,
-  byName: Map<string, TenantDeletionTable>
-): Promise<number> {
-  const condition = buildTenantScopeCondition(queryBuilder, entry, tenantId, byName);
-  const rows = (await select(db, { n: count() })
-    .from(entry.table)
-    .where(condition)
-    .all()) as Array<{
-    n: number | string | bigint;
-  }>;
-  return Number(rows[0]?.n ?? 0);
-}
-
-async function deleteTenantRows(
-  db: Database,
-  queryBuilder: QueryBuilder,
-  entry: TenantDeletionTable,
-  tenantId: string,
-  byName: Map<string, TenantDeletionTable>
-): Promise<number> {
-  const condition = buildTenantScopeCondition(queryBuilder, entry, tenantId, byName);
-  const result = (await deleteFrom(db, entry.table).where(condition).run()) as {
-    rowsAffected?: number;
-  };
-  return Number(result?.rowsAffected ?? 0);
+  return { liveTenantTables, fingerprint };
 }
 
 interface DeletionStep {
@@ -422,29 +582,17 @@ interface DeletionStep {
   deleteRows(db: Database, tenantId: string): Promise<void>;
 }
 
-function buildManifestStep(
-  entry: TenantDeletionTable,
-  queryBuilder: QueryBuilder,
-  byName: Map<string, TenantDeletionTable>
-): DeletionStep {
-  return {
-    name: entry.name,
-    countRows: (db, tenantId) => countTenantRows(db, queryBuilder, entry, tenantId, byName),
-    deleteRows: async (db, tenantId) => {
-      await deleteTenantRows(db, queryBuilder, entry, tenantId, byName);
-    },
-  };
-}
+const TENANT_SCHEMA = 'public';
 
-function buildImperativeStep(table: ImperativeTenantTable): DeletionStep {
-  const tableIdentifier = sql.identifier(table.name);
-  const tenantColumnIdentifier = sql.identifier(table.tenantColumn);
+function buildQualifiedStep(name: string, tenantColumn: string): DeletionStep {
+  const tableIdentifier = sql`${sql.identifier(TENANT_SCHEMA)}.${sql.identifier(name)}`;
+  const tenantColumnIdentifier = sql.identifier(tenantColumn);
   return {
-    name: table.name,
+    name,
     countRows: async (db, tenantId) => {
       const result = await executeRaw(
         db,
-        sql`SELECT count(*) AS n FROM ${tableIdentifier} WHERE ${tenantColumnIdentifier} = ${tenantId}`
+        sql`SELECT pg_catalog.count(*) AS n FROM ${tableIdentifier} WHERE ${tenantColumnIdentifier} = ${tenantId}`
       );
       return Number(rowsOf(result)[0]?.n ?? 0);
     },
@@ -455,6 +603,87 @@ function buildImperativeStep(table: ImperativeTenantTable): DeletionStep {
       );
     },
   };
+}
+
+function buildManifestStep(entry: TenantDeletionTable): DeletionStep {
+  return buildQualifiedStep(entry.name, entry.tenantColumn.name);
+}
+
+function buildImperativeStep(table: ImperativeTenantTable): DeletionStep {
+  return buildQualifiedStep(table.name, table.tenantColumn);
+}
+
+interface DeletionPlan {
+  steps: DeletionStep[];
+  fingerprint: string;
+}
+
+async function buildDeletionPlan(
+  db: Database,
+  manifest: TenantDeletionTable[],
+  planNames: ReadonlySet<string>
+): Promise<DeletionPlan> {
+  const audit = await auditLiveTenantCatalog(db, planNames);
+  const presentImperativeTables = IMPERATIVE_TENANT_TABLES.filter((table) =>
+    audit.liveTenantTables.has(table.name)
+  );
+  // Imperative registry entries are deliberately limited to known leaf tables.
+  // Their row-level foreign-key consistency remains an operator/schema
+  // precondition; the registry does not claim to validate it.
+  const steps = [
+    ...presentImperativeTables.map(buildImperativeStep),
+    ...manifest.map(buildManifestStep),
+  ];
+  if (steps.length === 0) {
+    throw new TenantDeletionCatalogError(
+      'Refusing tenant deletion: the reconciled deletion plan is empty'
+    );
+  }
+  return {
+    steps,
+    fingerprint: JSON.stringify({
+      catalog: audit.fingerprint,
+      steps: steps.map((step) => step.name),
+    }),
+  };
+}
+
+async function lockDeletionPlan(db: Database, plan: DeletionPlan): Promise<void> {
+  for (const step of plan.steps) {
+    const tableIdentifier = sql`${sql.identifier(TENANT_SCHEMA)}.${sql.identifier(step.name)}`;
+    // SHARE ROW EXCLUSIVE blocks concurrent table writers and policy/DDL changes
+    // for the duration of this transaction. It cannot cover a table created
+    // after the scan, which is why phase two reconciles the catalog again and
+    // operator quiescence remains mandatory.
+    await executeRaw(db, sql`LOCK TABLE ${tableIdentifier} IN SHARE ROW EXCLUSIVE MODE`);
+  }
+}
+
+async function buildLockedDeletionPlan(
+  db: Database,
+  manifest: TenantDeletionTable[],
+  planNames: ReadonlySet<string>
+): Promise<DeletionPlan> {
+  const beforeLock = await buildDeletionPlan(db, manifest, planNames);
+  await lockDeletionPlan(db, beforeLock);
+  const afterLock = await buildDeletionPlan(db, manifest, planNames);
+  if (beforeLock.fingerprint !== afterLock.fingerprint) {
+    throw new TenantDeletionCatalogError(
+      'Refusing tenant deletion: the live tenant catalog changed while the deletion plan was being locked'
+    );
+  }
+  return afterLock;
+}
+
+async function hardenDeletionSearchPath(db: Database): Promise<void> {
+  // Transaction-local and repeated in both phases. Explicit public relation
+  // qualification remains the primary binding; this also ensures any incidental
+  // built-in function/operator/type resolution prefers pg_catalog and searches
+  // the temporary schema last.
+  await executeRaw(
+    db,
+    sql`SELECT pg_catalog.set_config('search_path', 'pg_catalog, public, pg_temp', true)`
+  );
 }
 
 /**
@@ -490,47 +719,37 @@ export async function deleteTenantData(
   const log = options.log ?? (() => {});
   const dryRun = options.dryRun ?? false;
   const manifest = buildTenantDeletionManifest();
-  const byName = indexManifest(manifest);
-  const queryBuilder = new QueryBuilder();
-  const schemaVersion = await resolveSchemaVersion(db);
   const planNames = new Set([
     ...manifest.map((entry) => entry.name),
     ...IMPERATIVE_TENANT_TABLES.map((table) => table.name),
   ]);
-  const liveTenantTables = await auditLiveTenantCatalog(db, planNames);
-  const presentImperativeTables = IMPERATIVE_TENANT_TABLES.filter((table) =>
-    liveTenantTables.has(table.name)
-  );
-  // Imperative registry entries are leaves whose cascade parents are in the
-  // typed manifest, so placing them first preserves children-before-parents.
-  const steps: DeletionStep[] = [
-    ...presentImperativeTables.map(buildImperativeStep),
-    ...manifest.map((entry) => buildManifestStep(entry, queryBuilder, byName)),
-  ];
-  if (steps.length === 0) {
-    throw new TenantDeletionCatalogError(
-      'Refusing tenant deletion: the reconciled deletion plan is empty'
-    );
-  }
   const startedAt = Date.now();
-
-  log(
-    `${dryRun ? 'dry-run: ' : ''}tenant deletion started (schemaVersion=${schemaVersion}, tables=${steps.length})`
-  );
-
   const rowCounts: Record<string, number> = {};
+  let schemaVersion = '';
+  let phaseOneFingerprint = '';
+  let phaseOneTableCount = 0;
 
   // Phase 1: snapshot per-table counts, then (unless this is a dry run) delete,
-  // all inside one tenant-scoped transaction so the deletion is atomic and RLS
-  // pins every statement to the tenant.
+  // all inside one tenant-scoped transaction so the deletion is atomic. Every
+  // statement also has an explicit tenant_id predicate and public-qualified
+  // relation; RLS is a separately audited defense, not a foreign-key boundary.
   //
   // Counts are captured up front, BEFORE any DELETE runs. This keeps the reported
   // rowCounts accurate even when an `ON DELETE CASCADE` from a parent table would
   // otherwise remove a child's rows before that child's own DELETE statement
-  // runs. Each row belongs to exactly one table, so the pre-deletion snapshot is
-  // precisely the set of rows the operation removes.
+  // runs. Under the tenant-consistent foreign-key precondition, each row belongs
+  // to exactly one table and tenant, so the pre-deletion snapshot is precisely
+  // the set of rows the operation removes.
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    for (const step of steps) {
+    await hardenDeletionSearchPath(scoped);
+    schemaVersion = await resolveSchemaVersion(scoped);
+    const phaseOnePlan = await buildLockedDeletionPlan(scoped, manifest, planNames);
+    phaseOneFingerprint = phaseOnePlan.fingerprint;
+    phaseOneTableCount = phaseOnePlan.steps.length;
+    log(
+      `${dryRun ? 'dry-run: ' : ''}tenant deletion started (schemaVersion=${schemaVersion}, tables=${phaseOneTableCount})`
+    );
+    for (const step of phaseOnePlan.steps) {
       rowCounts[step.name] = await step.countRows(scoped, tenantId);
       if (rowCounts[step.name] > 0) {
         log(
@@ -539,16 +758,38 @@ export async function deleteTenantData(
       }
     }
     if (dryRun) return;
-    for (const step of steps) {
+    for (const step of phaseOnePlan.steps) {
       await step.deleteRows(scoped, tenantId);
     }
   });
 
-  // Phase 2: verify committed state in a fresh transaction (skipped for dry-run).
+  if (!schemaVersion || !phaseOneFingerprint || phaseOneTableCount === 0) {
+    throw new TenantDeletionCatalogError(
+      'Refusing tenant deletion: phase-one catalog reconciliation did not produce a plan'
+    );
+  }
+
+  // Phase 2: independently reconcile and lock a fresh plan, compare its live
+  // catalog fingerprint to phase one, then verify committed state. Reusing the
+  // phase-one steps here would let a relation or policy added between phases
+  // escape verification.
   if (!dryRun) {
     const remaining = await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await hardenDeletionSearchPath(scoped);
+      const verificationSchemaVersion = await resolveSchemaVersion(scoped);
+      if (verificationSchemaVersion !== schemaVersion) {
+        throw new TenantDeletionCatalogError(
+          'Refusing to certify tenant deletion: the migration watermark changed between deletion and verification'
+        );
+      }
+      const verificationPlan = await buildLockedDeletionPlan(scoped, manifest, planNames);
+      if (verificationPlan.fingerprint !== phaseOneFingerprint) {
+        throw new TenantDeletionCatalogError(
+          'Refusing to certify tenant deletion: the live tenant catalog or verification plan changed after phase one'
+        );
+      }
       const offending: string[] = [];
-      for (const step of steps) {
+      for (const step of verificationPlan.steps) {
         const left = await step.countRows(scoped, tenantId);
         if (left > 0) offending.push(step.name);
       }
@@ -560,7 +801,7 @@ export async function deleteTenantData(
   const durationMs = Date.now() - startedAt;
   const totalRows = Object.values(rowCounts).reduce((sum, value) => sum + value, 0);
   log(
-    `${dryRun ? 'dry-run complete' : 'tenant deletion verified'} (${totalRows} row(s) across ${steps.length} tables in ${durationMs}ms)`
+    `${dryRun ? 'dry-run complete' : 'tenant deletion verified'} (${totalRows} row(s) across ${phaseOneTableCount} tables in ${durationMs}ms)`
   );
 
   if (dryRun) {

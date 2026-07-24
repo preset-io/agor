@@ -1,12 +1,11 @@
 /**
  * `agor tenant delete` - Permanently delete all data for a single tenant.
  *
- * Operators of a multi-tenant Agor deployment use this to remove a tenant
- * entirely (offboarding, data-removal requests, regulatory erasure). It runs
- * non-interactively (container/Job friendly), talks straight to the database the
- * same way the rest of the runtime does (env/config), and prints a single stable
- * JSON object to stdout for external automation. Human audit logging goes to
- * stderr so stdout stays parseable.
+ * Operators of a standalone multi-tenant PostgreSQL runtime use this to remove
+ * a tenant entirely (offboarding, data-removal requests, regulatory erasure).
+ * It runs non-interactively (container/Job friendly), uses the runtime database
+ * configuration, and prints a single stable JSON object to stdout for external
+ * automation. Human audit logging goes to stderr so stdout stays parseable.
  */
 
 import {
@@ -48,9 +47,10 @@ function flushStderr(): Promise<void> {
 
 export default class TenantDelete extends Command {
   static override description =
-    'Permanently delete all data belonging to a single tenant (PostgreSQL multi-tenant deployments). Idempotent and verified. ' +
-    'Precondition: quiesce the tenant first — stop new tenant-scoped work in the deployment BEFORE running. ' +
-    'This command verifies tenant state at scan time and does not by itself prevent a concurrent writer from recreating tenant rows after verification.';
+    'Permanently delete all data belonging to a single tenant in a standalone multi-tenant PostgreSQL runtime. Idempotent and verified. ' +
+    'Preconditions: quiesce tenant writes and schema changes for the entire operation, and ensure every foreign-key reference between tenant rows is tenant-consistent. ' +
+    'PostgreSQL row-level security neither enforces tenant equality when foreign keys are created nor constrains referential actions such as cascades. ' +
+    'This command cannot prevent a writer or schema change that occurs after final verification.';
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --tenant-id acme-corp',

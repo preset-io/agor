@@ -21,7 +21,7 @@ import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import * as pg from './schema.postgres';
-import { deleteTenantData } from './tenant-deletion';
+import { deleteTenantData, TenantDeletionCatalogError } from './tenant-deletion';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -105,8 +105,8 @@ async function ensureImperativeEmbeddingTable(db: Database): Promise<void> {
       BEGIN
         IF NOT EXISTS (
           SELECT 1
-          FROM pg_type t
-          JOIN pg_namespace n ON n.oid = t.typnamespace
+          FROM pg_catalog.pg_type t
+          JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
           WHERE n.nspname = 'public' AND t.typname = 'vector'
         ) THEN
           CREATE DOMAIN public.vector AS text;
@@ -253,6 +253,33 @@ async function countTenantEmbeddings(db: Database, tenantId: string): Promise<nu
   });
 }
 
+async function installCanonicalTenantPolicy(db: Database, tableName: string): Promise<void> {
+  const table = sql`${sql.identifier('public')}.${sql.identifier(tableName)}`;
+  const policy = sql.identifier(`tenant_isolation_${tableName}`);
+  await executeRaw(db, sql`DROP POLICY IF EXISTS ${policy} ON ${table}`);
+  await executeRaw(
+    db,
+    sql`
+      CREATE POLICY ${policy} ON ${table}
+        AS PERMISSIVE
+        FOR ALL
+        TO PUBLIC
+        USING (
+          tenant_id = COALESCE(
+            NULLIF(current_setting('agor.tenant_id', true), ''),
+            'default'
+          )
+        )
+        WITH CHECK (
+          tenant_id = COALESCE(
+            NULLIF(current_setting('agor.tenant_id', true), ''),
+            'default'
+          )
+        )
+    `
+  );
+}
+
 describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreSQL)', () => {
   let db: Database;
 
@@ -338,6 +365,102 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     expect(await countTenantEmbeddings(db, tenantB)).toBe(0);
   });
 
+  it('uses audited public relations when temporary tables shadow catalog and plan names', async () => {
+    const tenantId = `td-shadow-${generateId()}`;
+    await seedTenant(db, tenantId);
+    const shadowDb = createDatabase({
+      dialect: 'postgresql',
+      url: postgresUrl!,
+      pool: { max: 1 },
+    });
+
+    try {
+      await executeRaw(shadowDb, sql`CREATE TEMPORARY TABLE pg_class (marker text)`);
+      await executeRaw(
+        shadowDb,
+        sql`CREATE TEMPORARY TABLE sessions (tenant_id text NOT NULL, marker text NOT NULL)`
+      );
+      await executeRaw(
+        shadowDb,
+        sql`INSERT INTO sessions (tenant_id, marker) VALUES (${tenantId}, 'temporary-shadow')`
+      );
+      await executeRaw(shadowDb, sql`SET search_path TO pg_temp, public, pg_catalog`);
+
+      const result = await deleteTenantData(shadowDb, tenantId);
+
+      expect(result.rowCounts.sessions).toBeGreaterThanOrEqual(1);
+      expect(await countTenantSessions(db, tenantId)).toBe(0);
+      const temporaryRows = await executeRaw(
+        shadowDb,
+        sql`SELECT pg_catalog.count(*) AS n FROM sessions WHERE tenant_id = ${tenantId}`
+      );
+      expect(Number(rowsOf(temporaryRows)[0]?.n ?? 0)).toBe(1);
+    } finally {
+      await closePostgresDatabase(shadowDb);
+      if ((await countTenantSessions(db, tenantId)) > 0) {
+        await deleteTenantData(db, tenantId);
+      }
+    }
+  });
+
+  it('rejects an unexpected restrictive policy that could hide tenant rows', async () => {
+    await executeRaw(
+      db,
+      sql`
+        CREATE POLICY tenant_delete_restrictive_test ON public.sessions
+          AS RESTRICTIVE
+          FOR ALL
+          TO PUBLIC
+          USING (false)
+          WITH CHECK (false)
+      `
+    );
+
+    try {
+      await expect(
+        deleteTenantData(db, `td-restrictive-${generateId()}`, { dryRun: true })
+      ).rejects.toThrow(/restrictive.*tenant_delete_restrictive_test/i);
+    } finally {
+      await executeRaw(
+        db,
+        sql`DROP POLICY IF EXISTS tenant_delete_restrictive_test ON public.sessions`
+      );
+    }
+  });
+
+  it('rejects an inverted tenant isolation predicate', async () => {
+    await executeRaw(db, sql`DROP POLICY tenant_isolation_sessions ON public.sessions`);
+    await executeRaw(
+      db,
+      sql`
+        CREATE POLICY tenant_isolation_sessions ON public.sessions
+          AS PERMISSIVE
+          FOR ALL
+          TO PUBLIC
+          USING (
+            tenant_id <> COALESCE(
+              NULLIF(current_setting('agor.tenant_id', true), ''),
+              'default'
+            )
+          )
+          WITH CHECK (
+            tenant_id <> COALESCE(
+              NULLIF(current_setting('agor.tenant_id', true), ''),
+              'default'
+            )
+          )
+      `
+    );
+
+    try {
+      await expect(
+        deleteTenantData(db, `td-inverted-${generateId()}`, { dryRun: true })
+      ).rejects.toThrow(/canonical tenant_id equality/i);
+    } finally {
+      await installCanonicalTenantPolicy(db, 'sessions');
+    }
+  });
+
   it('fails closed when the live catalog contains an unplanned tenant table', async () => {
     await executeRaw(db, sql`DROP TABLE IF EXISTS public.tenant_delete_unknown`);
     await executeRaw(
@@ -377,6 +500,96 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
       ).rejects.toThrow(/tenant_delete_unknown/);
     } finally {
       await executeRaw(db, sql`DROP TABLE IF EXISTS public.tenant_delete_unknown`);
+    }
+  });
+
+  it('fails closed when a tenant table appears after phase-one reconciliation', async () => {
+    const tenantId = `td-late-${generateId()}`;
+    await seedTenant(db, tenantId);
+    await executeRaw(db, sql`DROP TABLE IF EXISTS public.tenant_delete_late`);
+    await executeRaw(
+      db,
+      sql`
+        CREATE OR REPLACE FUNCTION public.tenant_delete_create_late_table()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF pg_catalog.to_regclass('public.tenant_delete_late') IS NULL THEN
+            CREATE TABLE public.tenant_delete_late (
+              tenant_id text NOT NULL,
+              value text NOT NULL
+            );
+            ALTER TABLE public.tenant_delete_late ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE public.tenant_delete_late FORCE ROW LEVEL SECURITY;
+            CREATE POLICY tenant_isolation_tenant_delete_late
+              ON public.tenant_delete_late
+              AS PERMISSIVE
+              FOR ALL
+              TO PUBLIC
+              USING (
+                tenant_id = COALESCE(
+                  NULLIF(current_setting('agor.tenant_id', true), ''),
+                  'default'
+                )
+              )
+              WITH CHECK (
+                tenant_id = COALESCE(
+                  NULLIF(current_setting('agor.tenant_id', true), ''),
+                  'default'
+                )
+              );
+            INSERT INTO public.tenant_delete_late (tenant_id, value)
+            VALUES (OLD.tenant_id, 'created after phase-one reconciliation');
+          END IF;
+          RETURN OLD;
+        END
+        $function$
+      `
+    );
+    await executeRaw(
+      db,
+      sql`
+        DROP TRIGGER IF EXISTS tenant_delete_create_late_table ON public.repos
+      `
+    );
+    await executeRaw(
+      db,
+      sql`
+        CREATE TRIGGER tenant_delete_create_late_table
+        BEFORE DELETE ON public.repos
+        FOR EACH ROW
+        EXECUTE FUNCTION public.tenant_delete_create_late_table()
+      `
+    );
+
+    try {
+      let deletionError: unknown;
+      try {
+        await deleteTenantData(db, tenantId);
+      } catch (error) {
+        deletionError = error;
+      }
+      expect(deletionError).toBeInstanceOf(TenantDeletionCatalogError);
+      expect(errorChainMessage(deletionError)).toMatch(/tenant_delete_late/);
+      expect(await countTenantSessions(db, tenantId)).toBe(0);
+      const lateRows = await runWithTenantDatabaseScope(db, tenantId, async (scoped) =>
+        executeRaw(
+          scoped,
+          sql`SELECT pg_catalog.count(*) AS n FROM public.tenant_delete_late WHERE tenant_id = ${tenantId}`
+        )
+      );
+      expect(Number(rowsOf(lateRows)[0]?.n ?? 0)).toBe(1);
+    } finally {
+      await executeRaw(
+        db,
+        sql`DROP TRIGGER IF EXISTS tenant_delete_create_late_table ON public.repos`
+      );
+      await executeRaw(db, sql`DROP FUNCTION IF EXISTS public.tenant_delete_create_late_table()`);
+      await executeRaw(db, sql`DROP TABLE IF EXISTS public.tenant_delete_late`);
+      if ((await countTenantSessions(db, tenantId)) > 0) {
+        await deleteTenantData(db, tenantId);
+      }
     }
   });
 
@@ -424,7 +637,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
       if (emptyDb) await closePostgresDatabase(emptyDb);
       await executeRaw(
         db,
-        sql`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${databaseName}`
+        sql`SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = ${databaseName}`
       );
       await executeRaw(db, sql`DROP DATABASE IF EXISTS ${sql.identifier(databaseName)}`);
     }

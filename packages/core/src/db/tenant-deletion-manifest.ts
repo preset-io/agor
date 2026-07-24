@@ -1,11 +1,16 @@
 /**
  * Runtime-owned manifest of tenant-scoped database tables.
  *
- * Operators of a multi-tenant Agor deployment occasionally need to permanently
- * remove every trace of a single tenant (offboarding, data-removal requests,
- * regulatory erasure). Doing that safely requires an exhaustive, machine-derived
- * list of which tables hold tenant data and in what order they must be deleted
- * so foreign keys are never violated.
+ * A standalone multi-tenant PostgreSQL runtime occasionally needs to
+ * permanently remove every trace of a single tenant (offboarding, data-removal
+ * requests, regulatory erasure). This module supplies an exhaustive,
+ * machine-derived list of tenant tables and a defensive order based on the
+ * compiled schema's foreign keys.
+ *
+ * The order is not proof of foreign-key tenant consistency. PostgreSQL RLS does
+ * not prevent a row from creating a cross-tenant reference and does not limit
+ * referential actions such as cascades. The live schema and data must maintain
+ * the deletion engine's tenant-consistent foreign-key precondition.
  *
  * This module derives that manifest directly from the PostgreSQL schema
  * definitions (`schema.postgres.ts`) rather than hand-maintaining a list, so a
@@ -28,8 +33,8 @@
  * the PostgreSQL schema exclusively.
  */
 
-import { eq, is, type SQL } from 'drizzle-orm';
-import { getTableConfig, type PgColumn, PgTable, type QueryBuilder } from 'drizzle-orm/pg-core';
+import { is } from 'drizzle-orm';
+import { getTableConfig, type PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import * as postgresSchema from './schema.postgres';
 
 /** Name of the column that scopes a row to a tenant. */
@@ -180,9 +185,10 @@ export function classifyPostgresTables(): TableClassificationResult {
 
 /**
  * Order manifest tables children-first so that, for every blocking or cascading
- * foreign key, the referencing table is deleted before the table it references.
- * Implemented as a Kahn topological sort; deterministic via name-sorted
- * tie-breaking.
+ * foreign key in the compiled schema, the referencing table is deleted before
+ * the table it references. Implemented as a Kahn topological sort;
+ * deterministic via name-sorted tie-breaking. This ordering does not validate
+ * row-level tenant equality across those references.
  */
 function orderChildrenFirst(
   entries: TenantDeletionTable[],
@@ -298,27 +304,4 @@ export function buildTenantDeletionManifest(): TenantDeletionTable[] {
 
   cachedManifest = orderChildrenFirst(entries, metas);
   return cachedManifest;
-}
-
-/** Index a manifest by table name. */
-export function indexManifest(manifest: TenantDeletionTable[]): Map<string, TenantDeletionTable> {
-  return new Map(manifest.map((entry) => [entry.name, entry]));
-}
-
-/**
- * Build the boolean condition that scopes a table's rows to a single tenant.
- *
- * The unused compatibility parameters can be removed with the executor call
- * sites; deletion entries themselves are direct-only.
- */
-export function buildTenantScopeCondition(
-  _queryBuilder: QueryBuilder,
-  entry: TenantDeletionTable,
-  tenantId: string,
-  _byName: Map<string, TenantDeletionTable>
-): SQL {
-  if (!entry.tenantColumn) {
-    throw new Error(`Direct tenant table ${entry.name} is missing its tenant column`);
-  }
-  return eq(entry.tenantColumn, tenantId);
 }

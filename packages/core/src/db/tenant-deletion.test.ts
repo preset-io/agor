@@ -1,6 +1,4 @@
-import { getTableConfig, type PgColumn, PgDialect, QueryBuilder } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import * as pg from './schema.postgres';
 import {
   assertNoRemainingTenantRows,
   assertValidTenantId,
@@ -9,7 +7,6 @@ import {
   TenantDeletionUnsupportedError,
   TenantDeletionVerificationError,
 } from './tenant-deletion';
-import { buildTenantScopeCondition, type TenantDeletionTable } from './tenant-deletion-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 import { dbTest } from './test-helpers';
 
@@ -76,33 +73,6 @@ describe('assertNoRemainingTenantRows', () => {
       expect(error).toBeInstanceOf(TenantDeletionVerificationError);
       expect((error as TenantDeletionVerificationError).tables).toEqual(['sessions', 'tasks']);
     }
-  });
-});
-
-describe('buildTenantScopeCondition', () => {
-  const dialect = new PgDialect();
-  const queryBuilder = new QueryBuilder();
-
-  function column(table: unknown, name: string): PgColumn {
-    const found = getTableConfig(table as never).columns.find((c) => c.name === name);
-    if (!found) throw new Error(`missing column ${name}`);
-    return found as PgColumn;
-  }
-
-  const directEntry: TenantDeletionTable = {
-    name: 'sessions',
-    table: pg.sessions,
-    scope: 'direct',
-    tenantColumn: column(pg.sessions, 'tenant_id'),
-  };
-  const byName = new Map<string, TenantDeletionTable>([['sessions', directEntry]]);
-
-  it('scopes a direct table with tenant_id = $1', () => {
-    const { sql, params } = dialect.sqlToQuery(
-      buildTenantScopeCondition(queryBuilder, directEntry, 'acme', byName)
-    );
-    expect(sql).toContain('"sessions"."tenant_id" =');
-    expect(params).toEqual(['acme']);
   });
 });
 
