@@ -123,7 +123,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Claude Code' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Claude Code(?! CLI)/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code default')).toBeChecked();
     }, ASYNC);
@@ -202,7 +202,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Claude Code' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Claude Code(?! CLI)/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code model claude-sonnet-5')).toBeChecked();
     }, ASYNC);
@@ -413,10 +413,40 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     // Approved addition: the modal makes clear whose settings are being edited.
     expect(screen.getByText('Editing Bob')).toBeInTheDocument();
+    // Personal API tokens are caller-scoped, so the entry is hidden here.
+    expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
     // Groups & Access is admin-only nav; the force-password control lives there.
     fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
     await screen.findByRole('heading', { name: 'Groups & Access' });
     expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+  });
+
+  it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({
+      user_id: 'user-2',
+      name: 'Bob',
+      agentic_auth_methods: { codex: 'subscription' },
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    // Only the API-key path (which targets the edited user) is offered; the
+    // ChatGPT sign-in / import-login-file controls act on the caller's own
+    // login, so they must not appear when editing someone else.
+    expect(screen.queryByText('Sign in with ChatGPT')).not.toBeInTheDocument();
+    expect(screen.queryByText('Import login file')).not.toBeInTheDocument();
   });
 
   it('filters the sidebar via the search box', async () => {

@@ -91,6 +91,26 @@ const PROVIDER_KEY_PREFIX = 'provider:';
 type ProviderStatus = 'connected' | 'not_connected' | 'workspace_managed';
 type ProviderSubtab = 'auth' | 'defaults';
 
+const PROVIDER_STATUS_LABEL: Record<ProviderStatus, string> = {
+  connected: 'Connected',
+  not_connected: 'Not connected',
+  workspace_managed: 'Managed by workspace',
+};
+
+// Visually-hidden text so a provider's status is never conveyed by the dot
+// color alone: assistive tech reads the label while sighted users see the dot.
+const SR_ONLY_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
+
 type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
   defaultSelectionSource?: 'workspace_default' | 'preset' | 'inline';
   defaultPresetId?: string;
@@ -159,9 +179,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [activeKey, setActiveKey] = useState<string>(() => normalizeInitialKey(initialTab));
   const [search, setSearch] = useState('');
   const [providerSubtab, setProviderSubtab] = useState<ProviderSubtab>('auth');
+  const [savingModal, setSavingModal] = useState(false);
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
+  const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
@@ -221,16 +243,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [availableGroups]
   );
 
-  // Saving state for agentic tool tabs
-  const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
-    'claude-code': false,
-    'claude-code-cli': false,
-    codex: false,
-    gemini: false,
-    opencode: false,
-    copilot: false,
-    cursor: false,
-  });
   const [dirtyAgenticConfigTools, setDirtyAgenticConfigTools] = useState<Set<AgenticToolName>>(
     () => new Set()
   );
@@ -719,29 +731,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
   };
 
-  // Handle agentic tool config save
+  // Handle agentic tool config save. The footer's shared saving state guards the
+  // in-flight UI; this only needs to flush the dirty tools and surface errors.
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
-    const toolsToSave = getAgenticConfigToolsToSave(tool);
-
     try {
-      setSavingAgenticConfig((prev) => {
-        const next = { ...prev };
-        for (const toolName of toolsToSave) next[toolName] = true;
-        return next;
-      });
-
-      await saveAgenticConfigs(toolsToSave);
+      await saveAgenticConfigs(getAgenticConfigToolsToSave(tool));
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
-    } finally {
-      setSavingAgenticConfig((prev) => {
-        const next = { ...prev };
-        for (const toolName of toolsToSave) next[toolName] = false;
-        return next;
-      });
     }
   };
 
@@ -810,11 +809,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 : workspaceConfigured
                   ? 'Workspace configuration'
                   : 'Unavailable';
-      const status: ProviderStatus = managedByWorkspace
-        ? 'workspace_managed'
-        : effectiveSource === 'Unavailable'
+      // An unresolvable credential reads as "not connected" even under a
+      // workspace-managed policy — otherwise a tenant_required tool with no
+      // workspace credential would show a "managed" dot while its own panel
+      // says the effective source is Unavailable.
+      const status: ProviderStatus =
+        effectiveSource === 'Unavailable'
           ? 'not_connected'
-          : 'connected';
+          : managedByWorkspace
+            ? 'workspace_managed'
+            : 'connected';
       return {
         canonicalTool,
         credentialToolName,
@@ -822,10 +826,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         fieldStatus,
         authMethod,
         toolFields,
-        tenantSettings,
         resolutionPolicy,
         personalConfigured,
-        workspaceConfigured,
         managedByWorkspace,
         effectiveSource,
         status,
@@ -853,7 +855,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         key: string;
         title: string;
         icon?: React.ReactNode;
-        badgeColor?: string;
+        status?: ProviderStatus;
       }>;
     }> = [
       {
@@ -863,7 +865,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           { key: 'profile', title: 'Profile', icon: <UserOutlined /> },
           { key: 'preferences', title: 'Preferences', icon: <BellOutlined /> },
           { key: 'security', title: 'Security', icon: <LockOutlined /> },
-          { key: 'tokens', title: 'API Tokens', icon: <KeyOutlined /> },
+          // Personal API tokens are scoped to the signed-in caller, so they are
+          // meaningless (and misleading) when an admin edits another user.
+          ...(isEditingOther
+            ? []
+            : [{ key: 'tokens', title: 'API Tokens', icon: <KeyOutlined /> }]),
         ],
       },
       {
@@ -872,7 +878,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: visibleAgenticToolTabs.map((tool) => ({
           key: providerKeyFor(tool),
           title: AGENTIC_TOOL_DISPLAY_NAMES[tool],
-          badgeColor: statusDotColor[resolveProvider(tool).status],
+          status: resolveProvider(tool).status,
         })),
       },
       {
@@ -894,7 +900,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
     }
     return groups;
-  }, [visibleAgenticToolTabs, isAdmin, resolveProvider, statusDotColor]);
+  }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
 
   const filteredGroups = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -916,25 +922,27 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: group.children.map((child) => ({
           key: child.key,
           icon: child.icon,
-          label: child.badgeColor ? (
+          label: child.status ? (
             <Space size={8}>
-              <Badge color={child.badgeColor} />
-              {child.title}
+              <Badge color={statusDotColor[child.status]} />
+              <span>{child.title}</span>
+              <span style={SR_ONLY_STYLE}>{PROVIDER_STATUS_LABEL[child.status]}</span>
             </Space>
           ) : (
             child.title
           ),
         })),
       })),
-    [filteredGroups]
+    [filteredGroups, statusDotColor]
   );
 
-  // If the active key is filtered out by search, fall back to Profile rather
-  // than rendering a panel that has no reachable nav entry.
+  // A search that hides the active item only de-highlights it in the menu — the
+  // panel keeps rendering so in-progress edits are never silently swapped out
+  // (and lost) for a different panel. Clearing the search restores the nav row.
   const activeVisible = filteredGroups.some((group) =>
     group.children.some((child) => child.key === activeKey)
   );
-  const effectiveKey = activeVisible ? activeKey : 'profile';
+  const effectiveKey = activeKey;
   const effectiveTool: AgenticToolName | null = effectiveKey.startsWith(PROVIDER_KEY_PREFIX)
     ? toolFromProviderKey(effectiveKey)
     : null;
@@ -949,36 +957,40 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // per field, so "Done" only flushes any dirty session-defaults left over
   // from another provider before closing.
   const handleModalSave = async () => {
-    if (!user) return;
-
-    if (effectiveTool) {
-      if (providerSubtab === 'defaults') {
-        await handleAgenticConfigSave(effectiveTool);
-      } else {
-        await saveDirtyAgenticConfigs();
+    if (!user || savingModal) return;
+    setSavingModal(true);
+    try {
+      if (effectiveTool) {
+        if (providerSubtab === 'defaults') {
+          await handleAgenticConfigSave(effectiveTool);
+        } else {
+          await saveDirtyAgenticConfigs();
+        }
+        handleClose();
+        return;
       }
+
+      switch (effectiveKey) {
+        case 'profile':
+          if (!(await handleProfileSave())) return;
+          break;
+        case 'security':
+          if (!(await handleSecuritySave())) return;
+          break;
+        case 'preferences':
+          if (!(await handlePreferencesSave())) return;
+          break;
+        case 'access':
+          if (!(await handleAccessSave())) return;
+          break;
+        // env-vars and tokens persist inline; nothing to commit here.
+      }
+
+      await saveDirtyAgenticConfigs();
       handleClose();
-      return;
+    } finally {
+      setSavingModal(false);
     }
-
-    switch (effectiveKey) {
-      case 'profile':
-        if (!(await handleProfileSave())) return;
-        break;
-      case 'security':
-        if (!(await handleSecuritySave())) return;
-        break;
-      case 'preferences':
-        if (!(await handlePreferencesSave())) return;
-        break;
-      case 'access':
-        if (!(await handleAccessSave())) return;
-        break;
-      // env-vars and tokens persist inline; nothing to commit here.
-    }
-
-    await saveDirtyAgenticConfigs();
-    handleClose();
   };
 
   const renderPanelHeader = (title: string, description?: React.ReactNode) => (
@@ -1049,7 +1061,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Form.Item>
       </Form>
 
-      {onRestartOnboarding && !isEditingOther && (
+      {onRestartOnboarding && isSelf && (
         <>
           <Divider titlePlacement="left" style={{ color: token.colorTextTertiary }}>
             Onboarding
@@ -1317,6 +1329,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           <CodexAuthSettings
             client={client}
             authMethod={authMethod ?? 'api_key'}
+            allowChatgptLogin={isSelf}
             apiKeyFields={allToolFields}
             fieldStatus={fieldStatus}
             onSaveField={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
@@ -1374,7 +1387,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           onChange={(key) => setProviderSubtab(key as ProviderSubtab)}
           items={[
             { key: 'auth', label: 'Authentication', children: authPane },
-            { key: 'defaults', label: 'Session Defaults', children: defaultsPane },
+            // Force-render so the Session Defaults <Form> is mounted (and
+            // connected) even while Authentication is the visible sub-tab —
+            // otherwise the hydration effect calls setFieldsValue on an
+            // unconnected form and Ant logs a "not connected" warning.
+            {
+              key: 'defaults',
+              label: 'Session Defaults',
+              children: defaultsPane,
+              forceRender: true,
+            },
           ]}
         />
       </>
@@ -1431,18 +1453,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           >
             Changes save automatically
           </Typography.Text>
-          <Button type="primary" onClick={handleModalSave}>
+          <Button type="primary" onClick={handleModalSave} loading={savingModal}>
             Done
           </Button>
         </>
       ) : (
         <>
-          <Button onClick={handleClose}>Close</Button>
-          <Button
-            type="primary"
-            onClick={handleModalSave}
-            loading={effectiveTool ? savingAgenticConfig[effectiveTool] : false}
-          >
+          <Button onClick={handleClose} disabled={savingModal}>
+            Close
+          </Button>
+          <Button type="primary" onClick={handleModalSave} loading={savingModal}>
             Save
           </Button>
         </>

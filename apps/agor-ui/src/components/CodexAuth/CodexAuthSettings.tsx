@@ -45,6 +45,15 @@ export interface CodexAuthSettingsProps {
   onClearField: (field: AgenticToolConfigField) => Promise<void>;
   savingFields: Partial<Record<AgenticToolConfigField, boolean>>;
   publicValues?: Partial<Record<AgenticToolConfigField, string>>;
+  /**
+   * Whether the ChatGPT sign-in / import-login-file / connection-probe controls
+   * are available. These act on the *caller's* machine login (a server-scoped
+   * auth.json + `check-auth`/`codex-auth/logout`), never on `onSaveField`'s
+   * target user — so an admin editing someone else must not see them (they would
+   * mutate the admin's own Codex login). Defaults to true (self-editing). When
+   * false, only the API-key path is shown, and it still targets the edited user.
+   */
+  allowChatgptLogin?: boolean;
 }
 
 /**
@@ -63,6 +72,7 @@ export function CodexAuthSettings({
   onClearField,
   savingFields,
   publicValues,
+  allowChatgptLogin = true,
 }: CodexAuthSettingsProps) {
   const { token } = useToken();
   const [view, setView] = useState<CodexMethodView>(() => viewForMethod(authMethod, 'chatgpt'));
@@ -94,7 +104,9 @@ export function CodexAuthSettings({
     setProbing(false);
   });
   const runProbe = useCallback(async () => {
-    if (!client) return;
+    // The probe checks the caller's own login; skip it entirely when the
+    // caller-scoped controls are hidden (admin editing another user).
+    if (!client || !allowChatgptLogin) return;
     setProbing(true);
     try {
       const result = await run(
@@ -108,7 +120,7 @@ export function CodexAuthSettings({
     } finally {
       setProbing(false);
     }
-  }, [client, run]);
+  }, [client, run, allowChatgptLogin]);
 
   // Re-probe when the persisted method changes: the daemon checks whichever
   // credential the server's active method points at, so a verdict captured for
@@ -234,7 +246,7 @@ export function CodexAuthSettings({
         Personal credentials are encrypted at rest and injected only into the agent runtime.
       </Text>
 
-      {(connectionBanner || authMethod === 'subscription') && (
+      {allowChatgptLogin && (connectionBanner || authMethod === 'subscription') && (
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           {connectionBanner}
           <Space size="middle" wrap>
@@ -288,18 +300,20 @@ export function CodexAuthSettings({
         </Space>
       )}
 
-      <Segmented<CodexMethodView>
-        block
-        value={view}
-        onChange={handleSelect}
-        options={[
-          { label: 'API key', value: 'api_key' },
-          { label: 'Sign in with ChatGPT', value: 'chatgpt' },
-          { label: 'Import login file', value: 'import' },
-        ]}
-      />
+      {allowChatgptLogin && (
+        <Segmented<CodexMethodView>
+          block
+          value={view}
+          onChange={handleSelect}
+          options={[
+            { label: 'API key', value: 'api_key' },
+            { label: 'Sign in with ChatGPT', value: 'chatgpt' },
+            { label: 'Import login file', value: 'import' },
+          ]}
+        />
+      )}
 
-      {view === 'api_key' && (
+      {(!allowChatgptLogin || view === 'api_key') && (
         <ApiKeyFields
           tool="codex"
           fields={apiKeyFields}
@@ -310,7 +324,7 @@ export function CodexAuthSettings({
           publicValues={publicValues}
         />
       )}
-      {view === 'chatgpt' && (
+      {allowChatgptLogin && view === 'chatgpt' && (
         <div>
           <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
             Sign in with your ChatGPT account — no OpenAI API key stored in Agor. The login is
@@ -324,7 +338,7 @@ export function CodexAuthSettings({
           />
         </div>
       )}
-      {view === 'import' && (
+      {allowChatgptLogin && view === 'import' && (
         <CodexImportAuthJson client={client} onImported={handleAuthenticated} />
       )}
     </Space>
