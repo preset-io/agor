@@ -36,7 +36,9 @@ function redactSecrets(message: string): string {
 
 export default class TenantDelete extends Command {
   static override description =
-    'Permanently delete all data belonging to a single tenant (PostgreSQL multi-tenant deployments). Idempotent and verified.';
+    'Permanently delete all data belonging to a single tenant (PostgreSQL multi-tenant deployments). Idempotent and verified. ' +
+    'Precondition: quiesce the tenant first — stop new tenant-scoped work at the control/auth layer BEFORE running. ' +
+    'This command verifies tenant state at scan time and does not by itself prevent a concurrent writer from recreating tenant rows after verification.';
 
   static override examples = [
     '<%= config.bin %> <%= command.id %> --tenant-id acme-corp',
@@ -85,7 +87,13 @@ export default class TenantDelete extends Command {
       });
 
       // Stable machine-readable contract on stdout — the only thing on stdout.
-      process.stdout.write(`${JSON.stringify(result)}\n`);
+      // Await the write so the payload is fully flushed to a pipe before the
+      // process.exit(0) below (needed to terminate the lingering postgres-js
+      // pool); process.exit can otherwise truncate an in-flight async write.
+      const json = `${JSON.stringify(result)}\n`;
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(json, (err) => (err ? reject(err) : resolve()));
+      });
 
       const totalRows = Object.values(result.rowCounts).reduce((sum, value) => sum + value, 0);
       this.logToStderr(

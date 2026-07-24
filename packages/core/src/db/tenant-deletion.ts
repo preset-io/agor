@@ -17,6 +17,12 @@
  * and still reports success. Multi-tenancy is PostgreSQL-only, so the command
  * refuses to run against a SQLite database.
  *
+ * Precondition — quiesce the tenant first: this operation verifies tenant state
+ * at scan time; it does not by itself fence out a concurrent writer. The
+ * operator must disable/quiesce the tenant (stop new tenant-scoped work at the
+ * control/auth layer) BEFORE running, otherwise a writer active during or after
+ * verification can recreate tenant rows that the verification pass will not see.
+ *
  * The result object is a frozen machine-readable contract (see
  * {@link TenantDeletionResult}) intended to be parsed by external automation. It
  * contains only booleans, numbers, and identifier strings — never row content,
@@ -34,7 +40,7 @@ import {
   indexManifest,
   type TenantDeletionTable,
 } from './tenant-deletion-manifest';
-import { runWithTenantDatabaseScope } from './tenant-scope';
+import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Thrown when the supplied tenant id is empty, blank, or wildcard-like. */
 export class InvalidTenantIdError extends Error {
@@ -132,6 +138,19 @@ export function assertNoRemainingTenantRows(remaining: string[]): void {
 
 async function resolveSchemaVersion(db: Database): Promise<string> {
   const status = await checkMigrationStatus(db);
+  // Fail closed on DB-ahead-of-binary schema skew: if the database was migrated
+  // by a newer release, this binary's compiled schema (and thus the deletion
+  // manifest) omits tables the database now has. Deleting + verifying against an
+  // incomplete manifest would falsely certify success while tenant data
+  // survives in tables this binary cannot see. (`hasPending` catches only the
+  // opposite, binary-ahead-of-DB case, which already fails loudly.)
+  if (status.dbAheadOfBinary) {
+    throw new Error(
+      'Database schema is newer than this binary: the database has migrations this release does not know about. ' +
+        'Refusing to run tenant deletion because the deletion manifest may be incomplete and could falsely certify success. ' +
+        'Upgrade this binary to match the database, then retry.'
+    );
+  }
   const applied = status.applied;
   if (applied.length === 0) {
     throw new Error(
@@ -182,6 +201,19 @@ export async function deleteTenantData(
   options: TenantDeletionOptions = {}
 ): Promise<TenantDeletionResult | TenantDeletionDryRunResult> {
   assertValidTenantId(tenantId);
+
+  // Refuse to run inside an ambient tenant/system database scope. This routine
+  // relies on two independent transactions — phase 1 deletes and commits, phase
+  // 2 re-scans committed state. runWithTenantDatabaseScope JOINS an existing
+  // scope rather than opening a fresh transaction, so a caller that invokes us
+  // within an active scope would collapse both phases into their single
+  // uncommitted transaction: verification would then observe uncommitted state
+  // and could report success before the outer transaction commits or rolls back.
+  if (getCurrentTenantDatabaseScope()) {
+    throw new Error(
+      'deleteTenantData must run with its own fresh connection, not within an ambient tenant/system database scope.'
+    );
+  }
 
   if (!isPostgresDatabase(db)) {
     throw new TenantDeletionUnsupportedError(

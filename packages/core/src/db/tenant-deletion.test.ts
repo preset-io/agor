@@ -10,6 +10,7 @@ import {
   TenantDeletionVerificationError,
 } from './tenant-deletion';
 import { buildTenantScopeCondition, type TenantDeletionTable } from './tenant-deletion-manifest';
+import { runWithTenantDatabaseScope } from './tenant-scope';
 import { dbTest } from './test-helpers';
 
 describe('assertValidTenantId', () => {
@@ -115,5 +116,13 @@ describe('deleteTenantData guards', () => {
     await expect(deleteTenantData(db, 'acme-corp')).rejects.toBeInstanceOf(
       TenantDeletionUnsupportedError
     );
+  });
+
+  dbTest('refuses to run inside an ambient tenant database scope', async ({ db }) => {
+    // runWithTenantDatabaseScope sets the scope store even on SQLite, so the
+    // ambient-scope guard fires before the PostgreSQL-only check.
+    await expect(
+      runWithTenantDatabaseScope(db, 'acme-corp', async () => deleteTenantData(db, 'acme-corp'))
+    ).rejects.toThrow(/fresh connection/);
   });
 });

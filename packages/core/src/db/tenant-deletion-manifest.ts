@@ -295,7 +295,35 @@ let cachedManifest: TenantDeletionTable[] | null = null;
 export function buildTenantDeletionManifest(): TenantDeletionTable[] {
   if (cachedManifest) return cachedManifest;
   const metas = discoverTableMetas();
-  const { direct, transitive } = classifyPostgresTables();
+  const { direct, transitive, unclassified } = classifyPostgresTables();
+
+  // Runtime exhaustiveness invariant: no schema table may silently escape
+  // deletion. This is the same guarantee the CI exhaustiveness test asserts,
+  // enforced here at runtime so a mis-deployed binary fails loudly instead of
+  // certifying an incomplete deletion.
+  if (unclassified.length > 0) {
+    throw new Error(
+      `Tenant deletion cannot classify table(s): ${unclassified.join(', ')}. ` +
+        'Every schema table must carry a tenant_id column, reach a scoped table ' +
+        'via a foreign key, or be declared in GLOBAL_TABLES.'
+    );
+  }
+
+  // The transitive deletion path is unproven: the child-first ordering picks a
+  // single parent FK, and phase-2 verification resolves scope through parent
+  // rows that phase-1 has already deleted, so a surviving transitive row
+  // (including ON DELETE SET NULL orphans) cannot be detected. Rather than
+  // half-delete such a table and self-certify success, refuse loudly. This
+  // branch is dormant today (every application table carries tenant_id) and
+  // guards against a future schema addition slipping through unverified.
+  if (transitive.length > 0) {
+    throw new Error(
+      `Tenant deletion does not yet support transitively-scoped tables (${transitive.join(', ')}). ` +
+        'Add a tenant_id column to these tables, or extend the deletion engine ' +
+        'with orphan-safe verification before deleting them.'
+    );
+  }
+
   const directSet = new Set<string>(direct);
   const scoped = new Set<string>([...direct, ...transitive]);
 
