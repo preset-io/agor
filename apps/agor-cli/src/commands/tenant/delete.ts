@@ -44,7 +44,7 @@ function flushStderr(): Promise<void> {
 export default class TenantDelete extends Command {
   static override description =
     'Permanently delete all data belonging to a single tenant (PostgreSQL multi-tenant deployments). Idempotent and verified. ' +
-    'Precondition: quiesce the tenant first — stop new tenant-scoped work at the control/auth layer BEFORE running. ' +
+    'Precondition: quiesce the tenant first — stop new tenant-scoped work in the deployment BEFORE running. ' +
     'This command verifies tenant state at scan time and does not by itself prevent a concurrent writer from recreating tenant rows after verification.';
 
   static override examples = [

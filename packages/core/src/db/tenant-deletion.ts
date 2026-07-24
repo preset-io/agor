@@ -4,13 +4,16 @@
  *
  * Operators of a multi-tenant Agor deployment need a verifiable way to remove a
  * tenant entirely (offboarding, data-removal requests, regulatory erasure). This
- * module performs that removal against the runtime-derived
- * {@link buildTenantDeletionManifest tenant manifest}:
+ * module performs that removal against a deletion plan assembled from the
+ * runtime-derived {@link buildTenantDeletionManifest tenant manifest} and the
+ * registry of tenant tables created imperatively at runtime:
  *
  *   1. Validate the tenant id (refuse empty / whitespace / wildcard values).
- *   2. Delete every tenant-scoped row inside a single tenant-scoped transaction,
+ *   2. Reconcile the plan against the live PostgreSQL catalog and fail closed if
+ *      any tenant-contract table is missing or malformed.
+ *   3. Delete every tenant-scoped row inside a single tenant-scoped transaction,
  *      children before parents, so foreign keys are never violated.
- *   3. Re-scan the whole manifest in a fresh transaction and fail unless zero
+ *   4. Re-scan the whole plan in a fresh transaction and fail unless zero
  *      rows remain for the tenant.
  *
  * Running it twice on the same tenant is safe: the second run deletes zero rows
@@ -19,9 +22,9 @@
  *
  * Precondition — quiesce the tenant first: this operation verifies tenant state
  * at scan time; it does not by itself fence out a concurrent writer. The
- * operator must disable/quiesce the tenant (stop new tenant-scoped work at the
- * control/auth layer) BEFORE running, otherwise a writer active during or after
- * verification can recreate tenant rows that the verification pass will not see.
+ * operator must stop new tenant-scoped work in the deployment BEFORE running,
+ * otherwise a writer active during or after verification can recreate tenant
+ * rows that the verification pass will not see.
  *
  * The result object is a frozen machine-readable contract (see
  * {@link TenantDeletionResult}) intended to be parsed by external automation. It
@@ -29,10 +32,10 @@
  * connection strings, or other secrets.
  */
 
-import { count } from 'drizzle-orm';
+import { count, sql } from 'drizzle-orm';
 import { QueryBuilder } from 'drizzle-orm/pg-core';
 import type { Database } from './client';
-import { deleteFrom, isPostgresDatabase, select } from './database-wrapper';
+import { deleteFrom, executeRaw, isPostgresDatabase, select } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
 import {
   buildTenantDeletionManifest,
@@ -40,6 +43,7 @@ import {
   indexManifest,
   type TenantDeletionTable,
 } from './tenant-deletion-manifest';
+import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Thrown when the supplied tenant id is empty, blank, or wildcard-like. */
@@ -55,6 +59,14 @@ export class TenantDeletionUnsupportedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TenantDeletionUnsupportedError';
+  }
+}
+
+/** Thrown when the live catalog cannot prove that the deletion plan is exhaustive. */
+export class TenantDeletionCatalogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TenantDeletionCatalogError';
   }
 }
 
@@ -80,7 +92,7 @@ export interface TenantDeletionResult {
   tenantDataDeleted: true;
   /** Current applied schema/migration version (last applied migration tag). */
   schemaVersion: string;
-  /** Rows deleted per table. Every manifest table is present, even at zero. */
+  /** Rows deleted per table. Every plan table is present, even at zero. */
   rowCounts: Record<string, number>;
 }
 
@@ -102,10 +114,13 @@ export interface TenantDeletionOptions {
 
 /** Wildcard-like characters that must never be accepted as a concrete tenant id. */
 const WILDCARD_CHARACTERS = /[%*]/;
+/** Unicode control and formatting characters can forge terminal or audit output. */
+const CONTROL_CHARACTERS = /[\p{Cc}\p{Cf}]/u;
 
 /**
  * Validate a tenant id, refusing empty, whitespace-only, whitespace-padded, and
- * wildcard-like values. A concrete id such as `default` or a UUID is accepted.
+ * wildcard-like or non-printable values. A concrete id such as `default` or a
+ * UUID is accepted.
  */
 export function assertValidTenantId(tenantId: unknown): asserts tenantId is string {
   if (typeof tenantId !== 'string') {
@@ -123,6 +138,9 @@ export function assertValidTenantId(tenantId: unknown): asserts tenantId is stri
   if (WILDCARD_CHARACTERS.test(tenantId)) {
     throw new InvalidTenantIdError('Tenant id must not contain wildcard characters ("%" or "*")');
   }
+  if (CONTROL_CHARACTERS.test(tenantId)) {
+    throw new InvalidTenantIdError('Tenant id must not contain control or formatting characters');
+  }
 }
 
 /**
@@ -138,10 +156,9 @@ export function assertNoRemainingTenantRows(remaining: string[]): void {
 
 async function resolveSchemaVersion(db: Database): Promise<string> {
   const status = await checkMigrationStatus(db);
-  // Fail closed unless the schema is in lockstep in BOTH directions: the binary's
-  // compiled schema (and thus the deletion manifest) must match exactly the
-  // schema the database currently has applied. That requires !dbAheadOfBinary AND
-  // !hasPending.
+  // This migration-watermark check is a conservative compatibility guard, not a
+  // proof that the compiled schema equals the live catalog. Exhaustiveness is
+  // established separately by the catalog reconciliation before any deletion.
   //
   // DB ahead of binary: the database was migrated by a newer release, so this
   // binary's schema omits tables the database now has. Deleting + verifying
@@ -165,8 +182,8 @@ async function resolveSchemaVersion(db: Database): Promise<string> {
   if (status.hasPending) {
     throw new Error(
       `Refusing to delete tenant data: the database has ${status.pending.length} pending migration(s); ` +
-        "the running binary's schema does not match the database. " +
-        'Run migrations so the binary and database schemas match before deleting a tenant ' +
+        "the running binary's migration watermark is not compatible with the database. " +
+        'Apply the pending migrations before deleting a tenant ' +
         '(a pending migration may drop or rename a tenant-scoped table, which would make deletion silently incomplete).'
     );
   }
@@ -177,6 +194,195 @@ async function resolveSchemaVersion(db: Database): Promise<string> {
     );
   }
   return applied[applied.length - 1];
+}
+
+function rowsOf(result: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
+  const rows = (result as { rows?: unknown[] } | undefined)?.rows;
+  return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+}
+
+function boolValue(value: unknown): boolean {
+  return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
+}
+
+interface CatalogRelation {
+  schemaName: string;
+  tableName: string;
+  relkind: string;
+  rlsEnabled: boolean;
+  rlsForced: boolean;
+  hasTenantColumn: boolean;
+  tenantColumnTextNotNull: boolean;
+  hasTenantPolicyMarker: boolean;
+  hasTenantIsolationPolicy: boolean;
+  participatesInInheritance: boolean;
+}
+
+/**
+ * Read every non-system ordinary or partitioned relation that claims some part
+ * of the tenant contract. Catalog names are used for comparison and diagnostics
+ * only; executed deletion SQL never uses them.
+ */
+async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
+  const result = await executeRaw(
+    db,
+    sql`
+      SELECT
+        n.nspname AS schema_name,
+        c.relname AS table_name,
+        c.relkind::text AS relkind,
+        c.relrowsecurity AS rls_enabled,
+        c.relforcerowsecurity AS rls_forced,
+        EXISTS (
+          SELECT 1
+          FROM pg_attribute a
+          WHERE a.attrelid = c.oid
+            AND a.attname = 'tenant_id'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+        ) AS has_tenant_column,
+        EXISTS (
+          SELECT 1
+          FROM pg_attribute a
+          WHERE a.attrelid = c.oid
+            AND a.attname = 'tenant_id'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+            AND a.atttypid = 'text'::regtype
+            AND a.attnotnull
+        ) AS tenant_column_text_not_null,
+        EXISTS (
+          SELECT 1
+          FROM pg_policy p
+          WHERE p.polrelid = c.oid
+            AND (
+              p.polname LIKE 'tenant_isolation_%'
+              OR COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
+              OR COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
+            )
+        ) AS has_tenant_policy_marker,
+        EXISTS (
+          SELECT 1
+          FROM pg_policy p
+          WHERE p.polrelid = c.oid
+            AND p.polname LIKE 'tenant_isolation_%'
+            AND COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
+            AND COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
+        ) AS has_tenant_isolation_policy,
+        EXISTS (
+          SELECT 1
+          FROM pg_inherits i
+          WHERE i.inhrelid = c.oid OR i.inhparent = c.oid
+        ) AS participates_in_inheritance
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p')
+        AND n.nspname <> 'information_schema'
+        AND n.nspname NOT LIKE 'pg_%'
+        AND (
+          c.relforcerowsecurity
+          OR EXISTS (
+            SELECT 1
+            FROM pg_attribute a
+            WHERE a.attrelid = c.oid
+              AND a.attname = 'tenant_id'
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM pg_policy p
+            WHERE p.polrelid = c.oid
+              AND (
+                p.polname LIKE 'tenant_isolation_%'
+                OR COALESCE(pg_get_expr(p.polqual, p.polrelid), '') LIKE '%agor.tenant_id%'
+                OR COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') LIKE '%agor.tenant_id%'
+              )
+          )
+        )
+    `
+  );
+
+  return rowsOf(result).map((row) => ({
+    schemaName: String(row.schema_name),
+    tableName: String(row.table_name),
+    relkind: String(row.relkind),
+    rlsEnabled: boolValue(row.rls_enabled),
+    rlsForced: boolValue(row.rls_forced),
+    hasTenantColumn: boolValue(row.has_tenant_column),
+    tenantColumnTextNotNull: boolValue(row.tenant_column_text_not_null),
+    hasTenantPolicyMarker: boolValue(row.has_tenant_policy_marker),
+    hasTenantIsolationPolicy: boolValue(row.has_tenant_isolation_policy),
+    participatesInInheritance: boolValue(row.participates_in_inheritance),
+  }));
+}
+
+/**
+ * Assert the full contract for every catalog relation and reconcile the live set
+ * against the typed manifest plus the constant imperative-table registry.
+ */
+async function auditLiveTenantCatalog(
+  db: Database,
+  planNames: ReadonlySet<string>
+): Promise<ReadonlySet<string>> {
+  const relations = await readTenantCatalog(db);
+  const liveTenantTables = new Set<string>();
+
+  for (const relation of relations) {
+    const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
+    if (relation.schemaName !== 'public') {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: tenant-contract relation ${qualifiedName} is outside the public schema`
+      );
+    }
+    if (relation.relkind === 'p') {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: tenant-contract relation ${qualifiedName} is partitioned`
+      );
+    }
+    if (relation.participatesInInheritance) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: tenant-contract relation ${qualifiedName} participates in table inheritance`
+      );
+    }
+    if (!relation.hasTenantColumn) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName} has forced row security or a tenant-isolation policy but no tenant_id column`
+      );
+    }
+    if (!relation.tenantColumnTextNotNull) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName}.tenant_id must be a NOT NULL text column`
+      );
+    }
+    if (!relation.rlsEnabled || !relation.rlsForced) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName} must enable and force row-level security`
+      );
+    }
+    if (!relation.hasTenantPolicyMarker || !relation.hasTenantIsolationPolicy) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName} lacks a complete tenant_isolation_* policy referencing agor.tenant_id`
+      );
+    }
+    liveTenantTables.add(relation.tableName);
+  }
+
+  if (liveTenantTables.size === 0) {
+    throw new TenantDeletionCatalogError(
+      'Refusing tenant deletion: live-catalog discovery found zero tenant-contract tables'
+    );
+  }
+
+  const uncovered = [...liveTenantTables].filter((name) => !planNames.has(name)).sort();
+  if (uncovered.length > 0) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: live tenant table(s) are not covered by the deletion plan: ${uncovered.join(', ')}`
+    );
+  }
+
+  return liveTenantTables;
 }
 
 async function countTenantRows(
@@ -208,6 +414,47 @@ async function deleteTenantRows(
     rowsAffected?: number;
   };
   return Number(result?.rowsAffected ?? 0);
+}
+
+interface DeletionStep {
+  name: string;
+  countRows(db: Database, tenantId: string): Promise<number>;
+  deleteRows(db: Database, tenantId: string): Promise<void>;
+}
+
+function buildManifestStep(
+  entry: TenantDeletionTable,
+  queryBuilder: QueryBuilder,
+  byName: Map<string, TenantDeletionTable>
+): DeletionStep {
+  return {
+    name: entry.name,
+    countRows: (db, tenantId) => countTenantRows(db, queryBuilder, entry, tenantId, byName),
+    deleteRows: async (db, tenantId) => {
+      await deleteTenantRows(db, queryBuilder, entry, tenantId, byName);
+    },
+  };
+}
+
+function buildImperativeStep(table: ImperativeTenantTable): DeletionStep {
+  const tableIdentifier = sql.identifier(table.name);
+  const tenantColumnIdentifier = sql.identifier(table.tenantColumn);
+  return {
+    name: table.name,
+    countRows: async (db, tenantId) => {
+      const result = await executeRaw(
+        db,
+        sql`SELECT count(*) AS n FROM ${tableIdentifier} WHERE ${tenantColumnIdentifier} = ${tenantId}`
+      );
+      return Number(rowsOf(result)[0]?.n ?? 0);
+    },
+    deleteRows: async (db, tenantId) => {
+      await executeRaw(
+        db,
+        sql`DELETE FROM ${tableIdentifier} WHERE ${tenantColumnIdentifier} = ${tenantId}`
+      );
+    },
+  };
 }
 
 /**
@@ -246,10 +493,29 @@ export async function deleteTenantData(
   const byName = indexManifest(manifest);
   const queryBuilder = new QueryBuilder();
   const schemaVersion = await resolveSchemaVersion(db);
+  const planNames = new Set([
+    ...manifest.map((entry) => entry.name),
+    ...IMPERATIVE_TENANT_TABLES.map((table) => table.name),
+  ]);
+  const liveTenantTables = await auditLiveTenantCatalog(db, planNames);
+  const presentImperativeTables = IMPERATIVE_TENANT_TABLES.filter((table) =>
+    liveTenantTables.has(table.name)
+  );
+  // Imperative registry entries are leaves whose cascade parents are in the
+  // typed manifest, so placing them first preserves children-before-parents.
+  const steps: DeletionStep[] = [
+    ...presentImperativeTables.map(buildImperativeStep),
+    ...manifest.map((entry) => buildManifestStep(entry, queryBuilder, byName)),
+  ];
+  if (steps.length === 0) {
+    throw new TenantDeletionCatalogError(
+      'Refusing tenant deletion: the reconciled deletion plan is empty'
+    );
+  }
   const startedAt = Date.now();
 
   log(
-    `${dryRun ? 'dry-run: ' : ''}tenant deletion started (schemaVersion=${schemaVersion}, tables=${manifest.length})`
+    `${dryRun ? 'dry-run: ' : ''}tenant deletion started (schemaVersion=${schemaVersion}, tables=${steps.length})`
   );
 
   const rowCounts: Record<string, number> = {};
@@ -260,22 +526,21 @@ export async function deleteTenantData(
   //
   // Counts are captured up front, BEFORE any DELETE runs. This keeps the reported
   // rowCounts accurate even when an `ON DELETE CASCADE` from a parent table would
-  // otherwise remove a child's rows before that child's own DELETE statement runs
-  // (deletion order only constrains blocking foreign keys, so a cascade parent can
-  // legitimately be deleted first). Each row belongs to exactly one table, so the
-  // pre-deletion snapshot is precisely the set of rows the operation removes.
+  // otherwise remove a child's rows before that child's own DELETE statement
+  // runs. Each row belongs to exactly one table, so the pre-deletion snapshot is
+  // precisely the set of rows the operation removes.
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    for (const entry of manifest) {
-      rowCounts[entry.name] = await countTenantRows(scoped, queryBuilder, entry, tenantId, byName);
-      if (rowCounts[entry.name] > 0) {
+    for (const step of steps) {
+      rowCounts[step.name] = await step.countRows(scoped, tenantId);
+      if (rowCounts[step.name] > 0) {
         log(
-          `${dryRun ? 'would delete' : 'deleting'} ${rowCounts[entry.name]} row(s) from ${entry.name}`
+          `${dryRun ? 'would delete' : 'deleting'} ${rowCounts[step.name]} row(s) from ${step.name}`
         );
       }
     }
     if (dryRun) return;
-    for (const entry of manifest) {
-      await deleteTenantRows(scoped, queryBuilder, entry, tenantId, byName);
+    for (const step of steps) {
+      await step.deleteRows(scoped, tenantId);
     }
   });
 
@@ -283,9 +548,9 @@ export async function deleteTenantData(
   if (!dryRun) {
     const remaining = await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
       const offending: string[] = [];
-      for (const entry of manifest) {
-        const left = await countTenantRows(scoped, queryBuilder, entry, tenantId, byName);
-        if (left > 0) offending.push(entry.name);
+      for (const step of steps) {
+        const left = await step.countRows(scoped, tenantId);
+        if (left > 0) offending.push(step.name);
       }
       return offending;
     });
@@ -295,7 +560,7 @@ export async function deleteTenantData(
   const durationMs = Date.now() - startedAt;
   const totalRows = Object.values(rowCounts).reduce((sum, value) => sum + value, 0);
   log(
-    `${dryRun ? 'dry-run complete' : 'tenant deletion verified'} (${totalRows} row(s) across ${manifest.length} tables in ${durationMs}ms)`
+    `${dryRun ? 'dry-run complete' : 'tenant deletion verified'} (${totalRows} row(s) across ${steps.length} tables in ${durationMs}ms)`
   );
 
   if (dryRun) {

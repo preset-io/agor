@@ -53,6 +53,7 @@ export * from './session-guard';
 // Tenant deletion (permanent, audited, idempotent per-tenant erasure)
 export * from './tenant-deletion';
 export * from './tenant-deletion-manifest';
+export * from './tenant-imperative-tables';
 export * from './tenant-scope';
 export * from './tenant-unit-of-work';
 // User utilities
