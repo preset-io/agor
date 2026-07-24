@@ -2,7 +2,7 @@ import type { AgorClient, User } from '@agor-live/client';
 import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { brandMarkHref } from '../../branding/brand';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBoardById,
@@ -109,7 +109,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               >
                 <img
                   src={brandMarkHref()}
-                  alt={BRAND.name}
+                  alt=""
+                  width={160}
+                  height={160}
                   style={{
                     width: 160,
                     height: 160,

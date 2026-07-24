@@ -221,7 +221,9 @@ function getAgentAvatar({
     return (
       <img
         src={brandMarkHref()}
-        alt={BRAND.name}
+        alt={`${BRAND.name} callback`}
+        width={32}
+        height={32}
         style={{ width: 32, height: 32, borderRadius: '50%' }}
       />
     );

@@ -2,7 +2,7 @@ import { DiscordIcon } from 'nextra/icons';
 import { Footer, Navbar } from 'nextra-theme-docs';
 import { NavbarCloudCTA } from '../components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
-import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
+import { getBasePath, LOGO_PATH } from '../lib/siteMetadata';
 
 const basePath = getBasePath();
 
@@ -13,8 +13,10 @@ export const logo = (
     {/* eslint-disable-next-line @next/next/no-img-element */}
     {/* biome-ignore lint/performance/noImgElement: Using img for static assets in docs */}
     <img
-      src={`${basePath}${LOGO_MARK_PATH}`}
+      src={`${basePath}${LOGO_PATH}`}
       alt=""
+      width="42"
+      height="42"
       style={{ height: '42px', width: '42px' }}
       suppressHydrationWarning
     />

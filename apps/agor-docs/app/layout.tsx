@@ -7,10 +7,9 @@ import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import {
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
-  FAVICON_PATH,
   getBasePath,
   getSiteUrl,
-  LOGO_MARK_PATH,
+  LOGO_PATH,
   THEME_COLOR,
   toAbsoluteUrl,
 } from '../lib/siteMetadata';
@@ -76,9 +75,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="description" content={DEFAULT_DESCRIPTION} />
         <meta name="theme-color" content={THEME_COLOR} />
-        <link rel="icon" type="image/svg+xml" href={`${basePath}${LOGO_MARK_PATH}`} />
-        {/* PNG fallback for browsers without SVG favicon support */}
-        <link rel="alternate icon" type="image/png" href={`${basePath}${FAVICON_PATH}`} />
+        <link rel="icon" type="image/svg+xml" href={`${basePath}${LOGO_PATH}`} />
         <link rel="apple-touch-icon" sizes="180x180" href={`${basePath}/apple-touch-icon.png`} />
         <script
           type="application/ld+json"

@@ -23,7 +23,7 @@ import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons'
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { brandMarkHref } from '../../branding/brand';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
@@ -402,7 +402,9 @@ export const ConversationView = React.memo<ConversationViewProps>(
         >
           <img
             src={brandMarkHref()}
-            alt={BRAND.name}
+            alt=""
+            width={160}
+            height={160}
             style={{
               width: 160,
               height: 160,

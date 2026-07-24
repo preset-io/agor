@@ -3,12 +3,14 @@ title: agor Documentation
 description: The command center for AI enablement. A shared canvas for coding agents and long-lived AI teammates, anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.
 ---
 
-import { LOGO_MARK_PATH } from '../../lib/siteMetadata';
+import { getBasePath, LOGO_PATH } from '../../lib/siteMetadata';
 
 <div style={{ textAlign: 'center', marginTop: '2rem', marginBottom: '2rem' }}>
   <img
-    src={LOGO_MARK_PATH}
-    alt="agor logo - the command center for AI enablement"
+    src={`${getBasePath()}${LOGO_PATH}`}
+    alt=""
+    width="135"
+    height="135"
     style={{ width: '135px', height: '135px', opacity: 0.9 }}
   />
 </div>

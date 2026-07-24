@@ -5,16 +5,13 @@ const DEFAULT_SITE_URL = 'https://agor.live';
  * which lives in apps/agor-ui/src/branding/brand.ts: the docs use a lowercase
  * "agor" wordmark and an en-dash title separator. Centralized here so
  * theme.config.tsx and the social-metadata validator share one source and the
- * favicon/logo/theme-color can't drift. Asset paths are public/-relative and
- * get the Next.js basePath applied at render time.
+ * logo/theme-color can't drift. Asset paths are public/-relative and get the
+ * Next.js basePath applied at render time.
  */
 export const BRAND_NAME = 'agor';
 export const THEME_COLOR = '#2e9a92';
-export const FAVICON_PATH = '/favicon.png';
+/** Canonical Agor mark for web rendering, including favicons. */
 export const LOGO_PATH = '/logo.svg';
-// Circle-less variant (transparent background) for chrome like the navbar,
-// where the full dark disc reads as a blob on dark surfaces.
-export const LOGO_MARK_PATH = '/logo-mark.svg';
 
 export const DEFAULT_TITLE = 'agor – The command center for AI enablement';
 

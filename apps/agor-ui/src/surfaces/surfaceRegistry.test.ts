@@ -112,9 +112,11 @@ describe('index.html favicon', () => {
     expect(iconMatch, 'index.html must declare a <link rel="icon">').not.toBeNull();
 
     const href = iconMatch?.[0].match(/href=["']([^"']+)["']/i)?.[1] ?? '';
-    // Root-absolute only. A relative href (e.g. "favicon.png") 404s on nested
+    const type = iconMatch?.[0].match(/type=["']([^"']+)["']/i)?.[1] ?? '';
+    // Root-absolute only. A relative href (e.g. "logo.svg") 404s on nested
     // SPA deep-links — exactly the Knowledge-surface favicon bug.
     expect(href.startsWith('/')).toBe(true);
     expect(href.endsWith(BRAND.markFile)).toBe(true);
+    expect(type).toBe('image/svg+xml');
   });
 });

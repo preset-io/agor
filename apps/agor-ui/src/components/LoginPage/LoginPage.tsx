@@ -7,7 +7,7 @@
 import { LockOutlined, MailOutlined } from '@ant-design/icons';
 import { Alert, Button, Divider, Form, Input, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { brandMarkHref } from '../../branding/brand';
 import { buildLaunchInitUrl } from '../../utils/launchInitUrl';
 import { isDarkTheme } from '../../utils/theme';
 import { BrandLogo } from '../BrandLogo';
@@ -87,12 +87,14 @@ export function LoginPage({
           <div style={{ textAlign: 'center' }}>
             <img
               src={brandMarkHref()}
-              alt={BRAND.name}
+              alt=""
+              width={72}
+              height={72}
               style={{
                 width: 72,
                 height: 72,
                 marginBottom: 16,
-                objectFit: 'cover',
+                objectFit: 'contain',
                 borderRadius: '50%',
                 display: 'block',
                 margin: '0 auto 16px',

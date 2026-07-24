@@ -14,10 +14,10 @@
  */
 
 export const BRAND = {
-  /** Wordmark used in document titles and image alt text. */
+  /** Wordmark used in document titles and accessible product naming. */
   name: 'Agor',
-  /** Agor mark asset, served from the Vite public dir (favicon + logo). */
-  markFile: 'favicon.png',
+  /** Canonical Agor SVG, served from the Vite public dir (favicon + logo). */
+  markFile: 'logo.svg',
   /** Separator between a surface label and the brand name in tab titles. */
   titleSeparator: ' · ',
 } as const;
@@ -25,7 +25,7 @@ export const BRAND = {
 /**
  * Absolute, base-aware URL to the Agor mark asset (favicon / logo).
  *
- * MUST be absolute (base-prefixed), never a bare relative `favicon.png`: SPA
+ * MUST be absolute (base-prefixed), never a bare relative `logo.svg`: SPA
  * surfaces live at nested paths (e.g. `/ui/knowledge/<ns>/<doc>`) and a
  * relative href resolves against the current document URL → 404. This is the
  * bug that made the Knowledge surface's favicon disappear on deep links.

@@ -10,7 +10,7 @@ import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } f
 import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
@@ -187,11 +187,14 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         >
           <img
             src={brandMarkHref()}
-            alt={BRAND.name}
+            alt=""
+            width={50}
+            height={50}
             style={{
+              width: 50,
               height: 50,
               borderRadius: '50%',
-              objectFit: 'cover',
+              objectFit: 'contain',
               display: 'block',
             }}
           />
