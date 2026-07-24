@@ -54,20 +54,14 @@ export function getFormValuesFromConfig(
   tool: AgenticToolName,
   config?: DefaultAgenticToolConfig
 ): AgenticFormValues {
-  if (!config) {
-    return {
-      permissionMode: getDefaultPermissionMode(tool),
-    };
-  }
-
   return {
-    modelConfig: config.modelConfig,
-    effort: config.modelConfig?.effort,
-    permissionMode: config.permissionMode || getDefaultPermissionMode(tool),
+    modelConfig: config?.modelConfig,
+    effort: config?.modelConfig?.effort,
+    permissionMode: config?.permissionMode || getDefaultPermissionMode(tool),
     ...(tool === 'codex' && {
-      codexSandboxMode: config.codexSandboxMode,
-      codexApprovalPolicy: config.codexApprovalPolicy,
-      codexNetworkAccess: config.codexNetworkAccess,
+      codexSandboxMode: config?.codexSandboxMode,
+      codexApprovalPolicy: config?.codexApprovalPolicy,
+      codexNetworkAccess: config?.codexNetworkAccess,
     }),
   };
 }

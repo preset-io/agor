@@ -251,6 +251,22 @@ describe('SessionFooter', () => {
     expect(within(overflowOptions).getByText('Effort')).toBeInTheDocument();
     expect(within(overflowOptions).getByText('Inherited')).toBeInTheDocument();
   });
+
+  it('does not expose live reasoning effort for Claude Code CLI sessions', async () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, agentic_tool: 'claude-code-cli' } as Session}
+        toolCaps={AGENTIC_TOOL_CAPABILITIES['claude-code-cli']}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    expect(within(overflowOptions).queryByText('Effort')).not.toBeInTheDocument();
+    expect(within(overflowOptions).queryByTestId('effort-selector-stub')).not.toBeInTheDocument();
+  });
 });
 
 describe('useFooterPreferences', () => {

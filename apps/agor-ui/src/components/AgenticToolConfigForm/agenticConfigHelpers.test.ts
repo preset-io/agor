@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest';
 import {
   buildModelConfigFromFormValues,
   buildScheduleConfigFromFormValues,
+  getFormValuesFromConfig,
 } from './agenticConfigHelpers';
+
+describe('getFormValuesFromConfig', () => {
+  it('explicitly clears merged model fields when a tool has no stored config', () => {
+    const values = getFormValuesFromConfig('codex');
+
+    expect(values).toHaveProperty('modelConfig', undefined);
+    expect(values).toHaveProperty('effort', undefined);
+  });
+});
 
 describe('buildModelConfigFromFormValues', () => {
   it('stores an explicit effort beside the selected model', () => {

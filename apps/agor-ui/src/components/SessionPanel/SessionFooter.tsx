@@ -143,6 +143,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   promptInputSlot,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
+  const supportsLiveEffort =
+    session.agentic_tool === 'claude-code' || session.agentic_tool === 'codex';
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [prefs, setPref] = useFooterPreferences();
@@ -282,7 +284,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       </div>
 
-      {toolCaps?.reasoningEffortLevels && (
+      {supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}

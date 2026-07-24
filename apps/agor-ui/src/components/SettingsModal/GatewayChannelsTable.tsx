@@ -80,7 +80,7 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
-import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm';
+import { buildModelConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
@@ -3214,17 +3214,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       return;
     }
     const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
-    if (agentDefaults) {
-      const activeForm = editModalOpen ? editForm : createForm;
-      activeForm.setFieldsValue({
-        permissionMode: agentDefaults.permissionMode,
-        modelConfig: agentDefaults.modelConfig,
-        effort: agentDefaults.modelConfig?.effort,
-        codexSandboxMode: agentDefaults.codexSandboxMode,
-        codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
-        codexNetworkAccess: agentDefaults.codexNetworkAccess,
-      });
-    }
+    const activeForm = editModalOpen ? editForm : createForm;
+    activeForm.setFieldsValue(
+      getFormValuesFromConfig(selectedAgent as AgenticToolName, agentDefaults)
+    );
   }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
 
   const extractFormData = (

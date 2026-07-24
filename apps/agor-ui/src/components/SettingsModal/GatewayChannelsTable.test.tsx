@@ -699,6 +699,29 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     });
   });
 
+  it('clears stale model and effort fields when switching to an agent without defaults', async () => {
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+      mcp_server_ids: ['mcp-server-1'],
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser: makeUser(), onUpdate });
+    expandPanel('Agent Configuration');
+    clickButton(/^claude-code$/);
+    await waitFor(() => expect(screen.getByLabelText('gateway-effort')).toHaveValue(''));
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    const update = onUpdate.mock.calls[0][1];
+    expect(update.agentic_config).not.toHaveProperty('modelConfig');
+    expect(update.mcp_server_ids).toEqual(['mcp-server-1']);
+  });
+
   it("applies the target agent's defaults when switching agents and back, instead of silently keeping stale fields", async () => {
     // A value-based guard (selectedAgent === persisted agent) would treat
     // switching away and back as "no-op" and skip re-applying defaults,
