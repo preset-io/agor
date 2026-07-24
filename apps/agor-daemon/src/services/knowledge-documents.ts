@@ -8,16 +8,13 @@
 import { PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
-  getCurrentTenantDatabase,
   isPostgresDatabase,
-  isSQLiteDatabase,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
   KnowledgeSemanticSettingsRepository,
-  runDatabaseTransaction,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   type UpdateKnowledgeDocumentInput,
@@ -44,6 +41,7 @@ import {
 import { DrizzleService } from '../adapters/drizzle';
 import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import {
   knowledgeChunkerOptionsFromSettings,
   knowledgeUnitsForMarkdown,
@@ -159,34 +157,14 @@ export class KnowledgeDocumentsService extends DrizzleService<
   private async runPolicyDependentWrite<T>(
     work: (service: KnowledgeDocumentsService) => Promise<T>
   ): Promise<T> {
-    const ambientDb = getCurrentTenantDatabase();
-    if (ambientDb && isPostgresDatabase(ambientDb)) {
-      await this.semanticSettings.lockAggregateForUpdate(ambientDb);
-      return work(this);
-    }
-
-    const apply = async (tx: TenantScopedDatabase): Promise<T> => {
+    return runKnowledgePolicyTransaction(this.db, async (tx: TenantScopedDatabase) => {
       const service = new KnowledgeDocumentsService(
         tx as unknown as TenantScopeAwareDatabase,
         this.app
       );
       await service.semanticSettings.lockAggregateForUpdate(tx);
       return work(service);
-    };
-
-    if (isSQLiteDatabase(this.db)) {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase), {
-            sqliteImmediate: true,
-          });
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
-        }
-      }
-    }
-    return runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase));
+    });
   }
 
   private isAdmin(user?: User): boolean {
@@ -513,14 +491,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
-    const result = await this.runPolicyDependentWrite((service) =>
-      service.putDocumentInTransaction(data, params)
-    );
+    const write = (service: KnowledgeDocumentsService) => service.writePutDocument(data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
 
-  private async putDocumentInTransaction(
+  private async writePutDocument(
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
@@ -645,18 +625,19 @@ export class KnowledgeDocumentsService extends DrizzleService<
       | Array<CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput>,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument | KnowledgeDocument[]> {
-    const result = await this.runPolicyDependentWrite(async (service) => {
+    const write = async (service: KnowledgeDocumentsService) => {
       if (!Array.isArray(data)) return service.createOne(data, params);
       const created: KnowledgeDocument[] = [];
       for (const item of data) created.push(await service.createOne(item, params));
       return created;
-    });
-    if (
+    };
+    const materializesUnits =
       (Array.isArray(data) && data.some((item) => typeof item.content_text === 'string')) ||
-      (!Array.isArray(data) && typeof data.content_text === 'string')
-    ) {
-      this.wakeIndexer();
-    }
+      (!Array.isArray(data) && typeof data.content_text === 'string');
+    const result = materializesUnits
+      ? await this.runPolicyDependentWrite(write)
+      : await write(this);
+    if (materializesUnits) this.wakeIndexer();
     return result;
   }
 
@@ -665,14 +646,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ) {
-    const result = await this.runPolicyDependentWrite((service) =>
-      service.patchInTransaction(id, data, params)
-    );
+    const write = (service: KnowledgeDocumentsService) => service.writePatch(id, data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
 
-  private async patchInTransaction(
+  private async writePatch(
     id: NullableId,
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
@@ -707,14 +690,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ) {
-    const result = await this.runPolicyDependentWrite((service) =>
-      service.updateInTransaction(id, data, params)
-    );
+    const write = (service: KnowledgeDocumentsService) => service.writeUpdate(id, data, params);
+    const result =
+      typeof data.content_text === 'string'
+        ? await this.runPolicyDependentWrite(write)
+        : await write(this);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
 
-  private async updateInTransaction(
+  private async writeUpdate(
     id: Id,
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams

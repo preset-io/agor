@@ -11,7 +11,7 @@ import {
   DEFAULT_KNOWLEDGE_SEMANTIC_POLICY,
   KNOWLEDGE_EMBEDDING_PROVIDERS,
 } from '../../types';
-import type { Database } from '../client';
+import type { Database, TenantScopedDatabase } from '../client';
 import {
   isPostgresDatabase,
   isSQLiteDatabase,
@@ -292,7 +292,7 @@ export class KnowledgeSemanticSettingsRepository {
    * their active transaction and retain it for all dependent writes.
    */
   async lockAggregateForUpdate(
-    txDb: Database,
+    txDb: TenantScopedDatabase,
     updatedBy?: UserID | null
   ): Promise<KnowledgeSemanticSettingsPublic> {
     const variables = new AppVariableRepository(txDb);
@@ -330,7 +330,7 @@ export class KnowledgeSemanticSettingsRepository {
    * settings write and dependent Knowledge-unit updates must commit together.
    */
   async patchInTransaction(
-    txDb: Database,
+    txDb: TenantScopedDatabase,
     patch: KnowledgeSemanticSettingsPatch,
     updatedBy?: UserID | null,
     validate?: (policy: KnowledgeSemanticPolicy) => void
@@ -407,7 +407,8 @@ export class KnowledgeSemanticSettingsRepository {
     validate?: (policy: KnowledgeSemanticPolicy) => void
   ): Promise<KnowledgeSemanticSettingsPublic> {
     const apply = async (txDb: Database) =>
-      (await this.patchInTransaction(txDb, patch, updatedBy, validate)).saved;
+      (await this.patchInTransaction(txDb as TenantScopedDatabase, patch, updatedBy, validate))
+        .saved;
 
     const ambientDb = getCurrentTenantDatabase();
     if (ambientDb && isPostgresDatabase(ambientDb)) return apply(ambientDb);

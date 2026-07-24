@@ -18,6 +18,7 @@ import {
   shortId,
   sql,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   update,
 } from '@agor/core/db';
 import type { KnowledgeDocumentUnitID, KnowledgeSemanticPolicy, TenantID } from '@agor/core/types';
@@ -41,6 +42,7 @@ interface PendingUnitRow {
 
 interface CurrentUnitRow {
   unit_id: string;
+  content_text: string | null;
   content_md5: string | null;
   embedding_status: string;
 }
@@ -228,7 +230,7 @@ export class KnowledgeEmbeddingIndexer {
     this.settings = new KnowledgeSemanticSettingsRepository(db);
   }
 
-  private withTenantDatabase<T>(work: () => Promise<T>): Promise<T> {
+  private withTenantDatabase<T>(work: (db: TenantScopedDatabase) => Promise<T>): Promise<T> {
     return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), work);
   }
 
@@ -484,8 +486,8 @@ export class KnowledgeEmbeddingIndexer {
 
     const batchSize = Math.min(Math.max(semantic.indexing.batch_size, 1), 128);
     this.lastErrorByTenant.set(this.currentTenantKey(), null);
-    const prepared = await this.withTenantDatabase(async () => {
-      const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+    const prepared = await this.withTenantDatabase(async (tx) => {
+      const currentSemantic = await this.settings.lockAggregateForUpdate(tx);
       const currentApiKey = await this.settings.getApiKey();
       if (
         !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
@@ -587,8 +589,8 @@ export class KnowledgeEmbeddingIndexer {
         { apiKey, model, dimensions }
       );
     } catch (error) {
-      const recorded = await this.withTenantDatabase(async () => {
-        const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+      const recorded = await this.withTenantDatabase(async (tx) => {
+        const currentSemantic = await this.settings.lockAggregateForUpdate(tx);
         const currentApiKey = await this.settings.getApiKey();
         if (
           !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
@@ -616,8 +618,8 @@ export class KnowledgeEmbeddingIndexer {
       throw error;
     }
 
-    const committed = await this.withTenantDatabase(async () => {
-      const currentSemantic = await this.settings.lockAggregateForUpdate(this.db);
+    const committed = await this.withTenantDatabase(async (tx) => {
+      const currentSemantic = await this.settings.lockAggregateForUpdate(tx);
       const currentApiKey = await this.settings.getApiKey();
       if (
         !isKnowledgeEmbeddingMaterializationSnapshotCurrent(
@@ -677,6 +679,7 @@ export class KnowledgeEmbeddingIndexer {
     if (rows.length === 0) return [];
     const currentRows = (await select(this.db, {
       unit_id: kbDocumentUnits.unit_id,
+      content_text: kbDocumentUnits.content_text,
       content_md5: kbDocumentUnits.content_md5,
       embedding_status: kbDocumentUnits.embedding_status,
     })
@@ -693,7 +696,9 @@ export class KnowledgeEmbeddingIndexer {
       .filter((row) => {
         const source = sourceById.get(row.unit_id);
         return (
-          source?.content_md5 === row.content_md5 &&
+          source !== undefined &&
+          source.content_text === row.content_text &&
+          source.content_md5 === row.content_md5 &&
           (row.embedding_status === 'pending' || row.embedding_status === 'stale')
         );
       })

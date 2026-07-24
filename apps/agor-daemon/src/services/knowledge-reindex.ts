@@ -1,9 +1,6 @@
 import {
-  getCurrentTenantDatabase,
   isPostgresDatabase,
-  isSQLiteDatabase,
   KnowledgeSemanticSettingsRepository,
-  runDatabaseTransaction,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
@@ -11,6 +8,7 @@ import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, KnowledgeEmbeddingStatus, Params } from '@agor/core/types';
 import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
 export interface KnowledgeReindexResult {
@@ -40,29 +38,9 @@ export class KnowledgeReindexService {
   }
 
   async create(_data?: unknown, _params?: KnowledgeReindexParams): Promise<KnowledgeReindexResult> {
-    const ambientDb = getCurrentTenantDatabase();
-    let result: KnowledgeReindexResult;
-    if (ambientDb && isPostgresDatabase(ambientDb)) {
-      result = await this.reindexInTransaction(ambientDb as TenantScopedDatabase);
-    } else if (isSQLiteDatabase(this.db)) {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          result = await runDatabaseTransaction(
-            this.db,
-            (tx) => this.reindexInTransaction(tx as TenantScopedDatabase),
-            { sqliteImmediate: true }
-          );
-          break;
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
-        }
-      }
-    } else {
-      result = await runDatabaseTransaction(this.db, (tx) =>
-        this.reindexInTransaction(tx as TenantScopedDatabase)
-      );
-    }
+    const result = await runKnowledgePolicyTransaction(this.db, (tx) =>
+      this.reindexInTransaction(tx)
+    );
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'

@@ -1,11 +1,8 @@
 import {
   executeRaw,
-  getCurrentTenantDatabase,
   isPostgresDatabase,
-  isSQLiteDatabase,
   KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
-  runDatabaseTransaction,
   sql,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -33,6 +30,7 @@ import {
   ensureKnowledgePgvectorStorage,
   getKnowledgePgvectorCapability,
 } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
 export type KnowledgeSettingsPatch = KnowledgeSemanticSettingsPatch;
@@ -180,7 +178,7 @@ export class KnowledgeSettingsService {
     const user = params?.user as User | undefined;
     const updatedBy = (user?.user_id as UserID | undefined) ?? null;
     const apply = async (
-      db: KnowledgeSettingsDatabase
+      db: TenantScopedDatabase
     ): Promise<{ saved: KnowledgeSemanticSettingsPublic; shouldWake: boolean }> => {
       const settings = new KnowledgeSemanticSettingsRepository(db);
       const { previous: current, saved } = await settings.patchInTransaction(
@@ -214,30 +212,7 @@ export class KnowledgeSettingsService {
     };
 
     try {
-      let result: { saved: KnowledgeSemanticSettingsPublic; shouldWake: boolean };
-      if (!isSQLiteDatabase(this.db)) {
-        const ambientDb = getCurrentTenantDatabase();
-        result =
-          ambientDb && isPostgresDatabase(ambientDb)
-            ? await apply(this.db)
-            : await runDatabaseTransaction(this.db, (tx) => apply(tx as TenantScopedDatabase));
-      } else {
-        for (let attempt = 0; ; attempt++) {
-          try {
-            result = await runDatabaseTransaction(
-              this.db,
-              (tx) => apply(tx as TenantScopedDatabase),
-              {
-                sqliteImmediate: true,
-              }
-            );
-            break;
-          } catch (error) {
-            if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
-            await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
-          }
-        }
-      }
+      const result = await runKnowledgePolicyTransaction(this.db, apply);
       if (result.shouldWake) this.wakeIndexer();
       return result.saved;
     } catch (error) {
