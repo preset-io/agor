@@ -225,6 +225,7 @@ describe('loadConfig', () => {
     'credentials',
     'opencode',
     'codex',
+    'knowledge',
   ])('rejects the removed %s config surface', async (key) => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

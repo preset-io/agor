@@ -964,30 +964,6 @@ export interface AgorProxyConfig {
 }
 
 /**
- * Knowledge Base semantic search settings. Secrets are stored separately in the
- * encrypted app_variables table; this config only carries non-secret defaults.
- */
-export interface AgorKnowledgeSettings {
-  semantic_search?: {
-    enabled?: boolean;
-    provider?: 'openai' | 'voyage' | 'openai-compatible';
-    model?: string;
-    dimensions?: number;
-    chunking?: {
-      target_tokens?: number;
-      max_tokens?: number;
-      overlap_tokens?: number;
-      min_tokens?: number;
-    };
-    indexing?: {
-      paused?: boolean;
-      batch_size?: number;
-      concurrency?: number;
-    };
-  };
-}
-
-/**
  * App-level multi-tenancy settings.
  *
  * `static` preserves today's single-tenant behavior: every request belongs to
@@ -1044,9 +1020,6 @@ export interface AgorConfig {
   /** Public open-source telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
-  /** Knowledge Base semantic search settings. */
-  knowledge?: AgorKnowledgeSettings;
-
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
 
@@ -1074,5 +1047,4 @@ export type ConfigKey =
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
-  | `telemetry.${keyof AgorTelemetrySettings}`
-  | `knowledge.${keyof AgorKnowledgeSettings}`;
+  | `telemetry.${keyof AgorTelemetrySettings}`;

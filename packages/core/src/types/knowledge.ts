@@ -121,6 +121,69 @@ export type KnowledgeSearchMode = (typeof KNOWLEDGE_SEARCH_MODES)[number];
 export const KNOWLEDGE_EMBEDDING_PROVIDERS = ['openai', 'voyage', 'openai-compatible'] as const;
 export type KnowledgeEmbeddingProvider = (typeof KNOWLEDGE_EMBEDDING_PROVIDERS)[number];
 
+export interface KnowledgeSemanticChunkingSettings {
+  target_tokens: number;
+  max_tokens: number;
+  overlap_tokens: number;
+  min_tokens: number;
+}
+
+export interface KnowledgeSemanticIndexingSettings {
+  paused: boolean;
+  batch_size: number;
+  concurrency: number;
+}
+
+export interface KnowledgeSemanticPolicy {
+  enabled: boolean;
+  provider: KnowledgeEmbeddingProvider;
+  model: string;
+  dimensions: number;
+  chunking: KnowledgeSemanticChunkingSettings;
+  indexing: KnowledgeSemanticIndexingSettings;
+}
+
+export interface StoredKnowledgeSemanticPolicy {
+  enabled?: true;
+  provider?: KnowledgeEmbeddingProvider;
+  model?: string;
+  dimensions?: number;
+  chunking?: Partial<KnowledgeSemanticChunkingSettings>;
+  indexing?: Partial<KnowledgeSemanticIndexingSettings>;
+}
+
+type NullableSettingsPatch<T> = {
+  [K in keyof T]?: T[K] | null;
+};
+
+export interface KnowledgeSemanticSettingsPatch {
+  enabled?: boolean;
+  provider?: KnowledgeEmbeddingProvider | null;
+  model?: string | null;
+  dimensions?: number | null;
+  api_key?: string | null;
+  chunking?: NullableSettingsPatch<KnowledgeSemanticChunkingSettings> | null;
+  indexing?: NullableSettingsPatch<KnowledgeSemanticIndexingSettings> | null;
+}
+
+export const DEFAULT_KNOWLEDGE_SEMANTIC_POLICY: KnowledgeSemanticPolicy = {
+  enabled: false,
+  provider: 'openai',
+  model: 'text-embedding-3-small',
+  dimensions: 1536,
+  chunking: {
+    target_tokens: 850,
+    max_tokens: 1200,
+    overlap_tokens: 100,
+    min_tokens: 80,
+  },
+  indexing: {
+    paused: false,
+    batch_size: 32,
+    concurrency: 1,
+  },
+};
+
 export const KNOWLEDGE_VECTOR_STORAGE_TYPES = ['vector', 'halfvec', 'bit', 'sparsevec'] as const;
 export type KnowledgeVectorStorageType = (typeof KNOWLEDGE_VECTOR_STORAGE_TYPES)[number];
 
@@ -575,21 +638,12 @@ export interface KnowledgeIndexingStatus {
 
 export interface KnowledgeSemanticSettingsPublic {
   enabled: boolean;
-  provider?: KnowledgeEmbeddingProvider | null;
-  model?: string | null;
-  dimensions?: number | null;
+  provider: KnowledgeEmbeddingProvider;
+  model: string;
+  dimensions: number;
   api_key_configured: boolean;
-  chunking?: {
-    target_tokens?: number;
-    max_tokens?: number;
-    overlap_tokens?: number;
-    min_tokens?: number;
-  };
-  indexing?: {
-    paused?: boolean;
-    batch_size?: number;
-    concurrency?: number;
-  };
+  chunking: KnowledgeSemanticChunkingSettings;
+  indexing: KnowledgeSemanticIndexingSettings;
 }
 
 export interface KnowledgeGraphNode {

@@ -5,9 +5,8 @@
  * immutable document version and advances `current_version_id`.
  */
 
-import { loadConfig, PAGINATION } from '@agor/core/config';
+import { PAGINATION } from '@agor/core/config';
 import {
-  AppVariableRepository,
   type CreateKnowledgeDocumentInput,
   isPostgresDatabase,
   type KnowledgeDocumentFilters,
@@ -15,6 +14,7 @@ import {
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
+  KnowledgeSemanticSettingsRepository,
   type TenantScopeAwareDatabase,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
@@ -38,14 +38,10 @@ import {
   titleFromKnowledgeContent,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import {
-  isUsableOpenAIEmbeddingConfig,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-} from '../knowledge/embeddings.js';
+import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
 import {
-  knowledgeChunkerOptionsFromConfig,
+  knowledgeChunkerOptionsFromSettings,
   knowledgeUnitsForMarkdown,
 } from '../knowledge/units.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -125,7 +121,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   KnowledgeDocumentParams
 > {
   private repo: KnowledgeDocumentRepository;
-  private variables: AppVariableRepository;
+  private semanticSettings: KnowledgeSemanticSettingsRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
   private graph: KnowledgeGraphRepository;
@@ -144,7 +140,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
     });
     this.repo = repo;
-    this.variables = new AppVariableRepository(db);
+    this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
     this.graph = new KnowledgeGraphRepository(db);
@@ -264,17 +260,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
    */
 
   private async isEmbeddingConfigured(): Promise<boolean> {
-    const config = await loadConfig();
     if (!isPostgresDatabase(this.db)) return false;
-    const apiKey = await this.variables.find(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
-    );
+    const settings = await this.semanticSettings.find();
     return (
-      isUsableOpenAIEmbeddingConfig(
-        config.knowledge?.semantic_search ?? {},
-        Boolean(apiKey?.value_encrypted)
-      ) && (await ensureKnowledgePgvectorStorage(this.db)).available
+      isUsableOpenAIEmbeddingConfig(settings, settings.api_key_configured) &&
+      (await ensureKnowledgePgvectorStorage(this.db)).available
     );
   }
 
@@ -283,11 +273,11 @@ export class KnowledgeDocumentsService extends DrizzleService<
     content?: string | null
   ): Promise<void> {
     if (typeof content !== 'string' || !doc.current_version_id) return;
-    const config = await loadConfig();
+    const settings = await this.semanticSettings.findPolicy();
     const chunks = knowledgeUnitsForMarkdown(
       doc.path,
       content,
-      knowledgeChunkerOptionsFromConfig(config)
+      knowledgeChunkerOptionsFromSettings(settings)
     );
     await this.repo.replaceUnitsForVersion(doc.current_version_id, chunks, {
       embeddingConfigured: await this.isEmbeddingConfigured(),

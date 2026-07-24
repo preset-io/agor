@@ -1,7 +1,7 @@
-import { loadConfig } from '@agor/core/config';
 import {
-  AppVariableRepository,
+  getCurrentTenantId,
   isPostgresDatabase,
+  KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
   select,
   sql,
@@ -14,13 +14,7 @@ import type {
   KnowledgeIndexingStatus,
   Params,
 } from '@agor/core/types';
-import {
-  DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-  isUsableOpenAIEmbeddingConfig,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-} from '../knowledge/embeddings.js';
+import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
 import { getKnowledgePgvectorCapability } from '../knowledge/pgvector.js';
 
 const STATUSES: KnowledgeEmbeddingStatus[] = [
@@ -34,22 +28,17 @@ const STATUSES: KnowledgeEmbeddingStatus[] = [
 export type KnowledgeIndexingParams = Params & AuthenticatedParams;
 
 export class KnowledgeIndexingStatusService {
-  private variables: AppVariableRepository;
+  private settings: KnowledgeSemanticSettingsRepository;
 
   constructor(
     private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
-    this.variables = new AppVariableRepository(db);
+    this.settings = new KnowledgeSemanticSettingsRepository(db);
   }
 
   async find(_params?: KnowledgeIndexingParams): Promise<KnowledgeIndexingStatus> {
-    const config = await loadConfig();
-    const semantic = config.knowledge?.semantic_search ?? {};
-    const apiKey = await this.variables.find(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
-    );
+    const semantic = await this.settings.find();
     const counts = Object.fromEntries(STATUSES.map((status) => [status, 0])) as Record<
       KnowledgeEmbeddingStatus,
       number
@@ -67,18 +56,24 @@ export class KnowledgeIndexingStatusService {
     }
 
     const pgvector = await getKnowledgePgvectorCapability(this.db);
-    const semanticEnabled = semantic.enabled === true;
+    const semanticEnabled = semantic.enabled;
     const embeddingConfigUsable = isUsableOpenAIEmbeddingConfig(
       semantic,
-      Boolean(apiKey?.value_encrypted)
+      semantic.api_key_configured
     );
     const configured = isPostgresDatabase(this.db) && pgvector.available && embeddingConfigUsable;
 
     const indexer = (this.app as unknown as { get?: (key: string) => unknown } | undefined)?.get?.(
       'knowledgeEmbeddingIndexer'
-    ) as { getLastIndexedAt?: () => Date | null; getLastError?: () => string | null } | undefined;
+    ) as
+      | {
+          getLastIndexedAt?: (tenantId?: string) => Date | null;
+          getLastError?: (tenantId?: string) => string | null;
+        }
+      | undefined;
+    const tenantId = String(getCurrentTenantId() ?? 'default');
     const lastError = semanticEnabled
-      ? ((configured ? indexer?.getLastError?.() : null) ??
+      ? ((configured ? indexer?.getLastError?.(tenantId) : null) ??
         (!pgvector.available ? pgvector.reason : null))
       : null;
 
@@ -91,12 +86,12 @@ export class KnowledgeIndexingStatusService {
       pgvector_storage_ready: pgvector.storageReady,
       pgvector_reason: pgvector.reason,
       pgvector_setup_hint: pgvector.setupHint,
-      provider: semantic.provider ?? 'openai',
-      model: semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
-      dimensions: semantic.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
+      provider: semantic.provider,
+      model: semantic.model,
+      dimensions: semantic.dimensions,
       chunks: counts,
       queue_depth: counts.pending + counts.stale,
-      last_indexed_at: indexer?.getLastIndexedAt?.() ?? null,
+      last_indexed_at: indexer?.getLastIndexedAt?.(tenantId) ?? null,
       last_error: lastError,
     };
   }

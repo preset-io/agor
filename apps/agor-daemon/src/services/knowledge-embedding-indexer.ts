@@ -1,12 +1,11 @@
-import { loadConfig } from '@agor/core/config';
 import {
-  AppVariableRepository,
   executeRaw,
   generateId,
   getCurrentTenantId,
   inArray,
   insert,
   isPostgresDatabase,
+  KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
   kbDocumentVersions,
   kbEmbeddingSpaces,
@@ -21,10 +20,7 @@ import {
 import type { KnowledgeDocumentUnitID, TenantID } from '@agor/core/types';
 import {
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
   embeddingToPgvector,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
   OpenAIEmbeddingProvider,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
   sha256Text,
@@ -192,17 +188,17 @@ export class KnowledgeEmbeddingIndexer {
   private intervalHandle?: NodeJS.Timeout;
   private running = false;
   private wakeScheduled = false;
-  private variables: AppVariableRepository;
+  private settings: KnowledgeSemanticSettingsRepository;
   private provider = new OpenAIEmbeddingProvider();
-  private lastError: string | null = null;
-  private lastIndexedAt: Date | null = null;
+  private lastErrorByTenant = new Map<string, string | null>();
+  private lastIndexedAtByTenant = new Map<string, Date>();
   private pgvectorStorageReady = false;
 
   constructor(
     private db: TenantScopeAwareDatabase,
     private options: { tenantId?: TenantID | string } = {}
   ) {
-    this.variables = new AppVariableRepository(db);
+    this.settings = new KnowledgeSemanticSettingsRepository(db);
   }
 
   private withTenantDatabase<T>(work: () => Promise<T>): Promise<T> {
@@ -235,16 +231,20 @@ export class KnowledgeEmbeddingIndexer {
     }, 0);
   }
 
-  getLastError(): string | null {
-    return this.lastError;
+  private currentTenantKey(): string {
+    return String(getCurrentTenantId() ?? this.options.tenantId ?? 'default');
   }
 
-  getLastIndexedAt(): Date | null {
-    return this.lastIndexedAt;
+  getLastError(tenantId?: TenantID | string): string | null {
+    return this.lastErrorByTenant.get(String(tenantId ?? this.currentTenantKey())) ?? null;
+  }
+
+  getLastIndexedAt(tenantId?: TenantID | string): Date | null {
+    return this.lastIndexedAtByTenant.get(String(tenantId ?? this.currentTenantKey())) ?? null;
   }
 
   private idle(): 0 {
-    this.lastError = null;
+    this.lastErrorByTenant.set(this.currentTenantKey(), null);
     return 0;
   }
 
@@ -396,9 +396,14 @@ export class KnowledgeEmbeddingIndexer {
     this.running = true;
     try {
       const indexed = await this.indexBatch();
-      if (indexed > 0 || !this.lastError) this.lastError = null;
+      if (indexed > 0 || !this.getLastError()) {
+        this.lastErrorByTenant.set(this.currentTenantKey(), null);
+      }
     } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error);
+      this.lastErrorByTenant.set(
+        this.currentTenantKey(),
+        error instanceof Error ? error.message : String(error)
+      );
       throw error;
     } finally {
       this.running = false;
@@ -406,32 +411,30 @@ export class KnowledgeEmbeddingIndexer {
   }
 
   async indexBatch(): Promise<number> {
-    const config = await loadConfig();
-    const semantic = config.knowledge?.semantic_search;
-    if (semantic?.enabled !== true) return this.idle();
-    if (semantic.indexing?.paused === true) return this.idle();
+    const { semantic, apiKey } = await this.withTenantDatabase(async () => ({
+      semantic: await this.settings.findPolicy(),
+      apiKey: await this.settings.getApiKey(),
+    }));
+    if (!semantic.enabled) return this.idle();
+    if (semantic.indexing.paused) return this.idle();
     if (!isPostgresDatabase(this.db)) return this.idle();
-    const provider = semantic.provider ?? 'openai';
+    const provider = semantic.provider;
     if (provider !== 'openai') return this.idle();
-
-    const apiKey = await this.withTenantDatabase(() =>
-      this.variables.getPlain(KNOWLEDGE_EMBEDDINGS_NAMESPACE, KNOWLEDGE_EMBEDDINGS_API_KEY)
-    );
     if (!apiKey) return this.idle();
 
-    const model = semantic.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL;
+    const model = semantic.model;
     if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(model)) {
       throw new Error(`Unsupported OpenAI embedding model: ${model}`);
     }
-    const dimensions = semantic.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS;
+    const dimensions = semantic.dimensions;
     if (dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) {
       throw new Error(
         'Only 1536-dimensional OpenAI embeddings are supported by the V1 vector table'
       );
     }
 
-    const batchSize = Math.min(Math.max(semantic.indexing?.batch_size ?? 32, 1), 128);
-    this.lastError = null;
+    const batchSize = Math.min(Math.max(semantic.indexing.batch_size, 1), 128);
+    this.lastErrorByTenant.set(this.currentTenantKey(), null);
     const prepared = await this.withTenantDatabase(async () => {
       // Hot idle path: avoid provider setup/work when no units are pending.
       const pending = (await select(this.db, { unit_id: kbDocumentUnits.unit_id })
@@ -482,13 +485,13 @@ export class KnowledgeEmbeddingIndexer {
     });
     if (prepared.kind === 'idle') return this.idle();
     if (prepared.kind === 'unavailable') {
-      this.lastError = prepared.reason;
+      this.lastErrorByTenant.set(this.currentTenantKey(), prepared.reason);
       return 0;
     }
     const { embeddingSpaceId, reused, rows } = prepared;
     if (rows.length === 0) {
       if (reused === 0) return this.idle();
-      this.lastIndexedAt = new Date();
+      this.lastIndexedAtByTenant.set(this.currentTenantKey(), new Date());
       return reused;
     }
 
@@ -574,7 +577,7 @@ export class KnowledgeEmbeddingIndexer {
         .run();
     });
 
-    this.lastIndexedAt = new Date();
+    this.lastIndexedAtByTenant.set(this.currentTenantKey(), new Date());
     return reused + results.length;
   }
 }

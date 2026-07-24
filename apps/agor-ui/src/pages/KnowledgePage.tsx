@@ -113,6 +113,11 @@ import {
 import { useThemedModal } from '../utils/modal';
 import { slugify } from '../utils/repoSlug';
 import { searchableSelectProps } from '../utils/selectSearch';
+import {
+  buildKnowledgeSemanticSettingsPatch,
+  DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS,
+  normalizeKnowledgeSemanticSettings,
+} from './knowledgeSemanticSettings';
 
 const { Header, Content } = Layout;
 const { Text, Title } = Typography;
@@ -156,7 +161,7 @@ interface KnowledgeEmbeddingReuseIntoNext {
   updatedAt?: string;
 }
 
-type KnowledgeSemanticSettings = KnowledgeSemanticSettingsPublic & { api_key?: string | null };
+type KnowledgeSemanticSettings = KnowledgeSemanticSettingsPublic;
 
 type KnowledgeNamespaceAclEntry = Pick<
   CoreKnowledgeNamespaceAclEntry,
@@ -205,24 +210,6 @@ const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
 const DRAFT_DOCUMENT_ID = '__knowledge_draft__' as CoreKnowledgeDocument['document_id'];
 const ROOT_FOLDER = '';
 const DEFAULT_FOLDERS = ['pages', 'skills', 'memories'];
-const DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS: KnowledgeSemanticSettings = {
-  enabled: false,
-  provider: 'openai',
-  model: 'text-embedding-3-small',
-  dimensions: 1536,
-  api_key_configured: false,
-  chunking: {
-    target_tokens: 850,
-    max_tokens: 1200,
-    overlap_tokens: 100,
-    min_tokens: 80,
-  },
-  indexing: {
-    paused: false,
-    batch_size: 32,
-    concurrency: 1,
-  },
-};
 
 const KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX = 280;
 const KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX = 780;
@@ -814,6 +801,7 @@ export function KnowledgePage({
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsApiKeyDraft, setSettingsApiKeyDraft] = useState('');
+  const [settingsClearApiKey, setSettingsClearApiKey] = useState(false);
   const [settingsForm] = Form.useForm<KnowledgeSemanticSettings>();
   const [namespaceEditorOpen, setNamespaceEditorOpen] = useState(false);
   const [namespaceEditing, setNamespaceEditing] = useState<KnowledgeNamespace | null>(null);
@@ -1325,18 +1313,9 @@ export function KnowledgePage({
         client.service('kb/settings').find(),
         client.service('kb/indexing/status').find(),
       ]);
-      const nextSettings = {
-        ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS,
-        ...(settings as unknown as KnowledgeSemanticSettingsPublic),
-        chunking: {
-          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.chunking,
-          ...((settings as unknown as KnowledgeSemanticSettingsPublic).chunking ?? {}),
-        },
-        indexing: {
-          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.indexing,
-          ...((settings as unknown as KnowledgeSemanticSettingsPublic).indexing ?? {}),
-        },
-      };
+      const nextSettings = normalizeKnowledgeSemanticSettings(
+        settings as unknown as KnowledgeSemanticSettingsPublic
+      );
       setKnowledgeSettings(nextSettings);
       setIndexingStatus(status as unknown as KnowledgeIndexingStatus);
       settingsForm.setFieldsValue(nextSettings);
@@ -1373,6 +1352,7 @@ export function KnowledgePage({
   const openKnowledgeSettings = useCallback(() => {
     setKnowledgeSettingsOpen(true);
     setSettingsApiKeyDraft('');
+    setSettingsClearApiKey(false);
     setSettingsError(null);
     setNamespaceError(null);
     void refreshKnowledgeSettings();
@@ -1387,24 +1367,15 @@ export function KnowledgePage({
     setSettingsError(null);
     try {
       const values = await settingsForm.validateFields();
-      const patch: Record<string, unknown> = {
-        enabled: values.enabled ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.enabled,
-        provider: values.provider ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.provider,
-        model: values.model || DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.model,
-        dimensions: values.dimensions ?? DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.dimensions,
-        chunking: {
-          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.chunking,
-          ...(values.chunking ?? {}),
-        },
-        indexing: {
-          ...DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS.indexing,
-          ...(values.indexing ?? {}),
-        },
-      };
-      if (settingsApiKeyDraft.trim()) patch.api_key = settingsApiKeyDraft.trim();
+      const patch = buildKnowledgeSemanticSettingsPatch(
+        values,
+        settingsApiKeyDraft,
+        settingsClearApiKey
+      );
       const next = await client.service('kb/settings').create(patch);
       setKnowledgeSettings(next as KnowledgeSemanticSettingsPublic);
       setSettingsApiKeyDraft('');
+      setSettingsClearApiKey(false);
       await refreshKnowledgeSettings();
       setKnowledgeSettingsOpen(false);
     } catch (err) {
@@ -1413,7 +1384,7 @@ export function KnowledgePage({
     } finally {
       setSettingsSaving(false);
     }
-  }, [client, refreshKnowledgeSettings, settingsApiKeyDraft, settingsForm]);
+  }, [client, refreshKnowledgeSettings, settingsApiKeyDraft, settingsClearApiKey, settingsForm]);
 
   const reindexKnowledge = useCallback(async () => {
     if (!client) return;
@@ -3941,16 +3912,37 @@ export function KnowledgePage({
                         </Form.Item>
                       </Flex>
                       <Form.Item label="OpenAI API key">
-                        <Input.Password
-                          value={settingsApiKeyDraft}
-                          onChange={(event) => setSettingsApiKeyDraft(event.target.value)}
-                          placeholder={
-                            knowledgeSettings?.api_key_configured
-                              ? 'Configured — enter a new key to replace'
-                              : 'sk-...'
-                          }
-                          autoComplete="off"
-                        />
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          <Input.Password
+                            value={settingsApiKeyDraft}
+                            disabled={settingsClearApiKey}
+                            onChange={(event) => {
+                              setSettingsApiKeyDraft(event.target.value);
+                              setSettingsClearApiKey(false);
+                            }}
+                            placeholder={
+                              knowledgeSettings?.api_key_configured
+                                ? 'Configured — enter a new key to replace'
+                                : 'sk-...'
+                            }
+                            autoComplete="off"
+                          />
+                          {knowledgeSettings?.api_key_configured && (
+                            <Button
+                              danger
+                              size="small"
+                              type={settingsClearApiKey ? 'primary' : 'default'}
+                              onClick={() => {
+                                setSettingsClearApiKey((current) => !current);
+                                setSettingsApiKeyDraft('');
+                              }}
+                            >
+                              {settingsClearApiKey
+                                ? 'API key will be removed on save'
+                                : 'Remove configured API key'}
+                            </Button>
+                          )}
+                        </Space>
                       </Form.Item>
                       <Flex gap={12} wrap="wrap">
                         <Form.Item
@@ -3986,7 +3978,7 @@ export function KnowledgePage({
                           label="Batch size"
                           style={{ width: 130 }}
                         >
-                          <InputNumber min={1} max={256} precision={0} style={{ width: '100%' }} />
+                          <InputNumber min={1} max={128} precision={0} style={{ width: '100%' }} />
                         </Form.Item>
                       </Flex>
                     </Form>

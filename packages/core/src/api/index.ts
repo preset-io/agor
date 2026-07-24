@@ -30,6 +30,7 @@ import type {
   KnowledgeNamespace,
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
+  KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
@@ -265,6 +266,13 @@ export type AgenticToolPresetsService = AgorService<
   CreateAgenticToolPreset,
   never,
   PatchAgenticToolPreset
+>;
+
+export type KnowledgeSettingsService = AgorService<
+  KnowledgeSemanticSettingsPublic,
+  KnowledgeSemanticSettingsPatch,
+  never,
+  never
 >;
 
 /**
@@ -597,6 +605,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'kb/settings'): KnowledgeSettingsService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 

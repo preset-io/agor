@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { __resetConfigCacheForTests, type AgorConfig, saveConfig } from '@agor/core/config';
+import {
+  __resetConfigCacheForTests,
+  type AgorConfig,
+  loadConfig,
+  saveConfig,
+} from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
   eq,
@@ -661,9 +666,10 @@ describe('KnowledgeDocumentsService permissions', () => {
 
 describe('Knowledge semantic indexing lifecycle', () => {
   dbTest('rejects unsupported providers and normalizes blank API keys', async ({ db }) => {
-    await withTempConfig({}, async () => {
+    await withTempConfig({ daemon: { port: 4321 } }, async () => {
       const admin = await seedUser(db, 'admin', ROLES.ADMIN);
       const settings = new KnowledgeSettingsService(db);
+      const configBefore = await loadConfig();
 
       await expect(
         settings.patch(null, { provider: 'voyage' as never }, params(admin))
@@ -675,59 +681,55 @@ describe('Knowledge semantic indexing lifecycle', () => {
         params(admin)
       );
       expect(saved.api_key_configured).toBe(false);
+      expect(await loadConfig()).toEqual(configBefore);
     });
   });
 
   dbTest('reindex rebuilds chunks from current document content on SQLite', async ({ db }) => {
-    await withTempConfig(
-      {
-        knowledge: {
-          semantic_search: {
-            enabled: true,
-            provider: 'openai',
-            chunking: {
-              target_tokens: 40,
-              max_tokens: 60,
-              overlap_tokens: 0,
-              min_tokens: 1,
-            },
-          },
+    await withTempConfig({}, async () => {
+      await new KnowledgeSettingsService(db).patch(null, {
+        enabled: true,
+        provider: 'openai',
+        chunking: {
+          target_tokens: 40,
+          max_tokens: 60,
+          overlap_tokens: 0,
+          min_tokens: 1,
         },
-      },
-      async () => {
-        const owner = await seedUser(db, 'owner');
-        const doc = await seedDocument(db, owner, {
-          content_text: `# Big\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`,
-        });
+      });
+      const owner = await seedUser(db, 'owner');
+      const doc = await seedDocument(db, owner, {
+        content_text: `# Big\n\n${Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ')}`,
+      });
 
-        const result = await new KnowledgeReindexService(db).create();
-        expect(result.status).toBe('not_configured');
-        expect(result.queued).toBeGreaterThan(1);
+      const result = await new KnowledgeReindexService(db).create();
+      expect(result.status).toBe('not_configured');
+      expect(result.queued).toBeGreaterThan(1);
 
-        const units = await select(db)
-          .from(kbDocumentUnits)
-          .where(eq(kbDocumentUnits.version_id, doc.current_version_id))
-          .all();
-        expect(units).toHaveLength(result.queued);
-        expect(new Set(units.map((unit) => unit.embedding_status))).toEqual(
-          new Set(['not_configured'])
-        );
-      }
-    );
+      const units = await select(db)
+        .from(kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, doc.current_version_id))
+        .all();
+      expect(units).toHaveLength(result.queued);
+      expect(new Set(units.map((unit) => unit.embedding_status))).toEqual(
+        new Set(['not_configured'])
+      );
+    });
   });
 
   dbTest('indexing status separates pgvector extension from usable storage', async ({ db }) => {
-    await withTempConfig(
-      { knowledge: { semantic_search: { enabled: true, provider: 'openai' } } },
-      async () => {
-        const status = await new KnowledgeIndexingStatusService(db).find();
+    await withTempConfig({}, async () => {
+      await new KnowledgeSettingsService(db).patch(null, {
+        enabled: true,
+        provider: 'openai',
+      });
+      const status = await new KnowledgeIndexingStatusService(db).find();
 
-        expect(status.pgvector_available).toBe(false);
-        expect(status.pgvector_extension_installed).toBe(false);
-        expect(status.pgvector_storage_ready).toBe(false);
-        expect(status.last_error).toContain('not PostgreSQL');
-      }
-    );
+      expect(status.pgvector_available).toBe(false);
+      expect(status.pgvector_extension_installed).toBe(false);
+      expect(status.pgvector_storage_ready).toBe(false);
+      expect(status.last_error).toContain('not PostgreSQL');
+    });
   });
 
   dbTest(
@@ -754,10 +756,13 @@ describe('Knowledge semantic indexing lifecycle', () => {
     async ({ db }) => {
       await withTempConfig({}, async () => {
         const indexer = new KnowledgeEmbeddingIndexer(db);
-        (indexer as unknown as { lastError: string | null }).lastError = 'old pgvector error';
+        (
+          indexer as unknown as { lastErrorByTenant: Map<string, string | null> }
+        ).lastErrorByTenant.set('default', 'old pgvector error');
 
         await expect(indexer.indexBatch()).resolves.toBe(0);
         expect(indexer.getLastError()).toBeNull();
+        expect(indexer.getLastError('another-tenant')).toBeNull();
       });
     }
   );

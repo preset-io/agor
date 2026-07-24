@@ -1,4 +1,3 @@
-import type { AgorConfig } from '@agor/core/config';
 import {
   and,
   eq,
@@ -10,17 +9,18 @@ import {
   select,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { KnowledgeDocumentVersionID } from '@agor/core/types';
-import { DEFAULT_KNOWLEDGE_CHUNKING } from './embeddings.js';
+import type { KnowledgeDocumentVersionID, KnowledgeSemanticPolicy } from '@agor/core/types';
 import { chunkMarkdownForKnowledge, type MarkdownChunkerOptions } from './markdown-chunker.js';
 
-export function knowledgeChunkerOptionsFromConfig(config: AgorConfig): MarkdownChunkerOptions {
-  const chunking = config.knowledge?.semantic_search?.chunking ?? {};
+export function knowledgeChunkerOptionsFromSettings(
+  settings: KnowledgeSemanticPolicy
+): MarkdownChunkerOptions {
+  const { chunking } = settings;
   return {
-    targetTokens: chunking.target_tokens ?? DEFAULT_KNOWLEDGE_CHUNKING.target_tokens,
-    maxTokens: chunking.max_tokens ?? DEFAULT_KNOWLEDGE_CHUNKING.max_tokens,
-    overlapTokens: chunking.overlap_tokens ?? DEFAULT_KNOWLEDGE_CHUNKING.overlap_tokens,
-    minTokens: chunking.min_tokens ?? DEFAULT_KNOWLEDGE_CHUNKING.min_tokens,
+    targetTokens: chunking.target_tokens,
+    maxTokens: chunking.max_tokens,
+    overlapTokens: chunking.overlap_tokens,
+    minTokens: chunking.min_tokens,
   };
 }
 
@@ -48,7 +48,7 @@ export function knowledgeUnitsForMarkdown(
 
 export async function rebuildCurrentKnowledgeUnits(
   db: TenantScopeAwareDatabase,
-  config: AgorConfig,
+  settings: KnowledgeSemanticPolicy,
   options: { embeddingConfigured: boolean }
 ): Promise<number> {
   const rows = (await select(db)
@@ -62,7 +62,7 @@ export async function rebuildCurrentKnowledgeUnits(
     .all()) as Array<Record<string, unknown>>;
 
   const documents = new KnowledgeDocumentRepository(db);
-  const chunkerOptions = knowledgeChunkerOptionsFromConfig(config);
+  const chunkerOptions = knowledgeChunkerOptionsFromSettings(settings);
   let queued = 0;
   for (const row of rows) {
     const document = row.kb_documents as typeof kbDocuments.$inferSelect;
