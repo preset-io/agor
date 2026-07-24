@@ -1,7 +1,12 @@
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { SdkHealthFailureInput } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isSdkHealthAbort, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
+import {
+  isSdkHealthAbort,
+  mapSdkActivity,
+  markSdkHealthAbort,
+  SdkWatchdog,
+} from './sdk-watchdog.js';
 
 const baseConfig: ResolvedSdkWatchdogConfig = {
   mode: 'observe',
@@ -101,6 +106,33 @@ describe('SdkWatchdog', () => {
     vi.advanceTimersByTime(599);
     expect(decisions).toEqual([]);
     vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('no_first_progress');
+  });
+
+  it('resumes supervision after an OpenCode permission update', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(400);
+    watchdog.record('waiting', 'permission.asked');
+    vi.advanceTimersByTime(5_000);
+
+    const resumed = mapSdkActivity('opencode', 'permission.updated');
+    expect(resumed).toEqual({ kind: 'sdk_started', detail: 'permission.resolved' });
+    if (resumed) watchdog.record(resumed.kind, resumed.detail);
+
+    vi.advanceTimersByTime(599);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('no_first_progress');
+  });
+
+  it('resumes supervision after a permission timeout', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    watchdog.record('waiting', 'permission.request');
+    vi.advanceTimersByTime(5_000);
+    watchdog.record('sdk_started', 'permission.timeout');
+    vi.advanceTimersByTime(1_000);
     expect(decisions[0]?.reason).toBe('no_first_progress');
   });
 

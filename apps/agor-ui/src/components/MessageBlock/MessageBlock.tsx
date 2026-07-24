@@ -48,6 +48,7 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import type { TaskProgressState } from '../taskProgressState';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
@@ -86,7 +87,7 @@ interface MessageBlockProps {
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
   userById?: Map<string, User>;
   currentUserId?: string;
-  isTaskRunning?: boolean; // Whether the parent presents the task as actively running
+  taskProgressState?: TaskProgressState;
   agentic_tool?: string; // Agentic tool name for showing tool icon
   sessionId?: string | null;
   taskId?: string;
@@ -316,7 +317,7 @@ function DaemonRestartNotice({
 //     gets a new ref each chunk — correct: it should re-render)
 //   - `userById`: from AppUserDataContext (stable across session patches)
 //   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `teammateEmoji`,
-//     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
+//     `taskProgressState`, `isLatestMessage`, `isFirstPending*`: primitives or
 //     stable derived values
 //   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
 //     and passed through useMemo'd AppActionsContext
@@ -324,7 +325,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
   userById = new Map(),
   currentUserId,
-  isTaskRunning = false,
+  taskProgressState = 'inactive',
   agentic_tool,
   sessionId,
   taskId,
@@ -336,6 +337,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onOpenAgenticToolSettings,
 }) => {
   const { token } = theme.useToken();
+  const isTaskRunning = taskProgressState === 'running';
 
   // Handle permission request messages specially
   if (message.type === 'permission_request') {
@@ -788,7 +790,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 hasResult: !!toolResult || hasImplicitResult,
                 isError: !!toolResult?.is_error,
                 isPotentiallyRunning,
-                isTaskRunning,
+                taskProgressState,
               });
               const icon = renderToolStatusIcon(status);
 

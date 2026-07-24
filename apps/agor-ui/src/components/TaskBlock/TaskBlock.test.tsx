@@ -261,14 +261,15 @@ describe('groupMessagesIntoBlocks — widget_request ordering', () => {
 });
 
 describe('TaskBlock SDK failure presentation', () => {
-  it('shows an active observe-only diagnosis in the collapsed header', () => {
-    renderTaskBlock(
+  it('shows an active observe-only diagnosis without a running spinner in the collapsed header', () => {
+    const { container } = renderTaskBlock(
       makeTask({
         sdk_failure: observedSdkFailure,
       })
     );
 
     expect(screen.getByText('Agent progress stalled')).toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
   });
 
   it('explains an active observe-only diagnosis without showing work in progress', () => {
@@ -297,7 +298,7 @@ describe('TaskBlock SDK failure presentation', () => {
     );
 
     const compaction = screen
-      .getByText('Compacting conversation context...')
+      .getByText('Context compaction stalled')
       .closest('[data-conversation-block]');
     expect(compaction).not.toBeNull();
     expect(compaction?.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();

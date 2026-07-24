@@ -53,6 +53,7 @@ import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
+import type { TaskProgressState } from '../taskProgressState';
 
 const { Paragraph } = Typography;
 
@@ -510,7 +511,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       !laterObserveProgress
         ? sdkFailure
         : undefined;
-    const presentTaskAsRunning = task.status === TaskStatus.RUNNING && !activeSdkFailure;
+    const taskProgressState: TaskProgressState = activeSdkFailure
+      ? 'stalled'
+      : task.status === TaskStatus.RUNNING
+        ? 'running'
+        : 'inactive';
+    const presentTaskAsRunning = taskProgressState === 'running';
 
     // Use computed context window from database (already summed across tasks since last compaction)
     // If undefined, it means the backend computation failed or hasn't run yet
@@ -543,7 +549,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           ) : (
             <DownOutlined style={{ color: token.colorPrimary }} />
           )}
-          <TaskStatusIcon status={task.status} size={16} />
+          <TaskStatusIcon status={task.status} size={16} progressState={taskProgressState} />
         </Flex>
 
         {/* Right column: Content */}
@@ -766,7 +772,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               agentic_tool={agentic_tool}
                               userById={userById}
                               currentUserId={task.created_by}
-                              isTaskRunning={presentTaskAsRunning}
+                              taskProgressState={taskProgressState}
                               sessionId={sessionId}
                               onPermissionDecision={onPermissionDecision}
                               isFirstPendingPermission={isFirstPending}
@@ -786,7 +792,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <AgentChain
                               messages={block.messages}
-                              isTaskRunning={presentTaskAsRunning}
+                              taskProgressState={taskProgressState}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                             />
                           </div>
@@ -800,7 +806,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                             <CompactionBlock
                               messages={block.messages}
                               agentic_tool={agentic_tool}
-                              isTaskRunning={presentTaskAsRunning}
+                              taskProgressState={taskProgressState}
                             />
                           </div>
                         );

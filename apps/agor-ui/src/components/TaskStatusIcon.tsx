@@ -7,9 +7,11 @@ import {
   MinusCircleOutlined,
   PauseCircleOutlined,
   QuestionCircleOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { Spin, theme } from 'antd';
 import type React from 'react';
+import type { TaskProgressState } from './taskProgressState';
 
 type TaskStatusValue = (typeof TaskStatus)[keyof typeof TaskStatus];
 type SessionStatusValue = (typeof SessionStatus)[keyof typeof SessionStatus];
@@ -17,6 +19,7 @@ type SessionStatusValue = (typeof SessionStatus)[keyof typeof SessionStatus];
 interface TaskStatusIconProps {
   status: TaskStatusValue | SessionStatusValue;
   size?: number;
+  progressState?: TaskProgressState;
 }
 
 /**
@@ -25,10 +28,18 @@ interface TaskStatusIconProps {
  * Keeps status → icon/color mapping in one place so TaskBlock, TaskListItem, etc.
  * stay visually consistent.
  */
-export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({ status, size = 16 }) => {
+export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({
+  status,
+  size = 16,
+  progressState,
+}) => {
   const { token } = theme.useToken();
   const iconStyle = { fontSize: size };
   const spinSize = size <= 14 ? 'small' : size >= 24 ? 'large' : 'default';
+
+  if (progressState === 'stalled') {
+    return <WarningOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
+  }
 
   switch (status) {
     case TaskStatus.COMPLETED:

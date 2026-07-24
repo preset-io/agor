@@ -8,8 +8,9 @@
 import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { Spin, Tooltip } from 'antd';
 import type React from 'react';
+import type { TaskProgressState } from '../taskProgressState';
 
-export type ToolStatus = 'success' | 'error' | 'pending' | 'stale';
+export type ToolStatus = 'success' | 'error' | 'pending' | 'stalled' | 'stale';
 
 /**
  * Tools whose invocation payload itself represents terminal state, even without
@@ -31,8 +32,8 @@ interface ToolStatusInput {
    * them have a subsequent result, so they all remain "pending".
    */
   isPotentiallyRunning: boolean;
-  /** Whether the parent task is still running */
-  isTaskRunning: boolean;
+  /** How the parent task should present unfinished work */
+  taskProgressState: TaskProgressState;
 }
 
 /**
@@ -42,16 +43,19 @@ interface ToolStatusInput {
  * - Has result + error → 'error'
  * - Has result + no error → 'success'
  * - No result + potentially running + task running → 'pending' (spinner)
+ * - No result + potentially running + task stalled → 'stalled' (neutral)
  * - No result + (not potentially running OR task done) → 'stale' (agent moved on)
  */
 export function deriveToolStatus({
   hasResult,
   isError,
   isPotentiallyRunning,
-  isTaskRunning,
+  taskProgressState,
 }: ToolStatusInput): ToolStatus {
   if (hasResult) return isError ? 'error' : 'success';
-  return isPotentiallyRunning && isTaskRunning ? 'pending' : 'stale';
+  if (!isPotentiallyRunning) return 'stale';
+  if (taskProgressState === 'running') return 'pending';
+  return taskProgressState === 'stalled' ? 'stalled' : 'stale';
 }
 
 /** Render the icon for a given tool status. */
@@ -63,6 +67,12 @@ export function renderToolStatusIcon(status: ToolStatus): React.ReactNode {
       return <CheckCircleOutlined style={{ fontSize: 14 }} />;
     case 'pending':
       return <Spin size="small" />;
+    case 'stalled':
+      return (
+        <Tooltip title="Agent progress stalled">
+          <ClockCircleOutlined style={{ fontSize: 14 }} />
+        </Tooltip>
+      );
     case 'stale':
       return (
         <Tooltip title="Agent moved on — result not captured">

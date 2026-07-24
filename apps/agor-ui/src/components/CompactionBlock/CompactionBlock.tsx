@@ -15,19 +15,20 @@ import { CheckCircleFilled } from '@ant-design/icons';
 import { Space, Spin, Typography, theme } from 'antd';
 import type React from 'react';
 import { SystemMessage } from '../SystemMessage';
+import type { TaskProgressState } from '../taskProgressState';
 
 const { Text } = Typography;
 
 interface CompactionBlockProps {
   messages: Message[]; // Array of system messages (start, complete)
   agentic_tool?: string;
-  isTaskRunning: boolean;
+  taskProgressState: TaskProgressState;
 }
 
 export const CompactionBlock: React.FC<CompactionBlockProps> = ({
   messages,
   agentic_tool,
-  isTaskRunning,
+  taskProgressState,
 }) => {
   const { token } = theme.useToken();
 
@@ -100,8 +101,12 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({
   // Otherwise, show in-progress state without implying progress after a stall.
   const inProgressContent = (
     <Space>
-      {isTaskRunning && <Spin size="small" />}
-      <Text type="secondary">Compacting conversation context...</Text>
+      {taskProgressState === 'running' && <Spin size="small" />}
+      <Text type="secondary">
+        {taskProgressState === 'stalled'
+          ? 'Context compaction stalled'
+          : 'Compacting conversation context...'}
+      </Text>
     </Space>
   );
 

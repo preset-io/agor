@@ -51,6 +51,7 @@ import {
   ToolBlock,
 } from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import type { TaskProgressState } from '../taskProgressState';
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -77,8 +78,8 @@ interface AgentChainProps {
    * Messages containing thoughts and/or tool uses
    */
   messages: Message[];
-  /** Whether the parent task is still running (controls spinner vs stale for pending tools) */
-  isTaskRunning?: boolean;
+  /** How the parent task should present unfinished work */
+  taskProgressState?: TaskProgressState;
   /** Whether this is the latest (most recent) agent chain block — used for pending/stale status detection */
   isLatest?: boolean;
 }
@@ -135,7 +136,7 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest }) => {
+  ({ messages, taskProgressState = 'inactive', isLatest }) => {
     const { token } = theme.useToken();
     const [expanded, setExpanded] = useState(true);
 
@@ -456,7 +457,7 @@ export const AgentChain = React.memo<AgentChainProps>(
         hasResult: !!toolResult || hasImplicitResult,
         isError: !!isError,
         isPotentiallyRunning,
-        isTaskRunning,
+        taskProgressState,
       });
       const icon = renderToolStatusIcon(status);
 

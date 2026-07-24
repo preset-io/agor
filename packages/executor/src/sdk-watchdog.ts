@@ -23,7 +23,6 @@ const STARTED = new Set([
   'codex:event_msg.turn_context',
   'gemini:model_info',
   'copilot:assistant.turn_start',
-  'opencode:permission.updated',
 ]);
 const WAITING = new Set([
   'claude-code:permission.request',
@@ -75,6 +74,9 @@ export function mapSdkActivity(
   const detail = boundedDetail(discriminator);
   const key = `${adapter}:${detail}`;
   if (WAITING.has(key)) return { kind: 'waiting', detail };
+  if (adapter === 'opencode' && detail === 'permission.updated') {
+    return { kind: 'sdk_started', detail: 'permission.resolved' };
+  }
   if (STARTED.has(key)) return { kind: 'sdk_started', detail };
   if (PROGRESS.has(key)) return { kind: 'progress', detail };
   return { kind: 'unknown_activity', detail };
@@ -190,10 +192,11 @@ export class SdkWatchdog {
       return;
     }
     const pausedAt = this.state.pausedAt;
-    if (pausedAt !== undefined && !(kind === 'sdk_started' && detail === 'permission.resolved')) {
-      return;
-    }
-    const resumed = pausedAt !== undefined;
+    const resumed =
+      pausedAt !== undefined &&
+      kind === 'sdk_started' &&
+      (detail === 'permission.resolved' || detail === 'permission.timeout');
+    if (pausedAt !== undefined && !resumed) return;
     if (pausedAt !== undefined) {
       const pausedFor = now - pausedAt;
       for (const key of ['startedAt', 'lastRawAt', 'firstProgressAt', 'idleAnchor'] as const) {
@@ -202,9 +205,7 @@ export class SdkWatchdog {
       this.state.pausedAt = undefined;
     }
     this.state.startedAt ??= now;
-    if (!(resumed && kind === 'sdk_started' && detail === 'permission.resolved')) {
-      this.state.lastRawAt = now;
-    }
+    if (!resumed) this.state.lastRawAt = now;
     if (kind === 'unknown_activity') this.state.unknownCount++;
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
