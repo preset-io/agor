@@ -1,6 +1,7 @@
 import { Head } from 'nextra/components';
 import 'nextra-theme-docs/style.css';
 import { Hanken_Grotesk, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
+import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
@@ -129,6 +130,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <DocsAuroraBackground />
         {children}
+        {/* HubSpot tracking / embed loader (portal 246818610). */}
+        <Script
+          id="hs-script-loader"
+          strategy="afterInteractive"
+          src="https://js-na2.hs-scripts.com/246818610.js"
+        />
       </body>
     </html>
   );
