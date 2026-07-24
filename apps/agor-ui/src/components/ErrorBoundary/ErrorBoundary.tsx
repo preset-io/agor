@@ -12,11 +12,19 @@ interface ErrorBoundaryProps {
   //     entire app.
   variant?: 'scoped' | 'global';
   fallbackTitle?: ReactNode;
+  // Optional component-specific fallback. This keeps failures isolated without
+  // forcing every surface into the generic Alert or global crash screen.
+  fallbackRender?: (props: ErrorBoundaryFallbackRenderProps) => ReactNode;
   // When this value changes, the boundary clears its error state and re-renders
   // children. Useful when fresh data may unblock the failed render (e.g. a
   // logs refresh after a transient bad payload). The global variant doesn't
   // typically use this — the user reloads instead.
   resetKey?: unknown;
+}
+
+export interface ErrorBoundaryFallbackRenderProps {
+  error: Error;
+  errorInfo: ErrorInfo | null;
 }
 
 interface ErrorBoundaryState {
@@ -53,9 +61,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render() {
     const { error, errorInfo } = this.state;
-    const { variant = 'scoped', fallbackTitle, children } = this.props;
+    const { variant = 'scoped', fallbackTitle, fallbackRender, children } = this.props;
 
     if (error) {
+      if (fallbackRender) {
+        return fallbackRender({ error, errorInfo });
+      }
       if (variant === 'global') {
         return <GlobalCrashScreen error={error} errorInfo={errorInfo} />;
       }

@@ -1,3 +1,4 @@
 export { getCrashContext, setCrashContext } from './crashContext';
-export { ErrorBoundary } from './ErrorBoundary';
+export { isDynamicImportLoadError } from './dynamicImportError';
+export { ErrorBoundary, type ErrorBoundaryFallbackRenderProps } from './ErrorBoundary';
 export { GlobalCrashScreen } from './GlobalCrashScreen';

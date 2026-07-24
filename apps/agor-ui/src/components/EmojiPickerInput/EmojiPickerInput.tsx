@@ -1,11 +1,14 @@
-import { SmileOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SmileOutlined } from '@ant-design/icons';
 import { Button, Flex, Form, Input, Popover, Typography } from 'antd';
 import type { EmojiClickData, PickerProps } from 'emoji-picker-react';
 import { lazy, Suspense, useState } from 'react';
+import { ErrorBoundary, isDynamicImportLoadError } from '../ErrorBoundary';
 
 // Lazy-load the emoji-picker-react render (~60KB) so the library is fetched
 // only when a picker is first opened, not at app mount. Types above are
 // `import type` and erase at compile time, so they don't pull the library in.
+// A failed native import cannot be retried in the same document, so the local
+// boundary below contains the failure and offers a full-page reload instead.
 const AgorEmojiPickerInner = lazy(() => import('./AgorEmojiPickerInner'));
 
 /**
@@ -18,6 +21,32 @@ const EmojiPickerFallback: React.FC = () => (
   </Flex>
 );
 
+export const EmojiPickerErrorFallback: React.FC<{
+  error: Error;
+  onReload?: () => void;
+}> = ({ error, onReload = () => window.location.reload() }) => {
+  const isLoadError = isDynamicImportLoadError(error);
+
+  return (
+    <Flex vertical align="center" justify="center" gap="small" style={{ width: 350, height: 400 }}>
+      <Typography.Text type="secondary">
+        {isLoadError ? "Couldn't load the emoji picker." : 'The emoji picker is unavailable.'}
+      </Typography.Text>
+      {isLoadError ? (
+        <Button size="small" icon={<ReloadOutlined />} aria-label="Reload page" onClick={onReload}>
+          Reload page
+        </Button>
+      ) : null}
+    </Flex>
+  );
+};
+
+const EmojiPickerBoundary: React.FC<React.PropsWithChildren> = ({ children }) => (
+  <ErrorBoundary fallbackRender={({ error }) => <EmojiPickerErrorFallback error={error} />}>
+    {children}
+  </ErrorBoundary>
+);
+
 /**
  * Shared <EmojiPicker /> wrapper that pins CSP-safe and visually-consistent
  * defaults. Always use this instead of importing EmojiPicker directly — the
@@ -25,9 +54,11 @@ const EmojiPickerFallback: React.FC = () => (
  * cdn.jsdelivr.net, blocked by Agor's default img-src CSP.
  */
 export const AgorEmojiPicker: React.FC<Pick<PickerProps, 'onEmojiClick'>> = ({ onEmojiClick }) => (
-  <Suspense fallback={<EmojiPickerFallback />}>
-    <AgorEmojiPickerInner onEmojiClick={onEmojiClick} />
-  </Suspense>
+  <EmojiPickerBoundary>
+    <Suspense fallback={<EmojiPickerFallback />}>
+      <AgorEmojiPickerInner onEmojiClick={onEmojiClick} />
+    </Suspense>
+  </EmojiPickerBoundary>
 );
 
 interface EmojiPickerInputProps {
