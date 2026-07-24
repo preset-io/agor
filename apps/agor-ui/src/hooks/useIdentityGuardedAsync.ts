@@ -18,7 +18,9 @@ export interface IdentityGuardedAsync {
    * Whether the identity is still the one live at the most recent `run` call.
    * Intended for inline guards inside a loop where at most one operation is in
    * flight (e.g. a self-scheduling poll); for concurrent one-shot calls, rely on
-   * `run`'s per-call guard instead.
+   * `run`'s per-call guard instead. Returns `false` until the first `run` — call
+   * it only from work that a `run` has already gated (e.g. a poll armed by it),
+   * never as a standalone readiness check.
    */
   isCurrent: () => boolean;
 }
