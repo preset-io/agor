@@ -239,7 +239,8 @@ security:
 
 Admins can then add or remove exact origins from **Settings → CORS**. Changes
 are stored for that workspace and take effect live; they do not require editing
-`config.yaml` or restarting the daemon.
+`config.yaml` or restarting the daemon. The page shows only workspace-managed
+additions; deployment-level and built-in origins remain operator-side details.
 
 Operators can disable this capability with
 `security.cors.tenant_origins.enabled: false`.

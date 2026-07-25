@@ -169,7 +169,6 @@ export interface RegisterServicesContext {
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   resolvedCors: ResolvedCors;
-  operatorCorsOrigins: string[];
   multiTenancy: ResolvedMultiTenancyConfig;
   tenantCorsPolicyStore: TenantCorsPolicyStore;
 }
@@ -557,7 +556,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     '/tenant-cors-settings',
     createTenantCorsSettingsService(db, {
       resolvedCors: ctx.resolvedCors,
-      operatorOrigins: ctx.operatorCorsOrigins,
       multiTenancy: ctx.multiTenancy,
       policyStore: ctx.tenantCorsPolicyStore,
     }),

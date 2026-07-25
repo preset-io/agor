@@ -39,6 +39,8 @@ export interface CorsConfigOptions {
    * rejected by the cors() callback. Bug surfaced in 0.17.3 — see PR #1106.
    */
   daemonPort: number;
+  /** Whether to include localhost/Vite development origins. Defaults to false. */
+  allowLocalhost?: boolean;
   /**
    * Browser-facing application origin derived from AGOR_BASE_URL or its
    * config equivalent. The first-party UI must always be able to reach the
@@ -52,8 +54,6 @@ export interface CorsConfigOptions {
 export interface CorsConfigResult {
   /** The resolved CORS origin configuration passed to `cors()` middleware. */
   origin: CorsOrigin;
-  /** Human-readable effective operator/built-in origin entries for Settings. */
-  operatorOrigins: string[];
   /** Localhost origins for local development */
   localhostOrigins: string[];
   /**
@@ -125,18 +125,20 @@ function parseRegexPattern(entry: string): RegExp | null {
  * PNA, credential stripping, etc.
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, daemonPort, applicationOrigin, resolved } = options;
+  const { uiPort, daemonPort, allowLocalhost = false, applicationOrigin, resolved } = options;
 
   // Localhost allow-list:
   //   - daemon port (npm-installed mode serves the UI from the daemon origin)
   //   - UI port + 3 successors (Vite + parallel dev servers)
-  const localhostOrigins = [
-    `http://localhost:${daemonPort}`,
-    `http://localhost:${uiPort}`,
-    `http://localhost:${uiPort + 1}`,
-    `http://localhost:${uiPort + 2}`,
-    `http://localhost:${uiPort + 3}`,
-  ];
+  const localhostOrigins = allowLocalhost
+    ? [
+        `http://localhost:${daemonPort}`,
+        `http://localhost:${uiPort}`,
+        `http://localhost:${uiPort + 1}`,
+        `http://localhost:${uiPort + 2}`,
+        `http://localhost:${uiPort + 3}`,
+      ]
+    : [];
 
   const extraOptions: Pick<CorsOptions, 'methods' | 'allowedHeaders' | 'maxAge'> = {};
   if (resolved.methods) extraOptions.methods = resolved.methods;
@@ -154,7 +156,6 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     );
     return {
       origin: resolved.mode === 'wildcard' ? '*' : true,
-      operatorOrigins: [resolved.mode === 'wildcard' ? '*' : 'Any origin (reflected)'],
       localhostOrigins,
       credentialsAllowed: false,
       isWildcard: true,
@@ -178,7 +179,6 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
         if (requestOrigin === 'null') return callback(null, true);
         callback(new Error('Not allowed by CORS'));
       },
-      operatorOrigins: ['null'],
       localhostOrigins,
       credentialsAllowed: resolved.credentials,
       isWildcard: false,
@@ -191,7 +191,6 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   // --- List mode: localhost + sandpack + user-provided. ------
   const exactOrigins = new Set(localhostOrigins);
   const patterns: RegExp[] = [];
-  const configuredOrigins: string[] = [];
 
   if (applicationOrigin) {
     exactOrigins.add(applicationOrigin);
@@ -200,8 +199,10 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   // Tightened localhost regex: only the daemon port + configured UI port range,
   // not "any port". We accept both http and https for localhost so that
   // operators terminating TLS in front of a local UI dev server still work.
-  const localhostPortRange = [daemonPort, uiPort, uiPort + 1, uiPort + 2, uiPort + 3].join('|');
-  patterns.push(new RegExp(`^https?:\\/\\/localhost:(${localhostPortRange})$`));
+  if (allowLocalhost) {
+    const localhostPortRange = [daemonPort, uiPort, uiPort + 1, uiPort + 2, uiPort + 3].join('|');
+    patterns.push(new RegExp(`^https?:\\/\\/localhost:(${localhostPortRange})$`));
+  }
 
   // Sandpack/CodeSandbox bundler (on by default, configurable).
   if (resolved.allowSandpack) {
@@ -217,10 +218,8 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
     const regex = parseRegexPattern(entry);
     if (regex) {
       patterns.push(regex);
-      configuredOrigins.push(entry);
     } else {
       exactOrigins.add(entry);
-      configuredOrigins.push(entry);
     }
   }
 
@@ -254,15 +253,6 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
 
   return {
     origin,
-    operatorOrigins: [
-      ...new Set([
-        ...localhostOrigins,
-        ...localhostOrigins.map((entry) => entry.replace('http://', 'https://')),
-        ...(applicationOrigin ? [applicationOrigin] : []),
-        ...(resolved.allowSandpack ? ['https://*.codesandbox.io'] : []),
-        ...configuredOrigins,
-      ]),
-    ].sort(),
     localhostOrigins,
     credentialsAllowed: resolved.credentials,
     isWildcard: false,

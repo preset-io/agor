@@ -335,7 +335,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                     <Descriptions.Item label="Allowed Origins">
                       {healthInfo.security.cors.originCount} configured{' '}
                       <Typography.Text type="secondary">
-                        (+ application URL, + localhost dev ports
+                        (+ application URL
                         {healthInfo.security.cors.allowSandpack && ', + Sandpack'})
                       </Typography.Text>
                     </Descriptions.Item>

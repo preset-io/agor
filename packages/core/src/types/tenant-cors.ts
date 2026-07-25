@@ -121,8 +121,6 @@ export interface TenantCorsSettings {
   routing_ready: boolean;
   revision: number;
   origins: string[];
-  /** Read-only effective global entries from operator configuration and built-ins. */
-  operator_origins: string[];
   credentials: boolean;
   updated_by?: UserID;
   updated_at?: string;

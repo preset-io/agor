@@ -20,7 +20,6 @@ import type { TenantCorsPolicyStore } from '../setup/tenant-cors.js';
 
 export interface TenantCorsSettingsServiceOptions {
   resolvedCors: ResolvedCors;
-  operatorOrigins: string[];
   multiTenancy: ResolvedMultiTenancyConfig;
   policyStore: TenantCorsPolicyStore;
 }
@@ -50,7 +49,6 @@ export class TenantCorsSettingsService {
       routing_ready: this.routingReady(),
       revision: stored.revision,
       origins: stored.origins,
-      operator_origins: [...this.options.operatorOrigins],
       credentials: this.options.resolvedCors.credentials,
       ...(stored.updated_by ? { updated_by: stored.updated_by } : {}),
       ...(stored.updated_at ? { updated_at: stored.updated_at } : {}),

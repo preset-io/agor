@@ -84,7 +84,7 @@ security:
 
 | Mode          | Behaviour                                                                                                             | Credentials       |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `list`        | Only origins in `origins[]` + built-ins (application URL, localhost, Sandpack)                                        | Allowed (default) |
+| `list`        | Only origins in `origins[]` + built-ins (application URL, development localhost, Sandpack)                            | Allowed (default) |
 | `wildcard`    | Accept any origin (returns `Access-Control-Allow-Origin: *`)                                                          | Forced off        |
 | `reflect`     | Echo the request's `Origin` header back                                                                               | Forced off        |
 | `null-origin` | Accept `Origin: null` (sandboxed iframes, `file://` docs) plus no-origin non-browser clients (curl, server-to-server) | Allowed           |
@@ -109,6 +109,10 @@ Those entries are stored in typed tenant-scoped database tables, audited,
 cached per tenant, and applied live without rewriting `config.yaml` or
 restarting the daemon.
 
+The tenant Settings API and UI expose only those tenant-managed additions.
+Operator and built-in origins are enforced by the daemon but are not returned
+to tenant admins, avoiding unnecessary disclosure of deployment topology.
+
 Tenant entries are exact origins only: no paths, query strings, wildcards,
 regular expressions, or `Origin: null`. Operator origins retain their existing
 exact/regex compatibility behavior.
@@ -131,7 +135,7 @@ Artifacts commonly render inside the hosted Sandpack iframe
 (`https://*.codesandbox.io`) while the Agor API URL may point at a loopback,
 internal, VPN, or sandbox host. That includes obvious local URLs like
 `http://localhost:<port>`, but it can also include public-looking names such as
-`https://agor.sandbox.preset.zone` if DNS routes them to a private network
+`https://app.example.com` if DNS routes them to a private network
 address. Chromium treats this as a public HTTPS origin trying to reach a
 private/local address space. Depending on Chrome version and flags, the browser
 may enforce Private Network Access / Local Network Access before the artifact's

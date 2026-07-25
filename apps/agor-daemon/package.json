@@ -13,8 +13,8 @@
   },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false && node scripts/stamp-build-info.mjs",
-    "dev": "concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts\"",
-    "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts",
+    "dev": "NODE_ENV=development concurrently -k -n core,daemon -c cyan,green \"pnpm --filter @agor/core dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts\"",
+    "dev:daemon-only": "NODE_ENV=development tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts",
     "start": "node dist/main.js",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",

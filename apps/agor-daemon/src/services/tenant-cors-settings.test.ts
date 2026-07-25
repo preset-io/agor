@@ -19,7 +19,6 @@ function serviceFor(
       resolvedCors: resolveSecurity({
         security: { cors: { tenant_origins: { enabled } } },
       }).cors,
-      operatorOrigins: ['https://operator.example.com'],
       multiTenancy: resolveMultiTenancyConfig({}),
       policyStore: { invalidate } as unknown as TenantCorsPolicyStore,
     }),
@@ -49,8 +48,8 @@ describe('TenantCorsSettingsService', () => {
       routing_ready: true,
       revision: 1,
       origins: ['https://app.example.com', 'https://xn--bcher-kva.example'],
-      operator_origins: ['https://operator.example.com'],
     });
+    expect(updated).not.toHaveProperty('operator_origins');
     expect(invalidate).toHaveBeenCalledWith('default');
   });
 

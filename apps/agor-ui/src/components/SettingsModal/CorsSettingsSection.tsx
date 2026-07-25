@@ -104,8 +104,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
     const removesCurrentOrigin =
       currentOrigin !== undefined &&
       settings.origins.includes(currentOrigin) &&
-      !origins.includes(currentOrigin) &&
-      !settings.operator_origins.includes(currentOrigin);
+      !origins.includes(currentOrigin);
 
     if (removesCurrentOrigin) {
       modal.confirm({
@@ -170,6 +169,10 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
 
             <Card title="Workspace origins">
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <Typography.Text type="secondary">
+                  Only additional origins managed for this workspace are shown here. The application
+                  itself and deployment-level policy are handled separately.
+                </Typography.Text>
                 <Space.Compact style={{ width: '100%', maxWidth: 720 }}>
                   <Input
                     value={newOrigin}
@@ -194,7 +197,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
 
                 {origins.length === 0 ? (
                   <Typography.Text type="secondary">
-                    No workspace-specific origins are allowed.
+                    No additional workspace origins are configured.
                   </Typography.Text>
                 ) : (
                   <List
@@ -238,28 +241,6 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
             </Card>
           </>
         ))}
-
-      {settings && settings.operator_origins.length > 0 && (
-        <Card
-          title="Operator and built-in origins"
-          extra={<Tag>Read only</Tag>}
-          styles={{ body: { paddingTop: token.paddingSM } }}
-        >
-          <Typography.Paragraph type="secondary">
-            These effective baseline entries apply to every workspace and are managed outside this
-            page.
-          </Typography.Paragraph>
-          <List
-            size="small"
-            dataSource={settings.operator_origins}
-            renderItem={(origin) => (
-              <List.Item>
-                <Typography.Text code>{origin}</Typography.Text>
-              </List.Item>
-            )}
-          />
-        </Card>
-      )}
     </Space>
   );
 };

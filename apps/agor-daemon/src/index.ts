@@ -329,6 +329,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const corsConfig = buildCorsConfig({
     uiPort: UI_PORT,
     daemonPort: DAEMON_PORT,
+    allowLocalhost: process.env.NODE_ENV === 'development',
     applicationOrigin,
     resolved: resolvedSecurity.cors,
   });
@@ -672,7 +673,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     allowSuperadmin,
     requireAuth,
     resolvedCors: resolvedSecurity.cors,
-    operatorCorsOrigins: corsConfig.operatorOrigins,
     multiTenancy,
     tenantCorsPolicyStore: activeTenantCorsPolicyStore,
   });

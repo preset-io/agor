@@ -27,6 +27,7 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
+      allowLocalhost: true,
       resolved: resolve({}, { corsOriginEnv: '*' }),
     });
     expect(result.isWildcard).toBe(true);
@@ -69,6 +70,7 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
+      allowLocalhost: true,
       resolved: resolve(),
     });
     expect(result.isAllowedOrigin('http://localhost:5173')).toBe(true);
@@ -85,6 +87,7 @@ describe('buildCorsConfig', () => {
     const result = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 3030,
+      allowLocalhost: true,
       resolved: resolve(),
     });
     expect(result.isAllowedOrigin('http://localhost:3030')).toBe(true);
@@ -92,6 +95,7 @@ describe('buildCorsConfig', () => {
     const custom = buildCorsConfig({
       uiPort: 5173,
       daemonPort: 4040,
+      allowLocalhost: true,
       resolved: resolve(),
     });
     expect(custom.isAllowedOrigin('http://localhost:4040')).toBe(true);
@@ -106,7 +110,17 @@ describe('buildCorsConfig', () => {
       resolved: resolve(),
     });
     expect(result.isAllowedOrigin('https://app.example.com')).toBe(true);
-    expect(result.operatorOrigins).toContain('https://app.example.com');
+  });
+
+  it('does not allow localhost development origins outside development mode', () => {
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      daemonPort: 3030,
+      resolved: resolve(),
+    });
+    expect(result.localhostOrigins).toEqual([]);
+    expect(result.isAllowedOrigin('http://localhost:5173')).toBe(false);
+    expect(result.isAllowedOrigin('https://localhost:3030')).toBe(false);
   });
 
   it('treats Sandpack origins as accepted but not "allowed" for credentials', () => {
@@ -137,14 +151,6 @@ describe('buildCorsConfig', () => {
     expect(result.isAllowedOrigin('https://dash.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://api.internal.example.com')).toBe(true);
     expect(result.isAllowedOrigin('https://other.example.com')).toBe(false);
-    expect(result.operatorOrigins).toEqual(
-      expect.arrayContaining([
-        'https://dash.example.com',
-        '/\\.internal\\.example\\.com$/',
-        'https://*.codesandbox.io',
-        'http://localhost:5173',
-      ])
-    );
   });
 
   it('passes methods/allowedHeaders/maxAge through to cors() extraOptions', () => {
