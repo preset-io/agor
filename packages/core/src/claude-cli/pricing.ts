@@ -64,16 +64,16 @@ const PRICING: ReadonlyArray<{ prefix: string; price: ClaudeModelPricing }> = [
       webSearchPerRequest: 0.01,
     },
   },
-  // Opus 5 — flagship tier. Needs its OWN entry so the longest-prefix match
-  // doesn't fall through to `claude-opus-4`.
-  // TODO(pricing): confirm Opus 5 rates — placeholder mirrors Opus 4.x
+  // Opus 5 — $5/$25, unchanged from Opus 4.8 (half the cost of Fable 5).
+  // Needs its OWN entry so the longest-prefix match doesn't fall through to
+  // `claude-opus-4`.
   {
     prefix: 'claude-opus-5',
     price: {
-      inputPerMTok: 15,
-      outputPerMTok: 75,
-      cacheWritePerMTok: 18.75,
-      cacheReadPerMTok: 1.5,
+      inputPerMTok: 5,
+      outputPerMTok: 25,
+      cacheWritePerMTok: 6.25,
+      cacheReadPerMTok: 0.5,
       webSearchPerRequest: 0.01,
     },
   },
@@ -200,9 +200,9 @@ export function computeCost(
  */
 export function getContextWindowLimit(modelId: string | null | undefined): number {
   if (!modelId) return 200_000;
-  // Fable 5 ships a 1M context window natively — it's the default (and only)
-  // mode, not a beta opt-in, so the bare id already means 1M.
-  if (modelId.startsWith('claude-fable')) return 1_000_000;
+  // Fable 5 and Opus 5 ship a 1M context window natively — it's the default
+  // (and only) mode, not a beta opt-in, so the bare id already means 1M.
+  if (modelId.startsWith('claude-fable') || modelId.startsWith('claude-opus-5')) return 1_000_000;
   // 1M context beta — encoded as a model-id suffix in Agor; bare `claude-*`
   // ids without the `[1m]` suffix get the standard 200K window.
   if (modelId.includes('[1m]') || modelId.endsWith('-1m')) return 1_000_000;
