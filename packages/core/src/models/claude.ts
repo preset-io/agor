@@ -24,6 +24,13 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-opus-5',
+    displayName: 'Claude Opus 5',
+    family: 'claude-5',
+    description:
+      'Most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work',
+  },
+  {
     id: 'claude-fable-5',
     displayName: 'Claude Fable 5',
     family: 'claude-5',

@@ -64,6 +64,19 @@ const PRICING: ReadonlyArray<{ prefix: string; price: ClaudeModelPricing }> = [
       webSearchPerRequest: 0.01,
     },
   },
+  // Opus 5 — flagship tier. Needs its OWN entry so the longest-prefix match
+  // doesn't fall through to `claude-opus-4`.
+  // TODO(pricing): confirm Opus 5 rates — placeholder mirrors Opus 4.x
+  {
+    prefix: 'claude-opus-5',
+    price: {
+      inputPerMTok: 15,
+      outputPerMTok: 75,
+      cacheWritePerMTok: 18.75,
+      cacheReadPerMTok: 1.5,
+      webSearchPerRequest: 0.01,
+    },
+  },
   // Opus 4.x — most expensive tier.
   {
     prefix: 'claude-opus-4',
