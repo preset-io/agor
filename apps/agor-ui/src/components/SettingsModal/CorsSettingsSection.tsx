@@ -3,19 +3,19 @@ import { normalizeTenantCorsOrigin } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Alert,
-  App,
   Button,
   Card,
   Form,
   Input,
   List,
+  Popconfirm,
   Space,
   Spin,
   Tag,
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 
 export interface CorsSettingsSectionProps {
@@ -27,7 +27,6 @@ interface OriginFormValues {
 }
 
 export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client }) => {
-  const { modal } = App.useApp();
   const { showSuccess, showWarning } = useThemedMessage();
   const { token } = theme.useToken();
   const [originForm] = Form.useForm<OriginFormValues>();
@@ -61,16 +60,6 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
     void load();
   }, [load]);
 
-  const dirty = useMemo(
-    () =>
-      Boolean(
-        settings &&
-          (settings.origins.length !== origins.length ||
-            settings.origins.some((origin, index) => origin !== origins[index]))
-      ),
-    [origins, settings]
-  );
-
   const validateOrigin = (_rule: unknown, value?: string) => {
     if (!value?.trim()) return Promise.resolve();
 
@@ -89,58 +78,40 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
     }
   };
 
-  const addOrigin = ({ origin }: OriginFormValues) => {
-    const normalized = normalizeTenantCorsOrigin(origin);
-    setOrigins((current) => [...current, normalized].sort());
-    originForm.resetFields();
-  };
-
-  const persist = async () => {
-    if (!client || !settings) return;
+  const persist = async (nextOrigins: string[], successMessage: string): Promise<boolean> => {
+    if (!client || !settings) return false;
     setSaving(true);
     setError(null);
     try {
       const updated = await client.service('tenant-cors-settings').patch('current', {
         expected_revision: settings.revision,
-        origins,
+        origins: nextOrigins,
       });
       setSettings(updated);
       setOrigins(updated.origins);
-      showSuccess('CORS origins updated');
+      showSuccess(successMessage);
+      return true;
     } catch (saveError) {
       if ((saveError as { code?: number } | null)?.code === 409) {
         await load();
         showWarning('These origins changed elsewhere. The latest settings were reloaded.');
-        return;
+        return false;
       }
       setError(
         saveError instanceof Error ? saveError.message : 'Failed to update workspace CORS origins'
       );
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const save = () => {
-    if (!settings) return;
-    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
-    const removesCurrentOrigin =
-      currentOrigin !== undefined &&
-      settings.origins.includes(currentOrigin) &&
-      !origins.includes(currentOrigin);
-
-    if (removesCurrentOrigin) {
-      modal.confirm({
-        title: 'Remove the website you are using?',
-        content:
-          'If this site connects to the daemon across origins, it will lose browser access after the change.',
-        okText: 'Remove and save',
-        okButtonProps: { danger: true },
-        onOk: persist,
-      });
-      return;
+  const addOrigin = async ({ origin }: OriginFormValues) => {
+    const normalized = normalizeTenantCorsOrigin(origin);
+    const nextOrigins = [...origins, normalized].sort();
+    if (await persist(nextOrigins, 'CORS origin added')) {
+      originForm.resetFields();
     }
-    void persist();
   };
 
   if (loading) {
@@ -216,6 +187,8 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
                   >
                     <Input.Search
                       placeholder="https://app.example.com"
+                      disabled={saving}
+                      loading={saving}
                       enterButton={
                         <>
                           <PlusOutlined /> Add origin
@@ -234,40 +207,56 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
                   <List
                     bordered
                     dataSource={origins}
-                    renderItem={(origin) => (
-                      <List.Item
-                        actions={[
-                          <Button
-                            key={`remove-${origin}`}
-                            type="text"
-                            danger
-                            icon={<DeleteOutlined />}
-                            aria-label={`Remove ${origin}`}
-                            onClick={() =>
-                              setOrigins((current) => current.filter((item) => item !== origin))
-                            }
-                          />,
-                        ]}
-                      >
-                        <Typography.Text code>{origin}</Typography.Text>
-                        {typeof window !== 'undefined' && window.location.origin === origin && (
-                          <Tag color="blue" style={{ marginLeft: token.marginSM }}>
-                            Current site
-                          </Tag>
-                        )}
-                      </List.Item>
-                    )}
+                    renderItem={(origin) => {
+                      const isCurrentSite =
+                        typeof window !== 'undefined' && window.location.origin === origin;
+                      return (
+                        <List.Item
+                          actions={[
+                            <Popconfirm
+                              key={`remove-${origin}`}
+                              title={
+                                isCurrentSite
+                                  ? 'Remove the origin you are using?'
+                                  : 'Remove this origin?'
+                              }
+                              description={
+                                isCurrentSite
+                                  ? 'If this site relies on this workspace-managed entry, it may lose browser access after removal.'
+                                  : 'Browser applications from this origin will no longer be allowed by this workspace entry.'
+                              }
+                              okText="Remove"
+                              cancelText="Cancel"
+                              okButtonProps={{ danger: true }}
+                              disabled={saving}
+                              onConfirm={() =>
+                                persist(
+                                  origins.filter((item) => item !== origin),
+                                  'CORS origin removed'
+                                )
+                              }
+                            >
+                              <Button
+                                type="text"
+                                danger
+                                disabled={saving}
+                                icon={<DeleteOutlined />}
+                                aria-label={`Remove ${origin}`}
+                              />
+                            </Popconfirm>,
+                          ]}
+                        >
+                          <Typography.Text code>{origin}</Typography.Text>
+                          {isCurrentSite && (
+                            <Tag color="blue" style={{ marginLeft: token.marginSM }}>
+                              Current site
+                            </Tag>
+                          )}
+                        </List.Item>
+                      );
+                    }}
                   />
                 )}
-
-                <Space>
-                  <Button type="primary" loading={saving} disabled={!dirty} onClick={save}>
-                    Save changes
-                  </Button>
-                  <Button disabled={!dirty || saving} onClick={() => setOrigins(settings.origins)}>
-                    Reset
-                  </Button>
-                </Space>
               </Space>
             </Card>
           </>
