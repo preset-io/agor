@@ -50,6 +50,9 @@ export function normalizeTenantCorsOrigin(input: unknown): string {
   if (hasWhitespaceOrControl) {
     throw new TenantCorsOriginValidationError('Origin must not contain whitespace or controls');
   }
+  if (!/^[a-z][a-z0-9+.-]*:\/\//iu.test(value)) {
+    throw new TenantCorsOriginValidationError('Origin must include http:// or https://');
+  }
   if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#\\]+\/?$/iu.test(value)) {
     throw new TenantCorsOriginValidationError(
       'Enter an origin only, without a path, query string, or fragment'

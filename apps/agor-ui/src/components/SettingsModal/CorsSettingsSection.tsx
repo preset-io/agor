@@ -1,7 +1,20 @@
 import type { AgorClient, TenantCorsSettings } from '@agor-live/client';
 import { normalizeTenantCorsOrigin } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Input, List, Space, Spin, Tag, Typography, theme } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Form,
+  Input,
+  List,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+  theme,
+} from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 
@@ -9,14 +22,17 @@ export interface CorsSettingsSectionProps {
   client: AgorClient | null;
 }
 
+interface OriginFormValues {
+  origin: string;
+}
+
 export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client }) => {
   const { modal } = App.useApp();
   const { showSuccess, showWarning } = useThemedMessage();
   const { token } = theme.useToken();
+  const [originForm] = Form.useForm<OriginFormValues>();
   const [settings, setSettings] = useState<TenantCorsSettings | null>(null);
   const [origins, setOrigins] = useState<string[]>([]);
-  const [newOrigin, setNewOrigin] = useState('');
-  const [inputError, setInputError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -55,21 +71,28 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
     [origins, settings]
   );
 
-  const addOrigin = () => {
+  const validateOrigin = (_rule: unknown, value?: string) => {
+    if (!value?.trim()) return Promise.resolve();
+
     try {
-      const normalized = normalizeTenantCorsOrigin(newOrigin);
+      const normalized = normalizeTenantCorsOrigin(value);
       if (origins.includes(normalized)) {
-        setInputError('This origin is already listed');
-        return;
+        return Promise.reject(new Error('This origin is already listed'));
       }
-      setOrigins((current) => [...current, normalized].sort());
-      setNewOrigin('');
-      setInputError(null);
+      return Promise.resolve();
     } catch (validationError) {
-      setInputError(
-        validationError instanceof Error ? validationError.message : 'Enter a valid origin'
+      return Promise.reject(
+        new Error(
+          validationError instanceof Error ? validationError.message : 'Enter a valid origin'
+        )
       );
     }
+  };
+
+  const addOrigin = ({ origin }: OriginFormValues) => {
+    const normalized = normalizeTenantCorsOrigin(origin);
+    setOrigins((current) => [...current, normalized].sort());
+    originForm.resetFields();
   };
 
   const persist = async () => {
@@ -173,27 +196,35 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
                   Only additional origins managed for this workspace are shown here. The application
                   itself and deployment-level policy are handled separately.
                 </Typography.Text>
-                <Space.Compact style={{ width: '100%', maxWidth: 720 }}>
-                  <Input
-                    value={newOrigin}
-                    placeholder="https://app.example.com"
-                    status={inputError ? 'error' : undefined}
-                    onChange={(event) => {
-                      setNewOrigin(event.target.value);
-                      setInputError(null);
-                    }}
-                    onPressEnter={addOrigin}
-                  />
-                  <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={addOrigin}
-                    disabled={!newOrigin.trim()}
+                <Form
+                  form={originForm}
+                  layout="vertical"
+                  onFinish={addOrigin}
+                  style={{ width: '100%', maxWidth: 720 }}
+                >
+                  <Form.Item
+                    name="origin"
+                    validateFirst
+                    validateDebounce={300}
+                    validateTrigger={['onChange', 'onBlur']}
+                    extra="Enter an exact origin including http:// or https://. Paths and wildcards are not supported."
+                    rules={[
+                      { required: true, whitespace: true, message: 'Origin is required' },
+                      { validator: validateOrigin },
+                    ]}
+                    style={{ marginBottom: 0 }}
                   >
-                    Add origin
-                  </Button>
-                </Space.Compact>
-                {inputError && <Typography.Text type="danger">{inputError}</Typography.Text>}
+                    <Input.Search
+                      placeholder="https://app.example.com"
+                      enterButton={
+                        <>
+                          <PlusOutlined /> Add origin
+                        </>
+                      }
+                      onSearch={() => originForm.submit()}
+                    />
+                  </Form.Item>
+                </Form>
 
                 {origins.length === 0 ? (
                   <Typography.Text type="secondary">

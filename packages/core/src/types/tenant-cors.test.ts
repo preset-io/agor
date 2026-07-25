@@ -41,6 +41,12 @@ describe('normalizeTenantCorsOrigin', () => {
     expect(normalizeTenantCorsOrigin('http://localhost:5173')).toBe('http://localhost:5173');
     expect(normalizeTenantCorsOrigin('https://app.example.com')).toBe('https://app.example.com');
   });
+
+  it('gives actionable feedback when the scheme is missing', () => {
+    expect(() => normalizeTenantCorsOrigin('app.example.com')).toThrow(
+      'Origin must include http:// or https://'
+    );
+  });
 });
 
 describe('normalizeTenantCorsOrigins', () => {
