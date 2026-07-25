@@ -135,7 +135,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
           CORS
         </Typography.Title>
         <Typography.Text type="secondary">
-          Choose which websites may make browser requests to this workspace.
+          Allow browser applications hosted at specific origins to call this workspace&apos;s API.
         </Typography.Text>
       </div>
 
@@ -163,8 +163,8 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
             <Alert
               type="warning"
               showIcon
-              title="Only allow websites you trust"
-              description="Allowed websites can make browser requests to this workspace. Depending on how authentication is configured, those requests may use a signed-in user's access. CORS does not replace authentication or permissions."
+              title="Only allow browser applications you trust"
+              description="A web page loaded from an allowed origin may call this workspace's API and read its responses. Depending on authentication, requests may act with a signed-in user's access. CORS does not replace authentication or permissions."
             />
 
             <Card title="Workspace origins">
