@@ -194,25 +194,6 @@ echo "✅ Watch modes started (git, core, executor, and client will rebuild on f
 echo "📦 Initializing Agor environment..."
 pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 
-# Agor-managed development branches already provide the browser-facing UI URL
-# as AGOR_BASE_URL. Reuse it as the exact CORS baseline when CORS_ORIGIN was
-# not set explicitly. Plain localhost development needs no override because
-# list mode includes the configured localhost ports.
-if [ -z "${CORS_ORIGIN:-}" ] && [ -n "${AGOR_BASE_URL:-}" ]; then
-  export CORS_ORIGIN="$AGOR_BASE_URL"
-  echo "🌐 Using the managed development UI origin for CORS"
-fi
-
-# The development Compose environment opts into tenant-admin-managed CORS so
-# the Settings UI is testable without manually editing the persisted
-# config.yaml. Apply this on every start so existing development volumes are
-# upgraded too. Production images use docker-entrypoint-prod.sh and are not
-# affected.
-if [ -n "${AGOR_TENANT_CORS_ENABLED:-}" ]; then
-  echo "🌐 Configuring tenant-managed CORS for development..."
-  ./node_modules/.bin/tsx scripts/configure-dev-cors.ts "$AGOR_TENANT_CORS_ENABLED"
-fi
-
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
 # Use --yes to skip confirmation prompt in non-interactive Docker environment

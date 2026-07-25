@@ -31,6 +31,7 @@ patchConsole();
 
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
+  getBaseUrl,
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
@@ -265,6 +266,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   }
 
   const daemonUrl = config.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
+  const applicationOrigin = new URL(await getBaseUrl()).origin;
   configureDaemonUrl(daemonUrl);
 
   // Wire the configured executor command template + impersonation user so the
@@ -327,6 +329,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const corsConfig = buildCorsConfig({
     uiPort: UI_PORT,
     daemonPort: DAEMON_PORT,
+    applicationOrigin,
     resolved: resolvedSecurity.cors,
   });
   const { origin: corsOrigin, credentialsAllowed, isWildcard } = corsConfig;

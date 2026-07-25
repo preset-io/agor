@@ -15,6 +15,7 @@
  *
  * Environment-derived inputs (not part of the config block) remain here:
  *   - UI port (for the localhost allow-list)
+ *   - browser-facing application origin (always first-party)
  *
  * Backcompat: the legacy `daemon.cors_origins`, `daemon.cors_allow_sandpack`,
  * and `CORS_ORIGIN` env var continue to work via `resolveSecurity()` — by the
@@ -38,6 +39,12 @@ export interface CorsConfigOptions {
    * rejected by the cors() callback. Bug surfaced in 0.17.3 — see PR #1106.
    */
   daemonPort: number;
+  /**
+   * Browser-facing application origin derived from AGOR_BASE_URL or its
+   * config equivalent. The first-party UI must always be able to reach the
+   * daemon; operators should not need to duplicate this in CORS_ORIGIN.
+   */
+  applicationOrigin?: string;
   /** Resolved CORS config (from `@agor/core/config` `resolveSecurity()`). */
   resolved: ResolvedCors;
 }
@@ -118,7 +125,7 @@ function parseRegexPattern(entry: string): RegExp | null {
  * PNA, credential stripping, etc.
  */
 export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
-  const { uiPort, daemonPort, resolved } = options;
+  const { uiPort, daemonPort, applicationOrigin, resolved } = options;
 
   // Localhost allow-list:
   //   - daemon port (npm-installed mode serves the UI from the daemon origin)
@@ -186,6 +193,10 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
   const patterns: RegExp[] = [];
   const configuredOrigins: string[] = [];
 
+  if (applicationOrigin) {
+    exactOrigins.add(applicationOrigin);
+  }
+
   // Tightened localhost regex: only the daemon port + configured UI port range,
   // not "any port". We accept both http and https for localhost so that
   // operators terminating TLS in front of a local UI dev server still work.
@@ -247,6 +258,7 @@ export function buildCorsConfig(options: CorsConfigOptions): CorsConfigResult {
       ...new Set([
         ...localhostOrigins,
         ...localhostOrigins.map((entry) => entry.replace('http://', 'https://')),
+        ...(applicationOrigin ? [applicationOrigin] : []),
         ...(resolved.allowSandpack ? ['https://*.codesandbox.io'] : []),
         ...configuredOrigins,
       ]),

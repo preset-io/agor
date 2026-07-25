@@ -434,15 +434,25 @@ export function resolveSecurity(
     credentials = false;
   }
 
-  const tenantOriginsEnabled = corsSettings.tenant_origins?.enabled === true;
-  if (tenantOriginsEnabled && mode !== 'list') {
+  const tenantOriginsSetting = corsSettings.tenant_origins?.enabled;
+  const tenantRoutingReady =
+    config.multi_tenancy?.mode !== 'required_from_auth' ||
+    Boolean(config.multi_tenancy.trusted_header);
+  const tenantOriginsEnabled =
+    tenantOriginsSetting ??
+    // Tenant-managed origins are the normal list-mode behavior whenever the
+    // target tenant is available before authentication. Modes that accept an
+    // arbitrary/opaque origin cannot preserve tenant-scoped isolation.
+    (mode === 'list' && tenantRoutingReady);
+
+  if (tenantOriginsSetting === true && mode !== 'list') {
     throw new Error(
       `security.cors.tenant_origins.enabled=true requires security.cors.mode="list"; ` +
         `mode="${mode}" cannot preserve tenant-scoped origin isolation.`
     );
   }
   if (
-    tenantOriginsEnabled &&
+    tenantOriginsSetting === true &&
     config.multi_tenancy?.mode === 'required_from_auth' &&
     !config.multi_tenancy.trusted_header
   ) {

@@ -98,6 +98,17 @@ describe('buildCorsConfig', () => {
     expect(custom.isAllowedOrigin('http://localhost:3030')).toBe(false);
   });
 
+  it('always allows the configured browser-facing application origin', () => {
+    const result = buildCorsConfig({
+      uiPort: 5173,
+      daemonPort: 3030,
+      applicationOrigin: 'https://app.example.com',
+      resolved: resolve(),
+    });
+    expect(result.isAllowedOrigin('https://app.example.com')).toBe(true);
+    expect(result.operatorOrigins).toContain('https://app.example.com');
+  });
+
   it('treats Sandpack origins as accepted but not "allowed" for credentials', () => {
     const result = buildCorsConfig({
       uiPort: 5173,

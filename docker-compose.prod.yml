@@ -14,7 +14,9 @@ services:
       - NODE_ENV=production
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=0.0.0.0
-      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      # Empty means list mode. The configured application origin is included
+      # automatically; use this only for additional operator-wide origins.
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
       # Optional first-run bootstrap password. If unset on an empty database,
       # Agor writes a random password to /home/agor/.agor/admin-credentials
       # (mode 0600) and logs only that file path.

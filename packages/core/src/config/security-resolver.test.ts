@@ -190,20 +190,20 @@ describe('resolveSecurity — CSP reporting + flags', () => {
 });
 
 describe('resolveSecurity — CORS', () => {
-  it('defaults to list mode with empty origins and credentials=true', () => {
+  it('defaults to list mode with tenant-managed origins and credentials=true', () => {
     const { cors } = resolveSecurity(EMPTY);
     expect(cors.mode).toBe('list');
     expect(cors.origins).toEqual([]);
     expect(cors.credentials).toBe(true);
     expect(cors.allowSandpack).toBe(true);
-    expect(cors.tenantOriginsEnabled).toBe(false);
+    expect(cors.tenantOriginsEnabled).toBe(true);
   });
 
-  it('enables tenant-managed origins in list mode', () => {
+  it('allows operators to disable tenant-managed origins in list mode', () => {
     const { cors } = resolveSecurity({
-      security: { cors: { tenant_origins: { enabled: true } } },
+      security: { cors: { tenant_origins: { enabled: false } } },
     });
-    expect(cors.tenantOriginsEnabled).toBe(true);
+    expect(cors.tenantOriginsEnabled).toBe(false);
   });
 
   it('rejects tenant-managed origins in wildcard, reflect, and null-origin modes', () => {
@@ -242,6 +242,24 @@ describe('resolveSecurity — CORS', () => {
     ).toBe(true);
   });
 
+  it('defaults tenant-managed origins based on pre-auth tenant routing readiness', () => {
+    expect(
+      resolveSecurity({
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      }).cors.tenantOriginsEnabled
+    ).toBe(false);
+
+    expect(
+      resolveSecurity({
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          auth_claim: 'tenant_id',
+          trusted_header: 'x-tenant-id',
+        },
+      }).cors.tenantOriginsEnabled
+    ).toBe(true);
+  });
+
   it('mode=wildcard forces credentials=false with a warning when user left it default', () => {
     const warn = vi.fn();
     const { cors } = resolveSecurity(
@@ -250,6 +268,7 @@ describe('resolveSecurity — CORS', () => {
     );
     expect(cors.mode).toBe('wildcard');
     expect(cors.credentials).toBe(false);
+    expect(cors.tenantOriginsEnabled).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('forces credentials=false'));
   });
 

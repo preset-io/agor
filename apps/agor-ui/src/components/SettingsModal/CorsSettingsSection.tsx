@@ -148,12 +148,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
         (!settings.enabled ? (
           <Alert
             title="Workspace CORS management is disabled"
-            description={
-              <>
-                An operator can enable it with{' '}
-                <code>security.cors.tenant_origins.enabled: true</code>.
-              </>
-            }
+            description="An operator disabled tenant-managed origins or selected a CORS mode that cannot preserve workspace isolation."
             type="info"
             showIcon
           />

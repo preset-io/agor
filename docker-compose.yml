@@ -109,12 +109,9 @@ services:
       - NODE_ENV=development
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=${DAEMON_HOST:-0.0.0.0}
-      # Empty means list mode with the built-in localhost origins. Managed
-      # branch environments provide their exact browser-facing UI origin.
+      # Empty means list mode. The configured application origin and local
+      # development ports are always included automatically.
       - CORS_ORIGIN=${CORS_ORIGIN:-}
-      # Dev-only convenience: materialized into config.yaml by the development
-      # entrypoint so Settings → CORS is testable on new and existing volumes.
-      - AGOR_TENANT_CORS_ENABLED=${AGOR_TENANT_CORS_ENABLED:-true}
 
       # UI configuration
       - UI_PORT=${UI_PORT:-5173}

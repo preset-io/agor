@@ -56,8 +56,6 @@ Create a `.env` file:
 ```bash
 # Daemon configuration
 DAEMON_PORT=3030
-# Optional when opening the dev UI from a non-localhost origin:
-# CORS_ORIGIN=http://dev-host.example.com:5173
 
 # UI configuration
 UI_PORT=5173
@@ -79,7 +77,8 @@ Create a `.env.prod` file:
 # Daemon configuration
 DAEMON_PORT=3030
 DAEMON_HOST=0.0.0.0
-CORS_ORIGIN=*
+# Optional additional operator-wide origin:
+# CORS_ORIGIN=https://operator-console.example.com
 
 # API keys (required for agent features)
 ANTHROPIC_API_KEY=sk-ant-...

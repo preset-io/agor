@@ -77,14 +77,14 @@ security:
     max_age_seconds: 600
     allow_sandpack: true # include *.codesandbox.io (default true)
     tenant_origins:
-      enabled: true # tenant admins manage exact origins live in Settings
+      enabled: false # optional operator opt-out; defaults on when routing supports it
 ```
 
 **Mode semantics:**
 
 | Mode          | Behaviour                                                                                                             | Credentials       |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `list`        | Only origins in `origins[]` + built-ins (localhost, Sandpack)                                                         | Allowed (default) |
+| `list`        | Only origins in `origins[]` + built-ins (application URL, localhost, Sandpack)                                        | Allowed (default) |
 | `wildcard`    | Accept any origin (returns `Access-Control-Allow-Origin: *`)                                                          | Forced off        |
 | `reflect`     | Echo the request's `Origin` header back                                                                               | Forced off        |
 | `null-origin` | Accept `Origin: null` (sandboxed iframes, `file://` docs) plus no-origin non-browser clients (curl, server-to-server) | Allowed           |
@@ -96,11 +96,18 @@ because it would allow credentialed requests from any origin.
 ### Tenant-admin-managed origins
 
 `security.cors.origins` remains the operator-owned baseline and applies to
-every tenant. Setting `security.cors.tenant_origins.enabled: true` adds an
-admin-only **Settings → CORS** page where tenant admins manage exact HTTP(S)
-origins for their own tenant. Those entries are stored in typed tenant-scoped
-database tables, audited, cached per tenant, and applied live without rewriting
-`config.yaml` or restarting the daemon.
+every tenant. The browser-facing application origin derived from
+`AGOR_BASE_URL` (or its config equivalent) is also always included in list
+mode, so operators do not need to duplicate the application's own URL in CORS
+configuration.
+
+Tenant-admin management defaults on in list mode whenever the target tenant is
+available before authentication. Operators can opt out with
+`security.cors.tenant_origins.enabled: false`. The admin-only
+**Settings → CORS** page manages exact HTTP(S) origins for the current tenant.
+Those entries are stored in typed tenant-scoped database tables, audited,
+cached per tenant, and applied live without rewriting `config.yaml` or
+restarting the daemon.
 
 Tenant entries are exact origins only: no paths, query strings, wildcards,
 regular expressions, or `Origin: null`. Operator origins retain their existing
@@ -110,9 +117,10 @@ In `multi_tenancy.mode: required_from_auth`, live tenant CORS requires
 `multi_tenancy.trusted_header`. The trusted ingress must overwrite that header
 and add it to preflight requests; browser preflight normally has no
 authentication claim from which the daemon could otherwise resolve a tenant.
-The daemon refuses to start if tenant origins are enabled without this
-pre-authentication routing context. Static mode uses the configured static
-tenant automatically.
+Without that pre-authentication routing context, tenant management defaults
+off. Explicitly setting `tenant_origins.enabled: true` without the header is
+rejected at startup. Static mode uses the configured static tenant
+automatically.
 
 CORS is a browser policy, not authentication or authorization. Service role
 checks and tenant database/RLS isolation still apply to every accepted request.

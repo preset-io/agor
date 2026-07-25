@@ -225,7 +225,9 @@ Users with the `admin` role can manage other users, configure MCP servers, view 
 ### Browser Origins (CORS)
 
 Operators can allow origins for every workspace with `security.cors.origins`.
-To let workspace admins manage their own origins in the application, enable:
+The configured browser-facing application origin is included automatically.
+In list mode, workspace CORS management is enabled by default whenever the
+daemon can resolve the workspace before authentication:
 
 ```yaml
 security:
@@ -233,13 +235,14 @@ security:
     mode: list
     origins:
       - https://operator-console.example.com
-    tenant_origins:
-      enabled: true
 ```
 
 Admins can then add or remove exact origins from **Settings → CORS**. Changes
 are stored for that workspace and take effect live; they do not require editing
 `config.yaml` or restarting the daemon.
+
+Operators can disable this capability with
+`security.cors.tenant_origins.enabled: false`.
 
 Only add websites you trust. Depending on how authentication is configured, an
 allowed website may make browser requests using a signed-in user's access.

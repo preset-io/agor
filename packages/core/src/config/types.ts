@@ -707,7 +707,10 @@ export type AgorCorsMode = 'list' | 'wildcard' | 'reflect' | 'null-origin';
  * is available; it is intentionally not a second origin-policy hierarchy.
  */
 export interface AgorTenantCorsOriginsSettings {
-  /** Allow tenant admins to manage exact origins for their tenant. Default: false. */
+  /**
+   * Allow tenant admins to manage exact origins for their tenant. Defaults to
+   * true in list mode when the tenant is available before authentication.
+   */
   enabled?: boolean;
 }
 
