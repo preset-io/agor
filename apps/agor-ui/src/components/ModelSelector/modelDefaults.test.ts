@@ -57,11 +57,12 @@ describe('curateModelOptions (Claude)', () => {
       (m) => m.id
     );
     // Exactly one entry per line: the newest Opus/Sonnet/Haiku/Fable.
-    expect(ids).toContain('claude-opus-4-8');
+    expect(ids).toContain('claude-opus-5');
     expect(ids).toContain('claude-sonnet-5');
     expect(ids).toContain('claude-haiku-4-5');
     expect(ids).toContain('claude-fable-5');
     // Superseded, dated, and 1M variants are excluded from the top-level list.
+    expect(ids).not.toContain('claude-opus-4-8');
     expect(ids).not.toContain('claude-opus-4-7');
     expect(ids).not.toContain('claude-sonnet-4-6');
     expect(ids).not.toContain('claude-opus-4-1');
