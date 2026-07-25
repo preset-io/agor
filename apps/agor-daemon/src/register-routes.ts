@@ -109,7 +109,6 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
-import { registerProxies } from './setup/proxies.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
@@ -673,12 +672,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const permissionService = new PermissionService((event, data) => {
     app.service('sessions').emit(event, data);
   });
-
-  // ============================================================================
-  // HTTP proxies (off by default; mounted only when config.proxies has entries)
-  // ============================================================================
-
-  registerProxies(app, config, jwtSecret);
 
   // ============================================================================
   // Messages bulk + streaming routes

@@ -17,6 +17,7 @@
 import type { AgorGrants, ArtifactTrustGrant, ArtifactTrustScopeType } from '@agor/core/types';
 import { and, eq, isNull } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { canonicalizeAgorGrants } from '../../types/artifact-grants';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
@@ -35,7 +36,7 @@ export class ArtifactTrustGrantRepository {
       scope_type: row.scope_type as ArtifactTrustScopeType,
       scope_value: row.scope_value ?? null,
       env_vars_set: row.env_vars_set,
-      agor_grants_set: row.agor_grants_set,
+      agor_grants_set: canonicalizeAgorGrants(row.agor_grants_set),
       granted_at: new Date(row.granted_at).toISOString(),
       revoked_at: row.revoked_at ? new Date(row.revoked_at).toISOString() : undefined,
     };
@@ -63,7 +64,7 @@ export class ArtifactTrustGrantRepository {
       scope_type: input.scope_type,
       scope_value: input.scope_value,
       env_vars_set: input.env_vars_set,
-      agor_grants_set: input.agor_grants_set,
+      agor_grants_set: canonicalizeAgorGrants(input.agor_grants_set),
       granted_at: now,
       revoked_at: null,
     };

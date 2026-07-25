@@ -30,7 +30,6 @@ export default {
   architecture: 'Architecture',
   'typescript-client': 'TypeScript Client',
   'sdk-comparison': 'SDK Comparison',
-  'api-proxies': 'API Proxies (CORS bypass)',
   'one-time-launch-auth': 'One-Time Launch Auth',
   '--- Development': {
     type: 'separator',

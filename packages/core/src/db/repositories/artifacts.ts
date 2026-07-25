@@ -8,6 +8,7 @@
  */
 
 import type {
+  AgorGrants,
   Artifact,
   ArtifactBuildStatus,
   ArtifactID,
@@ -20,6 +21,7 @@ import type {
 import { and, eq, inArray, like, or } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { canonicalizeAgorGrants } from '../../types/artifact-grants';
 import { getArtifactFullscreenUrl, getArtifactUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -33,6 +35,15 @@ import {
   resolveByShortIdPrefix,
 } from './base';
 import { visibleBranchReferenceAccessExists } from './branch-access';
+
+function canonicalGrantsOrUndefined(input: unknown): AgorGrants | undefined {
+  const grants = canonicalizeAgorGrants(input);
+  return Object.keys(grants).length > 0 ? grants : undefined;
+}
+
+function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
+  return canonicalGrantsOrUndefined(input) ?? null;
+}
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
@@ -66,7 +77,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       entry: row.entry ?? undefined,
       sandpack_config: row.sandpack_config ?? undefined,
       required_env_vars: row.required_env_vars ?? undefined,
-      agor_grants: row.agor_grants ?? undefined,
+      agor_grants: canonicalGrantsOrUndefined(row.agor_grants),
       agor_runtime: row.agor_runtime ?? undefined,
       public: row.public !== undefined ? Boolean(row.public) : true,
       created_by: row.created_by ?? undefined,
@@ -112,7 +123,10 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         entry: data.entry ?? null,
         sandpack_config: data.sandpack_config ?? null,
         required_env_vars: data.required_env_vars ?? null,
-        agor_grants: data.agor_grants ?? null,
+        agor_grants:
+          data.agor_grants === undefined || data.agor_grants === null
+            ? null
+            : canonicalGrantsOrNull(data.agor_grants),
         agor_runtime: data.agor_runtime ?? null,
         public: data.public ?? true,
         created_by: data.created_by ?? null,
@@ -331,7 +345,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         setData.agor_runtime = updates.agor_runtime ?? null;
       }
       if (updates.agor_grants !== undefined) {
-        setData.agor_grants = updates.agor_grants ?? null;
+        setData.agor_grants =
+          updates.agor_grants === null ? null : canonicalGrantsOrNull(updates.agor_grants);
       }
       if (updates.public !== undefined) setData.public = updates.public;
       if (updates.source_session_id !== undefined) {

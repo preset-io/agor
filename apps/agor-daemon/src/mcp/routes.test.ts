@@ -113,6 +113,7 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_kb_history');
     expect(toolNames).toContain('agor_kb_link');
     expect(toolNames).toContain('agor_kb_graph_neighbors');
+    expect(toolNames.some((name) => name.startsWith('agor_proxies_'))).toBe(false);
   });
 
   it('agor_sessions_list returns sessions', async () => {
