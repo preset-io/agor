@@ -129,7 +129,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
           CORS
         </Typography.Title>
         <Typography.Text type="secondary">
-          Allow browser applications hosted at specific origins to call this workspace&apos;s API.
+          Choose which website origins may read this workspace&apos;s API responses in a browser.
         </Typography.Text>
       </div>
 
@@ -157,11 +157,11 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
             <Alert
               type="warning"
               showIcon
-              title="Only allow browser applications you trust"
-              description="A web page loaded from an allowed origin may call this workspace's API and read its responses. Depending on authentication, requests may act with a signed-in user's access. CORS does not replace authentication or permissions."
+              title="Only add origins for websites you trust"
+              description="Browser code loaded from an allowed origin can read this workspace's API responses. For preflighted requests, the browser checks permission before sending the request. Depending on authentication, requests may act with a signed-in user's access. CORS does not replace authentication or permissions."
             />
 
-            <Card title="Workspace origins">
+            <Card title="Allowed website origins">
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                 <Typography.Text type="secondary">
                   Only additional origins managed for this workspace are shown here. The application
@@ -223,7 +223,7 @@ export const CorsSettingsSection: React.FC<CorsSettingsSectionProps> = ({ client
                               description={
                                 isCurrentSite
                                   ? 'If this site relies on this workspace-managed entry, it may lose browser access after removal.'
-                                  : 'Browser applications from this origin will no longer be allowed by this workspace entry.'
+                                  : "Browsers will no longer allow this origin to read this workspace's API responses through this entry."
                               }
                               okText="Remove"
                               cancelText="Cancel"
