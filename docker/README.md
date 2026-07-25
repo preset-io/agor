@@ -56,7 +56,8 @@ Create a `.env` file:
 ```bash
 # Daemon configuration
 DAEMON_PORT=3030
-CORS_ORIGIN=*
+# Optional when opening the dev UI from a non-localhost origin:
+# CORS_ORIGIN=http://dev-host.example.com:5173
 
 # UI configuration
 UI_PORT=5173
