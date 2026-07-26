@@ -123,4 +123,78 @@ describe('executor callback boundaries', () => {
       )
     ).rejects.toThrow('4-byte upload limit');
   });
+
+  it.each([
+    ['executor_action', 'artifact.validate'],
+    ['executor_gateway_channel_id', '019fa080-5573-7960-a851-2b03286d2a00'],
+    ['executor_slack_channel_id', 'C999'],
+    ['executor_branch_id', '019fa07c-b353-7a6b-abd9-9adf1017b990'],
+  ])('rejects a Slack callback with a mismatched %s claim', async (claim, value) => {
+    const service = new GatewayChannelsService(null as never);
+    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
+
+    await expect(
+      service.uploadFileFromExecutor(
+        {
+          gatewayChannelId: gatewayChannel.id,
+          channel: 'C123',
+          fileBase64: 'aGk=',
+          filename: 'hello.txt',
+        },
+        {
+          ...executorParams,
+          authentication: {
+            payload: { ...executorParams.authentication.payload, [claim]: value },
+          },
+        }
+      )
+    ).rejects.toThrow(/not scoped|branch does not match/);
+  });
+
+  it('rejects whitespace-bearing non-canonical Base64', async () => {
+    const service = new GatewayChannelsService(null as never);
+    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
+
+    await expect(
+      service.uploadFileFromExecutor(
+        {
+          gatewayChannelId: gatewayChannel.id,
+          channel: 'C123',
+          fileBase64: 'a Gk=',
+          filename: 'hello.txt',
+        },
+        executorParams
+      )
+    ).rejects.toThrow('valid Base64');
+  });
+
+  it('rejects artifact callbacks with the wrong scoped action', async () => {
+    const service = new ArtifactsService(
+      null as never,
+      {
+        settings: { authentication: { secret: 'test' } },
+      } as never
+    );
+
+    await expect(
+      service.publishFromExecutor(
+        {
+          files: { '/index.tsx': 'export default null' },
+          branch_id: gatewayChannel.target_branch_id,
+          board_id: '019fa07c-b353-7a6b-abd9-9adf1017b990',
+          name: 'Injected artifact',
+        },
+        {
+          ...executorParams,
+          authentication: {
+            payload: {
+              executor_action: 'artifact.validate',
+              executor_user_id: '019f9ffb-89e3-7129-83fb-28c6967d1b18',
+              executor_branch_id: gatewayChannel.target_branch_id,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow('not scoped to this artifact operation');
+  });
 });

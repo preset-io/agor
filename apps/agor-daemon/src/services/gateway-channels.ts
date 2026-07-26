@@ -147,12 +147,8 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Slack channel is not an allowed write target');
     }
 
-    const normalizedBase64 = data.fileBase64.replace(/\s/g, '');
-    if (
-      normalizedBase64.length === 0 ||
-      normalizedBase64.length % 4 !== 0 ||
-      !/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64)
-    ) {
+    const normalizedBase64 = data.fileBase64;
+    if (normalizedBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64)) {
       throw new BadRequest('File content must be valid Base64');
     }
     const padding = normalizedBase64.endsWith('==') ? 2 : normalizedBase64.endsWith('=') ? 1 : 0;
