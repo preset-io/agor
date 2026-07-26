@@ -1,6 +1,38 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ArtifactsService } from './artifacts.js';
 import { GatewayChannelsService } from './gateway-channels.js';
+
+vi.mock('../utils/upload.js', () => ({ MAX_UPLOAD_FILE_SIZE: 4 }));
+
+const gatewayChannel = {
+  id: '019fa073-fbd5-74a4-ad28-b37a6bf037ce',
+  target_branch_id: '019f9ffa-8310-72dd-b8da-422fe1b2634a',
+  channel_type: 'slack',
+  enabled: true,
+  config: {
+    bot_token: 'xoxb-secret',
+    agent_tools: { file_upload: true },
+    allowed_channel_ids: ['C123'],
+  },
+};
+
+const executorParams = {
+  provider: 'socketio',
+  user: {
+    user_id: 'executor-service',
+    email: 'executor@agor.internal',
+    role: 'service',
+    _isServiceAccount: true,
+  },
+  authentication: {
+    payload: {
+      executor_action: 'gateway.slack-file-upload',
+      executor_gateway_channel_id: gatewayChannel.id,
+      executor_slack_channel_id: 'C123',
+      executor_branch_id: gatewayChannel.target_branch_id,
+    },
+  },
+};
 
 describe('executor callback boundaries', () => {
   it('rejects artifact publishing from a normal member', async () => {
@@ -52,5 +84,43 @@ describe('executor callback boundaries', () => {
         }
       )
     ).rejects.toThrow('Only an executor service account');
+  });
+
+  it.each([
+    [{ enabled: false }, 'Gateway channel is disabled'],
+    [{ channel_type: 'github' }, 'not configured for Slack'],
+    [{ config: { ...gatewayChannel.config, allowed_channel_ids: ['C999'] } }, 'not an allowed'],
+  ])('revalidates mutable Slack policy: %j', async (patch, message) => {
+    const service = new GatewayChannelsService(null as never);
+    vi.spyOn(service, 'get').mockResolvedValue({ ...gatewayChannel, ...patch } as never);
+
+    await expect(
+      service.uploadFileFromExecutor(
+        {
+          gatewayChannelId: gatewayChannel.id,
+          channel: 'C123',
+          fileBase64: 'aGk=',
+          filename: 'hello.txt',
+        },
+        executorParams
+      )
+    ).rejects.toThrow(message);
+  });
+
+  it('enforces the upload limit again at the daemon callback', async () => {
+    const service = new GatewayChannelsService(null as never);
+    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
+
+    await expect(
+      service.uploadFileFromExecutor(
+        {
+          gatewayChannelId: gatewayChannel.id,
+          channel: 'C123',
+          fileBase64: Buffer.from('12345').toString('base64'),
+          filename: 'large.txt',
+        },
+        executorParams
+      )
+    ).rejects.toThrow('4-byte upload limit');
   });
 });

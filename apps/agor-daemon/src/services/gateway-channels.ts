@@ -13,7 +13,7 @@ import {
 } from '@agor/core/config';
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { getConnector } from '@agor/core/gateway';
+import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
 import {
   type AuthenticatedParams,
   type GatewayChannel,
@@ -22,6 +22,7 @@ import {
   resolveSlackAgentTools,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
 
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
@@ -129,12 +130,39 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Executor token is not scoped to this Slack upload');
     }
 
-    const gatewayChannel = (await super.get(data.gatewayChannelId, params)) as GatewayChannel;
+    const gatewayChannel = (await this.get(data.gatewayChannelId, params)) as GatewayChannel;
+    if (!gatewayChannel.enabled) {
+      throw new Forbidden('Gateway channel is disabled');
+    }
+    if (gatewayChannel.channel_type !== 'slack') {
+      throw new Forbidden('Gateway channel is not configured for Slack');
+    }
     if (!resolveSlackAgentTools(gatewayChannel.config?.agent_tools).file_upload) {
       throw new Forbidden('Slack file uploads are disabled for this gateway channel');
     }
     if (claims.executor_branch_id !== gatewayChannel.target_branch_id) {
       throw new Forbidden('Executor token branch does not match the gateway channel target');
+    }
+    if (!isSlackWriteTargetAllowed(gatewayChannel.config, data.channel)) {
+      throw new Forbidden('Slack channel is not an allowed write target');
+    }
+
+    const normalizedBase64 = data.fileBase64.replace(/\s/g, '');
+    if (
+      normalizedBase64.length === 0 ||
+      normalizedBase64.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64)
+    ) {
+      throw new BadRequest('File content must be valid Base64');
+    }
+    const padding = normalizedBase64.endsWith('==') ? 2 : normalizedBase64.endsWith('=') ? 1 : 0;
+    const decodedSize = (normalizedBase64.length / 4) * 3 - padding;
+    if (decodedSize > MAX_UPLOAD_FILE_SIZE) {
+      throw new BadRequest(`File exceeds the ${MAX_UPLOAD_FILE_SIZE}-byte upload limit`);
+    }
+    const file = Buffer.from(normalizedBase64, 'base64');
+    if (file.toString('base64') !== normalizedBase64) {
+      throw new BadRequest('File content must be canonical Base64');
     }
 
     const connector = getConnector('slack', gatewayChannel.config);
@@ -153,7 +181,7 @@ export class GatewayChannelsService extends DrizzleService<
     return uploader.uploadFile({
       channel: data.channel,
       ...(data.threadTs ? { threadTs: data.threadTs } : {}),
-      file: Buffer.from(data.fileBase64, 'base64'),
+      file,
       filename: data.filename,
       ...(data.comment ? { comment: data.comment } : {}),
     });
