@@ -9,6 +9,7 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
+import { usesExecutorRuntime } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -143,8 +144,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   promptInputSlot,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
-  const supportsLiveEffort =
-    session.agentic_tool === 'claude-code' || session.agentic_tool === 'codex';
+  const supportsLiveEffort = usesExecutorRuntime(session.agentic_tool);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [prefs, setPref] = useFooterPreferences();

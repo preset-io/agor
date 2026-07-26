@@ -24,7 +24,11 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import {
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  usesExecutorRuntime,
+} from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
@@ -436,7 +440,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           currentUser={currentUser}
           client={client ?? null}
           enableSaveAsDefault
-          showEffort={session.agentic_tool !== 'claude-code-cli'}
+          showEffort={usesExecutorRuntime(session.agentic_tool)}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}
