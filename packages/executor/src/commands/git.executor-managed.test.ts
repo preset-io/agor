@@ -47,6 +47,7 @@ import {
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
+const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
 
 function createClient(records: {
   repo?: Record<string, unknown>;
@@ -131,13 +132,16 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith('/safe/worktrees/repo/feature');
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(
+      '/safe/worktrees/repo/feature',
+      '/safe/worktrees'
+    );
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
@@ -225,7 +229,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
@@ -233,9 +237,10 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledTimes(1002);
     expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
       1001,
-      '/safe/worktrees/repo/branch-1000'
+      '/safe/worktrees/repo/branch-1000',
+      '/safe/worktrees'
     );
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {
@@ -247,7 +252,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 

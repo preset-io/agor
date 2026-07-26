@@ -1186,7 +1186,7 @@ async function resolveGatewayUploadFilePath(
   if (!trimmed) throw new Error('path is required');
 
   if (path.isAbsolute(trimmed)) {
-    const uploadDir = getUploadDirectory();
+    const uploadDir = getUploadDirectory(ctx.baseServiceParams.tenant?.tenant_id);
     const uploadRoot = await realpath(uploadDir).catch(() => path.resolve(uploadDir));
     const canonical = await canonicalizeExistingPrefix(trimmed);
     if (!isPathInsideRoot(uploadRoot, canonical)) {
@@ -1723,7 +1723,11 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       if (typeof botToken !== 'string' || !botToken) {
         throw new Error(`Gateway channel ${target.channel.id} has no bot token configured.`);
       }
-      const { paths } = await ingestInboundAttachments({ files: [file], botToken });
+      const { paths } = await ingestInboundAttachments({
+        files: [file],
+        botToken,
+        tenantId: ctx.baseServiceParams.tenant?.tenant_id,
+      });
       const storedPath = paths[0];
       if (!storedPath) {
         throw new Error(

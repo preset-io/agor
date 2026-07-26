@@ -6,7 +6,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { getAgorHome } from '@agor/core/config';
+import { getTenantDataRoot } from '@agor/core/config';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -56,8 +56,8 @@ const LEGACY_IGNORED_UPLOAD_DESTINATIONS = new Set(['branch', 'global']);
 /**
  * Resolve the only supported daemon-side upload directory.
  */
-export function getUploadDirectory(): string {
-  return path.join(getAgorHome(), 'uploads');
+export function getUploadDirectory(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'uploads');
 }
 
 export function validateUploadDestinationQuery(destination: unknown): void {
@@ -118,7 +118,9 @@ export function createUploadStorage() {
           );
         }
 
-        const dest = getUploadDirectory();
+        const tenantId = (req as Request & { feathers?: { tenant?: { tenant_id?: string } } })
+          .feathers?.tenant?.tenant_id;
+        const dest = getUploadDirectory(tenantId);
 
         if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
 

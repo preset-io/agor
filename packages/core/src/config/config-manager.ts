@@ -473,6 +473,8 @@ function validateConfig(config: AgorConfig): void {
     'frameworkRepoUrl',
   ]);
   only(config.multi_tenancy, 'multi_tenancy', [
+    'enabled',
+    'tenants_base_folder',
     'mode',
     'static_tenant_id',
     'auth_claim',
@@ -705,6 +707,8 @@ export function getDefaultConfig(): AgorConfig {
     analytics: getDefaultAnalyticsConfig(),
     telemetry: {},
     multi_tenancy: {
+      enabled: false,
+      tenants_base_folder: '~/.agor/tenants',
       mode: 'static',
       static_tenant_id: 'default',
     },
@@ -1343,14 +1347,47 @@ export function getDataHome(): string {
 }
 
 /**
+ * Resolve the root containing tenant-owned filesystem data.
+ *
+ * Single-tenant installs retain the historical data home. When filesystem
+ * multi-tenancy is enabled, a tenant id is required and the result is
+ * `<tenants_base_folder>/<tenantId>`.
+ */
+export function getTenantDataRoot(tenantId?: string): string {
+  const config = loadConfigSync();
+
+  if (config.multi_tenancy?.enabled !== true) {
+    return getDataHome();
+  }
+
+  const normalizedTenantId = tenantId?.trim();
+  if (
+    !normalizedTenantId ||
+    normalizedTenantId === '.' ||
+    normalizedTenantId === '..' ||
+    normalizedTenantId.includes('/') ||
+    normalizedTenantId.includes('\\')
+  ) {
+    throw new Error('A valid tenant id is required when multi_tenancy.enabled is true');
+  }
+
+  const configuredBase = config.multi_tenancy.tenants_base_folder || '~/.agor/tenants';
+  const expandedBase = expandHomePath(configuredBase);
+  const tenantsBase = path.isAbsolute(expandedBase)
+    ? expandedBase
+    : path.resolve(getAgorHome(), expandedBase);
+  return path.join(tenantsBase, normalizedTenantId);
+}
+
+/**
  * Get repos directory path
  *
  * Returns: $AGOR_DATA_HOME/repos
  *
  * @returns Absolute path to repos directory
  */
-export function getReposDir(): string {
-  return path.join(getDataHome(), 'repos');
+export function getReposDir(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'repos');
 }
 
 /**
@@ -1366,8 +1403,8 @@ export function getReposDir(): string {
  *
  * @returns Absolute path to the branches directory
  */
-export function getBranchesDir(): string {
-  return path.join(getDataHome(), 'worktrees');
+export function getBranchesDir(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'worktrees');
 }
 
 /**
@@ -1381,8 +1418,8 @@ export function getBranchesDir(): string {
  * @param branchName - Branch name (e.g., "feature-x")
  * @returns Absolute path to the branch
  */
-export function getBranchPath(repoSlug: string, branchName: string): string {
-  return path.join(getBranchesDir(), repoSlug, branchName);
+export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
+  return path.join(getBranchesDir(tenantId), repoSlug, branchName);
 }
 
 /**
@@ -1413,13 +1450,40 @@ export async function getDataHomeAsync(): Promise<string> {
   return getAgorHome();
 }
 
+/** Async counterpart to {@link getTenantDataRoot}. */
+export async function getTenantDataRootAsync(tenantId?: string): Promise<string> {
+  const config = await loadConfig();
+
+  if (config.multi_tenancy?.enabled !== true) {
+    return getDataHomeAsync();
+  }
+
+  const normalizedTenantId = tenantId?.trim();
+  if (
+    !normalizedTenantId ||
+    normalizedTenantId === '.' ||
+    normalizedTenantId === '..' ||
+    normalizedTenantId.includes('/') ||
+    normalizedTenantId.includes('\\')
+  ) {
+    throw new Error('A valid tenant id is required when multi_tenancy.enabled is true');
+  }
+
+  const configuredBase = config.multi_tenancy.tenants_base_folder || '~/.agor/tenants';
+  const expandedBase = expandHomePath(configuredBase);
+  const tenantsBase = path.isAbsolute(expandedBase)
+    ? expandedBase
+    : path.resolve(getAgorHome(), expandedBase);
+  return path.join(tenantsBase, normalizedTenantId);
+}
+
 /**
  * Get repos directory path (async version)
  *
  * @returns Absolute path to repos directory
  */
-export async function getReposDirAsync(): Promise<string> {
-  return path.join(await getDataHomeAsync(), 'repos');
+export async function getReposDirAsync(tenantId?: string): Promise<string> {
+  return path.join(await getTenantDataRootAsync(tenantId), 'repos');
 }
 
 /**
@@ -1430,6 +1494,6 @@ export async function getReposDirAsync(): Promise<string> {
  *
  * @returns Absolute path to branches directory
  */
-export async function getBranchesDirAsync(): Promise<string> {
-  return path.join(await getDataHomeAsync(), 'worktrees');
+export async function getBranchesDirAsync(tenantId?: string): Promise<string> {
+  return path.join(await getTenantDataRootAsync(tenantId), 'worktrees');
 }

@@ -623,12 +623,12 @@ export async function handleGitRepoDelete(
 
     for (const branch of branches) {
       if (!branch.path) continue;
-      await deleteBranchDirectory(branch.path);
+      await deleteBranchDirectory(branch.path, payload.params.branchesRoot);
       deletedPaths.push(branch.path);
       console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
 
-    await deleteRepoDirectory(repoPath);
+    await deleteRepoDirectory(repoPath, payload.params.reposRoot);
     deletedPaths.push(repoPath);
     console.log(`🗑️  [git.repo.delete] Deleted repository directory: ${repoPath}`);
 
