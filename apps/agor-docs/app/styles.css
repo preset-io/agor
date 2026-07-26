@@ -104,6 +104,20 @@ body:not(:has([class*="landingShell"])) main img {
  * Dark theme (and the landing page, which forces dark) gets a green-black
  * glass with a faint mint hairline instead of the default gray.
  */
+.agor-docs-wordmark {
+  font-size: 18px;
+  background-image: linear-gradient(90deg, #2e9a92 0%, #23776f 50%, #174f4b 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.dark .agor-docs-wordmark,
+body:has([class*="landingShell"]) .agor-docs-wordmark {
+  background-image: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
+}
+
 .dark .nextra-navbar-blur,
 body:has([class*="landingShell"]) .nextra-navbar-blur {
   background: rgba(7, 16, 15, 0.72);

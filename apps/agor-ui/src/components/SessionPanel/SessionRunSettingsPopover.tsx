@@ -21,8 +21,8 @@ export interface SessionRunSettingsPopoverProps {
   modelLabel?: string;
   modelConfig?: ModelConfig;
   onModelConfigChange: (config: ModelConfig) => void;
-  effortLevel: EffortLevel;
-  onEffortChange: (effort: EffortLevel) => void;
+  effortLevel?: EffortLevel;
+  onEffortChange: (effort: EffortLevel | undefined) => void;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   codexSandboxMode: CodexSandboxMode;
