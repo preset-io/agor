@@ -24,7 +24,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
@@ -454,7 +454,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      params
+      params,
+      {
+        executor_action: 'artifact.publish',
+        executor_user_id: params.user?.user_id,
+        executor_branch_id: branch.branch_id,
+      }
     );
     const result = await runExecutorCommand(
       {
@@ -512,7 +517,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     params?: ArtifactParams
   ): Promise<Artifact> {
-    const userId = params?.user?.user_id;
+    const claims = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
+    const userId = claims.executor_user_id as UserID;
     const matchedBranchId = data.branch_id as BranchID;
     const provenanceSubpath = data.subpath ?? '';
     const files = data.files;
@@ -560,6 +566,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const resolvedBoardId = (data.board_id ?? existing?.board_id) as BoardID | undefined;
     if (!resolvedBoardId) {
       throw new Error('boardId is required when creating a new artifact');
+    }
+    const branch = await this.branchRepo.findById(matchedBranchId);
+    if (!branch) throw new Error(`Branch not found: ${matchedBranchId}`);
+    if (branch.board_id !== resolvedBoardId) {
+      throw new Forbidden('Artifact board must match the source branch board');
     }
 
     const isPublic = data.public ?? existing?.public ?? true;
@@ -1587,7 +1598,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         command: 'branch.artifact.validate',
         sessionToken: generateScopedServiceToken(
           this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          params
+          params,
+          {
+            executor_action: 'artifact.validate',
+            executor_user_id: params.user?.user_id,
+            executor_branch_id: branch.branch_id,
+          }
         ),
         daemonUrl: getDaemonUrl(),
         params: { branchId: branch.branch_id, subpath: input.subpath },
@@ -1605,16 +1621,43 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return result.data as ArtifactValidationResult;
   }
 
-  async validateFromExecutor(data: {
-    files: Record<string, string>;
-    sidecar?: ArtifactSidecar | null;
-  }): Promise<ArtifactValidationResult> {
+  async validateFromExecutor(
+    data: {
+      files: Record<string, string>;
+      sidecar?: ArtifactSidecar | null;
+      branch_id?: string;
+    },
+    params?: ArtifactParams
+  ): Promise<ArtifactValidationResult> {
+    this.requireExecutorCallback(params, 'artifact.validate', data.branch_id);
     const sandpackConfig = sanitizeSandpackConfig(data.sidecar?.sandpack_config);
     const template = (sandpackConfig.template ??
       data.sidecar?.template ??
       'react') as SandpackTemplate;
     const requiredEnvVars = sanitizeEnvVarNames(data.sidecar?.required_env_vars);
     return this.validateArtifactFiles(data.files, { template, sandpackConfig, requiredEnvVars });
+  }
+
+  private requireExecutorCallback(
+    params: ArtifactParams | undefined,
+    action: 'artifact.publish' | 'artifact.validate',
+    branchId: string | undefined
+  ): Record<string, unknown> {
+    const caller = params?.user;
+    if (!caller) throw new NotAuthenticated('Authentication required');
+    if (!caller._isServiceAccount) {
+      throw new Forbidden('Only an executor service account may invoke this method');
+    }
+    const claims = params.authentication?.payload as Record<string, unknown> | undefined;
+    if (
+      claims?.executor_action !== action ||
+      typeof claims.executor_user_id !== 'string' ||
+      typeof branchId !== 'string' ||
+      claims.executor_branch_id !== branchId
+    ) {
+      throw new Forbidden('Executor token is not scoped to this artifact operation');
+    }
+    return claims;
   }
 
   async checkBuild(artifactId: string): Promise<{

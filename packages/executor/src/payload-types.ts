@@ -571,7 +571,7 @@ export const BranchSlackFileUploadPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     branchId: z.string().uuid(),
     filePath: z.string().min(1),
-    connectorConfig: z.record(z.string(), z.unknown()),
+    gatewayChannelId: z.string().uuid(),
     channel: z.string().min(1),
     threadTs: z.string().optional(),
     filename: z.string().optional(),

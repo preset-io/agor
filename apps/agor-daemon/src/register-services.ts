@@ -503,7 +503,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   {
-    app.use('/gateway-channels', createGatewayChannelsService(db));
+    app.use('/gateway-channels', createGatewayChannelsService(db), {
+      methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'uploadFileFromExecutor'],
+    });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
     // the parent gateway-channels admin gating / redaction hooks, so it carries

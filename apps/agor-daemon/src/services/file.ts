@@ -50,20 +50,13 @@ export class FileService
     const branch = await this.branchRepo.findById(branchId);
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
 
-    try {
-      const result = await this.runCommand('branch.files.browse', branch.branch_id, params);
-      if (!result.success) {
-        console.warn(
-          `[File Service] Executor browse failed for branch ${branchId}:`,
-          result.error?.message
-        );
-        return [];
-      }
-      return extractFiles(result.data);
-    } catch (error) {
-      console.error(`[File Service] Failed to browse branch ${branchId}:`, error);
-      return [];
+    const result = await this.runCommand('branch.files.browse', branch.branch_id, params);
+    if (!result.success) {
+      throw new Error(
+        `Failed to browse files: ${result.error?.message ?? 'unknown executor error'}`
+      );
     }
+    return extractFiles(result.data);
   }
 
   async get(id: Id, params?: FileParams): Promise<FileDetail> {

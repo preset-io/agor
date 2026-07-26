@@ -52,12 +52,22 @@ export async function handleBranchArtifactValidate(
     const files = await readArtifactTree(source.absolute);
     const sidecar = await readArtifactSidecar(source.absolute);
     const artifacts = client.service('artifacts') as unknown as {
+      methods?: (...names: string[]) => unknown;
       validateFromExecutor(data: {
         files: Record<string, string>;
         sidecar: Record<string, unknown> | null;
+        branch_id: string;
       }): Promise<unknown>;
     };
-    return { success: true, data: await artifacts.validateFromExecutor({ files, sidecar }) };
+    artifacts.methods?.('validateFromExecutor');
+    return {
+      success: true,
+      data: await artifacts.validateFromExecutor({
+        files,
+        sidecar,
+        branch_id: branch.branch_id,
+      }),
+    };
   } catch (error) {
     return {
       success: false,
@@ -203,10 +213,12 @@ export async function handleBranchArtifactPublish(
     const files = await readArtifactTree(source.absolute);
     const sidecar = await readArtifactSidecar(source.absolute);
     const artifacts = client.service('artifacts') as unknown as {
+      methods?: (...names: string[]) => unknown;
       publishFromExecutor(
         data: Record<string, unknown>
       ): Promise<{ artifact_id: string; content_hash?: string; build_status: string }>;
     };
+    artifacts.methods?.('publishFromExecutor');
     const artifact = await artifacts.publishFromExecutor({
       ...payload.params.publishData,
       branch_id: branch.branch_id,

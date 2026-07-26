@@ -12,8 +12,15 @@ import {
   resolveAgenticToolPreset,
 } from '@agor/core/config';
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
-import type { GatewayChannel, NullableId, Params } from '@agor/core/types';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { getConnector } from '@agor/core/gateway';
+import {
+  type AuthenticatedParams,
+  type GatewayChannel,
+  type NullableId,
+  type Params,
+  resolveSlackAgentTools,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 export class GatewayChannelsService extends DrizzleService<
@@ -95,6 +102,61 @@ export class GatewayChannelsService extends DrizzleService<
 
   async update(id: string, data: Partial<GatewayChannel>, params?: Params) {
     return this.patch(id, data, params) as Promise<GatewayChannel>;
+  }
+
+  async uploadFileFromExecutor(
+    data: {
+      gatewayChannelId: string;
+      channel: string;
+      threadTs?: string;
+      fileBase64: string;
+      filename: string;
+      comment?: string;
+    },
+    params?: AuthenticatedParams
+  ): Promise<unknown> {
+    const caller = params?.user;
+    const claims = params?.authentication?.payload as Record<string, unknown> | undefined;
+    if (!caller) throw new NotAuthenticated('Authentication required');
+    if (!caller._isServiceAccount) {
+      throw new Forbidden('Only an executor service account may upload branch files');
+    }
+    if (
+      claims?.executor_action !== 'gateway.slack-file-upload' ||
+      claims.executor_gateway_channel_id !== data.gatewayChannelId ||
+      claims.executor_slack_channel_id !== data.channel
+    ) {
+      throw new Forbidden('Executor token is not scoped to this Slack upload');
+    }
+
+    const gatewayChannel = (await super.get(data.gatewayChannelId, params)) as GatewayChannel;
+    if (!resolveSlackAgentTools(gatewayChannel.config?.agent_tools).file_upload) {
+      throw new Forbidden('Slack file uploads are disabled for this gateway channel');
+    }
+    if (claims.executor_branch_id !== gatewayChannel.target_branch_id) {
+      throw new Forbidden('Executor token branch does not match the gateway channel target');
+    }
+
+    const connector = getConnector('slack', gatewayChannel.config);
+    const uploader = connector as unknown as {
+      uploadFile?: (input: {
+        channel: string;
+        threadTs?: string;
+        file: Buffer;
+        filename: string;
+        comment?: string;
+      }) => Promise<unknown>;
+    };
+    if (typeof uploader.uploadFile !== 'function') {
+      throw new BadRequest('Configured Slack connector does not support file uploads');
+    }
+    return uploader.uploadFile({
+      channel: data.channel,
+      ...(data.threadTs ? { threadTs: data.threadTs } : {}),
+      file: Buffer.from(data.fileBase64, 'base64'),
+      filename: data.filename,
+      ...(data.comment ? { comment: data.comment } : {}),
+    });
   }
 }
 

@@ -1703,11 +1703,15 @@ describe('gateway agent-tool capability gating (MCP)', () => {
           params: expect.objectContaining({
             branchId: 'branch-1',
             filePath: 'chart.png',
+            gatewayChannelId: fileUploadEnabled.id,
             threadTs: '171234.000100',
           }),
         }),
         expect.any(Object)
       );
+      const executorPayload = vi.mocked(runExecutorCommand).mock.calls[0]?.[0];
+      expect(JSON.stringify(executorPayload)).not.toContain('xoxb');
+      expect(executorPayload?.params).not.toHaveProperty('connectorConfig');
       expect(payload).toMatchObject({ uploaded: true });
     });
 

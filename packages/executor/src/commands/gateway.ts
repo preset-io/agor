@@ -1,21 +1,10 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { getConnector } from '@agor/core/gateway';
 import type { BranchSlackFileUploadPayload, ExecutorResult } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import { resolveExecutorBranch, resolvePathInsideBranch } from './branch-filesystem.js';
 import type { CommandOptions } from './index.js';
-
-interface SlackUploader {
-  uploadFile(input: {
-    channel: string;
-    threadTs?: string;
-    file: Buffer;
-    filename: string;
-    comment?: string;
-  }): Promise<unknown>;
-}
 
 export async function handleBranchSlackFileUpload(
   payload: BranchSlackFileUploadPayload,
@@ -39,15 +28,23 @@ export async function handleBranchSlackFileUpload(
         `File exceeds the ${payload.params.maxBytes}-byte upload limit: ${source.relative} (${stats.size} bytes)`
       );
     }
-    const connector = getConnector('slack', payload.params.connectorConfig);
-    const uploader = connector as unknown as Partial<SlackUploader>;
-    if (typeof uploader.uploadFile !== 'function') {
-      throw new Error('Configured Slack connector does not support file uploads');
-    }
-    const uploaded = await uploader.uploadFile({
+    const channels = client.service('gateway-channels') as unknown as {
+      methods?: (...names: string[]) => unknown;
+      uploadFileFromExecutor(data: {
+        gatewayChannelId: string;
+        channel: string;
+        threadTs?: string;
+        fileBase64: string;
+        filename: string;
+        comment?: string;
+      }): Promise<unknown>;
+    };
+    channels.methods?.('uploadFileFromExecutor');
+    const uploaded = await channels.uploadFileFromExecutor({
+      gatewayChannelId: payload.params.gatewayChannelId,
       channel: payload.params.channel,
       ...(payload.params.threadTs ? { threadTs: payload.params.threadTs } : {}),
-      file: await readFile(source.absolute),
+      fileBase64: (await readFile(source.absolute)).toString('base64'),
       filename: payload.params.filename ?? basename(source.absolute),
       ...(payload.params.comment ? { comment: payload.params.comment } : {}),
     });

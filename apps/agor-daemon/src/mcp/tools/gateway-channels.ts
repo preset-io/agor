@@ -1636,13 +1636,20 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             command: 'branch.gateway.slack-file-upload',
             sessionToken: generateScopedServiceToken(
               ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-              ctx.baseServiceParams
+              ctx.baseServiceParams,
+              {
+                executor_action: 'gateway.slack-file-upload',
+                executor_user_id: ctx.authenticatedUser.user_id,
+                executor_branch_id: target.channel.target_branch_id,
+                executor_gateway_channel_id: target.channel.id,
+                executor_slack_channel_id: target.slackChannelId,
+              }
             ),
             daemonUrl: getDaemonUrl(),
             params: {
               branchId: target.channel.target_branch_id,
               filePath: args.path,
-              connectorConfig: target.channel.config,
+              gatewayChannelId: target.channel.id,
               channel: target.slackChannelId,
               threadTs: args.threadTs,
               filename: args.filename,

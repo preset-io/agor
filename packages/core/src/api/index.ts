@@ -72,7 +72,6 @@ const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
 const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
 const BRANCHES_SERVICE_EXTENDED = Symbol('agor.branchesServiceExtended');
 const TASKS_SERVICE_EXTENDED = Symbol('agor.tasksServiceExtended');
-const ARTIFACTS_SERVICE_EXTENDED = Symbol('agor.artifactsServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
@@ -920,18 +919,6 @@ function extendTasksService(client: AgorClient): void {
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }
 
-function extendArtifactsService(client: AgorClient): void {
-  const service = client.service('artifacts') as AgorService<Artifact> & {
-    [ARTIFACTS_SERVICE_EXTENDED]?: boolean;
-    methods?: (...names: string[]) => unknown;
-  };
-  if (service[ARTIFACTS_SERVICE_EXTENDED]) return;
-  if (typeof service.methods === 'function') {
-    service.methods('publishFromExecutor', 'validateFromExecutor');
-  }
-  service[ARTIFACTS_SERVICE_EXTENDED] = true;
-}
-
 function extendServiceFactory(client: AgorClient): void {
   const augmentedClient = client as AgorClient & {
     [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
@@ -1063,7 +1050,6 @@ export async function createRestClient(
   extendReposService(client);
   extendBranchesService(client);
   extendTasksService(client);
-  extendArtifactsService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
@@ -1156,7 +1142,6 @@ export function createClient(
   extendReposService(client);
   extendBranchesService(client);
   extendTasksService(client);
-  extendArtifactsService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
