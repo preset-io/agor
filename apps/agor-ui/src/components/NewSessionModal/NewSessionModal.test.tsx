@@ -65,6 +65,9 @@ vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
       <button type="button" data-testid="pick-cli" onClick={() => onSelect('claude-code-cli')}>
         cli
       </button>
+      <button type="button" data-testid="pick-opencode" onClick={() => onSelect('opencode')}>
+        opencode
+      </button>
     </div>
   ),
 }));
@@ -103,6 +106,16 @@ vi.mock('../AgenticConfigChipRow', () => ({
           onClick={() => form.setFieldValue('agenticToolPresetId', 'preset-1')}
         >
           preset
+        </button>
+        <button
+          type="button"
+          data-testid="clear-opencode-model"
+          onClick={() => {
+            form.setFieldValue('agenticToolPresetId', '__inline__');
+            form.setFieldValue('modelConfig', undefined);
+          }}
+        >
+          clear OpenCode model
         </button>
         <output data-testid="configuration-source">{source}</output>
         <button
@@ -271,5 +284,42 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
         permissionMode: 'plan',
       })
     );
+  });
+
+  it('carries a cleared OpenCode provider/model override as atomic absence', async () => {
+    const currentUser = {
+      user_id: 'u1',
+      default_agentic_config: {
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'openai',
+            model: 'gpt-5',
+            effort: 'high',
+          },
+          permissionMode: 'default',
+        },
+      },
+    } as unknown as User;
+    const onCreate = vi.fn();
+    render(
+      <NewSessionModal
+        open
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        availableAgents={[]}
+        branchId="branch-1"
+        currentUser={currentUser}
+        client={null}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('pick-opencode'));
+    fireEvent.click(screen.getByTestId('clear-opencode-model'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Session' }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0][0].modelConfig).toBeNull();
+    expect(onCreate.mock.calls[0][0].effort).toBeUndefined();
   });
 });

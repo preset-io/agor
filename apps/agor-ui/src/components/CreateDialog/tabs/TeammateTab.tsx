@@ -36,7 +36,7 @@ export interface TeammateTabResult {
   sourceBranch?: string;
   agent: AgenticToolName;
   agenticToolPresetId?: string;
-  modelConfig?: ModelConfig;
+  modelConfig?: ModelConfig | null;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -110,6 +110,13 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         (values.permissionMode as PermissionMode | undefined) ??
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
+      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const selectedModelConfig = isInline
+        ? values.modelConfig
+        : (values.modelConfig ?? agentDefaults?.modelConfig);
+      const hasCompleteOpenCodeModel =
+        selectedAgent !== 'opencode' ||
+        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
 
       const result: TeammateTabResult = {
         displayName: values.displayName.trim(),
@@ -119,12 +126,19 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
         agent: selectedAgent,
-        agenticToolPresetId:
-          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
+        agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
+        // Match NewSessionModal's three-state contract: an inline OpenCode
+        // clear is explicit null, while omission continues to inherit.
+        modelConfig:
+          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
+            ? null
+            : hasCompleteOpenCodeModel
+              ? selectedModelConfig
+              : undefined,
+        effort:
+          selectedAgent === 'opencode' && !hasCompleteOpenCodeModel
             ? undefined
-            : values.agenticToolPresetId,
-        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
-        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
+            : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
         mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
         permissionMode,
       };

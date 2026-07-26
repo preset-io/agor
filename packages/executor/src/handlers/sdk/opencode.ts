@@ -8,6 +8,7 @@ import { generateId, shortId } from '@agor/core';
 import type {
   ExecutorPulseKind,
   MessageID,
+  MessageSource,
   PermissionMode,
   SessionID,
   TaskID,
@@ -17,6 +18,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
+import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
@@ -28,6 +30,7 @@ export async function executeOpenCodeTask(params: {
   prompt: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
+  messageSource?: MessageSource;
   dataHome?: string;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
@@ -57,25 +60,10 @@ export async function executeOpenCodeTask(params: {
       throw new Error('OpenCode requires an Agor branch working directory');
     }
 
-    const existingMessages = await client.service('messages').find({
-      query: {
-        session_id: sessionId,
-        $sort: { index: 1 },
-      },
-    });
-    const messages = Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
-    const nextIndex = messages?.length || 0;
-
-    await repos.messagesService.create({
-      message_id: generateId() as MessageID,
-      session_id: sessionId,
-      task_id: taskId,
-      type: 'user' as const,
-      role: MessageRole.USER,
-      index: nextIndex,
-      timestamp: new Date().toISOString(),
-      content_preview: prompt.substring(0, 200),
-      content: prompt,
+    const messages = await repos.messages.findBySessionId(sessionId);
+    await createUserMessage(sessionId, prompt, taskId, messages.length, repos.messagesService, {
+      messageSource: params.messageSource,
+      existingMessages: messages,
     });
 
     const assistantMessageId = generateId() as MessageID;

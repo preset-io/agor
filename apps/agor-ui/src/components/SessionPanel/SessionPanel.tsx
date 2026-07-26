@@ -761,7 +761,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // lifetime-stable wrappers that delegate to the latest implementations via
   // a ref (re-pointed each render, right where the impls are defined).
   const footerHandlersRef = React.useRef<{
-    onModelConfigChange: (config: ModelConfig) => void;
+    onModelConfigChange: (config: ModelConfig | undefined) => void;
     onSendPrompt: () => void;
     onStop: () => void;
     onFork: () => void;
@@ -775,7 +775,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } | null>(null);
   const stableFooterHandlers = React.useMemo(
     () => ({
-      onModelConfigChange: (config: ModelConfig) =>
+      onModelConfigChange: (config: ModelConfig | undefined) =>
         footerHandlersRef.current?.onModelConfigChange(config),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
@@ -1289,8 +1289,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleModelConfigChange = (newConfig: ModelConfig) => {
+  const handleModelConfigChange = (newConfig: ModelConfig | undefined) => {
     if (session && onUpdateSession) {
+      if (!newConfig) {
+        onUpdateSession(session.session_id, {
+          model_config: null,
+        } as unknown as Partial<Session>);
+        return;
+      }
       const nextConfig: NonNullable<Session['model_config']> = {
         ...session.model_config,
         mode: newConfig.mode,

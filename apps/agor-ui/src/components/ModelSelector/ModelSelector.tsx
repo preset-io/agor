@@ -34,7 +34,7 @@ export interface ModelConfig {
 
 export interface ModelSelectorProps {
   value?: ModelConfig;
-  onChange?: (config: ModelConfig) => void;
+  onChange?: (config: ModelConfig | undefined) => void;
   agent?:
     | 'claude-code'
     | 'claude-code-cli'
@@ -295,15 +295,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               }
             : undefined
         }
-        onChange={(openCodeConfig: OpenCodeModelConfig) => {
-          if (onChange) {
-            onChange({
-              mode: 'exact',
-              model: openCodeConfig.model,
-              provider: openCodeConfig.provider,
-            });
-          }
-        }}
+        onChange={(openCodeConfig: OpenCodeModelConfig | undefined) =>
+          onChange?.(
+            openCodeConfig
+              ? {
+                  mode: 'exact',
+                  model: openCodeConfig.model,
+                  provider: openCodeConfig.provider,
+                }
+              : undefined
+          )
+        }
       />
     );
   }

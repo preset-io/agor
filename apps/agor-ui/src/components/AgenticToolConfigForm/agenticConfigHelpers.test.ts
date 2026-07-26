@@ -1,6 +1,9 @@
 import type { ScheduleAgenticToolConfig } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { buildScheduleConfigFromFormValues } from './agenticConfigHelpers';
+import {
+  buildConfigFromFormValues,
+  buildScheduleConfigFromFormValues,
+} from './agenticConfigHelpers';
 
 describe('buildScheduleConfigFromFormValues', () => {
   it('detaches a previous preset when switching a schedule to inline configuration', () => {
@@ -40,5 +43,42 @@ describe('buildScheduleConfigFromFormValues', () => {
     expect(result.configuration_reference).toBeUndefined();
     expect(result.preset_id).toBeUndefined();
     expect(result.context_files).toEqual(['AGENTS.md']);
+  });
+});
+
+describe('buildConfigFromFormValues', () => {
+  it('omits a cleared OpenCode provider/model override from user defaults', () => {
+    const result = buildConfigFromFormValues('opencode', {
+      modelConfig: undefined,
+      effort: 'high',
+      permissionMode: 'default',
+    });
+
+    expect(result.modelConfig).toBeUndefined();
+  });
+
+  it('omits a partial OpenCode provider/model override even with detached effort', () => {
+    const result = buildConfigFromFormValues('opencode', {
+      modelConfig: { mode: 'exact', provider: 'openai', model: '' },
+      effort: 'high',
+      permissionMode: 'default',
+    });
+
+    expect(result.modelConfig).toBeUndefined();
+  });
+
+  it('preserves a complete exact OpenCode provider/model pair', () => {
+    const result = buildConfigFromFormValues('opencode', {
+      modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-5' },
+      effort: 'high',
+      permissionMode: 'default',
+    });
+
+    expect(result.modelConfig).toEqual({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-5',
+      effort: 'high',
+    });
   });
 });

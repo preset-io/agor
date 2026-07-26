@@ -20,7 +20,7 @@ export interface SessionRunSettingsPopoverProps {
   session: Session;
   modelLabel?: string;
   modelConfig?: ModelConfig;
-  onModelConfigChange: (config: ModelConfig) => void;
+  onModelConfigChange: (config: ModelConfig | undefined) => void;
   effortLevel: EffortLevel;
   onEffortChange: (effort: EffortLevel) => void;
   permissionMode: PermissionMode;

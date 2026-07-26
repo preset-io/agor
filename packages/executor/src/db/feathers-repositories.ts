@@ -30,14 +30,24 @@ export class FeathersMessagesRepository {
 
   async findBySessionId(sessionId: SessionID): Promise<Message[]> {
     const service = this.client.service('messages');
-    const result = await service.find({
-      query: {
-        session_id: sessionId,
-        $sort: { index: 1 },
-        $limit: 10000,
-      },
-    });
-    return Array.isArray(result) ? result : result.data;
+    const messages: Message[] = [];
+    const pageSize = 10000;
+
+    while (true) {
+      const result = await service.find({
+        query: {
+          session_id: sessionId,
+          $sort: { index: 1 },
+          $limit: pageSize,
+          $skip: messages.length,
+        },
+      });
+
+      if (Array.isArray(result)) return result;
+
+      messages.push(...result.data);
+      if (result.data.length === 0 || messages.length >= result.total) return messages;
+    }
   }
 
   async findById(messageId: MessageID): Promise<Message | null> {

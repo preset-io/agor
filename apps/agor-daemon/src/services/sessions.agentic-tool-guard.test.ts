@@ -16,10 +16,11 @@ import {
   TaskRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session, Task, UUID } from '@agor/core/types';
+import type { CreateSessionInput, HookContext, Session, Task, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { applySessionConfigDefaults } from '../utils/apply-session-config-defaults';
 import { SessionsService } from './sessions';
 
 // The guard only touches the session/task repos built from `db`; the stored
@@ -173,5 +174,116 @@ describe('SessionsService.patch — agentic_tool immutability guard', () => {
 
     const result = (await service.patch(sessionId, { title: 'New title' })) as Session;
     expect(result.title).toBe('New title');
+  });
+});
+
+describe('SessionsService OpenCode model_config validation', () => {
+  function createInput(branchId: UUID, modelConfig: CreateSessionInput['model_config']) {
+    return {
+      session_id: generateId(),
+      branch_id: branchId,
+      agentic_tool: 'opencode' as const,
+      status: SessionStatus.IDLE,
+      created_by: 'test-user' as UUID,
+      git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
+      tasks: [],
+      contextFiles: [],
+      genealogy: { children: [] },
+      model_config: modelConfig,
+    } satisfies CreateSessionInput;
+  }
+
+  dbTest(
+    'preserves a deliberate clear through the create hook and persists absence without restoring a stale default',
+    async ({ db }) => {
+      const branchId = await createBranch(db);
+      const data = createInput(branchId, null);
+      const context = {
+        params: { provider: 'rest', user: { user_id: data.created_by } },
+        data,
+        app: {
+          service: () => ({
+            get: async () => ({
+              user_id: data.created_by,
+              default_agentic_config: {
+                opencode: {
+                  modelConfig: {
+                    mode: 'exact',
+                    provider: 'openai',
+                    model: 'stale-user-model',
+                  },
+                },
+              },
+            }),
+          }),
+        },
+      } as unknown as HookContext;
+
+      await applySessionConfigDefaults({ warnOnExternalDefaultFill: false })(context);
+      expect(context.data).toHaveProperty('model_config', null);
+
+      const service = new SessionsService(db, STUB_APP);
+      const created = (await service.create(context.data as CreateSessionInput)) as Session;
+      expect(created.model_config).toBeNull();
+      expect(
+        (await new SessionRepository(db).findById(created.session_id))?.model_config
+      ).toBeNull();
+    }
+  );
+
+  dbTest('rejects incomplete and blank OpenCode pairs on create', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const invalidConfigs = [
+      { mode: 'exact', model: 'gpt-5', updated_at: 'now' },
+      { mode: 'exact', provider: 'openai', updated_at: 'now' },
+      { mode: 'exact', provider: 'openai', model: '   ', updated_at: 'now' },
+      { mode: 'exact', provider: '   ', model: 'gpt-5', updated_at: 'now' },
+    ] as CreateSessionInput['model_config'][];
+
+    for (const modelConfig of invalidConfigs) {
+      await expect(service.create(createInput(branchId, modelConfig))).rejects.toThrow(
+        /provider.*model/i
+      );
+    }
+  });
+
+  dbTest('rejects incomplete and blank OpenCode pairs on patch', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const sessionId = await createSession(db, branchId, {
+      agentic_tool: 'opencode',
+      model_config: null,
+    });
+    const invalidConfigs = [
+      { mode: 'exact', model: 'gpt-5', updated_at: 'now' },
+      { mode: 'exact', provider: 'openai', updated_at: 'now' },
+      { mode: 'exact', provider: 'openai', model: '   ', updated_at: 'now' },
+      { mode: 'exact', provider: '   ', model: 'gpt-5', updated_at: 'now' },
+    ] as NonNullable<Session['model_config']>[];
+
+    for (const model_config of invalidConfigs) {
+      await expect(service.patch(sessionId, { model_config })).rejects.toThrow(/provider.*model/i);
+    }
+  });
+
+  dbTest('preserves a valid exact pair and existing-session null clears', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const exact = {
+      mode: 'exact' as const,
+      provider: 'openai',
+      model: 'gpt-5',
+      updated_at: 'now',
+    };
+
+    const created = (await service.create(createInput(branchId, exact))) as Session;
+    expect(created.model_config).toEqual(exact);
+
+    const cleared = (await service.patch(created.session_id, { model_config: null })) as Session;
+    expect(cleared.model_config).toBeNull();
+
+    const restored = (await service.patch(created.session_id, { model_config: exact })) as Session;
+    expect(restored.model_config).toEqual(exact);
   });
 });

@@ -11,7 +11,7 @@ export interface OpenCodeModelConfig {
 
 export interface OpenCodeModelSelectorProps {
   value?: OpenCodeModelConfig;
-  onChange?: (config: OpenCodeModelConfig) => void;
+  onChange?: (config: OpenCodeModelConfig | undefined) => void;
 }
 
 /**
@@ -38,9 +38,9 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
       onChange?.({ provider: nextProvider, model: nextModel });
       return;
     }
-    // A partial pair is not executable. Publish an empty override while the
-    // user finishes editing so stale provider/model values are never retained.
-    onChange?.({ provider: '', model: '' });
+    // A partial pair is not executable. Publish root absence while the user
+    // finishes editing so stale provider/model values are never retained.
+    onChange?.(undefined);
   };
 
   return (

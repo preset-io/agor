@@ -51,7 +51,7 @@ export interface NewSessionConfig {
   initialPrompt?: string;
 
   // Advanced configuration
-  modelConfig?: ModelConfig;
+  modelConfig?: ModelConfig | null;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -210,6 +210,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const selectedModelConfig = isInline
+        ? values.modelConfig
+        : (values.modelConfig ?? agentDefaults?.modelConfig);
+      const hasCompleteOpenCodeModel =
+        selectedAgent !== 'opencode' ||
+        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
 
       // Promote the inline config to the user's default when requested. Fire and
       // forget — session creation shouldn't block on the profile patch.
@@ -236,9 +242,19 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
         title: values.title,
         initialPrompt: values.initialPrompt,
-        // Daemon's applySessionConfigDefaults hook fills the tool default.
-        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
-        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
+        // OpenCode's provider/model selection is atomic. An inline clear must
+        // remain distinct from omission so the daemon does not restore a stale
+        // user default in its create hook.
+        modelConfig:
+          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
+            ? null
+            : hasCompleteOpenCodeModel
+              ? selectedModelConfig
+              : undefined,
+        effort:
+          selectedAgent === 'opencode' && !hasCompleteOpenCodeModel
+            ? undefined
+            : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,

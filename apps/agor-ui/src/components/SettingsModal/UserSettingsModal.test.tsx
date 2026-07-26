@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -391,5 +391,167 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     expect(screen.getByRole('heading', { name: 'Environment Variables' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('resets OpenCode provider state when the authenticated subject changes', async () => {
+    const oldSettings = {
+      runtime: 'available' as const,
+      runtimeVersion: '1.14.33',
+      isolation: { mode: 'simple' as const, boundary: 'logical' as const },
+      providers: [
+        {
+          id: 'old-provider',
+          name: 'Old User Provider',
+          configured: false,
+          status: 'disconnected' as const,
+          authMethods: [
+            { index: 0, type: 'api' as const, label: 'API key' },
+            { index: 1, type: 'oauth' as const, label: 'Browser flow' },
+          ],
+        },
+      ],
+    };
+    const newSettings = {
+      ...oldSettings,
+      providers: [
+        {
+          id: 'new-provider',
+          name: 'New User Provider',
+          configured: true,
+          status: 'configured' as const,
+          authMethods: [],
+        },
+      ],
+    };
+    const attempt = {
+      attemptId: 'old-attempt',
+      providerId: 'old-provider',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto' as const,
+        instructions: 'Old user authorization.',
+      },
+    };
+    const service = {
+      find: vi.fn().mockResolvedValueOnce(oldSettings).mockResolvedValueOnce(newSettings),
+      get: vi.fn(),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+    const oldUser = makeUser();
+    const newUser = makeUser({
+      user_id: 'user-2',
+      email: 'new-user@agor.live',
+      name: 'New User',
+    });
+    const renderModal = (subject: User) => (
+      <AntApp>
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={subject}
+          currentUser={subject}
+          client={client}
+          onUpdate={vi.fn()}
+          initialTab="opencode"
+        />
+      </AntApp>
+    );
+    const { rerender } = render(renderModal(oldUser));
+
+    fireEvent.change(await screen.findByLabelText('Old User Provider API key'), {
+      target: { value: 'old-user-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with Browser flow' }));
+    expect(await screen.findByText('Old user authorization.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Old User Provider API key')).toHaveValue('old-user-secret');
+    expect(screen.getByRole('button', { name: 'Cancel authorization' })).toBeInTheDocument();
+
+    rerender(renderModal(newUser));
+
+    expect(await screen.findByText('New User Provider')).toBeInTheDocument();
+    expect(screen.getByText('Configured in OpenCode')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Old User Provider API key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Old user authorization.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel authorization' })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('old-user-secret');
+    expect(service.find).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a delayed OpenCode settings response from the previous subject', async () => {
+    let resolveOld!: (value: unknown) => void;
+    const oldResponse = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    const newSettings = {
+      runtime: 'available' as const,
+      runtimeVersion: '1.14.33',
+      isolation: { mode: 'simple' as const, boundary: 'logical' as const },
+      providers: [
+        {
+          id: 'new-provider',
+          name: 'New User Provider',
+          configured: true,
+          status: 'configured' as const,
+          authMethods: [],
+        },
+      ],
+    };
+    const oldSettings = {
+      ...newSettings,
+      providers: [
+        {
+          id: 'old-provider',
+          name: 'Delayed Old Provider',
+          configured: true,
+          status: 'configured' as const,
+          authMethods: [],
+        },
+      ],
+    };
+    const service = {
+      find: vi.fn().mockReturnValueOnce(oldResponse).mockResolvedValueOnce(newSettings),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+    const oldUser = makeUser();
+    const newUser = makeUser({
+      user_id: 'user-2',
+      email: 'new-user@agor.live',
+      name: 'New User',
+    });
+    const renderModal = (subject: User) => (
+      <AntApp>
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={subject}
+          currentUser={subject}
+          client={client}
+          onUpdate={vi.fn()}
+          initialTab="opencode"
+        />
+      </AntApp>
+    );
+    const { rerender } = render(renderModal(oldUser));
+
+    await waitFor(() => expect(service.find).toHaveBeenCalledTimes(1));
+    rerender(renderModal(newUser));
+
+    expect(await screen.findByText('New User Provider')).toBeInTheDocument();
+    await act(async () => {
+      resolveOld(oldSettings);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('New User Provider')).toBeInTheDocument();
+    expect(screen.queryByText('Delayed Old Provider')).not.toBeInTheDocument();
   });
 });

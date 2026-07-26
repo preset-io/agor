@@ -26,7 +26,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
-import type { AuthenticatedParams } from '@agor/core/types';
+import type { AuthenticatedParams, OpenCodeOAuthAuthorization } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -36,6 +36,12 @@ import {
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  containExecutorProcess,
+  markExecutorProcessExited,
+  trackExecutorProcess,
+  untrackExecutorProcess,
+} from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
@@ -131,6 +137,20 @@ export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
   /** Optional timeout for short-lived command execution. */
   timeoutMs?: number;
+}
+
+export type OpenCodeOAuthProcessEvent =
+  | {
+      type: 'authorized';
+      authorization: OpenCodeOAuthAuthorization;
+    }
+  | { type: 'callback-started' };
+
+export interface OpenCodeOAuthExecutorHandle {
+  result: Promise<ExecutorCommandResult>;
+  cancel(): Promise<ExecutorCommandResult>;
+  submitCode(code: string): Promise<boolean>;
+  verifyAbsence(): Promise<boolean>;
 }
 
 /**
@@ -514,6 +534,392 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
   }
 }
 
+const OPENCODE_OAUTH_EVENT_PREFIX = 'AGOR_OPENCODE_OAUTH_EVENT ';
+
+function resolveLocalExecutorLocation(options: RunExecutorCommandOptions) {
+  const executorPath = findExecutorPath();
+  return {
+    executorPath,
+    cwd: options.cwd ?? path.dirname(path.dirname(executorPath)),
+  };
+}
+
+function prepareLocalExecutorSpawn(
+  options: RunExecutorCommandOptions,
+  mode: '--stdin' | '--opencode-oauth',
+  location = resolveLocalExecutorLocation(options)
+) {
+  const { executorPath, cwd } = location;
+  const {
+    env = process.env as Record<string, string>,
+    asUser: rawAsUser,
+    preparedEnv,
+    preparedEnvFilePath,
+  } = options;
+  const asUser = rawAsUser || undefined;
+  const envWithDaemonUrl: Record<string, string> = preparedEnv
+    ? withDaemonExecutorEnv(preparedEnv, getDaemonUrl())
+    : asUser
+      ? withDaemonExecutorEnv(
+          Object.fromEntries(
+            Object.entries({
+              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+              NODE_ENV: env.NODE_ENV,
+              LOG_LEVEL: env.LOG_LEVEL,
+              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+              OPENAI_API_KEY: env.OPENAI_API_KEY,
+              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+              GEMINI_API_KEY: env.GEMINI_API_KEY,
+              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+            }).filter(([_, value]) => value !== undefined)
+          ),
+          getDaemonUrl()
+        )
+      : withDaemonExecutorEnv(env, getDaemonUrl());
+  const prepared = asUser
+    ? preparedEnvFilePath
+      ? {
+          inlineEnv: Object.fromEntries(
+            Object.entries(envWithDaemonUrl).filter(([key]) => !isSecretEnvKey(key))
+          ),
+          envFilePath: preparedEnvFilePath,
+        }
+      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
+    : { inlineEnv: undefined, envFilePath: undefined };
+  const command = buildSpawnArgs('node', [executorPath, mode], {
+    asUser,
+    env: asUser ? prepared.inlineEnv : undefined,
+    envFilePath: prepared.envFilePath,
+  });
+  return { ...command, cwd, asUser, envWithDaemonUrl, envFilePath: prepared.envFilePath };
+}
+
+function parseOpenCodeOAuthEvent(line: string): OpenCodeOAuthProcessEvent | undefined {
+  if (!line.startsWith(OPENCODE_OAUTH_EVENT_PREFIX)) return undefined;
+  try {
+    const event = JSON.parse(line.slice(OPENCODE_OAUTH_EVENT_PREFIX.length)) as unknown;
+    if (!event || typeof event !== 'object' || !('type' in event)) return undefined;
+    if (event.type === 'callback-started') return { type: 'callback-started' };
+    if (
+      event.type === 'authorized' &&
+      'authorization' in event &&
+      event.authorization &&
+      typeof event.authorization === 'object'
+    ) {
+      const authorization = event.authorization as Record<string, unknown>;
+      if (
+        typeof authorization.url === 'string' &&
+        (authorization.method === 'auto' || authorization.method === 'code') &&
+        typeof authorization.instructions === 'string'
+      ) {
+        return {
+          type: 'authorized',
+          authorization: {
+            url: authorization.url,
+            method: authorization.method,
+            instructions: authorization.instructions,
+          },
+        };
+      }
+    }
+  } catch {
+    // Invalid protocol output is ignored and becomes a missing-result failure.
+  }
+  return undefined;
+}
+
+/**
+ * Starts the one bounded, local executor process used by native OpenCode OAuth.
+ *
+ * This deliberately is not a general interactive executor transport: the only
+ * intermediate frames it understands are the two OpenCode OAuth lifecycle
+ * events above. Cancellation contains the executor's whole process group,
+ * including its task-scoped managed OpenCode server.
+ */
+export function startOpenCodeOAuthExecutor(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions,
+  onEvent: (event: OpenCodeOAuthProcessEvent) => void
+): OpenCodeOAuthExecutorHandle {
+  const executorCommandTemplate =
+    options.executorCommandTemplate !== undefined
+      ? options.executorCommandTemplate || undefined
+      : configuredExecutorDefaults.executorCommandTemplate;
+  if (executorCommandTemplate) {
+    return {
+      result: Promise.resolve({
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
+          message: 'OpenCode OAuth requires a locally containable executor process.',
+        },
+      }),
+      cancel: async () => ({
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
+          message: 'OpenCode OAuth requires a locally containable executor process.',
+        },
+      }),
+      submitCode: async () => false,
+      verifyAbsence: async () => true,
+    };
+  }
+
+  const { timeoutMs = 10 * 60_000 } = options;
+  const rawAsUser = options.asUser;
+  const asUser =
+    rawAsUser !== undefined
+      ? rawAsUser || undefined
+      : configuredExecutorDefaults.asUser || undefined;
+  const attemptId = crypto.randomUUID();
+  const taskId = generateTaskId();
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--opencode-oauth');
+  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
+  const child = spawn(cmd, args, {
+    cwd,
+    env: asUser ? undefined : { ...envWithDaemonUrl },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+  });
+  attachEnvFileCleanup(child, { envFilePath, asUser });
+
+  let resolveResult!: (result: ExecutorCommandResult) => void;
+  const result = new Promise<ExecutorCommandResult>((resolve) => {
+    resolveResult = resolve;
+  });
+  let stdout = '';
+  let lineBuffer = '';
+  let stderrSeen = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let finalization: Promise<ExecutorCommandResult> | undefined;
+  let codeSubmitted = false;
+  let pendingInput:
+    | {
+        fail: (ownTransportFailure: boolean) => void;
+      }
+    | undefined;
+  let resolveClose!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClose = resolve;
+  });
+
+  const finalize = (
+    fallback?: ExecutorCommandResult,
+    leaderExited = false
+  ): Promise<ExecutorCommandResult> => {
+    finalization ??= (async () => {
+      pendingInput?.fail(false);
+      if (timer) clearTimeout(timer);
+      if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
+      const containment = await containExecutorProcess(attemptId, taskId);
+      if (containment.status !== 'verified_absent') {
+        return {
+          success: false,
+          error: {
+            code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED',
+            message: 'OpenCode OAuth cleanup could not be verified.',
+          },
+        };
+      }
+      await closed;
+      untrackExecutorProcess(attemptId, taskId);
+      return (
+        fallback ??
+        parseExecutorResultFromStdout(stdout) ?? {
+          success: false,
+          error: {
+            code: 'EXECUTOR_RESULT_MISSING',
+            message: 'OpenCode OAuth executor did not emit a result.',
+            details: { stderr: stderrSeen ? '[redacted]' : '' },
+          },
+        }
+      );
+    })();
+    void finalization.then(resolveResult);
+    return finalization;
+  };
+
+  const stdinFailure: ExecutorCommandResult = {
+    success: false,
+    error: {
+      code: 'OPENCODE_OAUTH_STDIN_FAILED',
+      message: 'OpenCode OAuth executor input could not be delivered.',
+    },
+  };
+  const endInput = (): boolean => {
+    const stream = child.stdin;
+    if (!stream || stream.destroyed) {
+      void finalize(stdinFailure);
+      return false;
+    }
+    if (stream.writableEnded || stream.writableFinished) return true;
+    try {
+      stream.end();
+      return true;
+    } catch {
+      pendingInput?.fail(true);
+      void finalize(stdinFailure);
+      return false;
+    }
+  };
+  const deliverInput = (value: unknown, end = false): Promise<boolean> => {
+    const stream = child.stdin;
+    if (
+      !stream?.writable ||
+      stream.destroyed ||
+      stream.writableEnded ||
+      stream.writableFinished ||
+      finalization
+    ) {
+      void finalize(stdinFailure);
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        if (pendingInput?.fail === fail) pendingInput = undefined;
+        resolve(true);
+      };
+      const fail = (ownTransportFailure: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (pendingInput?.fail === fail) pendingInput = undefined;
+        if (ownTransportFailure) void finalize(stdinFailure);
+        resolve(false);
+      };
+      pendingInput = { fail };
+      try {
+        stream.write(`${JSON.stringify(value)}\n`, (error?: Error | null) => {
+          if (error) {
+            fail(true);
+            return;
+          }
+          if (settled) return;
+          if (!end) {
+            succeed();
+            return;
+          }
+          try {
+            stream.end((endError?: Error | null) => {
+              if (endError) {
+                fail(true);
+                return;
+              }
+              succeed();
+            });
+          } catch {
+            fail(true);
+          }
+        });
+      } catch {
+        fail(true);
+      }
+    });
+  };
+
+  if (!child.pid) {
+    const spawnFailure = {
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: 'OpenCode OAuth executor did not start.',
+      },
+    };
+    resolveResult(spawnFailure);
+    return {
+      result,
+      cancel: async () => spawnFailure,
+      submitCode: async () => false,
+      verifyAbsence: async () => true,
+    };
+  }
+  trackExecutorProcess({ sessionId: attemptId, taskId, pid: child.pid, asUser });
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    const text = chunk.toString();
+    stdout += text;
+    lineBuffer += text;
+    const lines = lineBuffer.split(/\r?\n/);
+    lineBuffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const event = parseOpenCodeOAuthEvent(rawLine.trim());
+      if (event) {
+        onEvent(event);
+        if (event.type === 'authorized' && event.authorization.method === 'auto') {
+          endInput();
+        }
+      }
+    }
+  });
+  child.stderr?.on('data', () => {
+    stderrSeen = true;
+  });
+  child.stdin?.on('error', () => {
+    pendingInput?.fail(true);
+    void finalize(stdinFailure);
+  });
+  child.on('error', () => {
+    void finalize({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: 'OpenCode OAuth executor failed to start.',
+      },
+    });
+  });
+  child.on('exit', () => {
+    pendingInput?.fail(false);
+    void finalize(undefined, true);
+  });
+  child.on('close', () => {
+    pendingInput?.fail(false);
+    markExecutorProcessExited(attemptId, child.pid);
+    resolveClose();
+    void finalize(undefined, true);
+  });
+
+  timer = setTimeout(() => {
+    void finalize({
+      success: false,
+      error: {
+        code: 'OPENCODE_OAUTH_TIMEOUT',
+        message: 'OpenCode OAuth authorization timed out.',
+      },
+    });
+  }, timeoutMs);
+  void deliverInput(withResolvedConfig(payload));
+
+  return {
+    result,
+    cancel: () =>
+      finalize({
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_CANCELLED',
+          message: 'OpenCode OAuth authorization was cancelled.',
+        },
+      }),
+    submitCode: async (code: string) => {
+      if (finalization || codeSubmitted || !code.trim()) return false;
+      codeSubmitted = true;
+      return deliverInput({ code }, true);
+    },
+    verifyAbsence: async () => {
+      const containment = await containExecutorProcess(attemptId, taskId);
+      if (containment.status !== 'verified_absent') return false;
+      untrackExecutorProcess(attemptId, taskId);
+      return true;
+    },
+  };
+}
+
 /**
  * Run a short-lived executor command and wait for its JSON result.
  *
@@ -560,19 +966,11 @@ function runExecutorCommandLocal(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions
 ): Promise<ExecutorCommandResult> {
-  const executorPath = findExecutorPath();
-  const executorDir = path.dirname(path.dirname(executorPath));
-
-  const {
-    cwd = executorDir,
-    env = process.env as Record<string, string>,
-    logPrefix = '[Executor]',
-    asUser: rawAsUser,
-    preparedEnv,
-    preparedEnvFilePath,
-    timeoutMs = 60_000,
-  } = options;
+  const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+  const rawAsUser = options.asUser;
   const asUser = rawAsUser || undefined;
+  const location = resolveLocalExecutorLocation(options);
+  const { cwd } = location;
 
   if (cwd && !existsSync(cwd)) {
     return Promise.resolve({
@@ -584,47 +982,8 @@ function runExecutorCommandLocal(
     });
   }
 
-  const daemonUrl = getDaemonUrl();
-  const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
-    : asUser
-      ? withDaemonExecutorEnv(
-          Object.fromEntries(
-            Object.entries({
-              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-              NODE_ENV: env.NODE_ENV,
-              LOG_LEVEL: env.LOG_LEVEL,
-              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-              OPENAI_API_KEY: env.OPENAI_API_KEY,
-              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-              GEMINI_API_KEY: env.GEMINI_API_KEY,
-              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-            }).filter(([_, v]) => v !== undefined)
-          ),
-          daemonUrl
-        )
-      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
-
-  const prepared = asUser
-    ? preparedEnvFilePath
-      ? {
-          inlineEnv: Object.fromEntries(
-            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
-          ),
-          envFilePath: preparedEnvFilePath,
-        }
-      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
-    : { inlineEnv: undefined, envFilePath: undefined };
-
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-    asUser,
-    env: asUser ? prepared.inlineEnv : undefined,
-    envFilePath: prepared.envFilePath,
-  });
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin', location);
+  const { cmd, args, envWithDaemonUrl, envFilePath } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
@@ -640,7 +999,7 @@ function runExecutorCommandLocal(
       detached: false,
     });
 
-    attachEnvFileCleanup(child, { envFilePath: prepared.envFilePath, asUser });
+    attachEnvFileCleanup(child, { envFilePath, asUser });
 
     const timer = setTimeout(() => {
       if (settled) return;

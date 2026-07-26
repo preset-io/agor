@@ -41,8 +41,11 @@
 import { BadRequest } from '@agor/core/feathers';
 import {
   formatUnsupportedAgorCodexModelMessage,
+  hasCompleteOpenCodeModelConfig,
+  InvalidModelConfigError,
   isResolvedModelConfig,
   isUnsupportedAgorCodexModel,
+  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
 } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type { AgenticToolName, CreateSessionInput, HookContext, User } from '@agor/core/types';
@@ -72,11 +75,21 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
     const data = context.data as CreateSessionInput | undefined;
     if (!data) return context;
 
-    const hasPermission = data.permission_config != null;
-    const hasResolvedModel = isResolvedModelConfig(data.model_config);
-
     const agenticTool = data.agentic_tool as AgenticToolName | undefined;
     if (!agenticTool) return context; // can't resolve defaults without a tool
+
+    const hasPermission = data.permission_config != null;
+    const hasExplicitModelClear = Object.hasOwn(data, 'model_config') && data.model_config === null;
+    const hasResolvedModel =
+      hasExplicitModelClear || isResolvedModelConfig(data.model_config, agenticTool);
+
+    if (
+      agenticTool === 'opencode' &&
+      data.model_config != null &&
+      !hasCompleteOpenCodeModelConfig(data.model_config)
+    ) {
+      throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+    }
 
     if (
       agenticTool === 'codex' &&
@@ -118,11 +131,19 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       user = null;
     }
 
-    const resolved = resolveSessionDefaults({
-      agenticTool,
-      user,
-      overrides: { modelConfig: data.model_config ?? undefined },
-    });
+    let resolved: ReturnType<typeof resolveSessionDefaults>;
+    try {
+      resolved = resolveSessionDefaults({
+        agenticTool,
+        user,
+        overrides: { modelConfig: data.model_config ?? undefined },
+      });
+    } catch (error) {
+      if (error instanceof InvalidModelConfigError) {
+        throw new BadRequest(error.message);
+      }
+      throw error;
+    }
     if (
       resolved.model_config?.model &&
       agenticTool === 'codex' &&

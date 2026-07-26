@@ -80,7 +80,7 @@ export interface SessionFooterProps {
   modelLabel?: string;
   modelConfig?: ModelConfig;
   // Handlers
-  onModelConfigChange: (config: ModelConfig) => void;
+  onModelConfigChange: (config: ModelConfig | undefined) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onSendPrompt: () => void;
   onStop: () => void;

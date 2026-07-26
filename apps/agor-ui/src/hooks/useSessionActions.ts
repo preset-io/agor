@@ -82,6 +82,20 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         };
       }
 
+      const hasCompleteOpenCodeModel =
+        agenticTool !== 'opencode' ||
+        Boolean(config.modelConfig?.provider?.trim() && config.modelConfig?.model?.trim());
+      const modelConfig =
+        agenticTool === 'opencode' && config.modelConfig === null
+          ? null
+          : hasCompleteOpenCodeModel
+            ? config.modelConfig
+            : undefined;
+      const effort =
+        agenticTool === 'opencode' && (modelConfig === null || !hasCompleteOpenCodeModel)
+          ? undefined
+          : config.effort;
+
       const newSession = await client.service('sessions').create({
         agentic_tool: agenticTool,
         agentic_tool_preset_id: config.agenticToolPresetId,
@@ -89,15 +103,18 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
         branch_id: config.branch_id,
-        model_config: config.modelConfig
-          ? {
-              ...config.modelConfig,
-              ...(config.effort && { effort: config.effort }),
-              updated_at: new Date().toISOString(),
-            }
-          : config.effort
-            ? { effort: config.effort, updated_at: new Date().toISOString() }
-            : undefined,
+        model_config:
+          modelConfig === null
+            ? null
+            : modelConfig
+              ? {
+                  ...modelConfig,
+                  ...(effort && { effort }),
+                  updated_at: new Date().toISOString(),
+                }
+              : effort
+                ? { effort, updated_at: new Date().toISOString() }
+                : undefined,
         permission_config: permissionConfig,
       });
 

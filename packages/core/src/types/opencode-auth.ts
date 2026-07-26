@@ -21,10 +21,45 @@ export type OpenCodeProviderAuthPromptCondition = {
 };
 
 export interface OpenCodeProviderAuthMethod {
+  /** Stable index in the native OpenCode auth-method array. */
+  index: number;
   type: 'api' | 'oauth';
   label: string;
   prompts?: OpenCodeProviderAuthPrompt[];
 }
+
+export type OpenCodeOAuthAuthorization = {
+  url: string;
+  method: 'auto' | 'code';
+  instructions: string;
+};
+
+export type OpenCodeOAuthAttemptPhase =
+  | 'authorizing'
+  | 'awaiting_callback'
+  | 'completing'
+  | 'configured'
+  | 'cancelled'
+  | 'expired'
+  | 'failed';
+
+export interface OpenCodeOAuthAttempt {
+  attemptId: string;
+  providerId: string;
+  phase: OpenCodeOAuthAttemptPhase;
+  authorization?: OpenCodeOAuthAuthorization;
+  expiresAt: string;
+  settings?: OpenCodeProviderSettings;
+}
+
+export type OpenCodeOAuthConnectRequest = {
+  operation: 'connect-oauth';
+  providerId: string;
+  method: number;
+  inputs?: Record<string, string>;
+};
+
+export type OpenCodeOAuthAttemptPatch = { cancel: true } | { code: string };
 
 export type OpenCodeProviderConnectionStatus = 'configured' | 'disconnected' | 'unknown';
 

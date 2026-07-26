@@ -45,11 +45,32 @@ export type ModelConfigInput = {
  */
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
+export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =
+  'OpenCode model_config requires nonblank provider and model values';
+
+export class InvalidModelConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidModelConfigError';
+  }
+}
+
+/** OpenCode model selection is atomic: provider and model are either both usable or both absent. */
+export function hasCompleteOpenCodeModelConfig(
+  input: ModelConfigInput | null | undefined
+): boolean {
+  return Boolean(input?.provider?.trim() && input.model?.trim());
+}
+
 /** Whether a model config already has the complete persisted shape. */
 export function isResolvedModelConfig(
-  input: Partial<ResolvedModelConfig> | null | undefined
+  input: Partial<ResolvedModelConfig> | null | undefined,
+  tool?: AgenticToolName
 ): input is ResolvedModelConfig {
-  return Boolean(input?.mode && input.model && input.updated_at);
+  const hasPersistedShape = Boolean(input?.mode && input.model && input.updated_at);
+  if (!hasPersistedShape) return false;
+  if (tool !== 'opencode') return true;
+  return input?.mode === 'exact' && hasCompleteOpenCodeModelConfig(input);
 }
 
 /**
@@ -162,12 +183,30 @@ function mergeModelLessFallbackOverrides(
  * carry model-less `mode` / `provider` because their meaning depends on the
  * missing model value. This prevents partial persisted model_config objects
  * while preserving explicit notes, effort, and advisor choices.
+ *
+ * OpenCode is stricter: provider + model are one atomic exact selection.
+ * Model-less sources remain absent, while a source carrying only one side (or
+ * a blank side) is rejected instead of being persisted or combined with a
+ * lower-priority source.
  */
 export function resolveModelConfigWithFallback(
   tool: AgenticToolName,
   sources: Array<ModelConfigInput | undefined | null>,
   opts?: { now?: Date }
 ): ResolvedModelConfig | undefined {
+  if (tool === 'opencode') {
+    for (const source of sources) {
+      if (source == null) continue;
+      const carriesPairField = source.provider !== undefined || source.model !== undefined;
+      if (!carriesPairField) continue;
+      if (!hasCompleteOpenCodeModelConfig(source)) {
+        throw new InvalidModelConfigError(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+      }
+      return resolveModelConfig({ ...source, mode: 'exact' }, opts);
+    }
+    return undefined;
+  }
+
   let pendingModelLessOverrides: ModelConfigInput | undefined;
 
   for (const source of sources) {

@@ -1,5 +1,5 @@
 import type { AgorClient, OpenCodeProviderSettings as Settings } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeProviderSettings } from './OpenCodeProviderSettings';
@@ -16,6 +16,7 @@ const initial: Settings = {
       status: 'disconnected',
       authMethods: [
         {
+          index: 0,
           type: 'api',
           label: 'Workspace key',
           prompts: [
@@ -47,7 +48,9 @@ const initial: Settings = {
 
 function renderSettings(service: {
   find: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
   create: ReturnType<typeof vi.fn>;
+  patch: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
 }) {
   const client = { service: vi.fn(() => service) } as unknown as AgorClient;
@@ -70,7 +73,9 @@ describe('OpenCodeProviderSettings', () => {
     };
     const service = {
       find: vi.fn().mockResolvedValue(initial),
+      get: vi.fn(),
       create: vi.fn().mockResolvedValue(configured),
+      patch: vi.fn(),
       remove: vi.fn(),
     };
     renderSettings(service);
@@ -120,7 +125,9 @@ describe('OpenCodeProviderSettings', () => {
     };
     const service = {
       find: vi.fn().mockResolvedValue(available),
+      get: vi.fn(),
       create: vi.fn().mockResolvedValue(configured),
+      patch: vi.fn(),
       remove: vi.fn(),
     };
     renderSettings(service);
@@ -138,7 +145,7 @@ describe('OpenCodeProviderSettings', () => {
     );
   });
 
-  it('does not offer API-key connection for an OAuth-only provider', async () => {
+  it('starts and cancels a bounded native OAuth attempt with dynamic inputs', async () => {
     const oauthOnly = {
       ...initial,
       providers: [
@@ -147,20 +154,210 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth Provider',
           configured: false,
           status: 'disconnected' as const,
-          authMethods: [{ type: 'oauth' as const, label: 'Sign in with OAuth' }],
+          authMethods: [
+            {
+              index: 0,
+              type: 'oauth' as const,
+              label: 'ChatGPT browser',
+            },
+            {
+              index: 1,
+              type: 'oauth' as const,
+              label: 'ChatGPT headless',
+              prompts: [
+                {
+                  type: 'select' as const,
+                  key: 'region',
+                  message: 'OAuth region',
+                  options: [{ label: 'US', value: 'us' }],
+                },
+                {
+                  type: 'text' as const,
+                  key: 'account',
+                  message: 'OAuth account',
+                  when: { key: 'region', op: 'eq' as const, value: 'us' },
+                },
+              ],
+            },
+          ],
         },
       ],
     };
+    const attempt = {
+      attemptId: 'attempt-1',
+      providerId: 'oauth-provider',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto' as const,
+        instructions: 'Open the synthetic authorization page.',
+      },
+    };
     const service = {
       find: vi.fn().mockResolvedValue(oauthOnly),
-      create: vi.fn(),
+      get: vi.fn().mockResolvedValue(attempt),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'cancelled' }),
       remove: vi.fn(),
     };
     renderSettings(service);
 
-    expect(await screen.findByText(/OAuth connection is not available here/i)).toBeInTheDocument();
+    fireEvent.mouseDown(await screen.findByLabelText('OAuth region'));
+    fireEvent.click(await screen.findByText('US'));
+    fireEvent.change(await screen.findByLabelText('OAuth account'), {
+      target: { value: 'synthetic-account' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with ChatGPT headless' }));
+
+    await waitFor(() =>
+      expect(service.create).toHaveBeenCalledWith({
+        operation: 'connect-oauth',
+        providerId: 'oauth-provider',
+        method: 1,
+        inputs: { region: 'us', account: 'synthetic-account' },
+      })
+    );
+    expect(await screen.findByText('Open the synthetic authorization page.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open authorization page' })).toHaveAttribute(
+      'href',
+      'http://127.0.0.1:9898/authorize'
+    );
     expect(screen.queryByLabelText('OAuth Provider API key')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
-    expect(service.create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authorization' }));
+    await waitFor(() => expect(service.patch).toHaveBeenCalledWith('attempt-1', { cancel: true }));
+  });
+
+  it('submits a code callback once and clears the secret from UI state', async () => {
+    const oauthOnly = {
+      ...initial,
+      providers: [
+        {
+          id: 'oauth-provider',
+          name: 'OAuth Provider',
+          configured: false,
+          status: 'disconnected' as const,
+          authMethods: [
+            {
+              index: 0,
+              type: 'oauth' as const,
+              label: 'Code flow',
+              prompts: [{ type: 'text' as const, key: 'account', message: 'Code account' }],
+            },
+          ],
+        },
+      ],
+    };
+    const attempt = {
+      attemptId: 'attempt-code',
+      providerId: 'oauth-provider',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'code' as const,
+        instructions: 'Paste the one-time code.',
+      },
+    };
+    const service = {
+      find: vi.fn().mockResolvedValue(oauthOnly),
+      get: vi.fn().mockResolvedValue({ ...attempt, phase: 'completing' }),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'completing' }),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    fireEvent.change(await screen.findByLabelText('Code account'), {
+      target: { value: 'synthetic-account' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with Code flow' }));
+    await waitFor(() =>
+      expect(service.create).toHaveBeenCalledWith({
+        operation: 'connect-oauth',
+        providerId: 'oauth-provider',
+        method: 0,
+        inputs: { account: 'synthetic-account' },
+      })
+    );
+    const input = await screen.findByLabelText('OAuth Provider authorization code');
+    fireEvent.change(input, { target: { value: 'synthetic-secret-code' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit authorization code' }));
+
+    await waitFor(() =>
+      expect(service.patch).toHaveBeenCalledWith('attempt-code', {
+        code: 'synthetic-secret-code',
+      })
+    );
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(document.body.textContent).not.toContain('synthetic-secret-code');
+  });
+
+  it('does not overlap polls or let a stale configured response reverse cancellation', async () => {
+    const oauthOnly = {
+      ...initial,
+      providers: [
+        {
+          id: 'oauth-provider',
+          name: 'OAuth Provider',
+          configured: false,
+          status: 'disconnected' as const,
+          authMethods: [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }],
+        },
+      ],
+    };
+    const attempt = {
+      attemptId: 'attempt-race',
+      providerId: 'oauth-provider',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto' as const,
+        instructions: 'Authorize.',
+      },
+    };
+    let resolvePoll!: (value: typeof attempt & { phase: 'configured'; settings: Settings }) => void;
+    const service = {
+      find: vi.fn().mockResolvedValue(oauthOnly),
+      get: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolvePoll = resolve;
+          })
+      ),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'cancelled' as const }),
+      remove: vi.fn(),
+    };
+    try {
+      renderSettings(service);
+      const connect = await screen.findByRole('button', { name: 'Connect with Browser flow' });
+      vi.useFakeTimers();
+      fireEvent.click(connect);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Authorize.')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(service.get).toHaveBeenCalledOnce();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel authorization' }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Authorization cancelled.')).toBeInTheDocument();
+
+      resolvePoll({ ...attempt, phase: 'configured', settings: oauthOnly });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Authorization cancelled.')).toBeInTheDocument();
+      expect(screen.queryByText('Configured in OpenCode')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

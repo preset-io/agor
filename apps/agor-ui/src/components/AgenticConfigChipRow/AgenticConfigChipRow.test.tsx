@@ -23,11 +23,23 @@ vi.mock('../ModelSelector', async () => {
   const actual = await vi.importActual<typeof import('../ModelSelector')>('../ModelSelector');
   return {
     ...actual,
-    ModelSelector: ({ onChange }: { onChange: (v: unknown) => void }) => (
+    ModelSelector: ({
+      onChange,
+      agentic_tool,
+    }: {
+      onChange: (v: unknown) => void;
+      agentic_tool: string;
+    }) => (
       <button
         type="button"
         data-testid="model-change"
-        onClick={() => onChange({ mode: 'alias', model: 'claude-haiku-4-5' })}
+        onClick={() =>
+          onChange(
+            agentic_tool === 'opencode'
+              ? { mode: 'exact', provider: 'openai', model: 'gpt-5' }
+              : { mode: 'alias', model: 'claude-haiku-4-5' }
+          )
+        }
       >
         change model
       </button>
@@ -75,16 +87,18 @@ function Harness({
   user,
   client = makeClient(),
   initialSource,
+  tool = 'claude-code',
 }: {
   user: User;
   client?: AgorClient | null;
   initialSource?: string;
+  tool?: 'claude-code' | 'opencode';
 }) {
   const [form] = Form.useForm();
   return (
     <Form form={form} initialValues={{ agenticToolPresetId: initialSource }}>
       <AgenticConfigChipRow
-        tool="claude-code"
+        tool={tool}
         client={client}
         mcpServerById={new Map()}
         currentUser={user}
@@ -96,6 +110,8 @@ function Harness({
             {JSON.stringify({
               src: form.getFieldValue('agenticToolPresetId'),
               model: (form.getFieldValue('modelConfig') as { model?: string } | undefined)?.model,
+              provider: (form.getFieldValue('modelConfig') as { provider?: string } | undefined)
+                ?.provider,
               perm: form.getFieldValue('permissionMode'),
             })}
           </span>
@@ -212,6 +228,19 @@ describe('AgenticConfigChipRow', () => {
     fireEvent.click(await screen.findByTestId('advisor-select'));
 
     await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
+  });
+
+  it('renders the OpenCode default model chip and keeps its existing exact-pair editor', async () => {
+    render(<Harness tool="opencode" user={{ user_id: 'u4' } as User} initialSource="__inline__" />);
+
+    const chip = await screen.findByRole('button', { name: 'Model: OpenCode default' });
+    fireEvent.click(chip);
+    fireEvent.click(await screen.findByTestId('model-change'));
+
+    await waitFor(() => {
+      const state = JSON.parse(screen.getByTestId('state').textContent || '{}');
+      expect(state).toMatchObject({ provider: 'openai', model: 'gpt-5' });
+    });
   });
 });
 

@@ -11,6 +11,7 @@ import type {
   BranchID,
   CardWithType,
   MCPServer,
+  PermissionMode,
   Repo,
   Session,
   SpawnConfig,
@@ -85,6 +86,7 @@ import CardModal from '../CardModal';
 import type { CardNodeData } from '../CardNode';
 import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
+import type { ModelConfig } from '../ModelSelector';
 import SessionCard from '../SessionCard';
 import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
@@ -371,6 +373,54 @@ const nodeTypes = {
 const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
+
+interface CreateZoneTriggerSessionInput {
+  branchId: BranchID;
+  zoneName: string;
+  agent?: string;
+  agenticToolPresetId?: string;
+  modelConfig?: ModelConfig | null;
+  permissionMode?: PermissionMode;
+}
+
+/**
+ * Direct action owner for the interactive zone trigger's new-session path.
+ * The three model_config states are intentional: null clears a stale default,
+ * undefined inherits it, and a complete pair is timestamped for persistence.
+ */
+export function createZoneTriggerSession(
+  client: AgorClient,
+  {
+    branchId,
+    zoneName,
+    agent,
+    agenticToolPresetId,
+    modelConfig,
+    permissionMode,
+  }: CreateZoneTriggerSessionInput
+): Promise<Session> {
+  return client.service('sessions').create({
+    branch_id: branchId,
+    agentic_tool: (agent || 'claude-code') as AgenticToolName,
+    agentic_tool_preset_id: agenticToolPresetId,
+    description: `Session from zone "${zoneName}"`,
+    status: 'idle',
+    model_config:
+      modelConfig === null
+        ? null
+        : modelConfig
+          ? {
+              ...modelConfig,
+              updated_at: new Date().toISOString(),
+            }
+          : undefined,
+    permission_config: permissionMode
+      ? {
+          mode: permissionMode,
+        }
+      : undefined,
+  });
+}
 
 interface BranchZoneTriggerModalProps {
   modal: {
@@ -2923,23 +2973,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
                 // If creating new session, create it first
                 if (sessionId === 'new') {
-                  const newSession = await client.service('sessions').create({
-                    branch_id: branchTriggerModal.branchId,
-                    agentic_tool: (agent || 'claude-code') as AgenticToolName,
-                    agentic_tool_preset_id: agenticToolPresetId,
-                    description: `Session from zone "${branchTriggerModal.zoneName}"`,
-                    status: 'idle',
-                    model_config: modelConfig
-                      ? {
-                          ...modelConfig,
-                          updated_at: new Date().toISOString(),
-                        }
-                      : undefined,
-                    permission_config: permissionMode
-                      ? {
-                          mode: permissionMode,
-                        }
-                      : undefined,
+                  const newSession = await createZoneTriggerSession(client, {
+                    branchId: branchTriggerModal.branchId,
+                    zoneName: branchTriggerModal.zoneName,
+                    agent,
+                    agenticToolPresetId,
+                    modelConfig,
+                    permissionMode,
                   });
                   targetSessionId = newSession.session_id;
 

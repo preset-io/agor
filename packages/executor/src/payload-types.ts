@@ -186,6 +186,12 @@ export const OpenCodeAuthPayloadSchema = BasePayloadSchema.extend({
       operation: z.literal('disconnect'),
       providerId: z.string().trim().min(1).max(200),
     }),
+    z.object({
+      operation: z.literal('connect-oauth'),
+      providerId: z.string().trim().min(1).max(200),
+      method: z.number().int().nonnegative(),
+      inputs: z.record(z.string(), z.string()).optional(),
+    }),
   ]),
 });
 

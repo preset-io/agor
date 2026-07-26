@@ -34,6 +34,9 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  OpenCodeOAuthAttempt,
+  OpenCodeOAuthAttemptPatch,
+  OpenCodeOAuthConnectRequest,
   OpenCodeProviderSettings,
   PatchAgenticToolPreset,
   PermissionMode,
@@ -299,10 +302,18 @@ export interface KnowledgeReindexService {
 
 export interface OpenCodeAuthService {
   find(params?: Params): Promise<OpenCodeProviderSettings>;
+  get(attemptId: string, params?: Params): Promise<OpenCodeOAuthAttempt>;
   create(
-    data: { providerId: string; apiKey: string; metadata?: Record<string, string> },
+    data:
+      | { providerId: string; apiKey: string; metadata?: Record<string, string> }
+      | OpenCodeOAuthConnectRequest,
     params?: Params
-  ): Promise<OpenCodeProviderSettings>;
+  ): Promise<OpenCodeProviderSettings | OpenCodeOAuthAttempt>;
+  patch(
+    attemptId: string,
+    data: OpenCodeOAuthAttemptPatch,
+    params?: Params
+  ): Promise<OpenCodeOAuthAttempt>;
   remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
 }
 

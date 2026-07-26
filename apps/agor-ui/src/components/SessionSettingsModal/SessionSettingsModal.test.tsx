@@ -57,6 +57,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
         >
           save default
         </button>
+        <button
+          type="button"
+          data-testid="clear-model"
+          onClick={() => form.setFieldValue('modelConfig', undefined)}
+        >
+          clear model
+        </button>
       </div>
     );
   },
@@ -88,6 +95,13 @@ const codexSession = {
   ...claudeSession,
   session_id: 's-codex',
   agentic_tool: 'codex',
+} as unknown as Session;
+
+const openCodeSession = {
+  ...claudeSession,
+  session_id: 's-opencode',
+  agentic_tool: 'opencode',
+  model_config: { mode: 'exact', provider: 'openai', model: 'gpt-5' },
 } as unknown as Session;
 
 describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
@@ -151,5 +165,29 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(2));
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears an existing OpenCode provider/model override with null', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <SessionSettingsModal
+        open
+        onClose={vi.fn()}
+        session={openCodeSession}
+        client={null}
+        currentUser={null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('clear-model'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(onUpdate).toHaveBeenCalledWith(
+        's-opencode',
+        expect.objectContaining({ model_config: null })
+      )
+    );
   });
 });

@@ -5,12 +5,22 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock } = vi.hoisted(() => ({
+const { containMock, spawnMock, trackMock, untrackMock } = vi.hoisted(() => ({
+  containMock: vi.fn(),
   spawnMock: vi.fn(),
+  trackMock: vi.fn(),
+  untrackMock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
   spawn: spawnMock,
+}));
+
+vi.mock('../executor-tracking.js', () => ({
+  containExecutorProcess: containMock,
+  markExecutorProcessExited: vi.fn(),
+  trackExecutorProcess: trackMock,
+  untrackExecutorProcess: untrackMock,
 }));
 
 vi.mock('@agor/core/unix', () => ({
@@ -33,7 +43,9 @@ function createMockProcess() {
     stdout: EventEmitter;
     stderr: EventEmitter;
     written: string;
+    pid: number;
   };
+  proc.pid = 4242;
   proc.written = '';
   proc.stdin = new Writable({
     write(chunk, _encoding, callback) {
@@ -50,12 +62,18 @@ describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
+    containMock.mockReset();
+    containMock.mockResolvedValue({ status: 'verified_absent' });
+    trackMock.mockReset();
+    untrackMock.mockReset();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const unix = await import('@agor/core/unix');
     vi.mocked(unix.buildSpawnArgs).mockReturnValue({ cmd: 'node', args: ['executor', '--stdin'] });
     vi.mocked(unix.isSecretEnvKey).mockReturnValue(false);
+    vi.mocked(unix.prepareImpersonationEnv).mockReset();
+    vi.mocked(unix.attachEnvFileCleanup).mockReset();
     vi.mocked(unix.attachEnvFileCleanup).mockImplementation(() => {});
 
     const { configureExecutor } = await import('./spawn-executor');
@@ -263,6 +281,526 @@ describe('configured executor spawning', () => {
       } else {
         process.env.AGOR_EXECUTOR_PATH = previous;
       }
+    }
+  });
+
+  it('rejects a missing generic cwd before creating an impersonation env file', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-executor-cwd-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const missingCwd = path.join(dir, 'missing');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const unix = await import('@agor/core/unix');
+      vi.mocked(unix.prepareImpersonationEnv).mockReturnValue({
+        inlineEnv: { PATH: '/usr/bin' },
+        envFilePath: path.join(dir, 'should-not-exist.env'),
+      });
+      const { runExecutorCommand } = await import('./spawn-executor');
+      const result = await runExecutorCommand(
+        { command: 'opencode.auth', params: { operation: 'discover' } },
+        {
+          cwd: missingCwd,
+          asUser: 'alice',
+          env: { PATH: '/usr/bin', OPENAI_API_KEY: 'must-not-write' },
+        }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: {
+          code: 'EXECUTOR_CWD_MISSING',
+          message: `Refusing to spawn: cwd does not exist on disk: ${missingCwd}`,
+        },
+      });
+      expect(unix.prepareImpersonationEnv).not.toHaveBeenCalled();
+      expect(unix.attachEnvFileCleanup).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps OAuth lifecycle frames private and contains the whole process group on cancel', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-executor-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const onEvent = vi.fn();
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        {
+          command: 'opencode.auth',
+          dataHome: '/private/synthetic-home',
+          params: {
+            operation: 'connect-oauth',
+            providerId: 'openai',
+            method: 1,
+            inputs: { account: 'synthetic-secret-input' },
+          },
+        },
+        { env: { PATH: '/usr/bin' } },
+        onEvent
+      );
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'node',
+        ['executor', '--stdin'],
+        expect.objectContaining({ detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      );
+      proc.stdout.emit(
+        'data',
+        Buffer.from(
+          'AGOR_OPENCODE_OAUTH_EVENT {"type":"authorized","authorization":{"url":"http://127.0.0.1/authorize","method":"auto","instructions":"Synthetic code 1234"}}\n'
+        )
+      );
+      proc.stderr.emit(
+        'data',
+        Buffer.from('synthetic-secret-input /private/synthetic-home generated-password')
+      );
+      expect(onEvent).toHaveBeenCalledWith({
+        type: 'authorized',
+        authorization: {
+          url: 'http://127.0.0.1/authorize',
+          method: 'auto',
+          instructions: 'Synthetic code 1234',
+        },
+      });
+
+      const cancellation = handle.cancel();
+      proc.emit('exit', null);
+      proc.emit('close', null);
+      await expect(cancellation).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CANCELLED' },
+      });
+      await expect(handle.result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CANCELLED' },
+      });
+      expect(trackMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pid: 4242, asUser: undefined })
+      );
+      expect(containMock).toHaveBeenCalledOnce();
+      expect(untrackMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(await handle.result)).not.toContain('synthetic-secret-input');
+      expect(JSON.stringify(await handle.result)).not.toContain('/private/synthetic-home');
+      expect(console.error).not.toHaveBeenCalledWith(
+        expect.stringContaining('synthetic-secret-input')
+      );
+      expect(console.error).not.toHaveBeenCalledWith(
+        expect.stringContaining('/private/synthetic-home')
+      );
+      expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Synthetic code 1234'));
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects non-containable templated OAuth without spawning', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { configureExecutor, startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+    configureExecutor({ executor_command_template: 'remote {command}' });
+
+    const handle = startOpenCodeOAuthExecutor({ command: 'opencode.auth' }, {}, vi.fn());
+
+    await expect(handle.result).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
+        message: 'OpenCode OAuth requires a locally containable executor process.',
+      },
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('contains the OAuth process group on its bounded timeout', async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-timeout-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' }, timeoutMs: 25 },
+        vi.fn()
+      );
+      await vi.advanceTimersByTimeAsync(25);
+      proc.emit('exit', null);
+      proc.emit('close', null);
+
+      await expect(handle.result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_TIMEOUT' },
+      });
+      expect(containMock).toHaveBeenCalledOnce();
+      expect(untrackMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for close and parses the final OAuth result frame after exit', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-final-frame-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+
+      proc.emit('exit', 0);
+      proc.stdout.emit(
+        'data',
+        Buffer.from('AGOR_EXECUTOR_RESULT {"success":true,"data":{"runtime":"available"}}')
+      );
+      let settled = false;
+      void handle.result.finally(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      proc.emit('close', 0);
+      await expect(handle.result).resolves.toEqual({
+        success: true,
+        data: { runtime: 'available' },
+      });
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing', ''],
+    ['truncated', 'AGOR_EXECUTOR_RESULT {"success":true'],
+  ])('fails safely for a %s OAuth result frame after close', async (_label, frame) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-missing-frame-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      if (frame) proc.stdout.emit('data', Buffer.from(frame));
+      proc.stderr.emit('data', Buffer.from('secret password /private/path'));
+      proc.emit('exit', 1);
+      proc.emit('close', 1);
+
+      await expect(handle.result).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'EXECUTOR_RESULT_MISSING',
+          message: 'OpenCode OAuth executor did not emit a result.',
+          details: { stderr: '[redacted]' },
+        },
+      });
+      expect(JSON.stringify(await handle.result)).not.toContain('secret password');
+      expect(JSON.stringify(await handle.result)).not.toContain('/private/path');
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('shares one finalization across cancel and exit and retains unverified tracking', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-unverified-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    containMock.mockResolvedValue({
+      status: 'unverified',
+      reason: 'synthetic containment failure',
+    });
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      const first = handle.cancel();
+      const second = handle.cancel();
+      expect(second).toBe(first);
+      proc.emit('exit', null);
+      proc.emit('close', null);
+
+      await expect(first).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED' },
+      });
+      await expect(second).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED' },
+      });
+      await expect(handle.result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED' },
+      });
+      expect(containMock).toHaveBeenCalledOnce();
+      expect(untrackMock).not.toHaveBeenCalled();
+
+      containMock.mockResolvedValue({ status: 'verified_absent' });
+      await expect(handle.verifyAbsence()).resolves.toBe(true);
+      expect(containMock).toHaveBeenCalledTimes(2);
+      expect(untrackMock).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('submits exactly one secret code over the bounded OAuth stdin without echoing it', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    let finishInput!: () => void;
+    proc.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        proc.written += chunk.toString();
+        callback();
+      },
+      final(callback) {
+        finishInput = callback;
+      },
+    });
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const submission = handle.submitCode('synthetic-secret-code');
+      let deliverySettled = false;
+      void submission.then(() => {
+        deliverySettled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(deliverySettled).toBe(false);
+      finishInput();
+      await expect(submission).resolves.toBe(true);
+      await expect(handle.submitCode('second-code')).resolves.toBe(false);
+      expect(proc.written).toContain('"code":"synthetic-secret-code"');
+      expect(proc.written).not.toContain('second-code');
+      expect(console.log).not.toHaveBeenCalledWith(
+        expect.stringContaining('synthetic-secret-code')
+      );
+
+      const cancellation = handle.cancel();
+      proc.emit('exit', null);
+      proc.emit('close', null);
+      await cancellation;
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects code delivery when stdin finalization fails asynchronously', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-final-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    proc.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        proc.written += chunk.toString();
+        callback();
+      },
+      final(callback) {
+        setImmediate(() => callback(new Error('EPIPE synthetic-secret-code /private/final-path')));
+      },
+    });
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const submission = handle.submitCode('synthetic-secret-code');
+
+      await expect(submission).resolves.toBe(false);
+      proc.emit('exit', 1);
+      proc.emit('close', 1);
+
+      await expect(handle.result).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_STDIN_FAILED',
+          message: 'OpenCode OAuth executor input could not be delivered.',
+        },
+      });
+      expect(JSON.stringify(await handle.result)).not.toContain('synthetic-secret-code');
+      expect(JSON.stringify(await handle.result)).not.toContain('/private/final-path');
+      expect(console.error).not.toHaveBeenCalledWith(
+        expect.stringContaining('synthetic-secret-code')
+      );
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('owns an initial OAuth stdin delivery failure without exposing the payload', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-initial-write-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    proc.stdin = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('EPIPE synthetic-secret /private/path'));
+      },
+    });
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        {
+          command: 'opencode.auth',
+          dataHome: '/private/path',
+          params: { operation: 'connect-oauth', providerId: 'openai', method: 0 },
+        },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      proc.emit('exit', 1);
+      proc.emit('close', 1);
+
+      await expect(handle.result).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_STDIN_FAILED',
+          message: 'OpenCode OAuth executor input could not be delivered.',
+        },
+      });
+      expect(JSON.stringify(await handle.result)).not.toContain('synthetic-secret');
+      expect(JSON.stringify(await handle.result)).not.toContain('/private/path');
+      expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('synthetic-secret'));
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('settles a failed code write through concurrent cancellation and exit', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-write-'));
+    const executorPath = path.join(dir, 'agor-executor');
+    const previous = process.env.AGOR_EXECUTOR_PATH;
+    const proc = createMockProcess();
+    let writes = 0;
+    let failCodeWrite!: () => void;
+    proc.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        writes += 1;
+        proc.written += chunk.toString();
+        if (writes === 1) callback();
+        else {
+          failCodeWrite = () =>
+            callback(new Error('EPIPE synthetic-secret-code /private/code-path'));
+        }
+      },
+    });
+    spawnMock.mockReturnValue(proc);
+    writeFileSync(executorPath, '#!/usr/bin/env node\n');
+    process.env.AGOR_EXECUTOR_PATH = executorPath;
+
+    try {
+      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const handle = startOpenCodeOAuthExecutor(
+        { command: 'opencode.auth' },
+        { env: { PATH: '/usr/bin' } },
+        vi.fn()
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const submission = handle.submitCode('synthetic-secret-code');
+      expect(writes).toBe(2);
+      const cancellation = handle.cancel();
+      failCodeWrite();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      proc.emit('exit', null);
+      proc.emit('close', null);
+
+      await expect(submission).resolves.toBe(false);
+      await expect(cancellation).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CANCELLED' },
+      });
+      await expect(handle.result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CANCELLED' },
+      });
+      expect(console.error).not.toHaveBeenCalledWith(
+        expect.stringContaining('synthetic-secret-code')
+      );
+      expect(JSON.stringify(await handle.result)).not.toContain('/private/code-path');
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

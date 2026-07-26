@@ -255,6 +255,44 @@ describe('resolveModelConfigWithFallback', () => {
     expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();
   });
 
+  it('keeps only complete OpenCode provider/model pairs and forces exact mode', () => {
+    expect(
+      resolveModelConfigWithFallback(
+        'opencode',
+        [
+          { mode: 'alias', provider: 'openai', model: 'gpt-5', effort: 'high' },
+          { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-5' },
+        ],
+        { now }
+      )
+    ).toEqual({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-5',
+      effort: 'high',
+      updated_at: '2026-04-23T00:00:00.000Z',
+    });
+  });
+
+  it('rejects incomplete or blank OpenCode pairs', () => {
+    for (const source of [
+      { model: 'gpt-5' },
+      { provider: 'openai' },
+      { provider: '   ', model: 'gpt-5' },
+      { provider: 'openai', model: '   ' },
+    ]) {
+      expect(() => resolveModelConfigWithFallback('opencode', [source], { now })).toThrow(
+        /provider.*model/i
+      );
+    }
+  });
+
+  it('treats model-less OpenCode sources as absent', () => {
+    expect(
+      resolveModelConfigWithFallback('opencode', [undefined, null, {}, { effort: 'high' }], { now })
+    ).toBeUndefined();
+  });
+
   it('still uses an explicit source for tools without a static default', () => {
     const result = resolveModelConfigWithFallback('cursor', [{ model: 'composer-experimental' }], {
       now,

@@ -15,9 +15,11 @@
  * impersonation - it's already running as the correct user.
  */
 
+import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 
 import { executeCommand, getRegisteredCommands } from './commands/index.js';
+import { handleOpenCodeOAuth, type OpenCodeOAuthPayload } from './commands/opencode-auth.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -48,6 +50,10 @@ async function readStdin(): Promise<string> {
 
 function emitExecutorResult(result: unknown): void {
   console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
+}
+
+function emitOpenCodeOAuthEvent(event: unknown): void {
+  console.log(`AGOR_OPENCODE_OAUTH_EVENT ${JSON.stringify(event)}`);
 }
 
 /**
@@ -115,6 +121,61 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   emitExecutorResult(result);
 
   process.exit(result.success ? 0 : 1);
+}
+
+/**
+ * Dedicated two-message stdin mode for the bounded OpenCode OAuth protocol.
+ * The first line is the normal command payload. A `method: "code"` flow may
+ * consume exactly one additional `{ "code": "..." }` line.
+ */
+async function handleOpenCodeOAuthMode(options: { dryRun: boolean }): Promise<void> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  const iterator = lines[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done || !first.value.trim()) throw new Error('missing payload');
+    const payload = ExecutorPayloadSchema.parse(JSON.parse(first.value));
+    if (payload.command !== 'opencode.auth' || payload.params.operation !== 'connect-oauth') {
+      throw new Error('invalid OAuth payload');
+    }
+    let codeRead = false;
+    const readCode = async () => {
+      if (codeRead) throw new Error('OAuth code was already consumed');
+      codeRead = true;
+      const next = await iterator.next();
+      if (next.done) throw new Error('OAuth code input closed');
+      const control = JSON.parse(next.value) as unknown;
+      if (
+        !control ||
+        typeof control !== 'object' ||
+        !('code' in control) ||
+        typeof control.code !== 'string' ||
+        !control.code.trim()
+      ) {
+        throw new Error('invalid OAuth code input');
+      }
+      return control.code;
+    };
+    const result = await handleOpenCodeOAuth(
+      payload as OpenCodeOAuthPayload,
+      { dryRun: options.dryRun },
+      emitOpenCodeOAuthEvent,
+      readCode
+    );
+    emitExecutorResult(result);
+    process.exitCode = result.success ? 0 : 1;
+  } catch {
+    emitExecutorResult({
+      success: false,
+      error: {
+        code: 'OPENCODE_OAUTH_PROTOCOL_INVALID',
+        message: 'OpenCode OAuth executor input was invalid.',
+      },
+    });
+    process.exitCode = 1;
+  } finally {
+    lines.close();
+  }
 }
 
 /**
@@ -303,6 +364,10 @@ async function main() {
         type: 'boolean',
         default: false,
       },
+      'opencode-oauth': {
+        type: 'boolean',
+        default: false,
+      },
       'dry-run': {
         type: 'boolean',
         default: false,
@@ -334,7 +399,9 @@ async function main() {
   });
 
   // Route to appropriate mode
-  if (values.stdin) {
+  if (values['opencode-oauth']) {
+    await handleOpenCodeOAuthMode({ dryRun: values['dry-run'] || false });
+  } else if (values.stdin) {
     await handleStdinMode({ dryRun: values['dry-run'] || false });
   } else if (values['session-token']) {
     // Legacy mode - use CLI arguments

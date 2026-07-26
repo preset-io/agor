@@ -855,7 +855,13 @@ Agor's per-task Basic credential authenticates only the private SDK-to-server co
 - In `simple` mode, it reads state as the daemon user.
 - Prefer Agor-scoped environment variables when credentials must remain user- or session-specific.
 
-Provider authentication is resolved when the managed task starts. Agor's generic OpenCode auth check confirms that the runtime is enabled; it does not validate a particular provider credential in advance.
+OpenCode provider settings discover native API-key and OAuth methods using a
+disposable managed server. A native OAuth attempt keeps authorize and callback
+on the same auth server, stops the complete auth process path on completion or
+cancellation, and verifies saved state with a fresh server. “Configured” means
+that fresh OpenCode instance reports saved state; it does not make a paid or
+provider-validation request. Failed or cancelled callbacks leave credential
+contents under OpenCode's native ownership rather than using an Agor rollback.
 
 The model override UI does not call a daemon model-discovery endpoint because no persistent OpenCode server exists between tasks. Enter an exact provider/model pair, or leave both fields empty to use OpenCode's configured defaults.
 

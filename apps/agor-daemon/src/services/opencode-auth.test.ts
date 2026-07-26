@@ -1,7 +1,7 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
+import { runExecutorCommand, startOpenCodeOAuthExecutor } from '../utils/spawn-executor.js';
 import { createOpenCodeAuthService } from './opencode-auth';
 
 vi.mock('@agor/core/config', async () => {
@@ -29,9 +29,11 @@ vi.mock('@agor/core/unix', async () => {
 
 vi.mock('../utils/spawn-executor.js', () => ({
   runExecutorCommand: vi.fn(),
+  startOpenCodeOAuthExecutor: vi.fn(),
 }));
 
 const runCommand = vi.mocked(runExecutorCommand);
+const startOAuth = vi.mocked(startOpenCodeOAuthExecutor);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
 const usersRepository = vi.mocked(UsersRepository);
@@ -193,6 +195,433 @@ describe('OpenCode provider auth service', () => {
     releaseFirst();
     await Promise.all([first, second, independent]);
     expect(runCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps one OAuth attempt on one executor through authorize and callback states', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: {
+      success: boolean;
+      data?: unknown;
+      error?: { code: string; message: string };
+    }) => void;
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel: vi.fn(),
+        submitCode: vi.fn(),
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create(
+        {
+          operation: 'connect-oauth',
+          providerId: 'openai',
+          method: 1,
+          inputs: { region: 'us' },
+        },
+        params
+      )
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Use the synthetic provider.',
+      },
+    });
+    const started = await pending;
+    expect(started).toMatchObject({
+      providerId: 'openai',
+      phase: 'awaiting_callback',
+      authorization: { method: 'auto' },
+    });
+    emit({ type: 'callback-started' });
+    expect(
+      await runWithTenantContext('tenant-a', () =>
+        authService.get((started as { attemptId: string }).attemptId, params)
+      )
+    ).toMatchObject({ phase: 'completing' });
+
+    finish({
+      success: true,
+      data: {
+        ...discovery,
+        providers: [
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            configured: true,
+            status: 'configured',
+            authMethods: [],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(async () =>
+      expect(
+        (
+          await runWithTenantContext('tenant-a', () =>
+            authService.get((started as { attemptId: string }).attemptId, params)
+          )
+        ).phase
+      ).toBe('configured')
+    );
+    expect(startOAuth).toHaveBeenCalledOnce();
+    expect(startOAuth.mock.calls[0]?.[0]).toMatchObject({
+      params: {
+        operation: 'connect-oauth',
+        providerId: 'openai',
+        method: 1,
+        inputs: { region: 'us' },
+      },
+    });
+  });
+
+  it('holds the namespace mutation slot for OAuth across providers while another tenant stays independent', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel: vi.fn(),
+        submitCode: vi.fn(),
+      };
+    });
+    const authService = service();
+    const oauth = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Synthetic',
+      },
+    });
+    await oauth;
+
+    const blocked = runWithTenantContext('tenant-a', () =>
+      authService.create({ providerId: 'kimi-for-coding', apiKey: 'key-1' }, params)
+    );
+    const independent = runWithTenantContext('tenant-b', () =>
+      authService.remove('kimi-for-coding', params)
+    );
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledOnce());
+    expect(runCommand.mock.calls[0]?.[0]).toMatchObject({
+      params: { operation: 'disconnect' },
+    });
+
+    finish({
+      success: false,
+      error: { code: 'OPENCODE_AUTH_FAILED', message: 'safe' },
+    });
+    await Promise.all([blocked, independent]);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('isolates attempts by tenant and subject and cancels the full executor handle', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
+    const cancel = vi.fn(async () => {
+      const result = {
+        success: false,
+        error: { code: 'OPENCODE_OAUTH_CANCELLED', message: 'safe' },
+      };
+      finish(result);
+      return result;
+    });
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel,
+        submitCode: vi.fn(),
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Synthetic',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+
+    await runWithTenantContext('tenant-b', async () => {
+      await expect(authService.get(started.attemptId, params)).rejects.toThrow(/not found/i);
+    });
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(
+        authService.get(started.attemptId, {
+          user: { user_id: 'other-user', email: 'other@example.com', role: 'member' },
+        } as never)
+      ).rejects.toThrow(/not found/i);
+    });
+    const cancelled = await runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { cancel: true }, params)
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancelled.phase).toBe('cancelled');
+  });
+
+  it('maps a bounded executor timeout to an expired attempt without exposing failure detail', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: {
+      success: boolean;
+      error: { code: string; message: string; details?: unknown };
+    }) => void;
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel: vi.fn(),
+        submitCode: vi.fn(),
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Synthetic',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+    finish({
+      success: false,
+      error: {
+        code: 'OPENCODE_OAUTH_TIMEOUT',
+        message: 'contains synthetic-secret and /private/path',
+        details: { password: 'synthetic-password' },
+      },
+    });
+    const terminal = await vi.waitFor(() =>
+      runWithTenantContext('tenant-a', () => authService.get(started.attemptId, params))
+    );
+    await vi.waitFor(() =>
+      expect(
+        runWithTenantContext('tenant-a', () => authService.get(started.attemptId, params))
+      ).resolves.toMatchObject({ phase: 'expired' })
+    );
+    expect(JSON.stringify(terminal)).not.toContain('synthetic-secret');
+    expect(JSON.stringify(terminal)).not.toContain('/private/path');
+    expect(JSON.stringify(terminal)).not.toContain('synthetic-password');
+  });
+
+  it('submits one code to the same attempt without storing or returning the secret', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
+    const submitCode = vi.fn(async () => true);
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel: vi.fn(),
+        submitCode,
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'code',
+        instructions: 'Paste the code.',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+
+    const completing = await runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { code: ' synthetic-secret-code ' }, params)
+    );
+    expect(submitCode).toHaveBeenCalledWith('synthetic-secret-code');
+    expect(completing.phase).toBe('completing');
+    expect(JSON.stringify(completing)).not.toContain('synthetic-secret-code');
+
+    await runWithTenantContext('tenant-b', async () => {
+      await expect(
+        authService.patch(started.attemptId, { code: 'wrong-subject-code' }, params)
+      ).rejects.toThrow(/not found/i);
+    });
+    expect(submitCode).toHaveBeenCalledOnce();
+    finish({
+      success: false,
+      error: { code: 'OPENCODE_AUTH_FAILED', message: 'safe' },
+    });
+  });
+
+  it('blocks every later namespace mutation until retained containment verifies absence', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    const cleanupFailure = {
+      success: false,
+      error: {
+        code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED',
+        message: 'synthetic-secret password /private/path',
+      },
+    };
+    let finish!: (value: typeof cleanupFailure) => void;
+    const cancel = vi.fn(async () => {
+      finish(cleanupFailure);
+      return cleanupFailure;
+    });
+    const verifyAbsence = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel,
+        submitCode: vi.fn(),
+        verifyAbsence,
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Synthetic',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+
+    const terminal = await runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { cancel: true }, params)
+    );
+    expect(terminal.phase).toBe('failed');
+    expect(terminal.phase).not.toBe('cancelled');
+
+    await runWithTenantContext('tenant-a', async () => {
+      const blockedApi = authService.create(
+        { providerId: 'kimi-for-coding', apiKey: 'later-key' },
+        params
+      );
+      await expect(blockedApi).rejects.toThrow(/cleanup could not be verified/i);
+      const publicError = await blockedApi.catch((error) => error);
+      expect(String(publicError)).not.toContain('synthetic-secret');
+      expect(String(publicError)).not.toContain('/private/path');
+      expect(String(publicError)).not.toContain('password');
+      await expect(authService.remove('zhipuai-coding-plan', params)).rejects.toThrow(
+        /cleanup could not be verified/i
+      );
+    });
+    const blockedOAuth = await runWithTenantContext('tenant-a', () =>
+      authService.create(
+        { operation: 'connect-oauth', providerId: 'another-provider', method: 0 },
+        params
+      )
+    );
+    expect(blockedOAuth).toMatchObject({ providerId: 'another-provider', phase: 'failed' });
+    expect(startOAuth).toHaveBeenCalledOnce();
+    expect(runCommand).not.toHaveBeenCalled();
+
+    await expect(
+      runWithTenantContext('tenant-a', () =>
+        authService.create({ providerId: 'kimi-for-coding', apiKey: 'recovery-key' }, params)
+      )
+    ).resolves.toMatchObject({ runtime: 'available' });
+    expect(verifyAbsence).toHaveBeenCalledTimes(4);
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an in-flight code submission reverse cancellation', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
+    let releaseCode!: (accepted: boolean) => void;
+    const submitCode = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseCode = resolve;
+        })
+    );
+    const cancelledResult = {
+      success: false,
+      error: { code: 'OPENCODE_OAUTH_CANCELLED', message: 'safe' },
+    };
+    const cancel = vi.fn(async () => {
+      finish(cancelledResult);
+      return cancelledResult;
+    });
+    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel,
+        submitCode,
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(startOAuth).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'code',
+        instructions: 'Paste the code.',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+    const codePatch = runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { code: 'synthetic-code' }, params)
+    );
+    await vi.waitFor(() => expect(submitCode).toHaveBeenCalledOnce());
+    const cancellation = runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { cancel: true }, params)
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    releaseCode(true);
+
+    await expect(cancellation).resolves.toMatchObject({ phase: 'cancelled' });
+    await expect(codePatch).resolves.toMatchObject({ phase: 'cancelled' });
   });
 
   it('reports logical isolation in simple and insulated modes and OS isolation only in strict', async () => {

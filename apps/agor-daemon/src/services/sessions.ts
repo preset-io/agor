@@ -33,12 +33,15 @@ import {
   Forbidden,
   NotAuthenticated,
 } from '@agor/core/feathers';
+import type { ModelConfigInput } from '@agor/core/models';
 import {
   formatModelToolMismatchWarning,
   formatUnsupportedAgorCodexModelMessage,
+  hasCompleteOpenCodeModelConfig,
   isResolvedModelConfig,
   isUnsupportedAgorCodexModel,
   lintModelToolMatch,
+  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
 } from '@agor/core/models';
 import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
@@ -214,8 +217,18 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
-    modelConfig: Session['model_config'] | undefined
+    modelConfig: ModelConfigInput | null | undefined
   ): void {
+    if (
+      agenticTool === 'opencode' &&
+      modelConfig != null &&
+      !hasCompleteOpenCodeModelConfig(modelConfig)
+    ) {
+      throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+    }
+    if (agenticTool === 'opencode' && modelConfig != null && modelConfig.mode !== 'exact') {
+      throw new BadRequest('OpenCode model_config mode must be exact');
+    }
     if (
       agenticTool === 'codex' &&
       modelConfig?.model &&
@@ -317,7 +330,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       };
     } else {
       await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
-      if (modelConfig != null && !isResolvedModelConfig(modelConfig)) {
+      this.assertSupportedModelConfig(agenticTool, modelConfig);
+      if (modelConfig != null && !isResolvedModelConfig(modelConfig, agenticTool)) {
         throw new BadRequest('model_config must be resolved before session creation');
       }
       createData = {
@@ -1275,6 +1289,19 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           this.db,
           data.agentic_tool ?? current.agentic_tool
         );
+      }
+
+      if (data.model_config !== undefined || data.agentic_tool !== undefined) {
+        const effectiveTool = data.agentic_tool ?? current.agentic_tool;
+        const effectiveModelConfig =
+          data.model_config !== undefined ? data.model_config : current.model_config;
+        this.assertSupportedModelConfig(effectiveTool, effectiveModelConfig);
+        if (
+          effectiveModelConfig != null &&
+          !isResolvedModelConfig(effectiveModelConfig, effectiveTool)
+        ) {
+          throw new BadRequest('model_config must be resolved before updating a session');
+        }
       }
     }
     const result = (

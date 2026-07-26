@@ -59,7 +59,7 @@ interface ZoneTriggerModalProps {
     // New session config (only when sessionId === 'new')
     agent?: string;
     agenticToolPresetId?: string;
-    modelConfig?: ModelConfig;
+    modelConfig?: ModelConfig | null;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
   }) => Promise<void>;
@@ -106,7 +106,7 @@ export const ZoneTriggerModal = ({
   // Explicit state for session config (survives form mount/unmount cycles)
   const [sessionConfig, setSessionConfig] = useState<{
     agenticToolPresetId?: string;
-    modelConfig?: ModelConfig;
+    modelConfig?: ModelConfig | null;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
   }>({});
@@ -265,6 +265,12 @@ export const ZoneTriggerModal = ({
 
   const handleExecute = async () => {
     if (mode === 'create_new') {
+      const isInline = sessionConfig.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const selectedModelConfig = sessionConfig.modelConfig;
+      const hasCompleteOpenCodeModel =
+        selectedAgent !== 'opencode' ||
+        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
+
       // Use component state which is guaranteed to have the correct values
       // regardless of whether the form fields are mounted/visible
       await onExecute({
@@ -276,7 +282,14 @@ export const ZoneTriggerModal = ({
           sessionConfig.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
             ? undefined
             : sessionConfig.agenticToolPresetId,
-        modelConfig: sessionConfig.modelConfig,
+        // Match NewSessionModal's three-state contract: an inline OpenCode
+        // clear is explicit null, while omission continues to inherit.
+        modelConfig:
+          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
+            ? null
+            : hasCompleteOpenCodeModel
+              ? selectedModelConfig
+              : undefined,
         permissionMode: sessionConfig.permissionMode,
         mcpServerIds: sessionConfig.mcpServerIds,
       });
@@ -394,7 +407,18 @@ export const ZoneTriggerModal = ({
           onValuesChange={(changedValues) => {
             // Sync form changes to component state (only in create_new mode)
             if (mode === 'create_new') {
-              setSessionConfig((prev) => ({ ...prev, ...changedValues }));
+              setSessionConfig((prev) => {
+                const next = { ...prev, ...changedValues };
+                if (
+                  selectedAgent === 'opencode' &&
+                  next.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION &&
+                  Object.hasOwn(changedValues, 'modelConfig') &&
+                  !(next.modelConfig?.provider?.trim() && next.modelConfig?.model?.trim())
+                ) {
+                  next.modelConfig = null;
+                }
+                return next;
+              });
             }
           }}
         >

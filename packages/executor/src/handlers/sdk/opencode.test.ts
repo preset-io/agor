@@ -128,6 +128,7 @@ describe('executeOpenCodeTask', () => {
       prompt: 'Do the work',
       permissionMode: 'default',
       abortController,
+      messageSource: 'gateway',
       dataHome: '/opaque/opencode-home',
       resolvedConfig: { execution: { permission_timeout_ms: 1234 } },
     });
@@ -165,6 +166,15 @@ describe('executeOpenCodeTask', () => {
     });
     const assistantMessageId = mocks.runTurn.mock.calls[0][0].agorAssistantMessageId;
     expect(mocks.messagesCreate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        role: 'user',
+        task_id: '00000000-0000-7000-8000-000000000002',
+        content: 'Do the work',
+        metadata: { source: 'gateway' },
+      })
+    );
+    expect(mocks.messagesCreate).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         message_id: assistantMessageId,
@@ -183,6 +193,62 @@ describe('executeOpenCodeTask', () => {
     expect(services.tasks.patch).toHaveBeenCalledWith(
       '00000000-0000-7000-8000-000000000002',
       expect.objectContaining({ status: 'completed', model: 'openai/gpt-test' })
+    );
+  });
+
+  it('reuses a daemon-written user message beyond the default Feathers page', async () => {
+    const order: string[] = [];
+    const { client } = createClient(order);
+    const firstPage = Array.from({ length: 10000 }, (_, index) => ({
+      message_id: `00000000-0000-7000-8000-${String(index).padStart(12, '0')}`,
+      session_id: '00000000-0000-7000-8000-000000000001',
+      task_id: `00000000-0000-7000-8001-${String(index).padStart(12, '0')}`,
+      type: 'system',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      index,
+      timestamp: '2026-07-24T00:00:00.000Z',
+      content_preview: `Previous message ${index}`,
+      content: `Previous message ${index}`,
+    }));
+    const existingUserMessage = {
+      message_id: '00000000-0000-7000-8000-000000000004',
+      session_id: '00000000-0000-7000-8000-000000000001',
+      task_id: '00000000-0000-7000-8000-000000000002',
+      type: 'system',
+      role: 'user',
+      index: 10000,
+      timestamp: '2026-07-24T00:00:00.000Z',
+      content_preview: 'Daemon wrote this prompt',
+      content: 'Daemon wrote this prompt',
+      metadata: { is_agor_callback: true, source: 'agor' },
+    };
+    mocks.messagesFindBySession.mockResolvedValue([...firstPage, existingUserMessage]);
+    mocks.runTurn.mockResolvedValue({
+      openCodeSessionId: 'oc-existing',
+      sessionWasCreated: false,
+      finalMessage: {
+        content: 'done',
+        contentBlocks: [{ type: 'text', text: 'done' }],
+        toolUses: [],
+        metadata: {},
+      },
+    });
+
+    await executeOpenCodeTask({
+      client: client as never,
+      sessionId: '00000000-0000-7000-8000-000000000001' as never,
+      taskId: '00000000-0000-7000-8000-000000000002' as never,
+      prompt: 'Daemon wrote this prompt',
+      abortController: new AbortController(),
+      messageSource: 'agor',
+    });
+
+    expect(mocks.messagesCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.messagesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'assistant',
+        index: 10001,
+      })
     );
   });
 

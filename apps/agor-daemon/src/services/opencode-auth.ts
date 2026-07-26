@@ -6,9 +6,12 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  OpenCodeOAuthAttempt,
+  OpenCodeOAuthAttemptPatch,
+  OpenCodeOAuthConnectRequest,
   OpenCodeProviderDiscovery,
   OpenCodeProviderSettings,
   UserID,
@@ -23,9 +26,16 @@ import {
   assertOpenCodeNativeAuthSupported,
   resolveOpenCodeCredentialNamespace,
 } from '../utils/opencode-credential-namespace.js';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
+import {
+  type OpenCodeOAuthExecutorHandle,
+  runExecutorCommand,
+  startOpenCodeOAuthExecutor,
+} from '../utils/spawn-executor.js';
 
 const mutationSlots = new Map<string, Promise<void>>();
+// An unverified OAuth process keeps the same namespace coordinator closed.
+// The stored verifier delegates recovery to the existing tracked-process owner.
+const blockedNamespaces = new Map<string, () => Promise<boolean>>();
 const AUTH_EXECUTOR_ENV_KEYS = [
   'PATH',
   'HOME',
@@ -44,7 +54,26 @@ const AUTH_EXECUTOR_ENV_KEYS = [
 
 async function inMutationSlot<T>(key: string, work: () => Promise<T>): Promise<T> {
   const previous = mutationSlots.get(key) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(work);
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const verifyAbsence = blockedNamespaces.get(key);
+      if (verifyAbsence) {
+        let verified = false;
+        try {
+          verified = await verifyAbsence();
+        } catch {
+          // Existing containment owns details; the public service stays secret-safe.
+        }
+        if (!verified) {
+          throw new BadRequest(
+            'OpenCode provider cleanup could not be verified. Later mutations remain blocked.'
+          );
+        }
+        if (blockedNamespaces.get(key) === verifyAbsence) blockedNamespaces.delete(key);
+      }
+      return work();
+    });
   const settled = current.then(
     () => undefined,
     () => undefined
@@ -63,6 +92,27 @@ type CredentialContext = {
   asUser: string | null;
   mode: UnixUserMode;
 };
+
+type StoredOAuthAttempt = OpenCodeOAuthAttempt & {
+  namespaceKey: string;
+  handle?: OpenCodeOAuthExecutorHandle;
+  cancelRequested: boolean;
+  ready: Promise<void>;
+  resolveReady: () => void;
+};
+
+const oauthAttempts = new Map<string, StoredOAuthAttempt>();
+const OAUTH_TIMEOUT_MS = 10 * 60_000;
+const OAUTH_TERMINAL_RETENTION_MS = 10 * 60_000;
+
+function scheduleAttemptPrune(attempt: StoredOAuthAttempt): void {
+  const timer = setTimeout(() => {
+    if (oauthAttempts.get(attempt.attemptId) === attempt) {
+      oauthAttempts.delete(attempt.attemptId);
+    }
+  }, OAUTH_TERMINAL_RETENTION_MS);
+  timer.unref();
+}
 
 export class OpenCodeAuthService {
   constructor(private readonly db: TenantScopeAwareDatabase) {}
@@ -163,9 +213,14 @@ export class OpenCodeAuthService {
   }
 
   async create(
-    data: { providerId?: string; apiKey?: string; metadata?: Record<string, string> },
+    data:
+      | { providerId?: string; apiKey?: string; metadata?: Record<string, string> }
+      | OpenCodeOAuthConnectRequest,
     params?: AuthenticatedParams
-  ): Promise<OpenCodeProviderSettings> {
+  ): Promise<OpenCodeProviderSettings | OpenCodeOAuthAttempt> {
+    if ('operation' in data) {
+      return this.startOAuth(data, params);
+    }
     const unsupported = Object.keys(data ?? {}).find(
       (field) => field !== 'providerId' && field !== 'apiKey' && field !== 'metadata'
     );
@@ -189,6 +244,212 @@ export class OpenCodeAuthService {
       this.execute(context, { operation: 'connect-api-key', providerId, apiKey, metadata })
     );
     return this.settings(context, result);
+  }
+
+  private publicAttempt(attempt: StoredOAuthAttempt): OpenCodeOAuthAttempt {
+    const { attemptId, providerId, phase, authorization, expiresAt, settings } = attempt;
+    return {
+      attemptId,
+      providerId,
+      phase,
+      expiresAt,
+      ...(authorization ? { authorization } : {}),
+      ...(settings ? { settings } : {}),
+    };
+  }
+
+  private settleAttempt(
+    attempt: StoredOAuthAttempt,
+    result: Awaited<OpenCodeOAuthExecutorHandle['result']>,
+    context: CredentialContext
+  ): void {
+    if (result.success && result.data) {
+      const discovery = result.data as OpenCodeProviderDiscovery;
+      const configured = discovery.providers.some(
+        (provider) => provider.id === attempt.providerId && provider.configured
+      );
+      if (configured) {
+        attempt.settings = this.settings(context, discovery);
+        attempt.phase = 'configured';
+      } else {
+        attempt.phase = 'failed';
+      }
+    } else if (result.error?.code === 'OPENCODE_OAUTH_TIMEOUT') {
+      attempt.phase = 'expired';
+    } else if (result.error?.code === 'OPENCODE_OAUTH_CANCELLED') {
+      attempt.phase = 'cancelled';
+    } else {
+      attempt.phase = 'failed';
+    }
+    attempt.resolveReady();
+  }
+
+  private async ownedAttempt(
+    id: string,
+    params?: AuthenticatedParams
+  ): Promise<StoredOAuthAttempt> {
+    const context = await this.credentialContext(params);
+    const attempt = oauthAttempts.get(id);
+    if (!attempt || attempt.namespaceKey !== context.namespaceKey) {
+      throw new NotFound('OpenCode OAuth attempt was not found.');
+    }
+    return attempt;
+  }
+
+  private async startOAuth(
+    data: OpenCodeOAuthConnectRequest,
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeOAuthAttempt> {
+    const unsupported = Object.keys(data).find(
+      (field) =>
+        field !== 'operation' && field !== 'providerId' && field !== 'method' && field !== 'inputs'
+    );
+    if (unsupported) throw new BadRequest(`Unsupported field: ${unsupported}`);
+    const providerId = data.providerId?.trim();
+    if (!providerId || !Number.isInteger(data.method) || data.method < 0) {
+      throw new BadRequest('Provider and OAuth method are required.');
+    }
+    if (
+      data.inputs !== undefined &&
+      (!data.inputs ||
+        Array.isArray(data.inputs) ||
+        typeof data.inputs !== 'object' ||
+        Object.values(data.inputs).some((value) => typeof value !== 'string'))
+    ) {
+      throw new BadRequest('Provider prompt values must be strings.');
+    }
+
+    const context = await this.credentialContext(params);
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const attempt: StoredOAuthAttempt = {
+      attemptId: crypto.randomUUID(),
+      providerId,
+      phase: 'authorizing',
+      expiresAt: new Date(Date.now() + OAUTH_TIMEOUT_MS).toISOString(),
+      namespaceKey: context.namespaceKey,
+      cancelRequested: false,
+      ready,
+      resolveReady,
+    };
+    oauthAttempts.set(attempt.attemptId, attempt);
+
+    void inMutationSlot(context.namespaceKey, async () => {
+      if (attempt.cancelRequested) {
+        attempt.phase = 'cancelled';
+        attempt.resolveReady();
+        scheduleAttemptPrune(attempt);
+        return;
+      }
+      const handle = startOpenCodeOAuthExecutor(
+        {
+          command: 'opencode.auth',
+          dataHome: context.dataHome,
+          params: {
+            operation: 'connect-oauth',
+            providerId,
+            method: data.method,
+            ...(data.inputs && Object.keys(data.inputs).length > 0 ? { inputs: data.inputs } : {}),
+          },
+        },
+        {
+          asUser: context.asUser,
+          env: Object.fromEntries(
+            AUTH_EXECUTOR_ENV_KEYS.flatMap((key) =>
+              process.env[key] === undefined ? [] : [[key, process.env[key]]]
+            )
+          ) as Record<string, string>,
+          logPrefix: '[OpenCode Auth]',
+          templateVariables: { unix_user: context.asUser ?? undefined },
+          timeoutMs: OAUTH_TIMEOUT_MS,
+        },
+        (event) => {
+          if (attempt.cancelRequested) return;
+          if (event.type === 'authorized') {
+            attempt.authorization = event.authorization;
+            attempt.phase = 'awaiting_callback';
+            attempt.resolveReady();
+          } else {
+            attempt.phase = 'completing';
+          }
+        }
+      );
+      attempt.handle = handle;
+      const result = await handle.result;
+      if (result.error?.code === 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED') {
+        blockedNamespaces.set(context.namespaceKey, () => handle.verifyAbsence());
+      }
+      this.settleAttempt(attempt, result, context);
+      scheduleAttemptPrune(attempt);
+    }).catch(() => {
+      if (!attempt.cancelRequested) attempt.phase = 'failed';
+      attempt.resolveReady();
+      scheduleAttemptPrune(attempt);
+    });
+
+    await attempt.ready;
+    return this.publicAttempt(attempt);
+  }
+
+  async get(id: string, params?: AuthenticatedParams): Promise<OpenCodeOAuthAttempt> {
+    return this.publicAttempt(await this.ownedAttempt(id, params));
+  }
+
+  async patch(
+    id: string,
+    data: OpenCodeOAuthAttemptPatch,
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeOAuthAttempt> {
+    const attempt = await this.ownedAttempt(id, params);
+    if (
+      attempt.phase === 'configured' ||
+      attempt.phase === 'cancelled' ||
+      attempt.phase === 'expired' ||
+      attempt.phase === 'failed'
+    ) {
+      return this.publicAttempt(attempt);
+    }
+    if ('code' in data) {
+      if (Object.keys(data).some((field) => field !== 'code')) {
+        throw new BadRequest('Unsupported OAuth callback field.');
+      }
+      const code = data.code?.trim();
+      if (
+        !code ||
+        attempt.phase !== 'awaiting_callback' ||
+        attempt.authorization?.method !== 'code' ||
+        !attempt.handle
+      ) {
+        throw new BadRequest('This OAuth attempt is not awaiting a code.');
+      }
+      if (!(await attempt.handle.submitCode(code))) {
+        throw new BadRequest('This OAuth attempt no longer accepts a code.');
+      }
+      if (attempt.cancelRequested) {
+        this.settleAttempt(
+          attempt,
+          await attempt.handle.result,
+          await this.credentialContext(params)
+        );
+        return this.publicAttempt(attempt);
+      }
+      attempt.phase = 'completing';
+      return this.publicAttempt(attempt);
+    }
+    if (data.cancel !== true || Object.keys(data).some((field) => field !== 'cancel')) {
+      throw new BadRequest('Only OAuth cancellation or code submission is supported.');
+    }
+    attempt.cancelRequested = true;
+    if (!attempt.handle) {
+      attempt.phase = 'cancelled';
+      attempt.resolveReady();
+      return this.publicAttempt(attempt);
+    }
+    const result = await attempt.handle.cancel();
+    this.settleAttempt(attempt, result, await this.credentialContext(params));
+    return this.publicAttempt(attempt);
   }
 
   async remove(id: string, params?: AuthenticatedParams): Promise<OpenCodeProviderSettings> {

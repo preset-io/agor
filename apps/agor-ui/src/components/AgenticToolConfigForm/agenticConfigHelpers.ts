@@ -68,12 +68,26 @@ export function buildConfigFromFormValues(
   tool: AgenticToolName,
   values: AgenticFormValues
 ): DefaultAgenticToolConfig {
-  // Merge effort back into modelConfig
-  const modelConfig = values.modelConfig
-    ? { ...values.modelConfig, effort: values.effort }
-    : values.effort
-      ? { effort: values.effort }
+  const openCodeProvider =
+    values.modelConfig && 'provider' in values.modelConfig
+      ? values.modelConfig.provider
       : undefined;
+  const hasCompleteOpenCodeModel =
+    tool !== 'opencode' ||
+    Boolean(
+      typeof openCodeProvider === 'string' &&
+        openCodeProvider.trim() &&
+        values.modelConfig?.model?.trim()
+    );
+
+  // Merge effort back into modelConfig
+  const modelConfig = hasCompleteOpenCodeModel
+    ? values.modelConfig
+      ? { ...values.modelConfig, effort: values.effort }
+      : values.effort
+        ? { effort: values.effort }
+        : undefined
+    : undefined;
 
   return {
     modelConfig,

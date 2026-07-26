@@ -53,6 +53,10 @@ function client(
     provider: {
       list: vi.fn(async () => providerList(connected)),
       auth: vi.fn(async () => ({ data: authMethods })),
+      oauth: {
+        authorize: vi.fn(),
+        callback: vi.fn(),
+      },
     },
     instance: { dispose: vi.fn(async () => ({ data: true })) },
   };
@@ -155,6 +159,7 @@ describe('opencode.auth executor command', () => {
             id: 'kimi-for-coding',
             authMethods: [
               {
+                index: 0,
                 type: 'api',
                 label: 'Workspace key',
                 prompts: [
@@ -178,6 +183,223 @@ describe('opencode.auth executor command', () => {
         ]),
       }),
     });
+  });
+
+  it('keeps the native method index and completes auto OAuth on one server before fresh verification', async () => {
+    const authClient = client([], {
+      openai: [
+        { type: 'oauth', label: 'ChatGPT browser' },
+        {
+          type: 'oauth',
+          label: 'ChatGPT headless',
+          prompts: [
+            {
+              type: 'select',
+              key: 'region',
+              message: 'Region',
+              options: [{ label: 'US', value: 'us' }],
+            },
+          ],
+        },
+      ],
+    });
+    authClient.provider.oauth.authorize.mockResolvedValue({
+      data: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Open the synthetic authorization page.',
+      },
+    });
+    authClient.provider.oauth.callback.mockResolvedValue({ data: true });
+    const verificationClient = client(['openai'], {
+      openai: [
+        { type: 'oauth', label: 'ChatGPT browser' },
+        { type: 'oauth', label: 'ChatGPT headless' },
+      ],
+    });
+    verificationClient.provider.list.mockResolvedValue({
+      data: {
+        all: [{ id: 'openai', name: 'OpenAI' }],
+        connected: ['openai'],
+        default: {},
+      },
+    });
+    runtime.clients.push(authClient, verificationClient);
+    const events: unknown[] = [];
+
+    const { handleOpenCodeOAuth } = await import('./opencode-auth');
+    const result = await handleOpenCodeOAuth(
+      {
+        command: 'opencode.auth',
+        dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+        params: {
+          operation: 'connect-oauth',
+          providerId: 'openai',
+          method: 1,
+          inputs: { region: 'us' },
+        },
+      } as never,
+      {},
+      (event) => events.push(event)
+    );
+
+    expect(authClient.provider.oauth.authorize).toHaveBeenCalledWith({
+      providerID: 'openai',
+      method: 1,
+      inputs: { region: 'us' },
+      directory: '/home/alice/.local/share/agor/opencode/opaque',
+    });
+    expect(authClient.provider.oauth.callback).toHaveBeenCalledWith({
+      providerID: 'openai',
+      method: 1,
+      directory: '/home/alice/.local/share/agor/opencode/opaque',
+    });
+    expect(events).toEqual([
+      {
+        type: 'authorized',
+        authorization: {
+          url: 'http://127.0.0.1:9898/authorize',
+          method: 'auto',
+          instructions: 'Open the synthetic authorization page.',
+        },
+      },
+      { type: 'callback-started' },
+    ]);
+    expect(runtime.start).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: 'openai', configured: true }),
+        ]),
+      }),
+    });
+  });
+
+  it('closes a denied OAuth runtime without changing a previously configured connection', async () => {
+    const authClient = client(['openai']);
+    authClient.provider.oauth.authorize.mockResolvedValue({
+      data: {
+        url: 'http://127.0.0.1:9898/authorize?secret=synthetic',
+        method: 'auto',
+        instructions: 'Synthetic instruction code 1234',
+      },
+    });
+    authClient.provider.oauth.callback.mockResolvedValue({ error: { name: 'denied' } });
+    runtime.clients.push(authClient);
+
+    const { handleOpenCodeOAuth } = await import('./opencode-auth');
+    const result = await handleOpenCodeOAuth(
+      {
+        command: 'opencode.auth',
+        dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+        params: {
+          operation: 'connect-oauth',
+          providerId: 'openai',
+          method: 1,
+        },
+      } as never,
+      {},
+      () => undefined
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: 'OPENCODE_AUTH_FAILED',
+        message: 'OpenCode provider operation failed without exposing credential details.',
+      },
+    });
+    expect(authClient.auth.set).not.toHaveBeenCalled();
+    expect(authClient.auth.remove).not.toHaveBeenCalled();
+    expect(runtime.close).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain('synthetic');
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
+
+    const preservedClient = client(['openai']);
+    preservedClient.provider.list.mockResolvedValue({
+      data: {
+        all: [{ id: 'openai', name: 'OpenAI' }],
+        connected: ['openai'],
+        default: {},
+      },
+    });
+    runtime.clients.push(preservedClient);
+    const preservedConnection = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover' },
+    } as never);
+    expect(preservedConnection).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: 'openai', configured: true }),
+        ]),
+      }),
+    });
+  });
+
+  it('delivers one bounded code callback to the same native auth client without exposing it', async () => {
+    const authClient = client();
+    authClient.provider.oauth.authorize.mockResolvedValue({
+      data: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'code',
+        instructions: 'Paste the one-time code.',
+      },
+    });
+    authClient.provider.oauth.callback.mockImplementation(async ({ code }) => {
+      expect(code).toBe('synthetic-one-time-code');
+      return { data: true };
+    });
+    const verificationClient = client(['openai']);
+    verificationClient.provider.list.mockResolvedValue({
+      data: {
+        all: [{ id: 'openai', name: 'OpenAI' }],
+        connected: ['openai'],
+        default: {},
+      },
+    });
+    runtime.clients.push(authClient, verificationClient);
+    const events: unknown[] = [];
+
+    const { handleOpenCodeOAuth } = await import('./opencode-auth');
+    const result = await handleOpenCodeOAuth(
+      {
+        command: 'opencode.auth',
+        dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+        params: {
+          operation: 'connect-oauth',
+          providerId: 'openai',
+          method: 1,
+        },
+      } as never,
+      {},
+      (event) => events.push(event),
+      async () => 'synthetic-one-time-code'
+    );
+
+    expect(authClient.provider.oauth.callback).toHaveBeenCalledWith({
+      providerID: 'openai',
+      method: 1,
+      code: 'synthetic-one-time-code',
+      directory: '/home/alice/.local/share/agor/opencode/opaque',
+    });
+    expect(events).toEqual([
+      {
+        type: 'authorized',
+        authorization: {
+          url: 'http://127.0.0.1:9898/authorize',
+          method: 'code',
+          instructions: 'Paste the one-time code.',
+        },
+      },
+      { type: 'callback-started' },
+    ]);
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('synthetic-one-time-code');
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
   });
 
   it('disconnects GLM generically and verifies it is absent on a fresh server', async () => {

@@ -137,6 +137,8 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
       ...(values.effort ? { effort: values.effort } : {}),
       updated_at: new Date().toISOString(),
     };
+  } else if (!presetId && session.model_config) {
+    (updates as { model_config?: Session['model_config'] | null }).model_config = null;
   }
 
   if (!presetId && values.permissionMode) {

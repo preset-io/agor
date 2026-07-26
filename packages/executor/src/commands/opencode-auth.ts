@@ -1,4 +1,5 @@
 import type {
+  OpenCodeOAuthAuthorization,
   OpenCodeProviderAuthMethod,
   OpenCodeProviderConnection,
   OpenCodeProviderDiscovery,
@@ -18,7 +19,8 @@ function safeMethods(
   methods: Awaited<ReturnType<V2Client['provider']['auth']>>['data'] | undefined,
   providerId: string
 ): OpenCodeProviderAuthMethod[] {
-  return (methods?.[providerId] ?? []).map((method) => ({
+  return (methods?.[providerId] ?? []).map((method, index) => ({
+    index,
     type: method.type,
     label: method.label,
     ...(method.prompts
@@ -127,6 +129,16 @@ export async function handleOpenCodeAuth(payload: OpenCodeAuthPayload, options: 
       return { success: true, data: await discover(payload.dataHome) };
     }
 
+    if (payload.params.operation === 'connect-oauth') {
+      return {
+        success: false,
+        error: {
+          code: 'OPENCODE_OAUTH_PROTOCOL_REQUIRED',
+          message: 'OpenCode OAuth requires the bounded authorization protocol.',
+        },
+      };
+    }
+
     const { providerId } = payload.params;
     const apiKey =
       payload.params.operation === 'connect-api-key' ? payload.params.apiKey : undefined;
@@ -152,6 +164,79 @@ export async function handleOpenCodeAuth(payload: OpenCodeAuthPayload, options: 
       });
     });
 
+    return { success: true, data: await discover(payload.dataHome) };
+  } catch {
+    return {
+      success: false,
+      error: {
+        code: 'OPENCODE_AUTH_FAILED',
+        message: 'OpenCode provider operation failed without exposing credential details.',
+      },
+    };
+  }
+}
+
+export type OpenCodeOAuthExecutorEvent =
+  | { type: 'authorized'; authorization: OpenCodeOAuthAuthorization }
+  | { type: 'callback-started' };
+
+export type OpenCodeOAuthPayload = Omit<OpenCodeAuthPayload, 'params'> & {
+  params: Extract<OpenCodeAuthPayload['params'], { operation: 'connect-oauth' }>;
+};
+
+export async function handleOpenCodeOAuth(
+  payload: OpenCodeOAuthPayload,
+  options: CommandOptions,
+  emit: (event: OpenCodeOAuthExecutorEvent) => void,
+  readCode?: () => Promise<string>
+) {
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: { dryRun: true, command: payload.command, operation: payload.params.operation },
+    };
+  }
+
+  const { providerId, method, inputs } = payload.params;
+  try {
+    const mutation = await withFreshClient(
+      payload.dataHome,
+      Object.values(inputs ?? {}),
+      async (client) => {
+        const response = await client.provider.oauth.authorize({
+          providerID: providerId,
+          method,
+          ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {}),
+          directory: payload.dataHome,
+        });
+        if (response.error || !response.data) {
+          throw new Error('OpenCode rejected OAuth authorization');
+        }
+        const authorization: OpenCodeOAuthAuthorization = {
+          url: response.data.url,
+          method: response.data.method,
+          instructions: response.data.instructions,
+        };
+        emit({ type: 'authorized', authorization });
+        const code = authorization.method === 'code' ? (await readCode?.())?.trim() : undefined;
+        if (authorization.method === 'code' && !code) {
+          throw new Error('OpenCode OAuth code was not supplied');
+        }
+        emit({ type: 'callback-started' });
+        const callback = await client.provider.oauth.callback({
+          providerID: providerId,
+          method,
+          ...(code ? { code } : {}),
+          directory: payload.dataHome,
+        });
+        if (callback.error || callback.data !== true) {
+          throw new Error('OpenCode rejected OAuth callback');
+        }
+        await verifyOpenCodeAuthFileBoundary(payload.dataHome);
+        return true;
+      }
+    );
+    if (!mutation) throw new Error('OpenCode OAuth mutation did not complete');
     return { success: true, data: await discover(payload.dataHome) };
   } catch {
     return {

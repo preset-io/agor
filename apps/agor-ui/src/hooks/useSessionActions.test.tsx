@@ -54,3 +54,73 @@ describe('useSessionActions archive helpers', () => {
     expect(sessionsPatch).not.toHaveBeenCalled();
   });
 });
+
+describe('useSessionActions OpenCode model config', () => {
+  it('does not create a detached effort-only model config when selection is omitted', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        modelConfig: undefined,
+        effort: 'high',
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentic_tool: 'opencode',
+        model_config: undefined,
+      })
+    );
+  });
+
+  it('carries a deliberate clear as model_config null without detached effort', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        modelConfig: null,
+        effort: 'high',
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentic_tool: 'opencode',
+        model_config: null,
+      })
+    );
+  });
+
+  it('keeps a complete exact OpenCode provider/model pair', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-5' },
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_config: expect.objectContaining({
+          mode: 'exact',
+          provider: 'openai',
+          model: 'gpt-5',
+        }),
+      })
+    );
+  });
+});

@@ -178,6 +178,80 @@ describe('applySessionConfigDefaults', () => {
     );
   });
 
+  it('preserves an explicit OpenCode model_config null instead of restoring a stale user default', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'opencode',
+        created_by: ALICE,
+        model_config: null,
+      },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            opencode: {
+              modelConfig: {
+                mode: 'exact',
+                provider: 'openai',
+                model: 'stale-user-model',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await hook(ctx);
+
+    expect(ctx.data).toHaveProperty('model_config', null);
+    expect((ctx.data as { permission_config: unknown }).permission_config).toBeDefined();
+  });
+
+  it.each([
+    ['model-only', { model: 'gpt-5' }],
+    ['provider-only', { provider: 'openai' }],
+    ['blank model', { provider: 'openai', model: '   ' }],
+    ['blank provider', { provider: '   ', model: 'gpt-5' }],
+  ])('rejects an incomplete OpenCode %s create input', async (_label, modelConfig) => {
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'opencode',
+        created_by: ALICE,
+        model_config: modelConfig,
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await expect(
+      applySessionConfigDefaults({ warnOnExternalDefaultFill: false })(ctx)
+    ).rejects.toThrow(/provider.*model/i);
+  });
+
+  it('rejects an incomplete OpenCode user default through the shared resolver', async () => {
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: { agentic_tool: 'opencode', created_by: ALICE },
+      users: {
+        [ALICE]: {
+          user_id: ALICE,
+          default_agentic_config: {
+            opencode: { modelConfig: { model: 'gpt-5' } },
+          },
+        },
+      },
+    });
+
+    await expect(
+      applySessionConfigDefaults({ warnOnExternalDefaultFill: false })(ctx)
+    ).rejects.toThrow(/provider.*model/i);
+  });
+
   it("rejects an unsupported Codex model from the user's default", async () => {
     const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
     const ctx = makeContext({

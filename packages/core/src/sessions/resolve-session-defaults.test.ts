@@ -255,6 +255,43 @@ describe('resolveSessionDefaults', () => {
       // first-wins, not merge — must NOT inherit effort from user default
       expect(r.model_config).not.toHaveProperty('effort');
     });
+
+    it('preserves a complete OpenCode provider/model pair as exact', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'opencode',
+        user: makeUser({
+          opencode: {
+            modelConfig: {
+              mode: 'alias',
+              provider: 'openai',
+              model: 'gpt-5',
+              effort: 'high',
+            },
+          },
+        }),
+        now,
+      });
+
+      expect(r.model_config).toEqual({
+        mode: 'exact',
+        provider: 'openai',
+        model: 'gpt-5',
+        effort: 'high',
+        updated_at: now.toISOString(),
+      });
+    });
+
+    it('rejects an incomplete OpenCode user default at the shared resolution boundary', () => {
+      expect(() =>
+        resolveSessionDefaults({
+          agenticTool: 'opencode',
+          user: makeUser({
+            opencode: { modelConfig: { model: 'gpt-5' } },
+          }),
+          now,
+        })
+      ).toThrow(/provider.*model/i);
+    });
   });
 
   describe('mcp_server_ids', () => {

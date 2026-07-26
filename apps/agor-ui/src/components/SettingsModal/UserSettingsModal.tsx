@@ -1110,7 +1110,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                       title="OpenCode connections can only be managed by that user."
                     />
                   ) : client ? (
-                    <OpenCodeProviderSettings client={client} />
+                    <OpenCodeProviderSettings key={currentUser?.user_id} client={client} />
                   ) : (
                     <Alert type="warning" showIcon title="Not connected to Agor." />
                   ),

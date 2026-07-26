@@ -10,7 +10,7 @@ describe('OpenCodeModelSelector', () => {
     fireEvent.change(screen.getByLabelText('OpenCode provider ID'), {
       target: { value: 'openai' },
     });
-    expect(onChange).toHaveBeenLastCalledWith({ provider: '', model: '' });
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
 
     fireEvent.change(screen.getByLabelText('OpenCode model ID'), {
       target: { value: 'gpt-5' },
@@ -28,6 +28,6 @@ describe('OpenCodeModelSelector', () => {
       target: { value: '' },
     });
 
-    expect(onChange).toHaveBeenLastCalledWith({ provider: '', model: '' });
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 });

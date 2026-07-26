@@ -178,7 +178,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         contextFiles: session.contextFiles ?? [],
         tasks: session.tasks ?? [],
         permission_config: session.permission_config,
-        model_config: session.model_config ?? undefined,
+        // Keep explicit null as the atomic "no model override" value. Omitting
+        // the property remains distinct and lets create-time defaults apply.
+        model_config: session.model_config,
         callback_config: session.callback_config,
         fork_origin: session.fork_origin,
         custom_context: session.custom_context,

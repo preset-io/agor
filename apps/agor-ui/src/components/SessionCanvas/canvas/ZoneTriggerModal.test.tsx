@@ -1,5 +1,6 @@
-import type { BranchID, Session } from '@agor-live/client';
-import { render } from '@testing-library/react';
+import type { BranchID, Session, User } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ZoneTriggerModal } from './ZoneTriggerModal';
 
@@ -7,11 +8,56 @@ import { ZoneTriggerModal } from './ZoneTriggerModal';
 // children — the regression lives entirely in ZoneTriggerModal's render-time
 // useMemo, which runs regardless of what these children render.
 vi.mock('../../AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => null,
+  AgentSelectionGrid: ({ onSelect }: { onSelect: (agent: string) => void }) => (
+    <button type="button" onClick={() => onSelect('opencode')}>
+      OpenCode
+    </button>
+  ),
 }));
 vi.mock('../../AgenticToolConfigForm', () => ({
   AgenticToolConfigForm: () => null,
 }));
+vi.mock('../../AgenticToolConfigurationPicker', () => {
+  const ModelConfigControl = ({
+    value,
+    onChange,
+  }: {
+    value?: { mode: 'exact'; provider?: string; model: string };
+    onChange?: (value: { mode: 'exact'; provider?: string; model: string } | undefined) => void;
+  }) => (
+    <div>
+      <output data-testid="zone-model">
+        {value ? `${value.provider ?? ''}/${value.model}` : ''}
+      </output>
+      <button type="button" onClick={() => onChange?.(undefined)}>
+        Clear zone model
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange?.({ mode: 'exact', provider: 'anthropic', model: 'claude-4' })}
+      >
+        Complete zone model
+      </button>
+    </div>
+  );
+
+  return {
+    INLINE_AGENTIC_CONFIGURATION: '__inline__',
+    AgenticToolConfigurationPicker: () => (
+      <>
+        <Form.Item name="agenticToolPresetId">
+          <select aria-label="Zone configuration source">
+            <option value="">Inherit</option>
+            <option value="__inline__">Inline</option>
+          </select>
+        </Form.Item>
+        <Form.Item name="modelConfig">
+          <ModelConfigControl />
+        </Form.Item>
+      </>
+    ),
+  };
+});
 
 const BRANCH_ID = 'branch-1' as BranchID;
 
@@ -59,5 +105,83 @@ describe('ZoneTriggerModal smart-default session selection', () => {
     // session — surfaced as the closed Select's selected value.
     expect(document.body.textContent).toContain('Newer session');
     expect(document.body.textContent).not.toContain('Older session');
+  });
+});
+
+const staleOpenCodeDefault = {
+  user_id: 'user-1',
+  default_agentic_config: {
+    opencode: {
+      modelConfig: {
+        mode: 'exact',
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+    },
+  },
+} as unknown as User;
+
+function renderNewSessionModal(currentUser?: User) {
+  const onExecute = vi.fn(async () => {});
+  render(
+    <ZoneTriggerModal
+      open
+      onCancel={() => {}}
+      client={null}
+      branchId={BRANCH_ID}
+      branch={undefined}
+      sessionsByBranch={new Map()}
+      zoneName="Zone"
+      trigger={{ template: 'do work' } as never}
+      availableAgents={[{ id: 'opencode', name: 'OpenCode', icon: 'O', description: 'OpenCode' }]}
+      mcpServerById={new Map()}
+      currentUser={currentUser}
+      onExecute={onExecute}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'OpenCode' }));
+  fireEvent.click(screen.getByRole('button', { name: /Agentic Tool Configuration \(optional\)/ }));
+  return onExecute;
+}
+
+describe('ZoneTriggerModal OpenCode new-session configuration', () => {
+  it('turns an inline clear into null instead of restoring a stale stored default', async () => {
+    const onExecute = renderNewSessionModal(staleOpenCodeDefault);
+    await waitFor(() => expect(screen.getByTestId('zone-model')).toHaveTextContent('openai/gpt-5'));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Zone configuration source' }), {
+      target: { value: '__inline__' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear zone model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+    expect(onExecute.mock.calls[0][0].modelConfig).toBeNull();
+  });
+
+  it('keeps an omitted override omitted so defaults can be inherited', async () => {
+    const onExecute = renderNewSessionModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+    expect(onExecute.mock.calls[0][0].modelConfig).toBeUndefined();
+  });
+
+  it('keeps a complete inline provider/model pair exact', async () => {
+    const onExecute = renderNewSessionModal(staleOpenCodeDefault);
+    await waitFor(() => expect(screen.getByTestId('zone-model')).toHaveTextContent('openai/gpt-5'));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Zone configuration source' }), {
+      target: { value: '__inline__' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Complete zone model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+    expect(onExecute.mock.calls[0][0].modelConfig).toEqual({
+      mode: 'exact',
+      provider: 'anthropic',
+      model: 'claude-4',
+    });
   });
 });

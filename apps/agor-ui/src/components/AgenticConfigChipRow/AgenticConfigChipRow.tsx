@@ -168,7 +168,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     if (!isInline) seedCustom();
   };
 
-  const onModelChange = (next: ModelConfig) => {
+  const onModelChange = (next: ModelConfig | undefined) => {
     ensureCustom();
     form.setFieldValue('modelConfig', next);
   };
@@ -256,10 +256,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       )}
 
       <Flex gap={token.marginXS} align="center" wrap="wrap">
-        {resolvedModel && (
+        {(resolvedModel || tool === 'opencode') && (
           <EditableChip
             icon={<RobotOutlined />}
-            label={shortModelName(tool, resolvedModel)}
+            label={resolvedModel ? shortModelName(tool, resolvedModel) : 'OpenCode default'}
             title="Model"
             editable={inlineAllowed}
             managedNote={managedNote}
