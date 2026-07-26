@@ -1,7 +1,7 @@
 import type { Branch, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 
 vi.mock('antd', async (importOriginal) => {
@@ -134,7 +134,13 @@ function renderSections(props: Partial<React.ComponentProps<typeof BranchSession
   );
 }
 
+const OPEN_SECTIONS_STORAGE_KEY = 'agor:branch-card:open-session-sections:branch-1';
+
 describe('BranchSessionSections', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('keeps the new-session affordance visible when only scheduled runs remain', () => {
     renderSections();
 
@@ -305,6 +311,63 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Nested parent')).toBeInTheDocument();
     expect(screen.queryByText('Nested child')).not.toBeInTheDocument();
     expect(getSessionTreeToggle('Nested parent')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('persists the Sessions section collapse state across remounts in card mode', async () => {
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    const { unmount } = renderSections({ sessions: [manualSession] });
+
+    expect(screen.getByText('Manual session')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    await waitFor(() => {
+      const stored = window.localStorage.getItem(OPEN_SECTIONS_STORAGE_KEY);
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored as string)).not.toContain('sessions');
+    });
+
+    unmount();
+    renderSections({ sessions: [manualSession] });
+
+    expect(screen.queryByText('Manual session')).not.toBeInTheDocument();
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
+  });
+
+  it('restores a persisted expanded state and keeps writing on re-expand', async () => {
+    window.localStorage.setItem(OPEN_SECTIONS_STORAGE_KEY, JSON.stringify([]));
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    renderSections({ sessions: [manualSession] });
+
+    expect(screen.queryByText('Manual session')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    await waitFor(() => expect(screen.getByText('Manual session')).toBeInTheDocument());
+    expect(JSON.parse(window.localStorage.getItem(OPEN_SECTIONS_STORAGE_KEY) as string)).toContain(
+      'sessions'
+    );
+  });
+
+  it('does not persist section state in panel mode', () => {
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    renderSections({ sessions: [manualSession], mode: 'panel' });
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    expect(window.localStorage.getItem(OPEN_SECTIONS_STORAGE_KEY)).toBeNull();
   });
 
   it('expands a session when it newly gains children', () => {

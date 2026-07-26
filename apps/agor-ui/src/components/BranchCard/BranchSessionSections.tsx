@@ -64,6 +64,12 @@ import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 // Stable theme object so the ConfigProvider context value doesn't churn.
 const NO_MOTION_THEME = { token: { motion: false } };
 
+// Per-branch localStorage key for which sections ('sessions', 'scheduled-runs',
+// 'gateway-sessions') are open on the board card. Same lifecycle as the peeked
+// session ids key in BranchCard: survives reloads, orphaned when the branch is
+// deleted.
+export const OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:open-session-sections:';
+
 export type BranchSessionSectionsMode = 'card' | 'panel';
 type CollapseKey = string | number;
 type RemoteRelationshipRef = {
@@ -268,9 +274,22 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   const isPanel = mode === 'panel';
-  const [openSectionKeys, setOpenSectionKeys] = useState<CollapseKey[]>(() =>
-    defaultExpanded ? ['sessions'] : []
+  const defaultSectionKeys = useMemo<CollapseKey[]>(
+    () => (defaultExpanded ? ['sessions'] : []),
+    [defaultExpanded]
   );
+  // Board cards remember their section collapse state per branch across
+  // reloads; the teammate panel is a transient surface and must not rewrite
+  // the board card's stored state, so it keeps ephemeral state instead.
+  const [storedSectionKeys, setStoredSectionKeys] = useLocalStorage<CollapseKey[]>(
+    `${OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX}${branch.branch_id}`,
+    defaultSectionKeys
+  );
+  const [panelSectionKeys, setPanelSectionKeys] = useState<CollapseKey[]>(defaultSectionKeys);
+  const openSectionKeys = isPanel ? panelSectionKeys : storedSectionKeys;
+  const setOpenSectionKeys: (
+    value: CollapseKey[] | ((val: CollapseKey[]) => CollapseKey[])
+  ) => void = isPanel ? setPanelSectionKeys : setStoredSectionKeys;
   const isManualSessionsOpen = openSectionKeys.includes('sessions');
   const isScheduledRunsOpen = openSectionKeys.includes('scheduled-runs');
   const isGatewaySessionsOpen = openSectionKeys.includes('gateway-sessions');
@@ -283,7 +302,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         return alreadyOpen ? currentKeys.filter((key) => key !== sectionKey) : currentKeys;
       });
     },
-    []
+    [setOpenSectionKeys]
   );
   const handleManualSessionsChange = useCallback(
     (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('sessions', keys),
@@ -297,10 +316,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('gateway-sessions', keys),
     [updateSectionOpenState]
   );
+  const previousDefaultExpandedRef = useRef(defaultExpanded);
   useEffect(() => {
-    if (!defaultExpanded) return;
+    const wasExpanded = previousDefaultExpandedRef.current;
+    previousDefaultExpandedRef.current = defaultExpanded;
+    // Only a runtime flip to expanded forces the section open; running on
+    // mount would clobber a collapsed state restored from localStorage.
+    if (!defaultExpanded || wasExpanded) return;
     setOpenSectionKeys((keys) => (keys.includes('sessions') ? keys : [...keys, 'sessions']));
-  }, [defaultExpanded]);
+  }, [defaultExpanded, setOpenSectionKeys]);
   const peekedIds = peekedSessionIds ?? new Set<string>();
   const trimmedSearchQuery = searchQuery.trim();
   const searchActive = isSessionSearchActive(trimmedSearchQuery);

@@ -12,6 +12,7 @@ import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { readLocalStorageJson } from '../../hooks/localStorageJson';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import {
@@ -26,7 +27,10 @@ import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
-import { BranchSessionSections } from './BranchSessionSections';
+import {
+  BranchSessionSections,
+  OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX,
+} from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
@@ -120,10 +124,17 @@ const BranchCardComponent = ({
     priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 2 : 0,
     resetKey: progressiveMountKey ?? branchBoardId ?? 'unassigned',
   });
-  const sessionShellMinHeight = useMemo(
-    () => estimateBranchSessionSectionsHeight(sessions, { defaultExpanded }),
-    [defaultExpanded, sessions]
-  );
+  const sessionShellMinHeight = useMemo(() => {
+    // The shell should reserve the height the sections will actually take,
+    // which depends on the persisted per-branch collapse state.
+    const openSections = readLocalStorageJson<(string | number)[]>(
+      `${OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX}${branch.branch_id}`,
+      defaultExpanded ? ['sessions'] : []
+    );
+    return estimateBranchSessionSectionsHeight(sessions, {
+      defaultExpanded: openSections.includes('sessions'),
+    });
+  }, [branch.branch_id, defaultExpanded, sessions]);
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
