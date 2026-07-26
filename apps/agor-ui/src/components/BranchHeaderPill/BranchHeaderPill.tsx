@@ -95,6 +95,14 @@ export function BranchHeaderPill({
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
   const environmentUrl = branch.app_url;
+  // Surface the active environment variant name on the label instead of the
+  // generic "env" — only when the repo defines more than one variant to
+  // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
+  // EnvironmentPill on the board card.
+  const variantCount = repo.environment ? Object.keys(repo.environment.variants ?? {}).length : 0;
+  const envLabel =
+    branch.environment_variant && variantCount > 1 ? branch.environment_variant : 'env';
+  const variantPrefix = envLabel !== 'env' ? `${envLabel} · ` : '';
   // If a parent has loaded effective branch access (e.g. BranchModal), honor
   // that explicit decision. Otherwise do not infer from direct ownership or
   // `others_can`: group grants are not present on this branch payload, and the
@@ -299,7 +307,7 @@ export function BranchHeaderPill({
             <>
               {/* Env label — clickable to env URL when running, otherwise opens env tab */}
               {isRunning && environmentUrl ? (
-                <Tooltip title={`Open ${environmentUrl}`}>
+                <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
                   <a
                     href={environmentUrl}
                     target="_blank"
@@ -315,11 +323,13 @@ export function BranchHeaderPill({
                     }}
                   >
                     <EnvironmentStatusIcon state={inferredState} size={11} />
-                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
+                      {envLabel}
+                    </span>
                   </a>
                 </Tooltip>
               ) : (
-                <Tooltip title={getEnvTooltip()}>
+                <Tooltip title={`${variantPrefix}${getEnvTooltip()}`}>
                   <button
                     type="button"
                     onClick={openTab('environment')}
@@ -336,7 +346,9 @@ export function BranchHeaderPill({
                     }}
                   >
                     <EnvironmentStatusIcon state={inferredState} size={11} />
-                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
+                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
+                      {envLabel}
+                    </span>
                   </button>
                 </Tooltip>
               )}
