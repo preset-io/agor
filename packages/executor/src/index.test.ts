@@ -189,6 +189,14 @@ describe('AgorExecutor watchdog handoff', () => {
         requested_at: '2026-07-23T12:00:00.000Z',
       },
     });
+    listeners.get('tasks:termination_requested')?.({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
 
     expect(executor.abortController.signal.aborted).toBe(true);
     expect(heartbeatStop).toHaveBeenCalledOnce();

@@ -316,15 +316,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<TerminationClaimResult> {
     const result = await this.taskRepo.claimTermination(input);
-    if (result.outcome !== 'claimed') return result;
+    const claimed = result.outcome === 'claimed';
+    const retryingActiveRequest =
+      result.outcome === 'unchanged' &&
+      result.task.status === TaskStatus.STOPPING &&
+      !!result.task.termination_request &&
+      !result.task.termination_request.executor_quiesced_at;
+    if (!claimed && !retryingActiveRequest) return result;
 
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'patched',
-      data: result.task,
-      id: result.task.task_id,
-      params,
-    });
+    if (claimed) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: result.task,
+        id: result.task.task_id,
+        params,
+      });
+    }
+    // A repeated claim keeps the original requested_at fence but re-publishes
+    // the private control event. This makes Stop retryable after a lost socket
+    // delivery without creating a new cancellation epoch.
     emitServiceEvent(this.app, {
       path: 'tasks',
       event: 'termination_requested',
@@ -333,6 +344,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       method: 'patch',
       params,
     });
+    if (!claimed) return result;
+
     try {
       await this.app
         .service('sessions')
