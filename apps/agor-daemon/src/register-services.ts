@@ -82,7 +82,6 @@ import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
-import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
@@ -361,7 +360,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ['created','updated','patched','removed'], so without this it
   // fires locally on the server's EventEmitter and never reaches any
   // socket. See queryArtifactRuntime in services/artifacts.ts.
-  app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
+  app.use('/artifacts', createArtifactsService(db, app), {
+    events: ['agor-query'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'publishFromExecutor',
+      'validateFromExecutor',
+    ],
+  });
   app.use('/board-comments', createBoardCommentsService(db));
 
   // ============================================================================
@@ -607,8 +617,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
-  app.use('/context', createContextService(branchRepository));
-  app.use('/file', createFileService(branchRepository));
+  app.use('/file', createFileService(branchRepository, db, app));
   app.use('/files', createFilesService(db, app));
 
   // Server-side Handlebars renderer. UI calls POST /templates so the browser

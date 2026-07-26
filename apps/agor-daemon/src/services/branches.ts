@@ -6,7 +6,6 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
@@ -68,6 +67,7 @@ import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloa
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
@@ -1586,7 +1586,33 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    if (!existsSync(branch.path)) {
+    const statusToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      params
+    );
+    const statusResult = await runExecutorCommand(
+      {
+        command: 'branch.filesystem.status',
+        sessionToken: statusToken,
+        daemonUrl: getDaemonUrl(),
+        params: { branchId: branch.branch_id },
+      },
+      {
+        logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
+        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
+      }
+    );
+    if (!statusResult.success) {
+      throw new Error(
+        `Failed to inspect branch filesystem before unarchive: ${statusResult.error?.message ?? 'unknown executor error'}`
+      );
+    }
+    const branchPathExists =
+      !!statusResult.data &&
+      typeof statusResult.data === 'object' &&
+      (statusResult.data as { exists?: unknown }).exists === true;
+
+    if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild

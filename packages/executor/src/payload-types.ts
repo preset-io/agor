@@ -470,6 +470,117 @@ export const BranchFilesListPayloadSchema = BasePayloadSchema.extend({
 
 export type BranchFilesListPayload = z.infer<typeof BranchFilesListPayloadSchema>;
 
+export const BranchFilesBrowsePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.browse'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+  }),
+});
+
+export type BranchFilesBrowsePayload = z.infer<typeof BranchFilesBrowsePayloadSchema>;
+
+export const BranchFilesReadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.read'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    filePath: z.string().min(1),
+  }),
+});
+
+export type BranchFilesReadPayload = z.infer<typeof BranchFilesReadPayloadSchema>;
+
+export const BranchFilesystemStatusPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.filesystem.status'),
+  sessionToken: z.string(),
+  params: z
+    .object({
+      branchId: z.string().uuid().optional(),
+      branchIds: z.array(z.string().uuid()).max(10000).optional(),
+    })
+    .refine((value) => value.branchId !== undefined || value.branchIds !== undefined, {
+      message: 'branchId or branchIds is required',
+    }),
+});
+
+export type BranchFilesystemStatusPayload = z.infer<typeof BranchFilesystemStatusPayloadSchema>;
+
+export const BranchArtifactPublishPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.publish'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+    publishData: z.record(z.string(), z.unknown()),
+  }),
+});
+
+export type BranchArtifactPublishPayload = z.infer<typeof BranchArtifactPublishPayloadSchema>;
+
+export const BranchArtifactLandPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.land'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    artifactId: z.string().uuid(),
+    subpath: z.string().optional(),
+    overwrite: z.boolean().optional(),
+  }),
+});
+
+export type BranchArtifactLandPayload = z.infer<typeof BranchArtifactLandPayloadSchema>;
+
+export const BranchArtifactValidatePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.validate'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+  }),
+});
+
+export type BranchArtifactValidatePayload = z.infer<typeof BranchArtifactValidatePayloadSchema>;
+
+export const BranchKnowledgeWritePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.knowledge.write'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+    content: z.string(),
+    sidecar: z.record(z.string(), z.unknown()),
+    overwrite: z.boolean().optional(),
+  }),
+});
+export type BranchKnowledgeWritePayload = z.infer<typeof BranchKnowledgeWritePayloadSchema>;
+
+export const BranchKnowledgeReadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.knowledge.read'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+  }),
+});
+export type BranchKnowledgeReadPayload = z.infer<typeof BranchKnowledgeReadPayloadSchema>;
+
+export const BranchSlackFileUploadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.gateway.slack-file-upload'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    filePath: z.string().min(1),
+    connectorConfig: z.record(z.string(), z.unknown()),
+    channel: z.string().min(1),
+    threadTs: z.string().optional(),
+    filename: z.string().optional(),
+    comment: z.string().optional(),
+    maxBytes: z.number().int().positive(),
+  }),
+});
+export type BranchSlackFileUploadPayload = z.infer<typeof BranchSlackFileUploadPayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Branch Inspect Payload
 // ═══════════════════════════════════════════════════════════
@@ -910,6 +1021,15 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
   BranchFilesListPayloadSchema,
+  BranchFilesBrowsePayloadSchema,
+  BranchFilesReadPayloadSchema,
+  BranchFilesystemStatusPayloadSchema,
+  BranchArtifactPublishPayloadSchema,
+  BranchArtifactLandPayloadSchema,
+  BranchArtifactValidatePayloadSchema,
+  BranchKnowledgeWritePayloadSchema,
+  BranchKnowledgeReadPayloadSchema,
+  BranchSlackFileUploadPayloadSchema,
   BranchInspectPayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
@@ -975,6 +1095,15 @@ export function getSupportedCommands(): string[] {
     'git.branch.remove',
     'git.branch.clean',
     'branch.files.list',
+    'branch.files.browse',
+    'branch.files.read',
+    'branch.filesystem.status',
+    'branch.artifact.publish',
+    'branch.artifact.land',
+    'branch.artifact.validate',
+    'branch.knowledge.write',
+    'branch.knowledge.read',
+    'branch.gateway.slack-file-upload',
     'branch.inspect',
     'branch.agor-yml.import',
     'branch.agor-yml.export',

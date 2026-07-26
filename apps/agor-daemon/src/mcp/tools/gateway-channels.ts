@@ -38,19 +38,20 @@ import {
   type Session,
   type SlackAgentToolCapability,
   type UserID,
-  type UserRole,
   type UUID,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GatewayService } from '../../services/gateway.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
-import {
-  canonicalizeExistingPrefix,
-  isPathInsideRoot,
-  resolveBranchWorkspacePath,
-} from '../../utils/branch-workspace-path.js';
+import { canonicalizeExistingPrefix, isPathInsideRoot } from '../../utils/branch-workspace-path.js';
+import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
 import {
   mcpLimit,
@@ -1171,15 +1172,9 @@ async function resolveGatewaySlackToolTarget(
 
 /**
  * Resolve `agor_gateway_slack_file_upload`'s `path` argument to an absolute
- * file. Accepts either an absolute path inside the daemon upload directory
- * (where inbound-ingested and composer-uploaded attachments live) or a path
- * relative to the target branch's workspace root, resolved the same way
- * `resolveBranchWorkspacePath` bounds every other branch-workspace file tool.
- * Rejects everything else so this tool can never read arbitrary host files.
+ * daemon-owned file. Branch-relative files are handled by the executor.
  */
 async function resolveGatewayUploadFilePath(
-  ctx: McpContext,
-  branchId: BranchID,
   rawPath: string
 ): Promise<{ absolutePath: string; sourceName: string }> {
   const trimmed = rawPath.trim();
@@ -1200,19 +1195,7 @@ async function resolveGatewayUploadFilePath(
     return { absolutePath: canonical, sourceName: path.basename(canonical) };
   }
 
-  const branchRepo = bindMcpRepositoryToTenantUnitOfWork(ctx, (db) => new BranchRepository(db));
-  const workspace = await resolveBranchWorkspacePath({
-    branchRepo,
-    branchId,
-    subpath: trimmed,
-    userId: ctx.userId,
-    userRole: ctx.authenticatedUser?.role as UserRole | undefined,
-    requiredPermission: 'session',
-  });
-  if (!fs.existsSync(workspace.absolute)) {
-    throw new Error(`File not found in branch workspace: ${workspace.relative}`);
-  }
-  return { absolutePath: workspace.canonical, sourceName: path.basename(workspace.canonical) };
+  throw new Error('Branch-relative files must be uploaded through the executor');
 }
 
 export function registerGatewayChannelTools(server: McpServer, ctx: McpContext): void {
@@ -1647,11 +1630,55 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     },
     async (args) => {
       const target = await resolveGatewaySlackToolTarget(ctx, args, 'file_upload');
-      const { absolutePath, sourceName } = await resolveGatewayUploadFilePath(
-        ctx,
-        target.channel.target_branch_id,
-        args.path
-      );
+      if (!path.isAbsolute(args.path.trim())) {
+        const result = await runExecutorCommand(
+          {
+            command: 'branch.gateway.slack-file-upload',
+            sessionToken: generateScopedServiceToken(
+              ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
+              ctx.baseServiceParams
+            ),
+            daemonUrl: getDaemonUrl(),
+            params: {
+              branchId: target.channel.target_branch_id,
+              filePath: args.path,
+              connectorConfig: target.channel.config,
+              channel: target.slackChannelId,
+              threadTs: args.threadTs,
+              filename: args.filename,
+              comment: args.comment,
+              maxBytes: MAX_UPLOAD_FILE_SIZE,
+            },
+          },
+          {
+            logPrefix: `[Gateway Slack upload ${target.channel.id}]`,
+            asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+              resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+            ),
+          }
+        );
+        if (!result.success) {
+          throw new Error(
+            `Slack file upload failed: ${result.error?.message ?? 'unknown executor error'}`
+          );
+        }
+        const uploaded =
+          result.data && typeof result.data === 'object'
+            ? (result.data as { uploaded?: unknown }).uploaded
+            : undefined;
+        return textResult({
+          uploaded: true,
+          gateway_channel: {
+            id: target.channel.id,
+            name: target.channel.name,
+            target_branch_id: target.channel.target_branch_id,
+          },
+          slack_channel_id: target.slackChannelId,
+          result: uploaded,
+        });
+      }
+
+      const { absolutePath, sourceName } = await resolveGatewayUploadFilePath(args.path);
       const stats = await stat(absolutePath);
       if (!stats.isFile()) {
         throw new Error(`Not a file: ${args.path}`);

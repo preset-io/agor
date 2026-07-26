@@ -1036,10 +1036,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
+      publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
+      validateFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'validate artifacts')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
     },
-  });
+  } as never);
 
   // Custom REST routes for artifact payload and console
   {

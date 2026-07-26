@@ -1,413 +1,121 @@
 /**
- * File Service
- *
- * Provides read-only REST + WebSocket API for browsing all files in a branch.
- * Does not use database - reads directly from filesystem.
- *
- * Configuration:
- * - Scans entire branch path when branch_id is provided
- * - Recursively finds all files (excluding node_modules, .git, etc.)
- * - Applies 50k file hard limit to prevent browser crashes
- * - Detects text files for preview vs download
+ * Read-only branch file browser. Tenant filesystem access is delegated to the executor.
  */
-
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { BranchRepository } from '@agor/core/db';
-import type { FileDetail, FileListItem, Id, QueryParams, ServiceMethods } from '@agor/core/types';
+import type { BranchRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
+import type {
+  AuthenticatedParams,
+  FileDetail,
+  FileListItem,
+  Id,
+  QueryParams,
+  ServiceMethods,
+} from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../utils/spawn-executor.js';
 
-const MAX_FILES = 50000; // Hard limit to prevent browser crashes
-const MAX_PREVIEW_SIZE = 1024 * 1024; // 1MB max file size for preview
-const MAX_TITLE_READ_BYTES = 4096; // Only read first 4KB for markdown title extraction
+export type FileParams = QueryParams<{ branch_id?: string }> & Partial<AuthenticatedParams>;
 
-/**
- * File service params (read-only, no create/update/delete)
- */
-export type FileParams = QueryParams<{
-  branch_id?: string;
-}>;
-
-/**
- * Check if file should be previewable as text
- */
-function isTextFile(filePath: string, size: number): boolean {
-  // Size limit: 1MB for preview
-  if (size > MAX_PREVIEW_SIZE) return false;
-
-  const lowerPath = filePath.toLowerCase();
-
-  // Exclude lock files and other files that are too large/not useful to preview
-  const excludeFiles = [
-    'package-lock.json',
-    'pnpm-lock.yaml',
-    'yarn.lock',
-    'composer.lock',
-    'Gemfile.lock',
-    'Cargo.lock',
-    'poetry.lock',
-  ];
-
-  const fileName = lowerPath.split('/').pop() || '';
-  if (excludeFiles.includes(fileName)) {
-    return false;
-  }
-
-  const textExtensions = [
-    '.txt',
-    '.md',
-    '.json',
-    '.yaml',
-    '.yml',
-    '.js',
-    '.ts',
-    '.jsx',
-    '.tsx',
-    '.py',
-    '.rb',
-    '.go',
-    '.rs',
-    '.java',
-    '.c',
-    '.cpp',
-    '.h',
-    '.css',
-    '.scss',
-    '.less',
-    '.html',
-    '.xml',
-    '.svg',
-    '.sh',
-    '.bash',
-    '.zsh',
-    '.fish',
-    '.env',
-    '.gitignore',
-    '.dockerignore',
-    '.sql',
-    '.graphql',
-    '.proto',
-    '.toml',
-    '.ini',
-    '.vue',
-    '.svelte',
-    '.astro',
-    '.makefile',
-    '.dockerfile',
-  ];
-
-  return textExtensions.some((ext) => lowerPath.endsWith(ext));
+function extractFiles(data: unknown): FileListItem[] {
+  if (!data || typeof data !== 'object') return [];
+  const files = (data as { files?: unknown }).files;
+  return Array.isArray(files) ? (files as FileListItem[]) : [];
 }
 
-/**
- * Detect MIME type from file extension
- */
-function getMimeType(filePath: string): string | undefined {
-  const ext = extname(filePath).toLowerCase();
-  const mimeTypes: Record<string, string> = {
-    '.md': 'text/markdown',
-    '.txt': 'text/plain',
-    '.json': 'application/json',
-    '.js': 'text/javascript',
-    '.ts': 'text/typescript',
-    '.jsx': 'text/javascript',
-    '.tsx': 'text/typescript',
-    '.py': 'text/x-python',
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.xml': 'application/xml',
-    '.svg': 'image/svg+xml',
-    '.yaml': 'text/yaml',
-    '.yml': 'text/yaml',
-  };
-  return mimeTypes[ext];
+function extractFile(data: unknown): FileDetail | null {
+  if (!data || typeof data !== 'object') return null;
+  const file = (data as { file?: unknown }).file;
+  return file && typeof file === 'object' ? (file as FileDetail) : null;
 }
 
-/**
- * File service - read-only filesystem browser for branch files
- */
 export class FileService
   implements Pick<ServiceMethods<FileListItem | FileDetail>, 'find' | 'get' | 'setup' | 'teardown'>
 {
-  private branchRepo: BranchRepository;
+  constructor(
+    private branchRepo: BranchRepository,
+    private db: TenantScopeAwareDatabase,
+    private app: Application
+  ) {}
 
-  constructor(branchRepo: BranchRepository) {
-    this.branchRepo = branchRepo;
-  }
-
-  /**
-   * Find all files in branch (GET /file?branch_id=xxx)
-   * Returns lightweight list items without content
-   */
   async find(params?: FileParams): Promise<FileListItem[]> {
     ensureMinimumRole(params, ROLES.MEMBER, 'list files');
-
     const branchId = params?.query?.branch_id;
-
-    if (!branchId) {
-      throw new Error('branch_id query parameter is required');
-    }
-
-    // Get branch to find its path
+    if (!branchId) throw new Error('branch_id query parameter is required');
     const branch = await this.branchRepo.findById(branchId);
-    if (!branch) {
-      throw new Error(`Branch not found: ${branchId}`);
-    }
+    if (!branch) throw new Error(`Branch not found: ${branchId}`);
 
-    console.log('[File Service] Scanning branch:', {
-      branch_id: branch.branch_id,
-      name: branch.name,
-      path: branch.path,
-    });
-
-    // Resolve real path to handle symlinks
-    const branchRoot = await realpath(branch.path);
-
-    const files: FileListItem[] = [];
-    const scanState = { truncated: false, totalCount: 0 };
-
-    // Scan entire branch
-    await this.scanDirectory(branchRoot, branchRoot, files, scanState);
-
-    console.log(
-      `[File Service] Found ${scanState.totalCount} files total, returning ${files.length} files`,
-      {
-        truncated: scanState.truncated,
+    try {
+      const result = await this.runCommand('branch.files.browse', branch.branch_id, params);
+      if (!result.success) {
+        console.warn(
+          `[File Service] Executor browse failed for branch ${branchId}:`,
+          result.error?.message
+        );
+        return [];
       }
-    );
-
-    return files;
+      return extractFiles(result.data);
+    } catch (error) {
+      console.error(`[File Service] Failed to browse branch ${branchId}:`, error);
+      return [];
+    }
   }
 
-  /**
-   * Get specific file (GET /file/:path?branch_id=xxx)
-   * Returns full details with content
-   *
-   * @param id - Relative path from branch root (e.g., "src/index.ts", "README.md")
-   */
   async get(id: Id, params?: FileParams): Promise<FileDetail> {
     ensureMinimumRole(params, ROLES.MEMBER, 'read file');
-
     const branchId = params?.query?.branch_id;
-
-    if (!branchId) {
-      throw new Error('branch_id query parameter is required');
-    }
-
-    // Get branch to find its path
+    if (!branchId) throw new Error('branch_id query parameter is required');
     const branch = await this.branchRepo.findById(branchId);
-    if (!branch) {
-      throw new Error(`Branch not found: ${branchId}`);
+    if (!branch) throw new Error(`Branch not found: ${branchId}`);
+
+    const result = await this.runCommand('branch.files.read', branch.branch_id, params, {
+      filePath: id.toString(),
+    });
+    if (!result.success) {
+      throw new Error(`Failed to read file: ${result.error?.message ?? 'unknown executor error'}`);
     }
-
-    const relativePathInput = id.toString();
-    const normalizedRelativePath = this.normalizeRelativePath(relativePathInput);
-
-    // Resolve real branch root to handle symlinks
-    const branchRoot = await realpath(branch.path);
-    const fullPath = resolve(branchRoot, normalizedRelativePath);
-
-    try {
-      // Resolve real path and validate it's within branch (prevents symlink escape)
-      const realFilePath = await realpath(fullPath);
-      const relativeToRoot = relative(branchRoot, realFilePath);
-
-      // Validate path is within branch
-      if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-        throw new Error('Access denied: path escapes branch');
-      }
-
-      // Get file stats using lstat (doesn't follow symlinks)
-      const stats = await lstat(fullPath);
-
-      // Reject symlinks to prevent escape
-      if (stats.isSymbolicLink()) {
-        throw new Error('Access denied: symlinks not allowed');
-      }
-
-      // Determine if text file
-      const isText = isTextFile(normalizedRelativePath, stats.size);
-
-      // Read file content (binary-safe)
-      const buffer = await readFile(fullPath);
-      let content: string;
-      let encoding: 'utf-8' | 'base64';
-
-      if (isText) {
-        // Text files: return as UTF-8 string
-        content = buffer.toString('utf-8');
-        encoding = 'utf-8';
-      } else {
-        // Binary files: return as base64
-        content = buffer.toString('base64');
-        encoding = 'base64';
-      }
-
-      // Extract title from first H1 for markdown, otherwise use filename
-      let title = normalizedRelativePath.split('/').pop() || normalizedRelativePath;
-      if (normalizedRelativePath.endsWith('.md') && isText) {
-        title = this.extractTitle(content, normalizedRelativePath);
-      }
-
-      return {
-        path: normalizedRelativePath,
-        title,
-        size: stats.size,
-        lastModified: stats.mtime.toISOString(),
-        isText,
-        mimeType: getMimeType(normalizedRelativePath),
-        content,
-        encoding,
-      };
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Access denied')) {
-        throw error;
-      }
-      throw new Error(`Failed to read file: ${error}`);
-    }
+    const file = extractFile(result.data);
+    if (!file) throw new Error('Failed to read file: executor returned an invalid response');
+    return file;
   }
 
-  /**
-   * Recursively scan directory for all files
-   */
-  private async scanDirectory(
-    baseDir: string,
-    currentDir: string,
-    files: FileListItem[],
-    scanState: { truncated: boolean; totalCount: number },
-    excludePatterns: string[] = [
-      'node_modules',
-      '.git',
-      'dist',
-      'build',
-      '.next',
-      'coverage',
-      '__pycache__',
-      '.venv',
-      'venv',
-    ]
-  ): Promise<void> {
-    // Early exit if we've already hit the limit
-    if (files.length >= MAX_FILES) {
-      scanState.truncated = true;
-      return;
-    }
-
-    try {
-      const entries = await readdir(currentDir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        // Check limit before processing each entry
-        if (files.length >= MAX_FILES) {
-          scanState.truncated = true;
-          return;
-        }
-
-        const fullPath = join(currentDir, entry.name);
-
-        // Use lstat to not follow symlinks
-        const stats = await lstat(fullPath);
-
-        // Skip symlinks entirely to prevent escape
-        if (stats.isSymbolicLink()) {
-          console.log(`[File Service] Skipping symlink: ${fullPath}`);
-          continue;
-        }
-
-        const relativePath = relative(baseDir, fullPath);
-
-        // Normalize path separators to POSIX (forward slashes)
-        const normalizedPath = relativePath.split(sep).join('/');
-
-        // Skip excluded directories
-        const pathParts = normalizedPath.split('/');
-        if (excludePatterns.some((pattern) => pathParts.includes(pattern))) {
-          continue;
-        }
-
-        if (stats.isDirectory()) {
-          // Recursively scan subdirectories
-          await this.scanDirectory(baseDir, fullPath, files, scanState, excludePatterns);
-        } else if (stats.isFile()) {
-          scanState.totalCount++;
-
-          const isText = isTextFile(normalizedPath, stats.size);
-
-          // Extract title for markdown files (lazy: only read first 4KB)
-          let title = entry.name;
-          if (normalizedPath.endsWith('.md') && stats.size > 0 && stats.size <= MAX_PREVIEW_SIZE) {
-            try {
-              // Only read first 4KB for title extraction
-              const buffer = await readFile(fullPath);
-              const chunk = buffer.subarray(0, MAX_TITLE_READ_BYTES).toString('utf-8');
-              title = this.extractTitle(chunk, normalizedPath);
-            } catch (err) {
-              console.warn(`[File Service] Failed to extract title from ${normalizedPath}:`, err);
-              title = entry.name;
-            }
-          }
-
-          files.push({
-            path: normalizedPath,
-            title,
-            size: stats.size,
-            lastModified: stats.mtime.toISOString(),
-            isText,
-            mimeType: getMimeType(normalizedPath),
-          });
-        }
+  private async runCommand(
+    command: 'branch.files.browse' | 'branch.files.read',
+    branchId: string,
+    params?: FileParams,
+    extraParams: Record<string, unknown> = {}
+  ) {
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      params
+    );
+    return runExecutorCommand(
+      {
+        command,
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        params: { branchId, ...extraParams },
+      },
+      {
+        logPrefix: `[FileService ${branchId}]`,
+        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
       }
-    } catch (error) {
-      // Log directory access errors instead of silently skipping
-      console.error(`[File Service] Failed to read directory ${currentDir}:`, error);
-    }
+    );
   }
 
-  /**
-   * Normalize relative path input, preventing traversal characters.
-   */
-  private normalizeRelativePath(pathFragment: string): string {
-    const normalized = pathFragment.replace(/\\/g, '/').replace(/^\/+/, '').trim();
-
-    if (!normalized) {
-      throw new Error('File path required');
-    }
-
-    if (normalized.includes('\0')) {
-      throw new Error('Invalid file path');
-    }
-
-    return normalized;
-  }
-
-  /**
-   * Extract title from markdown content (first H1) or fallback to filename
-   */
-  private extractTitle(content: string, relativePath: string): string {
-    // Try to extract first H1 heading
-    const h1Match = content.match(/^#\s+(.+)$/m);
-    if (h1Match) {
-      return h1Match[1].trim();
-    }
-
-    // Fallback to filename without extension
-    const filename = relativePath.split('/').pop() || relativePath;
-    return filename.replace(/\.md$/, '');
-  }
-
-  async setup(): Promise<void> {
-    // No setup needed
-  }
-
-  async teardown(): Promise<void> {
-    // No teardown needed
-  }
+  async setup(): Promise<void> {}
+  async teardown(): Promise<void> {}
 }
 
-/**
- * Service factory function
- */
-export function createFileService(branchRepo: BranchRepository): FileService {
-  return new FileService(branchRepo);
+export function createFileService(
+  branchRepo: BranchRepository,
+  db: TenantScopeAwareDatabase,
+  app: Application
+): FileService {
+  return new FileService(branchRepo, db, app);
 }
