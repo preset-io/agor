@@ -13,12 +13,7 @@
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type {
-  Message,
-  ToolResultContentBlock,
-  ToolUse,
-  TranscriptContentProjection,
-} from '@agor-live/client';
+import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor-live/client';
 import {
   BranchesOutlined,
   BulbOutlined,
@@ -56,7 +51,21 @@ import {
   ToolBlock,
 } from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
-import { TranscriptProjectionNotice } from '../TranscriptProjectionNotice';
+
+interface ToolUseBlock {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface ToolResultBlock {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string | CoreContentBlock[];
+  is_error?: boolean;
+  diff?: DiffEnrichment;
+}
 
 interface TextBlock {
   type: 'text';
@@ -76,9 +85,8 @@ interface AgentChainProps {
 
 interface ChainItem {
   type: 'thought' | 'tool';
-  content: string | { toolUse: ToolUse; toolResult?: ToolResultContentBlock };
+  content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
-  projection?: TranscriptContentProjection;
 }
 
 /**
@@ -141,16 +149,13 @@ export const AgentChain = React.memo<AgentChainProps>(
       const items: ChainItem[] = [];
 
       // First pass: collect ALL tool results from ALL messages (including user messages)
-      const globalToolResultMap = new Map<string, ToolResultContentBlock>();
-      const globalToolUseIds = new Set<string>();
+      const globalToolResultMap = new Map<string, ToolResultBlock>();
       for (const message of messages) {
         if (Array.isArray(message.content)) {
           for (const block of message.content) {
             if (block.type === 'tool_result') {
-              const toolResult = block as unknown as ToolResultContentBlock;
+              const toolResult = block as unknown as ToolResultBlock;
               globalToolResultMap.set(toolResult.tool_use_id, toolResult);
-            } else if (block.type === 'tool_use') {
-              globalToolUseIds.add((block as unknown as ToolUse).id);
             }
           }
         }
@@ -178,7 +183,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           const toolResults = message.content.filter((b) => b.type === 'tool_result');
           if (toolResults.length > 0) {
             for (const block of toolResults) {
-              const toolResult = block as unknown as ToolResultContentBlock;
+              const toolResult = block as unknown as ToolResultBlock;
               const resultText = toolResultToDisplayText(toolResult.content);
 
               if (resultText.trim()) {
@@ -186,9 +191,6 @@ export const AgentChain = React.memo<AgentChainProps>(
                   type: 'thought',
                   content: resultText,
                   message,
-                  projection: globalToolUseIds.has(toolResult.tool_use_id)
-                    ? undefined
-                    : toolResult.transcript_projection,
                 });
               }
             }
@@ -196,7 +198,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           }
         }
 
-        const toolUseMap = new Map<string, ToolUse>();
+        const toolUseMap = new Map<string, ToolUseBlock>();
         const textBlocksBeforeTools: string[] = [];
         const textBlocksAfterTools: string[] = [];
 
@@ -214,7 +216,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               }
             }
           } else if (block.type === 'tool_use') {
-            const toolUse = block as unknown as ToolUse;
+            const toolUse = block as unknown as ToolUseBlock;
             toolUseMap.set(toolUse.id, toolUse);
             hasSeenTool = true;
           }
@@ -270,8 +272,8 @@ export const AgentChain = React.memo<AgentChainProps>(
         } else {
           toolCount++;
           const { toolUse, toolResult } = item.content as {
-            toolUse: ToolUse;
-            toolResult?: ToolResultContentBlock;
+            toolUse: ToolUseBlock;
+            toolResult?: ToolResultBlock;
           };
 
           // Count tool names (use display name for MCP proxy tools)
@@ -305,7 +307,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     }, [chainItems]);
 
     // Generate smart description for tool
-    const getToolDescription = (toolUse: ToolUse): string | null => {
+    const getToolDescription = (toolUse: ToolUseBlock): string | null => {
       const { name, input } = toolUse;
 
       if (typeof input.description === 'string') {
@@ -387,7 +389,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     };
 
     // Resolve the display name for a tool (handles MCP proxy tools)
-    const resolveDisplayName = (toolUse: ToolUse): string => {
+    const resolveDisplayName = (toolUse: ToolUseBlock): string => {
       return getToolDisplayName(toolUse.name, toolUse.input);
     };
 
@@ -398,7 +400,7 @@ export const AgentChain = React.memo<AgentChainProps>(
       for (let i = chainItems.length - 1; i >= 0; i--) {
         if (chainItems[i].type === 'tool') {
           const { toolResult } = chainItems[i].content as {
-            toolResult?: ToolResultContentBlock;
+            toolResult?: ToolResultBlock;
           };
           if (toolResult) return i;
         }
@@ -413,36 +415,34 @@ export const AgentChain = React.memo<AgentChainProps>(
         const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
-          <React.Fragment key={`thought-${index}`}>
-            <ToolBlock
-              icon={<BulbOutlined style={{ fontSize: 14 }} />}
-              name="Thinking"
-              description={oneLine || undefined}
-              status="success"
-            >
-              {thoughtContent.trim() && (
-                <CollapsibleText
-                  maxLines={8}
-                  preserveWhitespace
-                  style={{
-                    fontSize: token.fontSizeSM,
-                    margin: 0,
-                    color: token.colorTextTertiary,
-                  }}
-                >
-                  {thoughtContent}
-                </CollapsibleText>
-              )}
-            </ToolBlock>
-            <TranscriptProjectionNotice projection={item.projection} />
-          </React.Fragment>
+          <ToolBlock
+            key={`thought-${index}`}
+            icon={<BulbOutlined style={{ fontSize: 14 }} />}
+            name="Thinking"
+            description={oneLine || undefined}
+            status="success"
+          >
+            {thoughtContent.trim() && (
+              <CollapsibleText
+                maxLines={8}
+                preserveWhitespace
+                style={{
+                  fontSize: token.fontSizeSM,
+                  margin: 0,
+                  color: token.colorTextTertiary,
+                }}
+              >
+                {thoughtContent}
+              </CollapsibleText>
+            )}
+          </ToolBlock>
         );
       }
 
       // Tool use
       const { toolUse, toolResult } = item.content as {
-        toolUse: ToolUse;
-        toolResult?: ToolResultContentBlock;
+        toolUse: ToolUseBlock;
+        toolResult?: ToolResultBlock;
       };
       const isError = toolResult?.is_error;
       const displayName = resolveDisplayName(toolUse);

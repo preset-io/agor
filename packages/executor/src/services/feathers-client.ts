@@ -6,7 +6,7 @@
  */
 
 import { type AgorClient, createClient } from '@agor/core/api';
-import { projectTranscriptRequestData } from './transcript-projector.js';
+import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -20,6 +20,8 @@ const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
 const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
 const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
+const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
+
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
     console.debug(...args);
@@ -32,14 +34,24 @@ function registerExecutorClientHooks(client: AgorClient): void {
       all: [
         async (context) => {
           const path = String(context.path);
-          const projectsTranscriptData =
+          const isTranscriptWrite =
             (path === 'messages' && (context.method === 'create' || context.method === 'patch')) ||
             (path === 'messages/bulk' && context.method === 'create');
-          if (projectsTranscriptData) {
-            context.data = projectTranscriptRequestData(context.data, {
-              path,
-              method: context.method,
-            });
+          if (!isTranscriptWrite) return context;
+
+          let byteSize: number;
+          try {
+            byteSize = Buffer.byteLength(JSON.stringify(context.data), 'utf8');
+          } catch {
+            throw new Error(
+              `Executor transcript data could not be serialized (${path}.${context.method})`
+            );
+          }
+          if (byteSize > EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
+            throw new Error(
+              `Executor transcript data is ${byteSize} bytes, exceeding the ${EXECUTOR_REQUEST_DATA_BUDGET_BYTES}-byte transport budget (${path}.${context.method}). ` +
+                `Reduce the tool result size at the source (e.g. pagination, filtering, or result limits).`
+            );
           }
           return context;
         },
