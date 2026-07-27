@@ -13,7 +13,11 @@ import {
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
+import {
+  AVAILABLE_CLAUDE_MODEL_ALIASES,
+  DEFAULT_CLAUDE_MODEL,
+  hasNativeMillionContext,
+} from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -57,17 +61,6 @@ function isAlias(id: string): boolean {
 
 const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 const ONE_MILLION_TOKENS = 900_000; // threshold to detect 1M-eligible models
-
-/**
- * Fable 5 and Opus 5 ship a 1M context window natively — it's both the default
- * and the maximum, not a beta opt-in — so they must NOT get a synthetic `[1m]`
- * variant. That suffix maps to the `context-1m-2025-08-07` beta flag (see
- * parseModelWithBetas), which these models don't use; the bare id already is
- * the 1M model.
- */
-function hasNativeMillionContext(id: string): boolean {
-  return id.startsWith('claude-fable') || id.startsWith('claude-opus-5');
-}
 
 /**
  * Build the option list from the API response. Models whose

@@ -12,6 +12,25 @@ export interface ClaudeModel {
   description: string;
 }
 
+const NATIVE_MILLION_CONTEXT_PREFIXES = [
+  'claude-fable-5',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+] as const;
+
+/**
+ * Claude 4.6 and later models include the full 1M context window by default.
+ * Older models may still expose a synthetic `[1m]` variant that enables the
+ * legacy beta flag.
+ */
+export function hasNativeMillionContext(modelId: string): boolean {
+  return NATIVE_MILLION_CONTEXT_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+}
+
 /**
  * Static fallback list of Claude model aliases.
  *
@@ -55,34 +74,16 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     description: 'Previous generation Opus model for agents and coding',
   },
   {
-    id: 'claude-opus-4-7[1m]',
-    displayName: 'Claude Opus 4.7 (1M context)',
-    family: 'claude-4',
-    description: 'Opus 4.7 with extended 1M token context window',
-  },
-  {
     id: 'claude-sonnet-4-6',
     displayName: 'Claude Sonnet 4.6',
     family: 'claude-4',
     description: 'Best combination of speed and intelligence',
   },
   {
-    id: 'claude-sonnet-4-6[1m]',
-    displayName: 'Claude Sonnet 4.6 (1M context)',
-    family: 'claude-4',
-    description: 'Sonnet 4.6 with extended 1M token context window',
-  },
-  {
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     family: 'claude-4',
     description: 'Previous generation Opus',
-  },
-  {
-    id: 'claude-opus-4-6[1m]',
-    displayName: 'Claude Opus 4.6 (1M context)',
-    family: 'claude-4',
-    description: 'Opus 4.6 with extended 1M token context window',
   },
   {
     id: 'claude-sonnet-4-5',

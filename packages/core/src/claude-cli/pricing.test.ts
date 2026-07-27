@@ -13,22 +13,41 @@ describe('getModelPricing', () => {
     });
   });
 
-  it('resolves dated Opus 5 snapshots to the Opus 5 tier, not Opus 4.x', () => {
-    // Longest-prefix match: `claude-opus-5-*` must NOT fall through to the
-    // `claude-opus-4` ($15/$75) entry.
-    expect(getModelPricing('claude-opus-5-20260101')?.inputPerMTok).toBe(5);
-    expect(getModelPricing('claude-opus-4-8')?.inputPerMTok).toBe(15);
+  it.each([
+    'claude-opus-4-5',
+    'claude-opus-4-6',
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-opus-4-8-20260528',
+    'claude-opus-5-20260101',
+  ])('prices %s at the modern $5/$25 tier', (modelId) => {
+    expect(getModelPricing(modelId)).toMatchObject({
+      inputPerMTok: 5,
+      outputPerMTok: 25,
+    });
+  });
+
+  it('retains legacy pricing for Opus 4.1', () => {
+    expect(getModelPricing('claude-opus-4-1')).toMatchObject({
+      inputPerMTok: 15,
+      outputPerMTok: 75,
+    });
   });
 });
 
 describe('getContextWindowLimit', () => {
-  it('treats Opus 5 as native 1M context (default and maximum, no [1m] suffix)', () => {
-    expect(getContextWindowLimit('claude-opus-5')).toBe(1_000_000);
-    expect(getContextWindowLimit('claude-opus-5-20260101')).toBe(1_000_000);
+  it.each([
+    'claude-opus-4-6',
+    'claude-opus-4-8',
+    'claude-opus-5-20260101',
+    'claude-sonnet-4-6',
+    'claude-fable-5',
+  ])('treats %s as native 1M context', (modelId) => {
+    expect(getContextWindowLimit(modelId)).toBe(1_000_000);
   });
 
   it('keeps the 200K default for non-native models without a [1m] suffix', () => {
-    expect(getContextWindowLimit('claude-opus-4-8')).toBe(200_000);
-    expect(getContextWindowLimit('claude-opus-4-8[1m]')).toBe(1_000_000);
+    expect(getContextWindowLimit('claude-opus-4-5')).toBe(200_000);
+    expect(getContextWindowLimit('claude-opus-4-5[1m]')).toBe(1_000_000);
   });
 });
