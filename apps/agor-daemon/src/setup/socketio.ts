@@ -14,7 +14,11 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
-import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
+import {
+  type ResolvedMultiTenancyConfig,
+  resolveTenantContext,
+  SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
+} from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -330,7 +334,7 @@ export function createSocketIOConfig(
     // Socket.io server options for better connection management
     pingTimeout: 60000, // How long to wait for pong before considering connection dead
     pingInterval: 25000, // How often to ping clients
-    maxHttpBufferSize: 1e6, // 1MB max message size
+    maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     transports: ['websocket', 'polling'], // Prefer WebSocket
   };
 

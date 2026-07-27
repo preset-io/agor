@@ -17,8 +17,6 @@ import type {
   CardType,
   CardWithType,
   CloneRepositoryResult,
-  ContextFileDetail,
-  ContextFileListItem,
   CreateAgenticToolPreset,
   CreateSessionInput,
   Group,
@@ -202,7 +200,6 @@ export interface ServiceTypes {
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
-  context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
   'kb/versions': KnowledgeDocumentVersion;
@@ -645,7 +642,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
-  service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths
@@ -1078,6 +1074,8 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
+    /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
+    ackTimeout?: number;
     /** Explicit authentication storage for non-browser clients. */
     authStorage?: {
       getItem(key: string): string | null | Promise<string | null>;
@@ -1103,6 +1101,7 @@ export function createClient(
       options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
     timeout: 20000, // 20s timeout for initial connection
+    ...(options?.ackTimeout === undefined ? {} : { ackTimeout: options.ackTimeout }),
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

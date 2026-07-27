@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -41,12 +44,14 @@ import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
   handleBranchInspect,
+  handleGitBranchRemove,
   handleGitClone,
   handleGitRepoDelete,
 } from './git.js';
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
+const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
 
 function createClient(records: {
   repo?: Record<string, unknown>;
@@ -124,6 +129,35 @@ beforeEach(() => {
 });
 
 describe('managed executor git/fs commands', () => {
+  it('uses the daemon-provided tenant root when removing a branch directory', async () => {
+    const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    await mkdir(branchPath, { recursive: true });
+    createClient({});
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'clone',
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(true);
+      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot);
+    } finally {
+      await rm(branchesRoot, { recursive: true, force: true });
+    }
+  });
+
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
       repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
@@ -131,13 +165,16 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith('/safe/worktrees/repo/feature');
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(
+      '/safe/worktrees/repo/feature',
+      '/safe/worktrees'
+    );
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
@@ -225,7 +262,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
@@ -233,9 +270,10 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledTimes(1002);
     expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
       1001,
-      '/safe/worktrees/repo/branch-1000'
+      '/safe/worktrees/repo/branch-1000',
+      '/safe/worktrees'
     );
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {
@@ -247,7 +285,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 

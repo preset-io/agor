@@ -1,5 +1,5 @@
 import { loadConfigSync } from '@agor/core/config';
-import { type TenantScopeAwareDatabase, UsersRepository } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { User, UserID } from '@agor/core/types';
 
 /**
@@ -13,7 +13,7 @@ import type { User, UserID } from '@agor/core/types';
  */
 export async function resolveExecutorReadAsUser(
   db: TenantScopeAwareDatabase,
-  userOrId: User | UserID | undefined | null
+  userOrId: User | UserID | string | undefined | null
 ): Promise<string | undefined> {
   const config = loadConfigSync();
   const unixMode = config.execution?.unix_user_mode ?? 'simple';
@@ -24,6 +24,7 @@ export async function resolveExecutorReadAsUser(
 
   let user: User | null | undefined;
   if (typeof userOrId === 'string') {
+    const { UsersRepository } = await import('@agor/core/db');
     user = await new UsersRepository(db).findById(userOrId);
   } else {
     user = userOrId;

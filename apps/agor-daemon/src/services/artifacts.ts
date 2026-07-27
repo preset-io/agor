@@ -13,9 +13,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import * as fs from 'node:fs';
-import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { generateId } from '@agor/core';
 import {
@@ -30,10 +27,9 @@ import {
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
-  shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
@@ -64,19 +60,20 @@ import {
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
-import {
-  canonicalizeExistingPrefix,
-  ensureBranchWorkspaceAccess,
-  matchRegisteredBranchPath,
-  resolveBranchWorkspacePath,
-} from '../utils/branch-workspace-path.js';
+import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import {
   detectLegacyFormat,
   effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../utils/spawn-executor.js';
 import type { UsersService } from './users.js';
 
 /**
@@ -124,23 +121,6 @@ function withInjectedAgorRuntime(cfg: SandpackConfig | undefined): SandpackConfi
 }
 
 /**
- * Build the default `.agor/artifacts/<folder>` name used when `land()` is
- * called without a custom subpath. Combines a slugified artifact name with
- * the first 8 chars of the UUID — readable AND collision-resistant — so the
- * folder is easy to navigate while still uniquely identifying the artifact.
- */
-function defaultLandFolderName(artifact: { name: string; artifact_id: string }): string {
-  const slug = artifact.name
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  const idShort = shortId(artifact.artifact_id);
-  return slug.length > 0 ? `${slug}-${idShort}` : artifact.artifact_id;
-}
-
-/**
  * Round-trip sidecar shape written by `land()` and read back by `publishArtifact()`.
  * Carries metadata that doesn't fit into the file map (template, sandpack
  * config, declarative consent surface).
@@ -166,42 +146,6 @@ interface ArtifactValidationResult {
   errors: string[];
   warnings: string[];
   diagnostics: ArtifactValidationDiagnostic[];
-}
-
-/**
- * Read `agor.artifact.json` from a folder if present. Returns null when the
- * file is missing or unparseable — the caller treats absence and corruption
- * the same way (fall through to other defaults).
- */
-function readArtifactSidecar(folderPath: string): ArtifactSidecar | null {
-  const sidecarPath = path.join(folderPath, 'agor.artifact.json');
-  if (!fs.existsSync(sidecarPath)) return null;
-  try {
-    const raw = fs.readFileSync(sidecarPath, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<ArtifactSidecar>;
-    return {
-      template:
-        typeof parsed.template === 'string' ? (parsed.template as SandpackTemplate) : undefined,
-      sandpack_config:
-        parsed.sandpack_config && typeof parsed.sandpack_config === 'object'
-          ? (parsed.sandpack_config as SandpackConfig)
-          : undefined,
-      required_env_vars: Array.isArray(parsed.required_env_vars)
-        ? parsed.required_env_vars
-        : undefined,
-      agor_grants:
-        parsed.agor_grants && typeof parsed.agor_grants === 'object'
-          ? (parsed.agor_grants as AgorGrants)
-          : undefined,
-      agor_runtime:
-        parsed.agor_runtime && typeof parsed.agor_runtime === 'object'
-          ? (parsed.agor_runtime as AgorRuntimeConfig)
-          : undefined,
-    };
-  } catch (err) {
-    console.warn(`[artifacts] Failed to parse agor.artifact.json in ${folderPath}:`, err);
-    return null;
-  }
 }
 
 export type ArtifactParams = QueryParams<{
@@ -283,59 +227,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       requesterId: string;
     }
   > = new Map();
-
-  private async ensureBranchFilesystemAccess(
-    branchId: BranchID,
-    userId?: string,
-    userRole?: UserRole
-  ): Promise<void> {
-    const branch = await this.branchRepo.findById(branchId);
-    if (!branch) {
-      throw new Error(`Branch not found: ${branchId}`);
-    }
-    await ensureBranchWorkspaceAccess(this.branchRepo, branch, userId, userRole, 'session');
-  }
-
-  private async resolveArtifactSource(
-    input: { folderPath?: string; branch_id?: string; subpath?: string },
-    userId?: string,
-    userRole?: UserRole
-  ): Promise<{ folderPath: string; matchedBranchId: BranchID | null }> {
-    let folderPath: string;
-    let hintBranchId: BranchID | null = null;
-
-    if (input.branch_id) {
-      const workspace = await resolveBranchWorkspacePath({
-        branchRepo: this.branchRepo,
-        branchId: input.branch_id,
-        subpath: input.subpath,
-        userId,
-        userRole,
-        requiredPermission: 'session',
-      });
-      folderPath = workspace.canonical;
-      hintBranchId = workspace.branchId;
-    } else {
-      if (input.subpath) {
-        throw new Error('branchId is required when subpath is provided');
-      }
-      if (!input.folderPath) {
-        throw new Error('folderPath or branchId + subpath is required');
-      }
-      folderPath = path.resolve(input.folderPath);
-    }
-
-    const validated = await this.validatePublishPath(folderPath);
-    const matchedBranchId = validated.branchId;
-    if (hintBranchId && matchedBranchId && hintBranchId !== matchedBranchId) {
-      throw new Error('Resolved branch subpath does not match known branch root');
-    }
-    const branchId = hintBranchId ?? matchedBranchId;
-    if (branchId && !hintBranchId) {
-      await this.ensureBranchFilesystemAccess(branchId, userId, userRole);
-    }
-    return { folderPath: validated.folderPath, matchedBranchId: branchId };
-  }
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
     const artifactRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactRepository(db));
@@ -524,7 +415,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /**
    * Publish a folder as a live Sandpack artifact on a board. Reads files from
-   * `folderPath`, serializes them into the DB, and places (or updates) the
+   * a branch-relative folder, serializes them into the DB, and places (or updates) the
    * artifact on the board.
    *
    * Named `publishArtifact` (not `publish`) on purpose: `service.publish`
@@ -537,7 +428,81 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    */
   async publishArtifact(
     data: {
-      folderPath?: string;
+      branch_id: string;
+      source_session_id?: SessionID | null;
+      subpath: string;
+      board_id?: string;
+      name?: string;
+      artifact_id?: string;
+      template?: SandpackTemplate;
+      public?: boolean;
+      sandpack_config?: SandpackConfig;
+      required_env_vars?: string[];
+      agor_grants?: AgorGrants;
+      agor_runtime?: AgorRuntimeConfig;
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    },
+    params: ArtifactParams
+  ): Promise<Artifact> {
+    const branch = await this.branchRepo.findById(data.branch_id);
+    if (!branch) throw new Error(`Branch not found: ${data.branch_id}`);
+    await ensureBranchWorkspaceAccess(
+      this.branchRepo,
+      branch,
+      params.user?.user_id,
+      params.user?.role as UserRole | undefined,
+      'session'
+    );
+
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      params,
+      {
+        executor_action: 'artifact.publish',
+        executor_user_id: params.user?.user_id,
+        executor_branch_id: branch.branch_id,
+      }
+    );
+    const result = await runExecutorCommand(
+      {
+        command: 'branch.artifact.publish',
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          branchId: branch.branch_id,
+          subpath: data.subpath,
+          publishData: data,
+        },
+      },
+      {
+        logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
+        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+      }
+    );
+    if (!result.success) {
+      throw new Error(
+        `Artifact publish failed: ${result.error?.message ?? 'unknown executor error'}`
+      );
+    }
+    const artifactId =
+      result.data && typeof result.data === 'object'
+        ? (result.data as { artifactId?: unknown }).artifactId
+        : undefined;
+    if (typeof artifactId !== 'string') {
+      throw new Error('Artifact publish failed: executor returned no artifact ID');
+    }
+    const artifact = await this.artifactRepo.findById(artifactId);
+    if (!artifact) throw new Error(`Artifact ${artifactId} not found after executor publish`);
+    return artifact;
+  }
+
+  async publishFromExecutor(
+    data: {
+      files: Record<string, string>;
+      sidecar?: ArtifactSidecar | null;
       branch_id?: string;
       source_session_id?: SessionID | null;
       subpath?: string;
@@ -555,26 +520,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       width?: number;
       height?: number;
     },
-    userId?: string,
-    userRole?: UserRole
+    params?: ArtifactParams
   ): Promise<Artifact> {
-    const { folderPath, matchedBranchId } = await this.resolveArtifactSource(
-      {
-        folderPath: data.folderPath,
-        branch_id: data.branch_id,
-        subpath: data.subpath,
-      },
-      userId,
-      userRole
-    );
-
-    if (!fs.existsSync(folderPath)) {
-      throw new Error(`Folder not found: ${folderPath}`);
-    }
-
-    // Round-trip metadata: read agor.artifact.json (written by land()). Acts
-    // as a fallback for fields the caller didn't supply explicitly.
-    const sidecar = readArtifactSidecar(folderPath);
+    const claims = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
+    const userId = claims.executor_user_id as UserID;
+    const matchedBranchId = data.branch_id as BranchID;
+    const provenanceSubpath = data.subpath ?? '';
+    const files = data.files;
+    const sidecar = data.sidecar ?? null;
 
     // For updates, load the existing row up-front so it can serve as the
     // bottom of the fallback chain (data > sidecar > existing > default).
@@ -586,8 +539,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         throw new Error('Cannot update artifact: not the owner');
       }
     }
-
-    const files = this.readFilesRecursive(folderPath, folderPath);
 
     // Resolution chain for each field: explicit data > sidecar > existing > default.
     const resolvedSandpackConfig = sanitizeSandpackConfig(
@@ -620,6 +571,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const resolvedBoardId = (data.board_id ?? existing?.board_id) as BoardID | undefined;
     if (!resolvedBoardId) {
       throw new Error('boardId is required when creating a new artifact');
+    }
+    const branch = await this.branchRepo.findById(matchedBranchId);
+    if (!branch) throw new Error(`Branch not found: ${matchedBranchId}`);
+    if (branch.board_id !== resolvedBoardId) {
+      throw new Forbidden('Artifact board must match the source branch board');
     }
 
     const isPublic = data.public ?? existing?.public ?? true;
@@ -686,7 +642,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       branch_id: matchedBranchId,
       source_session_id: data.source_session_id ?? null,
       name: resolvedName,
-      path: folderPath,
+      path: provenanceSubpath,
       template,
       files,
       dependencies: cachedDeps,
@@ -929,100 +885,56 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    */
   async land(
     artifactId: string,
-    branchPath: string,
-    options?: { subpath?: string; overwrite?: boolean }
-  ): Promise<{ destinationPath: string; fileCount: number; bytesWritten: number }> {
-    const artifact = await this.artifactRepo.findById(artifactId);
-    if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
-    if (!artifact.files || Object.keys(artifact.files).length === 0) {
-      throw new Error(`Artifact ${artifactId} has no stored files to land`);
-    }
-
-    if (!fs.existsSync(branchPath)) {
-      throw new Error(`Branch path does not exist: ${branchPath}`);
-    }
-    const branchRoot = await realpath(branchPath);
-
-    const rawSubpath =
-      options?.subpath && options.subpath.trim().length > 0
-        ? options.subpath
-        : path.join('.agor', 'artifacts', defaultLandFolderName(artifact));
-
-    if (path.isAbsolute(rawSubpath)) {
-      throw new Error(`subpath must be relative to the branch root: ${rawSubpath}`);
-    }
-
-    const destination = path.resolve(branchRoot, rawSubpath);
-    const canonicalDestination = await canonicalizeExistingPrefix(destination);
-
-    const assertInsideRoot = (candidate: string, reason: string): void => {
-      if (candidate === branchRoot) {
-        throw new Error(`${reason}: must not resolve to the branch root`);
+    branchId: BranchID,
+    options: { subpath?: string; overwrite?: boolean },
+    params: ArtifactParams
+  ): Promise<{ subpath: string; fileCount: number; bytesWritten: number }> {
+    const branch = await this.branchRepo.findById(branchId);
+    if (!branch) throw new Error(`Branch not found: ${branchId}`);
+    await ensureBranchWorkspaceAccess(
+      this.branchRepo,
+      branch,
+      params.user?.user_id,
+      params.user?.role as UserRole | undefined,
+      'session'
+    );
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      params
+    );
+    const result = await runExecutorCommand(
+      {
+        command: 'branch.artifact.land',
+        sessionToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          branchId,
+          artifactId,
+          subpath: options.subpath,
+          overwrite: options.overwrite,
+        },
+      },
+      {
+        logPrefix: `[ArtifactsService.land ${branchId}]`,
+        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
       }
-      const rel = path.relative(branchRoot, candidate);
-      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-        throw new Error(`${reason}: escapes branch root`);
-      }
-    };
-    assertInsideRoot(destination, `subpath ${rawSubpath}`);
-    assertInsideRoot(canonicalDestination, `subpath ${rawSubpath} (canonical)`);
-
-    for (const filePath of Object.keys(artifact.files)) {
-      const key = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-      if (path.isAbsolute(key)) {
-        throw new Error(`Artifact contains absolute file path: ${filePath}`);
-      }
-      const resolved = path.resolve(destination, key);
-      const rel = path.relative(destination, resolved);
-      if (rel.startsWith('..') || path.isAbsolute(rel)) {
-        throw new Error(`Artifact file path escapes destination: ${filePath}`);
-      }
+    );
+    if (!result.success) {
+      throw new Error(
+        `Artifact materialization failed: ${result.error?.message ?? 'unknown executor error'}`
+      );
     }
-
-    if (fs.existsSync(destination)) {
-      if (!options?.overwrite) {
-        throw new Error(
-          `Destination already exists: ${destination} (pass overwrite=true to replace)`
-        );
-      }
-      await rm(destination, { recursive: true, force: true });
+    const data = result.data as
+      | { subpath?: unknown; fileCount?: unknown; bytesWritten?: unknown }
+      | undefined;
+    if (
+      typeof data?.subpath !== 'string' ||
+      typeof data.fileCount !== 'number' ||
+      typeof data.bytesWritten !== 'number'
+    ) {
+      throw new Error('Artifact materialization failed: executor returned an invalid result');
     }
-
-    await mkdir(destination, { recursive: true });
-
-    let bytesWritten = 0;
-    let fileCount = 0;
-    for (const [filePath, content] of Object.entries(artifact.files)) {
-      const key = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-      const fullPath = path.join(destination, key);
-      await mkdir(path.dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, content, 'utf-8');
-      bytesWritten += Buffer.byteLength(content, 'utf-8');
-      fileCount += 1;
-    }
-
-    // Round-trip sidecar: persist artifact-level metadata that has no place in
-    // a normal file tree (template, sandpack_config, required_env_vars,
-    // agor_grants). publishArtifact() reads agor.artifact.json back if present;
-    // ordinary builds/Vite/CRA never look at it.
-    //
-    // Always emit every field — even when empty — so the sidecar is
-    // self-documenting: an agent reading it knows the artifact's full
-    // declarative contract without inferring from absence.
-    const sidecar = {
-      $schema: 'https://agor.live/schemas/artifact/2026-05-09.json',
-      template: artifact.template,
-      sandpack_config: artifact.sandpack_config ?? {},
-      required_env_vars: artifact.required_env_vars ?? [],
-      agor_grants: canonicalizeAgorGrants(artifact.agor_grants),
-      agor_runtime: artifact.agor_runtime ?? {},
-    };
-    const sidecarJson = `${JSON.stringify(sidecar, null, 2)}\n`;
-    await writeFile(path.join(destination, 'agor.artifact.json'), sidecarJson, 'utf-8');
-    bytesWritten += Buffer.byteLength(sidecarJson, 'utf-8');
-    fileCount += 1;
-
-    return { destinationPath: destination, fileCount, bytesWritten };
+    return { subpath: data.subpath, fileCount: data.fileCount, bytesWritten: data.bytesWritten };
   }
 
   /**
@@ -1674,31 +1586,83 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   // ── Build / status / console / find helpers (mostly unchanged) ──
 
   async checkBuildFromFolder(
-    input: { folderPath?: string; branch_id?: string; subpath?: string },
-    userId?: string,
-    userRole?: UserRole
+    input: { branch_id: string; subpath: string },
+    params: ArtifactParams
   ): Promise<ArtifactValidationResult> {
-    const { folderPath } = await this.resolveArtifactSource(input, userId, userRole);
-    if (!fs.existsSync(folderPath)) {
-      return {
-        status: 'error',
-        errors: [`Folder not found: ${folderPath}`],
-        warnings: [],
-        diagnostics: [
+    const branch = await this.branchRepo.findById(input.branch_id);
+    if (!branch) throw new Error(`Branch not found: ${input.branch_id}`);
+    await ensureBranchWorkspaceAccess(
+      this.branchRepo,
+      branch,
+      params.user?.user_id,
+      params.user?.role as UserRole | undefined,
+      'session'
+    );
+    const result = await runExecutorCommand(
+      {
+        command: 'branch.artifact.validate',
+        sessionToken: generateScopedServiceToken(
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          params,
           {
-            code: 'folder_not_found',
-            severity: 'error',
-            message: `Folder not found: ${folderPath}`,
-          },
-        ],
-      };
+            executor_action: 'artifact.validate',
+            executor_user_id: params.user?.user_id,
+            executor_branch_id: branch.branch_id,
+          }
+        ),
+        daemonUrl: getDaemonUrl(),
+        params: { branchId: branch.branch_id, subpath: input.subpath },
+      },
+      {
+        logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
+        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+      }
+    );
+    if (!result.success) {
+      throw new Error(
+        `Artifact validation failed: ${result.error?.message ?? 'unknown executor error'}`
+      );
     }
-    const sidecar = readArtifactSidecar(folderPath);
-    const sandpackConfig = sanitizeSandpackConfig(sidecar?.sandpack_config);
-    const template = (sandpackConfig.template ?? sidecar?.template ?? 'react') as SandpackTemplate;
-    const requiredEnvVars = sanitizeEnvVarNames(sidecar?.required_env_vars);
-    const files = this.readFilesRecursive(folderPath, folderPath);
-    return this.validateArtifactFiles(files, { template, sandpackConfig, requiredEnvVars });
+    return result.data as ArtifactValidationResult;
+  }
+
+  async validateFromExecutor(
+    data: {
+      files: Record<string, string>;
+      sidecar?: ArtifactSidecar | null;
+      branch_id?: string;
+    },
+    params?: ArtifactParams
+  ): Promise<ArtifactValidationResult> {
+    this.requireExecutorCallback(params, 'artifact.validate', data.branch_id);
+    const sandpackConfig = sanitizeSandpackConfig(data.sidecar?.sandpack_config);
+    const template = (sandpackConfig.template ??
+      data.sidecar?.template ??
+      'react') as SandpackTemplate;
+    const requiredEnvVars = sanitizeEnvVarNames(data.sidecar?.required_env_vars);
+    return this.validateArtifactFiles(data.files, { template, sandpackConfig, requiredEnvVars });
+  }
+
+  private requireExecutorCallback(
+    params: ArtifactParams | undefined,
+    action: 'artifact.publish' | 'artifact.validate',
+    branchId: string | undefined
+  ): Record<string, unknown> {
+    const caller = params?.user;
+    if (!caller) throw new NotAuthenticated('Authentication required');
+    if (!caller._isServiceAccount) {
+      throw new Forbidden('Only an executor service account may invoke this method');
+    }
+    const claims = params.authentication?.payload as Record<string, unknown> | undefined;
+    if (
+      claims?.executor_action !== action ||
+      typeof claims.executor_user_id !== 'string' ||
+      typeof branchId !== 'string' ||
+      claims.executor_branch_id !== branchId
+    ) {
+      throw new Forbidden('Executor token is not scoped to this artifact operation');
+    }
+    return claims;
   }
 
   async checkBuild(artifactId: string): Promise<{
@@ -2129,39 +2093,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   // ── Private helpers ──
 
-  /**
-   * Restrict publish folder paths to known-safe roots: any registered
-   * branch path, or /tmp / /var/tmp. Returns the matching branch's id
-   * when the path is inside a branch (caller persists this on the
-   * artifact row for provenance + by-branch filtering); returns null for
-   * temp-dir paths.
-   */
-  private async validatePublishPath(
-    folderPath: string
-  ): Promise<{ folderPath: string; branchId: BranchID | null }> {
-    const resolved = path.resolve(folderPath);
-    const matchedBranch = await matchRegisteredBranchPath({
-      branchRepo: this.branchRepo,
-      folderPath: resolved,
-    });
-    if (matchedBranch) {
-      return { folderPath: matchedBranch.canonicalFolderPath, branchId: matchedBranch.branchId };
-    }
-
-    const canonical = await canonicalizeExistingPrefix(resolved);
-    const allowedTempRoots = ['/tmp', '/var/tmp', tmpdir()];
-    for (const root of allowedTempRoots) {
-      const rootReal = await canonicalizeExistingPrefix(root);
-      if (canonical.startsWith(rootReal + path.sep) || canonical === rootReal) {
-        return { folderPath: canonical, branchId: null };
-      }
-    }
-
-    throw new Error(
-      `Publish path rejected: ${folderPath} is not inside a known branch or temp directory`
-    );
-  }
-
   private validateArtifactFiles(
     files: Record<string, string>,
     options: {
@@ -2378,51 +2309,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       hash.update(`${key}:${files[key]}`);
     }
     return hash.digest('hex');
-  }
-
-  private getFileList(dirPath: string, rootDir?: string): string[] {
-    const root = rootDir ?? dirPath;
-    const files: string[] = [];
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      const resolved = path.resolve(fullPath);
-      if (!resolved.startsWith(path.resolve(root) + path.sep) && resolved !== path.resolve(root)) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          files.push(...this.getFileList(fullPath, root));
-        }
-      } else {
-        files.push(fullPath);
-      }
-    }
-
-    return files;
-  }
-
-  private readFilesRecursive(dirPath: string, rootDir: string): Record<string, string> {
-    const files: Record<string, string> = {};
-    const fileList = this.getFileList(dirPath);
-
-    for (const file of fileList) {
-      const relativePath = path.relative(rootDir, file);
-      // The `agor.artifact.json` sidecar is land()'s round-trip carrier for
-      // metadata that doesn't fit in the file map. publishArtifact() consumes it
-      // separately (callers pass the parsed values via the publish args).
-      // Either way it doesn't belong in the served file map.
-      if (relativePath === 'agor.artifact.json') continue;
-      // Skip the synthesized .env so a round-trip via land() → publishArtifact()
-      // doesn't accidentally bake the viewer's secrets into the next publish.
-      if (relativePath === '.env') continue;
-      const normalizedPath = `/${relativePath.replace(/\\/g, '/')}`;
-      files[normalizedPath] = fs.readFileSync(file, 'utf-8');
-    }
-
-    return files;
   }
 }
 

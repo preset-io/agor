@@ -156,6 +156,25 @@ describe('createClient', () => {
   });
 
   describe('socket configuration', () => {
+    it('forwards an explicit acknowledgement timeout without enabling retries', () => {
+      createClient('http://localhost:3030', true, { ackTimeout: 60_000 });
+
+      expect(ioMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          ackTimeout: 60_000,
+        })
+      );
+      expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('retries');
+    });
+
+    it('leaves acknowledgement timeout unset when omitted', () => {
+      createClient();
+
+      expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('ackTimeout');
+      expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('retries');
+    });
+
     it('should configure reconnection settings', () => {
       createClient();
 

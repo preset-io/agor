@@ -21,6 +21,7 @@
  * directly. Avoids spinning a real socket.io server / port.
  */
 
+import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
@@ -271,6 +272,17 @@ describe('parseTerminalChannel', () => {
   it('rejects empty or nested userIds', () => {
     expect(parseTerminalChannel('user//terminal')).toBeNull();
     expect(parseTerminalChannel('user/a/b/terminal')).toBeNull();
+  });
+});
+
+describe('Socket.IO transport ceiling', () => {
+  it('uses the shared core packet ceiling', () => {
+    const { config } = buildHarness();
+
+    expect(SOCKET_IO_MAX_BUFFER_SIZE_BYTES).toBe(1_000_000);
+    expect(config.serverOptions).toMatchObject({
+      maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
+    });
   });
 });
 

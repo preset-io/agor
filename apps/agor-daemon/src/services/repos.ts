@@ -14,6 +14,9 @@ import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
+  getBranchesDir,
+  getBranchPath,
+  getReposDir,
   isValidGitUrl,
   isValidSlug,
   normalizeRepoUrl,
@@ -38,12 +41,7 @@ import {
   scanGitConfigRemoteCredentials,
   scrubGitConfigRemoteCredentials,
 } from '@agor/core/git/exec';
-import {
-  getBranchPath,
-  getReposDir,
-  redactGitUrlCredentials,
-  stripGitUrlCredentials,
-} from '@agor/core/git/pure';
+import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Branch,
@@ -257,7 +255,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // local_path is computed best-effort (mirrors what the executor will use).
     // Use the slug, not the URL basename, so two remotes with the same repo
     // name but distinct Agor slugs do not collide on disk.
-    const expectedLocalPath = path.join(getReposDir(), slug);
+    const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
+    const expectedLocalPath = path.join(getReposDir(tenantId), slug);
     const placeholder = (await this.create(
       {
         slug: slug as RepoSlug,
@@ -740,7 +739,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
 
-    const branchPath = getBranchPath(repo.slug, data.name);
+    const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
+    const branchPath = getBranchPath(repo.slug, data.name, tenantId);
 
     // Path existence + branch-in-use checks have moved to the executor /
     // core git helpers — see the "filesystem preflights" note above. Both
@@ -1217,6 +1217,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           daemonUrl: getDaemonUrl(),
           params: {
             repoId: repo.repo_id,
+            reposRoot: getReposDir((params as AuthenticatedParams | undefined)?.tenant?.tenant_id),
+            branchesRoot: getBranchesDir(
+              (params as AuthenticatedParams | undefined)?.tenant?.tenant_id
+            ),
           },
         },
         {

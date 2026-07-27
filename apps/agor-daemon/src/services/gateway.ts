@@ -2432,6 +2432,7 @@ export class GatewayService {
           const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
+            tenantId: getCurrentTenantId(),
           });
           failedAttachments = failed;
           if (paths.length > 0) {

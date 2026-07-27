@@ -600,7 +600,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `🚀 Agor daemon running at http://${displayHost}:${DAEMON_PORT} (bound to ${DAEMON_HOST})`
   );
   console.log(
-    `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/context,/users`
+    `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
   runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());

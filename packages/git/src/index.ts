@@ -1730,15 +1730,19 @@ export async function getGitState(repoPath: string): Promise<string> {
  * This is typically used when deleting a remote repository that was cloned by Agor.
  *
  * @param repoPath - Absolute path to the repository directory
- * @throws Error if the path is not inside ~/.agor/repos/ (safety check)
+ * @param allowedReposDir - Explicit safety root (tenant-scoped when applicable)
+ * @throws Error if the path is not inside the allowed repositories root
  */
-export async function deleteRepoDirectory(repoPath: string): Promise<void> {
+export async function deleteRepoDirectory(
+  repoPath: string,
+  allowedReposDir: string = getReposDir()
+): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
   // Safety check: ensure we're only deleting from ~/.agor/repos/
-  const reposDir = getReposDir();
+  const reposDir = allowedReposDir;
 
   // Use realpathSync to follow symlinks and canonicalize paths.
   // If the directory was already removed, fall back to resolving via parent.
@@ -1771,15 +1775,19 @@ export async function deleteRepoDirectory(repoPath: string): Promise<void> {
  * Removes the branch directory and all its contents from the branches directory.
  *
  * @param branchPath - Absolute path to the branch directory
+ * @param allowedBranchesDir - Explicit safety root (tenant-scoped when applicable)
  * @throws Error if the path is not inside the configured branches directory (safety check)
  */
-export async function deleteBranchDirectory(branchPath: string): Promise<void> {
+export async function deleteBranchDirectory(
+  branchPath: string,
+  allowedBranchesDir: string = getBranchesDir()
+): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
   // Safety check: ensure we're only deleting from configured branches directory
-  const branchesDir = getBranchesDir();
+  const branchesDir = allowedBranchesDir;
 
   // Use realpathSync to follow symlinks and canonicalize paths.
   // If the branch directory was already removed (e.g. by `git worktree remove`),

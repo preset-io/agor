@@ -355,7 +355,7 @@ function renderUpgradeInstructions(input: {
     `Migrate ONLY this artifact: ${artifactRef}. Do not touch any other artifacts.`,
     '',
     `1. Read the current files: agor_artifacts_get(artifactId=${artifactRef}).`,
-    `2. Republish with the new format: agor_artifacts_publish(folderPath=<tmp folder you write the rewritten files to>, artifactId=${artifactRef}, …).`,
+    `2. Republish with the new format: agor_artifacts_publish(branchId=<branch id>, subpath=<branch-relative folder>, artifactId=${artifactRef}, …).`,
     '',
     'In the rewritten file map:',
     `  - Drop these legacy files: ${removalsLine}`,

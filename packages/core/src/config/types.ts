@@ -963,6 +963,15 @@ export interface AgorKnowledgeSettings {
  * accessed.
  */
 export interface AgorMultiTenancySettings {
+  /** Store tenant-owned filesystem data below a tenant-specific root. Defaults to false. */
+  filesystem_isolation_enabled?: boolean;
+
+  /**
+   * Parent directory for tenant data. Absolute paths and paths relative to
+   * `~/.agor` are supported. Defaults to `~/.agor/tenants`.
+   */
+  tenants_base_folder?: string;
+
   /** Multi-tenancy mode. Defaults to `static`. */
   mode?: 'static' | 'required_from_auth';
 
@@ -1027,4 +1036,5 @@ export type ConfigKey =
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
-  | `telemetry.${keyof AgorTelemetrySettings}`;
+  | `telemetry.${keyof AgorTelemetrySettings}`
+  | `multi_tenancy.${keyof AgorMultiTenancySettings}`;

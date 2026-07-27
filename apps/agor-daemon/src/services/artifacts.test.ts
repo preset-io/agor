@@ -5,15 +5,7 @@
  * land (filesystem materialization, path-traversal defenses).
  */
 
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
@@ -33,7 +25,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/types';
-import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { ArtifactsService } from './artifacts';
 
@@ -115,27 +107,6 @@ async function seedUser(db: Database, userId: string): Promise<void> {
     email: `${userId}@test.local`,
     display_name: userId,
   });
-}
-
-/**
- * Compute the same default land subpath that `defaultLandFolderName` in
- * the service does. Tests that pre-create the default destination must
- * stay in sync — duplicating the logic here is the lesser evil vs
- * exporting an internal helper just for tests.
- */
-function defaultLandDestForArtifact(
-  tmpRoot: string,
-  artifact: { name: string; artifact_id: string }
-): string {
-  const slug = artifact.name
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  const idShort = shortId(artifact.artifact_id);
-  const folder = slug.length > 0 ? `${slug}-${idShort}` : artifact.artifact_id;
-  return path.join(realpathSync(tmpRoot), '.agor', 'artifacts', folder);
 }
 
 /** Seed an artifact with a known file map and a board placement. */
@@ -488,257 +459,6 @@ describe('ArtifactsService.patch (board move routing)', () => {
   });
 });
 
-describe('ArtifactsService.land', () => {
-  let tmpRoot: string;
-
-  beforeEach(() => {
-    tmpRoot = mkdtempSync(path.join(tmpdir(), 'agor-land-test-'));
-  });
-
-  afterEach(() => {
-    try {
-      rmSync(tmpRoot, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  });
-
-  dbTest('writes all files plus agor.artifact.json to default subpath', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id, {
-      files: { '/app.js': 'export const x = 1', '/nested/deep.js': 'export const y = 2' },
-    });
-
-    const result = await service.land(artifact.artifact_id, tmpRoot);
-
-    const expectedDest = defaultLandDestForArtifact(tmpRoot, artifact);
-    expect(result.destinationPath).toBe(expectedDest);
-    expect(result.fileCount).toBe(3); // 2 source files + agor.artifact.json sidecar
-    expect(readFileSync(path.join(expectedDest, 'app.js'), 'utf-8')).toBe('export const x = 1');
-    expect(readFileSync(path.join(expectedDest, 'nested', 'deep.js'), 'utf-8')).toBe(
-      'export const y = 2'
-    );
-
-    const manifest = JSON.parse(
-      readFileSync(path.join(expectedDest, 'agor.artifact.json'), 'utf-8')
-    );
-    expect(manifest.template).toBe('react');
-  });
-
-  dbTest('writes to a custom subpath inside the branch', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    const result = await service.land(artifact.artifact_id, tmpRoot, {
-      subpath: 'apps/frontend/demo',
-    });
-
-    expect(result.destinationPath).toBe(
-      path.join(realpathSync(tmpRoot), 'apps', 'frontend', 'demo')
-    );
-  });
-
-  dbTest('rejects subpath that escapes the branch via ".."', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    await expect(
-      service.land(artifact.artifact_id, tmpRoot, { subpath: '../escape' })
-    ).rejects.toThrow(/escapes branch root/i);
-  });
-
-  dbTest('rejects absolute subpath', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    await expect(
-      service.land(artifact.artifact_id, tmpRoot, { subpath: '/etc/passwd' })
-    ).rejects.toThrow(/must be relative/i);
-  });
-
-  dbTest('rejects subpath that resolves to the branch root', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    await expect(service.land(artifact.artifact_id, tmpRoot, { subpath: '.' })).rejects.toThrow(
-      /branch root/i
-    );
-  });
-
-  dbTest('rejects when branch path does not exist', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    await expect(
-      service.land(artifact.artifact_id, path.join(tmpRoot, 'does-not-exist'))
-    ).rejects.toThrow(/does not exist/i);
-  });
-
-  dbTest('rejects artifact whose file map contains a traversal key', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id, {
-      files: {
-        '/good.js': 'ok',
-        '/../../../bin/evil': 'pwn',
-      },
-    });
-
-    await expect(service.land(artifact.artifact_id, tmpRoot)).rejects.toThrow(
-      /escapes destination/i
-    );
-  });
-
-  dbTest('errors when destination exists and overwrite is false', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    // Pre-create the default destination with a file inside.
-    const dest = defaultLandDestForArtifact(tmpRoot, artifact);
-    const fs = await import('node:fs/promises');
-    await fs.mkdir(dest, { recursive: true });
-    writeFileSync(path.join(dest, 'pre-existing.txt'), 'preexisting');
-
-    await expect(service.land(artifact.artifact_id, tmpRoot)).rejects.toThrow(/already exists/i);
-  });
-
-  dbTest('with overwrite=true replaces existing destination', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id, {
-      files: { '/only.js': 'fresh' },
-    });
-
-    const dest = defaultLandDestForArtifact(tmpRoot, artifact);
-    const fs = await import('node:fs/promises');
-    await fs.mkdir(dest, { recursive: true });
-    writeFileSync(path.join(dest, 'stale.txt'), 'stale');
-
-    const result = await service.land(artifact.artifact_id, tmpRoot, { overwrite: true });
-
-    expect(result.fileCount).toBe(2); // /only.js + agor.artifact.json sidecar
-    expect(readFileSync(path.join(dest, 'only.js'), 'utf-8')).toBe('fresh');
-    // Stale file is gone.
-    const fsSync = await import('node:fs');
-    expect(fsSync.existsSync(path.join(dest, 'stale.txt'))).toBe(false);
-  });
-
-  dbTest(
-    'rejects subpath that escapes through a symlinked directory inside the branch',
-    async ({ db }) => {
-      const service = new ArtifactsService(db, makeFakeApp());
-      const board = await seedBoard(db);
-      const artifact = await seedArtifact(db, board.board_id);
-
-      // Attack shape: the branch contains a symlink `.agor` -> `/tmp/...`
-      // that points outside the branch. The default subpath uses `.agor/...`,
-      // so without realpath canonicalization, a lexical containment check
-      // would let the write escape into the symlink target.
-      const outside = mkdtempSync(path.join(tmpdir(), 'agor-land-outside-'));
-      try {
-        symlinkSync(outside, path.join(tmpRoot, '.agor'), 'dir');
-
-        await expect(service.land(artifact.artifact_id, tmpRoot)).rejects.toThrow(
-          /escapes branch root/i
-        );
-      } finally {
-        rmSync(outside, { recursive: true, force: true });
-      }
-    }
-  );
-
-  dbTest('canonicalizes a symlinked branch path before containment check', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifact = await seedArtifact(db, board.board_id);
-
-    // The branch.path column may be a symlink (common when cloning the
-    // repo under /home vs. /var/home). Landing must still write inside the
-    // real (canonicalized) branch — it should not throw and not land
-    // somewhere else.
-    const realBranch = path.join(tmpRoot, 'real-branch');
-    mkdirSync(realBranch, { recursive: true });
-    const symlinkedBranch = path.join(tmpRoot, 'linked-branch');
-    symlinkSync(realBranch, symlinkedBranch, 'dir');
-
-    const result = await service.land(artifact.artifact_id, symlinkedBranch);
-
-    // Destination path is reported under the real root (post-canonicalize).
-    expect(result.destinationPath.startsWith(realpathSync(realBranch))).toBe(true);
-    expect(readFileSync(path.join(result.destinationPath, 'index.js'), 'utf-8')).toBe(
-      'console.log("hello")'
-    );
-  });
-
-  dbTest(
-    'rejects branch-relative publish source that is a symlink to outside the branch',
-    async ({ db }) => {
-      const service = new ArtifactsService(db, makeFakeApp());
-      const branch = await seedRepoAndBranch(db, tmpRoot);
-      const outside = mkdtempSync(path.join(tmpdir(), 'agor-publish-outside-'));
-      try {
-        writeFileSync(path.join(outside, 'index.js'), 'console.log("outside")');
-        symlinkSync(outside, path.join(tmpRoot, 'app'), 'dir');
-
-        await expect(
-          service.checkBuildFromFolder(
-            { branch_id: branch.branch_id, subpath: 'app' },
-            'user-reviewer',
-            'member'
-          )
-        ).rejects.toThrow(/escapes branch root/i);
-      } finally {
-        rmSync(outside, { recursive: true, force: true });
-      }
-    }
-  );
-
-  dbTest(
-    'treats registered branches under temp roots as branches before temp-dir allowance',
-    async ({ db }) => {
-      const service = new ArtifactsService(db, makeFakeApp());
-      const branch = await seedRepoAndBranch(db, tmpRoot);
-      const appDir = path.join(tmpRoot, 'app');
-      mkdirSync(appDir, { recursive: true });
-      writeFileSync(path.join(appDir, 'index.js'), 'console.log("branch")');
-
-      await expect(
-        service.checkBuildFromFolder({ folderPath: appDir }, undefined, 'member')
-      ).rejects.toThrow(/Authentication required/i);
-
-      await expect(
-        service.checkBuildFromFolder({ folderPath: appDir }, 'user-reviewer', 'member')
-      ).resolves.toMatchObject({ status: 'success' });
-
-      expect(branch.path).toBe(tmpRoot);
-    }
-  );
-
-  dbTest('errors when artifact has no stored files', async ({ db }) => {
-    const service = new ArtifactsService(db, makeFakeApp());
-    const board = await seedBoard(db);
-    const artifactRepo = new ArtifactRepository(db);
-    const created = await artifactRepo.create({
-      artifact_id: generateId(),
-      board_id: board.board_id,
-      name: 'Empty',
-      template: 'react',
-      files: undefined,
-      public: true,
-      created_by: 'user-owner',
-    });
-
-    await expect(service.land(created.artifact_id, tmpRoot)).rejects.toThrow(/no stored files/i);
-  });
-});
-
 describe('ArtifactsService.getPayload trust + .env synthesis', () => {
   dbTest(
     'removed grants cannot be persisted or observed through patch/get/list',
@@ -1038,44 +758,6 @@ describe('ArtifactsService.grantTrust', () => {
         scopeType: 'artifact',
       })
     ).rejects.toThrow(/not found/i);
-  });
-});
-
-describe('ArtifactsService.checkBuildFromFolder validation diagnostics', () => {
-  dbTest('reports missing local imports and malformed package.json', async ({ db }) => {
-    const root = mkdtempSync(path.join(tmpdir(), 'agor-artifact-validate-'));
-    try {
-      writeFileSync(path.join(root, 'index.js'), "import './missing';\nconsole.log('hello');\n");
-      writeFileSync(path.join(root, 'package.json'), '{ invalid json');
-
-      const service = new ArtifactsService(db, makeFakeApp());
-      const result = await service.checkBuildFromFolder({ folderPath: root });
-
-      expect(result.status).toBe('error');
-      expect(result.diagnostics.map((d) => d.code)).toContain('missing_local_import');
-      expect(result.diagnostics.map((d) => d.code)).toContain('malformed_package_json');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  dbTest('warns about declared env vars on templates without dotenv injection', async ({ db }) => {
-    const root = mkdtempSync(path.join(tmpdir(), 'agor-artifact-validate-'));
-    try {
-      writeFileSync(path.join(root, 'index.js'), "console.log('hello');\n");
-      writeFileSync(
-        path.join(root, 'agor.artifact.json'),
-        JSON.stringify({ template: 'vanilla', required_env_vars: ['API_KEY'] })
-      );
-
-      const service = new ArtifactsService(db, makeFakeApp());
-      const result = await service.checkBuildFromFolder({ folderPath: root });
-
-      expect(result.status).toBe('success');
-      expect(result.diagnostics.map((d) => d.code)).toContain('env_vars_not_injected_for_template');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 });
 
