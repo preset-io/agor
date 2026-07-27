@@ -20,7 +20,7 @@ const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
 const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
 const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
-const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
+export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
 
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
@@ -28,7 +28,7 @@ function feathersClientDebug(...args: unknown[]): void {
   }
 }
 
-function registerExecutorClientHooks(client: AgorClient): void {
+export function registerExecutorClientHooks(client: AgorClient): void {
   client.hooks({
     before: {
       all: [
