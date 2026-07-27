@@ -16,6 +16,7 @@ vi.mock('node:child_process', () => ({
 vi.mock('@agor/core/unix', () => ({
   attachEnvFileCleanup: vi.fn(),
   buildSpawnArgs: vi.fn(),
+  escapeShellArg: (value: string) => `'${value.replace(/'/g, "'\\''")}'`,
   isSecretEnvKey: vi.fn(),
   prepareImpersonationEnv: vi.fn(),
 }));
@@ -173,7 +174,7 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('substitutes {tenant_id} from the request tenant params for templated spawns', async () => {
+  it('substitutes a shell-safe {tenant_id} from the trusted execution scope', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
     const { spawnExecutor } = await import('./spawn-executor');
@@ -182,30 +183,74 @@ describe('configured executor spawning', () => {
       { command: 'git.clone' },
       {
         executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
-        params: { tenant: { tenant_id: 'tenant-abc' as never, source: 'auth_claim' } },
+        executionScope: { tenantId: "tenant-'abc" },
       }
     );
 
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
-      ['-c', 'launch --tenant-id tenant-abc -- git.clone'],
+      ['-c', "launch --tenant-id 'tenant-'\\''abc' -- git.clone"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
   });
 
-  it('leaves {tenant_id} unsubstituted when the request has no resolved tenant', async () => {
+  it('refuses a tenant-dependent template without an execution scope', async () => {
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    expect(() =>
+      spawnExecutor(
+        { command: 'git.clone' },
+        { executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}' }
+      )
+    ).toThrow(
+      'executor_command_template requires {tenant_id}, but no tenant execution scope is active'
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let caller template overrides replace the trusted tenant', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
     const { spawnExecutor } = await import('./spawn-executor');
 
     spawnExecutor(
       { command: 'git.clone' },
-      { executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}' }
+      {
+        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        executionScope: { tenantId: 'trusted-tenant' },
+        templateVariables: { tenant_id: 'spoofed-tenant' } as never,
+      }
     );
 
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
-      ['-c', 'launch --tenant-id {tenant_id} -- git.clone'],
+      ['-c', "launch --tenant-id 'trusted-tenant' -- git.clone"],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
+  it('uses the trusted tenant scope for short-lived templated commands', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+
+    const resultPromise = runExecutorCommand(
+      { command: 'branch.inspect' },
+      {
+        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        executionScope: { tenantId: 'tenant-run' },
+      }
+    );
+    proc.stdout.emit('data', Buffer.from('{"success":true,"data":{"ok":true}}\n'));
+    proc.emit('exit', 0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      success: true,
+      data: { ok: true },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', "launch --tenant-id 'tenant-run' -- branch.inspect"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
   });
@@ -313,16 +358,18 @@ describe('substituteTemplateVariables', () => {
       command: 'git.clone',
     });
 
-    expect(result).toBe('launch --tenant-id tenant-xyz -- git.clone');
+    expect(result).toBe("launch --tenant-id 'tenant-xyz' -- git.clone");
   });
 
-  it('leaves {tenant_id} as-is when no tenant is provided', async () => {
+  it('throws when {tenant_id} is required but no tenant is provided', async () => {
     const { substituteTemplateVariables } = await import('./spawn-executor');
 
-    const result = substituteTemplateVariables('launch --tenant-id {tenant_id} -- {command}', {
-      command: 'git.clone',
-    });
-
-    expect(result).toBe('launch --tenant-id {tenant_id} -- git.clone');
+    expect(() =>
+      substituteTemplateVariables('launch --tenant-id {tenant_id} -- {command}', {
+        command: 'git.clone',
+      })
+    ).toThrow(
+      'executor_command_template requires {tenant_id}, but no tenant execution scope is active'
+    );
   });
 });

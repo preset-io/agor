@@ -360,7 +360,14 @@ execution:
 | `{unix_user_uid}` | Target Unix UID                         | `1001`                |
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
-| `{branch_id}`   | Branch ID (if available)              | `01xyz789...`         |
+| `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
+| `{tenant_id}`     | Trusted runtime tenant ID                | `tenant-abc`          |
+
+`{tenant_id}` is rendered as one shell-escaped argument because tenant identity
+may originate in an external authentication claim. Use the placeholder unquoted,
+for example `launcher --tenant-id {tenant_id}`. If a template references
+`{tenant_id}` but the launch has no tenant execution scope, Agor refuses to
+execute the template instead of passing a literal or empty tenant value.
 
 ### How It Works
 

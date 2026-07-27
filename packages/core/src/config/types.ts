@@ -464,6 +464,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
+   * - {tenant_id} - Trusted runtime tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it
    * to `agor-executor --stdin`.

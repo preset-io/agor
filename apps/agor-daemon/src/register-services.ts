@@ -146,7 +146,7 @@ import {
   getSessionFilePath,
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
-import { spawnExecutor } from './utils/spawn-executor.js';
+import { executorExecutionScopeForParams, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
@@ -1011,7 +1011,7 @@ function createExecuteHandler(
       asUser: executorUnixUser || undefined,
       preparedEnv: executorEnv,
       logPrefix,
-      params, // Surfaces {tenant_id} to the executor command template
+      executionScope: executorExecutionScopeForParams(params),
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,

@@ -28,6 +28,7 @@ import {
   type SessionRepository,
   shortId,
   TaskRepository,
+  type TenantContextScope,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
@@ -157,8 +158,9 @@ import {
 } from './utils/session-task-state.js';
 import {
   createServiceToken,
+  executorExecutionScopeForParams,
   getDaemonUrl,
-  serviceTokenScopeForParams,
+  serviceTokenScopeForExecutionScope,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
 import {
@@ -720,13 +722,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   const createExecutorServiceToken = (
-    params: Partial<AuthenticatedParams> | undefined,
+    executionScope: TenantContextScope | undefined,
     scope: Record<string, unknown>
   ): string | undefined => {
     if (!jwtSecret) return undefined;
     return createServiceToken(jwtSecret, undefined, {
-      ...serviceTokenScopeForParams(params),
       ...scope,
+      ...serviceTokenScopeForExecutionScope(executionScope),
     });
   };
 
@@ -737,7 +739,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     options?: { delete?: boolean; scope?: Record<string, unknown> }
   ): void => {
     if (!executionMode.unixFsIsolationEnabled) return;
-    const serviceToken = createExecutorServiceToken(params, {
+    const executionScope = executorExecutionScopeForParams(params);
+    const serviceToken = createExecutorServiceToken(executionScope, {
       ...options?.scope,
       branch_id: branchId,
       command: 'unix.sync-branch',
@@ -754,8 +757,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ...(options?.delete ? { delete: true } : {}),
         },
       },
-      // params surfaces {tenant_id} to the executor command template
-      { logPrefix, params }
+      { logPrefix, executionScope }
     );
   };
 
@@ -775,7 +777,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       await invalidateRealtimeBranchAccess(branch.branch_id);
     }
 
-    const serviceToken = createExecutorServiceToken(params, {
+    const executionScope = executorExecutionScopeForParams(params);
+    const serviceToken = createExecutorServiceToken(executionScope, {
       board_id: boardId,
       command: 'unix.sync-board',
     });
@@ -790,8 +793,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           daemonUser: config.daemon?.unix_user,
         },
       },
-      // params surfaces {tenant_id} to the executor command template
-      { logPrefix, params }
+      { logPrefix, executionScope }
     );
   };
 
@@ -2304,13 +2306,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken(
-            context.params as Partial<AuthenticatedParams>,
-            {
-              user_id: user.user_id,
-              command: 'unix.sync-user',
-            }
+          const executionScope = executorExecutionScopeForParams(
+            context.params as Partial<AuthenticatedParams>
           );
+          const serviceToken = createExecutorServiceToken(executionScope, {
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
@@ -2323,10 +2325,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            // params surfaces {tenant_id} to the executor command template
             {
               logPrefix: '[Executor/user.create]',
-              params: context.params as Partial<AuthenticatedParams>,
+              executionScope,
             }
           );
 
@@ -2381,13 +2382,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken(
-            context.params as Partial<AuthenticatedParams>,
-            {
-              user_id: user.user_id,
-              command: 'unix.sync-user',
-            }
+          const executionScope = executorExecutionScopeForParams(
+            context.params as Partial<AuthenticatedParams>
           );
+          const serviceToken = createExecutorServiceToken(executionScope, {
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
@@ -2400,10 +2401,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            // params surfaces {tenant_id} to the executor command template
             {
               logPrefix: '[Executor/user.patch]',
-              params: context.params as Partial<AuthenticatedParams>,
+              executionScope,
             }
           );
 
@@ -2530,6 +2530,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   | undefined;
                 if (!existingGitState?.base_sha && branch.path) {
                   try {
+                    const executionScope = executorExecutionScopeForParams(
+                      context.params as AuthenticatedParams
+                    );
                     const { currentSha, currentRef } = await inspectBranchViaExecutor(
                       context.app as Application,
                       branch.branch_id,
@@ -2541,9 +2544,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                             | undefined
                         ),
                         logPrefix: `[sessions.create ${branch.name}]`,
-                        serviceTokenScope: serviceTokenScopeForParams(
-                          context.params as AuthenticatedParams
-                        ),
+                        executionScope,
                       }
                     );
                     (context.data as Record<string, unknown>).git_state = {

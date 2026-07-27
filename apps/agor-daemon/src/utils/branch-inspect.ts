@@ -1,6 +1,7 @@
+import type { TenantContextScope } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID } from '@agor/core/types';
-import { generateSessionToken, getDaemonUrl, runExecutorCommand } from './spawn-executor.js';
+import { generateScopedServiceToken, getDaemonUrl, runExecutorCommand } from './spawn-executor.js';
 
 export interface BranchInspectResult {
   currentSha: string;
@@ -22,12 +23,12 @@ export async function inspectBranchViaExecutor(
   options: {
     asUser?: string | null;
     logPrefix?: string;
-    serviceTokenScope?: Record<string, unknown>;
+    executionScope?: TenantContextScope;
   } = {}
 ): Promise<BranchInspectResult> {
-  const sessionToken = generateSessionToken(
+  const sessionToken = generateScopedServiceToken(
     app as unknown as { settings: { authentication?: { secret?: string } } },
-    options.serviceTokenScope
+    options.executionScope
   );
 
   const result = await runExecutorCommand(
@@ -40,6 +41,7 @@ export async function inspectBranchViaExecutor(
     {
       logPrefix: options.logPrefix ?? `[branch.inspect ${branchId}]`,
       asUser: options.asUser ?? undefined,
+      executionScope: options.executionScope,
     }
   );
 

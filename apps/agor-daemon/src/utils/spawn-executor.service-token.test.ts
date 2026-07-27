@@ -1,9 +1,12 @@
+import { runWithTenantContext } from '@agor/core/db';
 import type { AuthenticatedParams } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import {
   createServiceToken,
+  executorExecutionScopeForParams,
   generateScopedServiceToken,
+  serviceTokenScopeForExecutionScope,
   serviceTokenScopeForParams,
 } from './spawn-executor';
 
@@ -37,6 +40,27 @@ describe('executor service token scoping', () => {
     expect(serviceTokenScopeForParams({})).toEqual({});
   });
 
+  it('uses one narrow execution scope for template and token identity', () => {
+    const executionScope = executorExecutionScopeForParams({
+      tenant: { tenant_id: 'tenant-a' as never, source: 'auth_claim' },
+    });
+
+    expect(executionScope).toEqual({ tenantId: 'tenant-a' });
+    expect(serviceTokenScopeForExecutionScope(executionScope)).toEqual({
+      tenant_id: 'tenant-a',
+    });
+  });
+
+  it('rejects a request tenant that conflicts with ambient execution context', () => {
+    expect(() =>
+      runWithTenantContext('tenant-ambient', () =>
+        executorExecutionScopeForParams({
+          tenant: { tenant_id: 'tenant-request' as never, source: 'auth_claim' },
+        })
+      )
+    ).toThrow('Conflicting tenant identities at executor boundary');
+  });
+
   it('stamps role: service for a plain (unscoped) service token', () => {
     const decoded = jwt.decode(createServiceToken('test-secret', '5m', {})) as { role?: string };
     expect(decoded.role).toBe('service');
@@ -53,10 +77,11 @@ describe('executor service token scoping', () => {
     expect(decoded.terminal_user_id).toBe('u1');
   });
 
-  it('generates tenant-scoped service tokens directly from params', () => {
+  it('keeps trusted execution scope authoritative over extra token claims', () => {
     const token = generateScopedServiceToken(
       { settings: { authentication: { secret: 'test-secret' } } },
-      { tenant: { tenant_id: 'tenant-b' as never, source: 'auth_claim' } }
+      { tenantId: 'tenant-b' },
+      { tenant_id: 'spoofed-tenant' }
     );
     const decoded = jwt.decode(token) as { tenant_id?: string; type?: string };
 

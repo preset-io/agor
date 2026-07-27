@@ -26,10 +26,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
+import { getCurrentTenantId, type TenantContextScope } from '@agor/core/db';
 import type { AuthenticatedParams } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
+  escapeShellArg,
   isSecretEnvKey,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
@@ -92,14 +94,9 @@ export interface ExecutorTemplateVariables {
   branch_id?: string;
   log_level?: string;
   /**
-   * The runtime tenant that owns this request, as resolved from the request's
-   * auth claim (`params.tenant`). Exposed as a general `{tenant_id}` placeholder
-   * so operator-supplied command templates can forward it (e.g. a multi-tenant
-   * remote launcher that must attribute each run to its tenant). Left as-is when
-   * absent (single-tenant / unauthenticated paths). This is intentionally the
-   * runtime's own generic primitive — do NOT extend it with deployment-specific
-   * identifiers (workspace/cell/team/instance); those mappings live outside the
-   * runtime.
+   * Trusted runtime tenant identity. This is populated from `executionScope`,
+   * shell-escaped during substitution, and is not caller-overridable through
+   * `SpawnExecutorOptions.templateVariables`.
    */
   tenant_id?: string;
 }
@@ -118,14 +115,13 @@ export interface SpawnExecutorOptions {
   asUser?: string | null;
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
-  templateVariables?: ExecutorTemplateVariables;
   /**
-   * Authenticated request params. Only consumed to derive the `{tenant_id}`
-   * template variable in one place (via `serviceTokenScopeForParams`) so call
-   * sites don't each re-derive it. Optional: paths without a resolved tenant
-   * simply leave `{tenant_id}` unsubstituted.
+   * Caller-provided domain/runtime overrides. Tenant identity is deliberately
+   * excluded: it must come from the trusted execution scope below.
    */
-  params?: Partial<AuthenticatedParams>;
+  templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
+  /** Narrow trusted identity for the executor launch. */
+  executionScope?: TenantContextScope;
   onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
@@ -165,6 +161,12 @@ export function substituteTemplateVariables(
   template: string,
   variables: ExecutorTemplateVariables
 ): string {
+  if (template.includes('{tenant_id}') && !variables.tenant_id) {
+    throw new Error(
+      'executor_command_template requires {tenant_id}, but no tenant execution scope is active'
+    );
+  }
+
   let result = template;
 
   const substitutions: Record<string, string | number | undefined> = {
@@ -182,7 +184,12 @@ export function substituteTemplateVariables(
   for (const [key, value] of Object.entries(substitutions)) {
     if (value !== undefined) {
       const placeholder = new RegExp(`\\{${key}\\}`, 'g');
-      result = result.replace(placeholder, String(value));
+      // executor_command_template is executed via `sh -c`. Tenant IDs may
+      // originate in external auth claims, so render this security-sensitive
+      // value as one opaque shell argument. Templates should use
+      // `{tenant_id}` unquoted, e.g. `launcher --tenant-id {tenant_id}`.
+      const renderedValue = key === 'tenant_id' ? escapeShellArg(String(value)) : String(value);
+      result = result.replace(placeholder, renderedValue);
     }
   }
 
@@ -270,8 +277,8 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        tenant_id: serviceTokenScopeForParams(options.params).tenant_id as string | undefined,
         ...templateVariables,
+        tenant_id: options.executionScope?.tenantId,
       },
       logPrefix,
     });
@@ -567,8 +574,8 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        tenant_id: serviceTokenScopeForParams(options.params).tenant_id as string | undefined,
         ...templateVariables,
+        tenant_id: options.executionScope?.tenantId,
       },
       logPrefix,
     });
@@ -871,6 +878,33 @@ export function createServiceToken(
 }
 
 /**
+ * Resolve the narrow tenant identity needed at the executor boundary.
+ *
+ * Feathers request params, trusted internal params, authenticated user claims,
+ * and the ambient long-running operation context must never disagree. The
+ * normal tenant hooks already enforce this; the check here also protects MCP
+ * and direct/background orchestration paths.
+ */
+export function executorExecutionScopeForParams(
+  params?: Partial<AuthenticatedParams>
+): TenantContextScope | undefined {
+  const candidates = [
+    params?.tenant?.tenant_id,
+    params?.tenant_id,
+    params?.user?.tenant_id,
+    getCurrentTenantId(),
+  ]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean);
+
+  if (new Set(candidates).size > 1) {
+    throw new Error('Conflicting tenant identities at executor boundary');
+  }
+
+  return candidates[0] ? { tenantId: candidates[0] } : undefined;
+}
+
+/**
  * Build extra JWT claims for executor/service tokens from authenticated service
  * params. In Cloud required-from-auth mode, executor RPCs must carry the same
  * tenant claim as the request that spawned them; otherwise the daemon handles
@@ -879,8 +913,14 @@ export function createServiceToken(
 export function serviceTokenScopeForParams(
   params?: Partial<AuthenticatedParams>
 ): Record<string, unknown> {
-  const tenantId = params?.tenant?.tenant_id ?? params?.tenant_id ?? params?.user?.tenant_id;
-  return tenantId ? { tenant_id: tenantId } : {};
+  return serviceTokenScopeForExecutionScope(executorExecutionScopeForParams(params));
+}
+
+/** Convert the trusted executor scope into JWT claims without re-resolving identity. */
+export function serviceTokenScopeForExecutionScope(
+  executionScope?: TenantContextScope
+): Record<string, unknown> {
+  return executionScope ? { tenant_id: executionScope.tenantId } : {};
 }
 
 /**
@@ -907,23 +947,23 @@ export function generateSessionToken(
 }
 
 /**
- * Generate a tenant-scoped executor service token from Feathers params.
+ * Generate an executor service token from the same narrow scope used to render
+ * the command template.
  *
- * Prefer this over manually composing `generateSessionToken(app,
- * serviceTokenScopeForParams(params))` so required-from-auth deployments do not
- * accidentally drop tenant context on new executor call paths.
+ * Keeping token and launch context on one value prevents the executor JWT and
+ * remote launcher from accidentally targeting different tenants.
  */
 export function generateScopedServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  params?: Partial<AuthenticatedParams>,
+  executionScope?: TenantContextScope,
   extraScope: Record<string, unknown> = {},
   expiresIn?: SignOptions['expiresIn']
 ): string {
   return generateSessionToken(
     app,
-    { ...serviceTokenScopeForParams(params), ...extraScope },
+    { ...extraScope, ...serviceTokenScopeForExecutionScope(executionScope) },
     expiresIn
   );
 }
