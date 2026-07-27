@@ -962,7 +962,7 @@ export interface AgorKnowledgeSettings {
  */
 export interface AgorMultiTenancySettings {
   /** Store tenant-owned filesystem data below a tenant-specific root. Defaults to false. */
-  enabled?: boolean;
+  filesystem_isolation_enabled?: boolean;
 
   /**
    * Parent directory for tenant data. Absolute paths and paths relative to

@@ -40,6 +40,7 @@ export default {
     type: 'separator',
     title: 'Deployment',
   },
+  'multi-tenant-filesystem': 'Multi-Tenant Filesystem',
   'multiplayer-unix-isolation': 'Full Multiplayer Mode',
   'containerized-execution': 'Containerized Execution',
 };

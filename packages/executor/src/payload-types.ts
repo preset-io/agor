@@ -388,6 +388,9 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
     /** Path to the branch to remove */
     branchPath: z.string(),
 
+    /** Tenant-aware root that must contain branchPath */
+    branchesRoot: z.string(),
+
     /** Force removal even if dirty */
     force: z.boolean().optional(),
 

@@ -12,6 +12,7 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  getBranchesDir,
   loadConfig,
   PAGINATION,
   resolveExecutionSecurityMode,
@@ -1281,6 +1282,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
     const { deleteFromFilesystem } = params?.query || {};
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
@@ -1319,6 +1321,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               params: {
                 branchId: branch.branch_id,
                 branchPath: branch.path,
+                branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Already deleted above
                 // Clean up the branch if it was created by Agor
                 branch: branch.ref,
@@ -1428,6 +1431,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
     } else if (filesystemAction === 'deleted') {
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
+      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
       // No user impersonation for infrastructure operations — the daemon user
       // owns all branches and impersonation would resolve getBranchesDir()
@@ -1454,6 +1458,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               params: {
                 branchId: branch.branch_id,
                 branchPath: branch.path,
+                branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Daemon handles DB deletion separately
                 // Clean up the branch if it was created by Agor
                 branch: branch.ref,

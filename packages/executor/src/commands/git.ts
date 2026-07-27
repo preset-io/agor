@@ -1372,6 +1372,7 @@ export async function handleGitBranchRemove(
 
     const branchId = payload.params.branchId;
     const branchPath = payload.params.branchPath;
+    const branchesRoot = payload.params.branchesRoot;
     const storageMode = payload.params.storageMode ?? 'worktree';
 
     console.log(
@@ -1394,7 +1395,7 @@ export async function handleGitBranchRemove(
         console.log(
           `[git.branch.remove] Clone mode — removing self-standing directory ${branchPath}`
         );
-        await deleteBranchDirectory(branchPath);
+        await deleteBranchDirectory(branchPath, branchesRoot);
         filesystemRemoved = true;
       } else {
         console.log(
@@ -1415,7 +1416,7 @@ export async function handleGitBranchRemove(
         console.warn(
           `[git.branch.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
         );
-        await deleteBranchDirectory(branchPath);
+        await deleteBranchDirectory(branchPath, branchesRoot);
         filesystemRemoved = true;
       } else {
         // Read .git file to find the main repo
@@ -1448,7 +1449,7 @@ export async function handleGitBranchRemove(
         // Fully delete the directory to reclaim all disk space.
         if (existsSync(branchPath)) {
           console.log(`[git.branch.remove] Directory still exists, removing residual files...`);
-          await deleteBranchDirectory(branchPath);
+          await deleteBranchDirectory(branchPath, branchesRoot);
           console.log(`[git.branch.remove] Directory fully removed`);
         }
 
@@ -1483,7 +1484,7 @@ export async function handleGitBranchRemove(
       console.log(
         '[git.branch.remove] No .git file but directory exists (orphaned), removing directory...'
       );
-      await deleteBranchDirectory(branchPath);
+      await deleteBranchDirectory(branchPath, branchesRoot);
       filesystemRemoved = true;
       console.log('[git.branch.remove] Orphaned directory removed');
     } else {

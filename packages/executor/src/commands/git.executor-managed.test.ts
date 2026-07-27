@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -41,6 +44,7 @@ import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
   handleBranchInspect,
+  handleGitBranchRemove,
   handleGitClone,
   handleGitRepoDelete,
 } from './git.js';
@@ -125,6 +129,35 @@ beforeEach(() => {
 });
 
 describe('managed executor git/fs commands', () => {
+  it('uses the daemon-provided tenant root when removing a branch directory', async () => {
+    const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    await mkdir(branchPath, { recursive: true });
+    createClient({});
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'clone',
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(true);
+      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot);
+    } finally {
+      await rm(branchesRoot, { recursive: true, force: true });
+    }
+  });
+
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
       repo: { repo_id: repoId, local_path: '/safe/repos/repo' },

@@ -399,6 +399,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
       },
     };
 
@@ -415,6 +416,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
         force: true,
       },
     };
@@ -593,6 +595,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/branches/feature',
+        branchesRoot: '/data/branches',
       },
     };
     expect(isGitBranchRemovePayload(payload)).toBe(true);

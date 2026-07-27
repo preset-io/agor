@@ -1354,7 +1354,7 @@ describe('getTenantDataRoot', () => {
   });
 
   it('uses the default tenant base folder when enabled', async () => {
-    await writeConfig({ enabled: true });
+    await writeConfig({ filesystem_isolation_enabled: true });
 
     expect(getTenantDataRoot('tenant-a')).toBe(path.join(tempDir, '.agor', 'tenants', 'tenant-a'));
     expect(getReposDir('tenant-a')).toBe(
@@ -1366,7 +1366,10 @@ describe('getTenantDataRoot', () => {
   });
 
   it('resolves relative tenant base folders from the daemon home', async () => {
-    await writeConfig({ enabled: true, tenants_base_folder: 'tenant-volume' });
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: 'tenant-volume',
+    });
 
     expect(getTenantDataRoot('tenant-b')).toBe(
       path.join(tempDir, '.agor', 'tenant-volume', 'tenant-b')
@@ -1374,15 +1377,21 @@ describe('getTenantDataRoot', () => {
   });
 
   it('supports absolute and home-relative tenant base folders', async () => {
-    await writeConfig({ enabled: true, tenants_base_folder: '/data/agor-tenants' });
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '/data/agor-tenants',
+    });
     expect(getTenantDataRoot('tenant-c')).toBe('/data/agor-tenants/tenant-c');
 
-    await writeConfig({ enabled: true, tenants_base_folder: '~/mounted-tenants' });
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '~/mounted-tenants',
+    });
     expect(getTenantDataRoot('tenant-c')).toBe(path.join(tempDir, 'mounted-tenants', 'tenant-c'));
   });
 
   it('requires a safe tenant id when enabled', async () => {
-    await writeConfig({ enabled: true });
+    await writeConfig({ filesystem_isolation_enabled: true });
 
     expect(() => getTenantDataRoot()).toThrow(/valid tenant id/i);
     expect(() => getTenantDataRoot('../escape')).toThrow(/valid tenant id/i);
@@ -1393,7 +1402,9 @@ describe('getTenantDataRoot', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(
       path.join(agorDir, 'config.yaml'),
-      yaml.dump({ multi_tenancy: { enabled: true, unsupported_option: true } }),
+      yaml.dump({
+        multi_tenancy: { filesystem_isolation_enabled: true, unsupported_option: true },
+      }),
       'utf-8'
     );
     __resetConfigCacheForTests();

@@ -1148,18 +1148,21 @@ describe('GatewayService Slack attachment ingestion', () => {
       connector: {},
     });
 
-    const result = await service.create({
-      channel_key: 'slack-key',
-      thread_id: 'D123-100.000000',
-      text: 'what does this screenshot show?',
-      files: inboundFiles,
-      metadata: dmMetadata,
-    });
+    const result = await runWithTenantContext('tenant-channel', () =>
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'D123-100.000000',
+        text: 'what does this screenshot show?',
+        files: inboundFiles,
+        metadata: dmMetadata,
+      })
+    );
 
     expect(result).toMatchObject({ success: true, sessionId: 'sess-1' });
     expect(ingestInboundAttachments).toHaveBeenCalledWith({
       files: inboundFiles,
       botToken: 'xoxb-test',
+      tenantId: 'tenant-channel',
     });
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/screenshot_1.png');

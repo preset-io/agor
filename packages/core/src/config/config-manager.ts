@@ -473,7 +473,7 @@ function validateConfig(config: AgorConfig): void {
     'frameworkRepoUrl',
   ]);
   only(config.multi_tenancy, 'multi_tenancy', [
-    'enabled',
+    'filesystem_isolation_enabled',
     'tenants_base_folder',
     'mode',
     'static_tenant_id',
@@ -707,7 +707,7 @@ export function getDefaultConfig(): AgorConfig {
     analytics: getDefaultAnalyticsConfig(),
     telemetry: {},
     multi_tenancy: {
-      enabled: false,
+      filesystem_isolation_enabled: false,
       tenants_base_folder: '~/.agor/tenants',
       mode: 'static',
       static_tenant_id: 'default',
@@ -1347,17 +1347,16 @@ export function getDataHome(): string {
 }
 
 /**
- * Resolve the root containing tenant-owned filesystem data.
- *
- * Single-tenant installs retain the historical data home. When filesystem
- * multi-tenancy is enabled, a tenant id is required and the result is
- * `<tenants_base_folder>/<tenantId>`.
+ * Pure tenant-data-root policy shared by sync and async config loaders.
  */
-export function getTenantDataRoot(tenantId?: string): string {
-  const config = loadConfigSync();
-
-  if (config.multi_tenancy?.enabled !== true) {
-    return getDataHome();
+function resolveTenantDataRoot(
+  config: AgorConfig,
+  dataHome: string,
+  agorHome: string,
+  tenantId?: string
+): string {
+  if (config.multi_tenancy?.filesystem_isolation_enabled !== true) {
+    return dataHome;
   }
 
   const normalizedTenantId = tenantId?.trim();
@@ -1368,15 +1367,28 @@ export function getTenantDataRoot(tenantId?: string): string {
     normalizedTenantId.includes('/') ||
     normalizedTenantId.includes('\\')
   ) {
-    throw new Error('A valid tenant id is required when multi_tenancy.enabled is true');
+    throw new Error(
+      'A valid tenant id is required when multi_tenancy.filesystem_isolation_enabled is true'
+    );
   }
 
   const configuredBase = config.multi_tenancy.tenants_base_folder || '~/.agor/tenants';
   const expandedBase = expandHomePath(configuredBase);
   const tenantsBase = path.isAbsolute(expandedBase)
     ? expandedBase
-    : path.resolve(getAgorHome(), expandedBase);
+    : path.resolve(agorHome, expandedBase);
   return path.join(tenantsBase, normalizedTenantId);
+}
+
+/**
+ * Resolve the root containing tenant-owned filesystem data.
+ *
+ * Single-tenant installs retain the historical data home. When filesystem
+ * multi-tenancy is enabled, a tenant id is required and the result is
+ * `<tenants_base_folder>/<tenantId>`.
+ */
+export function getTenantDataRoot(tenantId?: string): string {
+  return resolveTenantDataRoot(loadConfigSync(), getDataHome(), getAgorHome(), tenantId);
 }
 
 /**
@@ -1452,29 +1464,8 @@ export async function getDataHomeAsync(): Promise<string> {
 
 /** Async counterpart to {@link getTenantDataRoot}. */
 export async function getTenantDataRootAsync(tenantId?: string): Promise<string> {
-  const config = await loadConfig();
-
-  if (config.multi_tenancy?.enabled !== true) {
-    return getDataHomeAsync();
-  }
-
-  const normalizedTenantId = tenantId?.trim();
-  if (
-    !normalizedTenantId ||
-    normalizedTenantId === '.' ||
-    normalizedTenantId === '..' ||
-    normalizedTenantId.includes('/') ||
-    normalizedTenantId.includes('\\')
-  ) {
-    throw new Error('A valid tenant id is required when multi_tenancy.enabled is true');
-  }
-
-  const configuredBase = config.multi_tenancy.tenants_base_folder || '~/.agor/tenants';
-  const expandedBase = expandHomePath(configuredBase);
-  const tenantsBase = path.isAbsolute(expandedBase)
-    ? expandedBase
-    : path.resolve(getAgorHome(), expandedBase);
-  return path.join(tenantsBase, normalizedTenantId);
+  const [config, dataHome] = await Promise.all([loadConfig(), getDataHomeAsync()]);
+  return resolveTenantDataRoot(config, dataHome, getAgorHome(), tenantId);
 }
 
 /**
