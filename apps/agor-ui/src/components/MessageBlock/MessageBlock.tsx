@@ -26,7 +26,7 @@ import { Bubble } from '@ant-design/x';
 import { Button, Tooltip, theme } from 'antd';
 
 import React, { useState } from 'react';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { BRAND, brandBadgeHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -221,8 +221,10 @@ function getAgentAvatar({
   if (isCallback) {
     return (
       <img
-        src={brandMarkHref()}
-        alt={BRAND.name}
+        src={brandBadgeHref()}
+        alt={`${BRAND.name} callback`}
+        width={32}
+        height={32}
         style={{ width: 32, height: 32, borderRadius: '50%' }}
       />
     );

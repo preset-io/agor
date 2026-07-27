@@ -1,8 +1,8 @@
 // src/types/session.ts
 
 /**
- * Effort level controls how much reasoning Claude applies.
- * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
+ * Effort level controls how much reasoning a supported agent applies.
+ * Runtime adapters map this shared value to their native effort option.
  */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -257,7 +257,7 @@ export interface Session {
     updated_at: string;
     /** Optional user notes about why this model was selected */
     notes?: string;
-    /** Effort level for reasoning depth (default: high) */
+    /** Optional session override for reasoning depth; unset delegates to the runtime default. */
     effort?: EffortLevel;
     /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
     advisorModel?: string;

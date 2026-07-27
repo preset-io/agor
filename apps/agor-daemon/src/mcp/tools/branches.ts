@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
@@ -24,6 +23,12 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
+import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -349,9 +354,49 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
+      const statusResult = await runExecutorCommand(
+        {
+          command: 'branch.filesystem.status',
+          sessionToken: generateScopedServiceToken(
+            ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
+            ctx.baseServiceParams
+          ),
+          daemonUrl: getDaemonUrl(),
+          params: { branchIds: branches.map((branch) => branch.branch_id) },
+        },
+        {
+          logPrefix: '[MCP branches.cleanupCandidates.status]',
+          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+          ),
+        }
+      );
+      if (!statusResult.success) {
+        throw new Error(
+          `Failed to inspect archived branch filesystems: ${statusResult.error?.message ?? 'unknown executor error'}`
+        );
+      }
+      const statusEntries =
+        statusResult.data && typeof statusResult.data === 'object'
+          ? (statusResult.data as { statuses?: unknown }).statuses
+          : undefined;
+      const pathExistsByBranch = new Map<string, boolean>(
+        Array.isArray(statusEntries)
+          ? statusEntries
+              .filter(
+                (entry): entry is { branchId: string; exists: boolean } =>
+                  !!entry &&
+                  typeof entry === 'object' &&
+                  typeof (entry as { branchId?: unknown }).branchId === 'string' &&
+                  typeof (entry as { exists?: unknown }).exists === 'boolean'
+              )
+              .map((entry) => [entry.branchId, entry.exists])
+          : []
+      );
+
       const filtered = branches
         .map((branch) => {
-          const pathExists = branch.path ? existsSync(branch.path) : false;
+          const pathExists = pathExistsByBranch.get(branch.branch_id) ?? false;
           return {
             branch,
             pathExists,

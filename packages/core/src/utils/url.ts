@@ -128,13 +128,13 @@ export function knowledgePath(namespaceSlug?: string | null, documentPath?: stri
 
 /** Compose a full external URL from a relative entity path.
  *  Strips a trailing slash off `baseUrl` defensively so misconfigured
- *  `daemon.base_url` values (e.g. `https://agor.example.com/`) don't
+ *  base URL values (e.g. `https://agor.example.com/`) don't
  *  produce double-slashed URLs like `https://agor.example.com//ui/...`.
  *  Also strips a trailing `/ui` suffix so operators who set
- *  `daemon.base_url` to the full UI address (e.g. `https://agor.example.com/ui`)
+ *  a base URL to the full UI address (e.g. `https://agor.example.com/ui`)
  *  don't end up with double-prefixed `/ui/ui/...` entity URLs.
  *  `baseUrl` here comes from `getBaseUrl()` in config-manager, which
- *  reads `daemon.base_url` (with an `AGOR_BASE_URL` env override). */
+ *  prefers `ui.base_url` before the daemon fallback. */
 function fullUrl(path: string, baseUrl: string): string {
   // Strip trailing slash first, then any trailing /ui suffix.
   let base = baseUrl.replace(/\/$/, '');

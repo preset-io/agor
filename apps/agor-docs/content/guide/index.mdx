@@ -3,12 +3,14 @@ title: agor Documentation
 description: The command center for AI enablement. A shared canvas for coding agents and long-lived AI teammates, anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.
 ---
 
-import { LOGO_MARK_PATH } from '../../lib/siteMetadata';
+import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
 
 <div style={{ textAlign: 'center', marginTop: '2rem', marginBottom: '2rem' }}>
   <img
-    src={LOGO_MARK_PATH}
-    alt="agor logo - the command center for AI enablement"
+    src={`${getBasePath()}${LOGO_MARK_PATH}`}
+    alt=""
+    width="135"
+    height="135"
     style={{ width: '135px', height: '135px', opacity: 0.9 }}
   />
 </div>
@@ -47,6 +49,7 @@ Prefer Homebrew on macOS or Linux? See the [Getting Started Guide](/guide/gettin
 
 **Then dive in:**
 
+- **[Raising Your First AI Teammate](/guide/first-teammate).** The short path to succeeding with Agor: one named teammate, one real job
 - **[Features Overview](/guide/features-overview).** A map of what Agor does, starting with branches, sessions, and boards
 - **[Architecture](/guide/architecture).** System design and the typed TypeScript client
 - **[Development Guide](/guide/development).** Run Agor in Agor and contribute

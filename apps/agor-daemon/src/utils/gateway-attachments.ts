@@ -157,9 +157,10 @@ export async function ingestInboundAttachments(args: {
   botToken: string;
   fetchImpl?: typeof fetch;
   uploadDir?: string;
+  tenantId?: string;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
-  const uploadDir = args.uploadDir ?? getUploadDirectory();
+  const uploadDir = args.uploadDir ?? getUploadDirectory(args.tenantId);
 
   const ingestable = args.files.filter(isIngestableFile);
   const paths: string[] = [];

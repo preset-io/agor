@@ -14,7 +14,11 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
-import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
+import {
+  type ResolvedMultiTenancyConfig,
+  resolveTenantContext,
+  SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
+} from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -27,9 +31,15 @@ import type {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
+import { isExecutorSessionTokenPayload } from '../auth/executor-session-token.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import { isTerminalExecutorIdentity } from '../auth/terminal-executor-guard.js';
-import { leaveAllSessionStreamChannels } from '../utils/realtime-publish.js';
+import {
+  executorTaskChannelName,
+  joinExecutorTaskChannel,
+  leaveAllExecutorTaskChannels,
+  leaveAllSessionStreamChannels,
+} from '../utils/realtime-publish.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -324,7 +334,7 @@ export function createSocketIOConfig(
     // Socket.io server options for better connection management
     pingTimeout: 60000, // How long to wait for pong before considering connection dead
     pingInterval: 25000, // How often to ping clients
-    maxHttpBufferSize: 1e6, // 1MB max message size
+    maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     transports: ['websocket', 'polling'], // Prefer WebSocket
   };
 
@@ -953,8 +963,14 @@ export function configureChannels(
       const result = authResult as {
         user?: { user_id?: string; email?: string; tenant_id?: string };
         authentication?: { payload?: unknown };
+        task_id?: string;
       };
       console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
+
+      // Authentication can be replaced on an already-open socket. Remove any
+      // prior executor capability before considering the new signed claims, so
+      // a socket can never accumulate control rooms across Tasks.
+      leaveAllExecutorTaskChannels(app, context.connection);
 
       // A terminal-executor identity must NOT receive broadcast events. It only
       // consumes raw `terminal:*` events on its own `user/<id>/terminal` room,
@@ -999,6 +1015,24 @@ export function configureChannels(
             .join(context.connection as never);
         }
       }
+
+      const executorPayload = result.authentication?.payload;
+      if (
+        isExecutorSessionTokenPayload(executorPayload) &&
+        typeof executorPayload.task_id === 'string' &&
+        executorPayload.task_id.length > 0 &&
+        result.task_id === executorPayload.task_id
+      ) {
+        // A signed task claim is necessary but not sufficient: namespace the
+        // private room by the tenant resolved from that same authenticated
+        // login, preventing even a pathological cross-tenant Task-ID collision
+        // from crossing the control-plane boundary.
+        if (!tenant) return;
+        joinExecutorTaskChannel(app, tenant.tenant_id, executorPayload.task_id, context.connection);
+        console.debug(
+          `🎯 Executor connection joined task control room: ${executorTaskChannelName(tenant.tenant_id, executorPayload.task_id)}`
+        );
+      }
     }
   });
 
@@ -1013,6 +1047,7 @@ export function configureChannels(
 
       // Remove from authenticated channel - no more broadcast events
       app.channel('authenticated').leave(context.connection as never);
+      leaveAllExecutorTaskChannels(app, context.connection);
       if (tenant) {
         app.channel(tenantChannelName(tenant.tenant_id)).leave(context.connection as never);
         if (userId) {

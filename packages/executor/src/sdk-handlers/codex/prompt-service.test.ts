@@ -50,6 +50,8 @@ let mockInstanceConfigs: Array<unknown> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 let mockStartThreadId: string | undefined = 'mock-thread-id';
+let mockStartThreadOptions: unknown[] = [];
+let mockResumeThreadOptions: unknown[] = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -81,7 +83,8 @@ vi.mock('@agor/core/sdk', () => {
       mockClosedInstanceIds.push(this.instanceId);
     }
 
-    startThread() {
+    startThread(options: unknown) {
+      mockStartThreadOptions.push(options);
       return {
         id: mockStartThreadId,
         run: vi.fn(),
@@ -89,7 +92,8 @@ vi.mock('@agor/core/sdk', () => {
       };
     }
 
-    resumeThread(threadId: string) {
+    resumeThread(threadId: string, options: unknown) {
+      mockResumeThreadOptions.push(options);
       return {
         id: threadId,
         run: vi.fn(),
@@ -127,6 +131,8 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -317,6 +323,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
     vi.clearAllMocks();
@@ -483,7 +491,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
         codex: codexPermissions,
       },
-      model_config: {},
+      model_config: { effort: 'medium' },
       mcp_token: 'test-token',
     });
     mockSessionsRepo.update.mockResolvedValue(undefined);
@@ -524,6 +532,9 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     ]);
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
       threadId: 'mock-thread-id',
+    });
+    expect(mockStartThreadOptions.at(-1)).toMatchObject({
+      modelReasoningEffort: 'medium',
     });
   });
 
@@ -604,6 +615,8 @@ describe('CodexPromptService - forked sessions', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -640,7 +653,7 @@ describe('CodexPromptService - forked sessions', () => {
       sdk_session_id: null,
       genealogy: { forked_from_session_id: 'parent-session' },
       permission_config: { codex: {} },
-      model_config: {},
+      model_config: { effort: 'max' },
       mcp_token: 'test-token',
     };
     const parentSession = {
@@ -686,6 +699,9 @@ describe('CodexPromptService - forked sessions', () => {
     });
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
       threadId: 'forked-thread-id',
+    });
+    expect(mockResumeThreadOptions.at(-1)).toMatchObject({
+      modelReasoningEffort: 'xhigh',
     });
   });
 });

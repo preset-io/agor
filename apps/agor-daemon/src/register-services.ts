@@ -79,9 +79,9 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
+import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
-import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
@@ -122,6 +122,7 @@ import { createSessionMCPServersService } from './services/session-mcp-servers.j
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
+import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
@@ -251,6 +252,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'patch',
       'remove',
       'connectExecutor',
+      'reportTerminationComplete',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
     ],
@@ -265,7 +267,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //      task.
     //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
     //      the executor for live tool/thinking visualization.
-    events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
+    events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
@@ -360,7 +362,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ['created','updated','patched','removed'], so without this it
   // fires locally on the server's EventEmitter and never reaches any
   // socket. See queryArtifactRuntime in services/artifacts.ts.
-  app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
+  app.use('/artifacts', createArtifactsService(db, app), {
+    events: ['agor-query'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'publishFromExecutor',
+      'validateFromExecutor',
+    ],
+  });
   app.use('/board-comments', createBoardCommentsService(db));
 
   // ============================================================================
@@ -492,7 +505,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   {
-    app.use('/gateway-channels', createGatewayChannelsService(db));
+    app.use('/gateway-channels', createGatewayChannelsService(db), {
+      methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'uploadFileFromExecutor'],
+    });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
     // the parent gateway-channels admin gating / redaction hooks, so it carries
@@ -576,6 +591,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     .service('/codex-auth/device')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
 
+  // Removes the caller's Codex login — deletes their auth.json as the right Unix
+  // identity and clears the stored codex auth method (emitting `patched` so the
+  // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
+  // grant, so other machines stay signed in.
+  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
+  app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
+
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
   // and falls back to AVAILABLE_CLAUDE_MODEL_ALIASES if no key or API failure.
@@ -599,8 +621,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
-  app.use('/context', createContextService(branchRepository));
-  app.use('/file', createFileService(branchRepository));
+  app.use('/file', createFileService(branchRepository, db, app));
   app.use('/files', createFilesService(db, app));
 
   // Server-side Handlebars renderer. UI calls POST /templates so the browser

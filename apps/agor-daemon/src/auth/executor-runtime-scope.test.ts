@@ -26,6 +26,7 @@ function ctx(overrides: Partial<HookContext>): HookContext {
 describe('executorRuntimeScopeGuard', () => {
   it.each([
     'connectExecutor',
+    'reportTerminationComplete',
     'reportRuntimeTelemetry',
     'reportSdkHealthFailure',
   ])('accepts scoped %s and rejects a different task', async (method) => {

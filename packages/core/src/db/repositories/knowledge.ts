@@ -1370,41 +1370,48 @@ export class KnowledgeDocumentRepository
     units: ReplaceKnowledgeUnitInput[],
     options: { embeddingConfigured?: boolean } = {}
   ): Promise<void> {
-    const version = await new KnowledgeDocumentVersionRepository(this.db).findById(versionId);
+    await this.db.transaction((tx) =>
+      this.replaceUnitsForVersionInTransaction(txAsDb(tx), versionId, units, options)
+    );
+  }
+
+  /** Replace units inside a caller-owned transaction. */
+  async replaceUnitsForVersionInTransaction(
+    txDb: Database,
+    versionId: KnowledgeDocumentVersionID,
+    units: ReplaceKnowledgeUnitInput[],
+    options: { embeddingConfigured?: boolean } = {}
+  ): Promise<void> {
+    const version = await new KnowledgeDocumentVersionRepository(txDb).findById(versionId);
     if (!version) throw new EntityNotFoundError('KnowledgeDocumentVersion', versionId);
-    await this.db.transaction(async (tx) => {
-      const txDb = txAsDb(tx);
-      await deleteFrom(txDb, kbDocumentUnits)
-        .where(eq(kbDocumentUnits.version_id, versionId))
-        .run();
-      if (units.length === 0) return;
-      await insert(txDb, kbDocumentUnits)
-        .values(
-          units.map((unit) => ({
-            unit_id: deterministicKnowledgeUnitId(version.version_id, unit),
-            document_id: version.document_id,
-            version_id: version.version_id,
-            kind: unit.kind,
-            ordinal: unit.ordinal,
-            path_anchor: unit.path_anchor ?? null,
-            heading_path: unit.heading_path ?? null,
-            source_path: unit.source_path ?? null,
-            content_text: unit.content_text,
-            content_md5: unit.content_md5,
-            start_offset: unit.start_offset ?? null,
-            end_offset: unit.end_offset ?? null,
-            embedding_status: options.embeddingConfigured ? 'pending' : 'not_configured',
-            embedding_model: null,
-            embedding_dimensions: null,
-            embedding_hash: null,
-            embedding_error: null,
-            metadata: unit.metadata ?? null,
-            created_at: new Date(),
-            updated_at: new Date(),
-          }))
-        )
-        .run();
-    });
+    await deleteFrom(txDb, kbDocumentUnits).where(eq(kbDocumentUnits.version_id, versionId)).run();
+    if (units.length === 0) return;
+    await insert(txDb, kbDocumentUnits)
+      .values(
+        units.map((unit) => ({
+          unit_id: deterministicKnowledgeUnitId(version.version_id, unit),
+          document_id: version.document_id,
+          version_id: version.version_id,
+          kind: unit.kind,
+          ordinal: unit.ordinal,
+          path_anchor: unit.path_anchor ?? null,
+          heading_path: unit.heading_path ?? null,
+          source_path: unit.source_path ?? null,
+          content_text: unit.content_text,
+          content_md5: unit.content_md5,
+          start_offset: unit.start_offset ?? null,
+          end_offset: unit.end_offset ?? null,
+          embedding_status: options.embeddingConfigured ? 'pending' : 'not_configured',
+          embedding_model: null,
+          embedding_dimensions: null,
+          embedding_hash: null,
+          embedding_error: null,
+          metadata: unit.metadata ?? null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        }))
+      )
+      .run();
   }
 
   async delete(id: string): Promise<void> {

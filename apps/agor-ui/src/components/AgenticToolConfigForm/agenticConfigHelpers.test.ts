@@ -1,6 +1,39 @@
 import type { ScheduleAgenticToolConfig } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { buildScheduleConfigFromFormValues } from './agenticConfigHelpers';
+import {
+  buildModelConfigFromFormValues,
+  buildScheduleConfigFromFormValues,
+  getFormValuesFromConfig,
+} from './agenticConfigHelpers';
+
+describe('getFormValuesFromConfig', () => {
+  it('explicitly clears merged model fields when a tool has no stored config', () => {
+    const values = getFormValuesFromConfig('codex');
+
+    expect(values).toHaveProperty('modelConfig', undefined);
+    expect(values).toHaveProperty('effort', undefined);
+  });
+});
+
+describe('buildModelConfigFromFormValues', () => {
+  it('stores an explicit effort beside the selected model', () => {
+    expect(
+      buildModelConfigFromFormValues({
+        modelConfig: { model: 'gpt-5.6-sol' },
+        effort: 'medium',
+      })
+    ).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+  });
+
+  it('removes a stale nested effort when the form returns to inherited', () => {
+    expect(
+      buildModelConfigFromFormValues({
+        modelConfig: { model: 'gpt-5.6-sol', effort: 'high' },
+        effort: undefined,
+      })
+    ).toEqual({ model: 'gpt-5.6-sol' });
+  });
+});
 
 describe('buildScheduleConfigFromFormValues', () => {
   it('detaches a previous preset when switching a schedule to inline configuration', () => {

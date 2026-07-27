@@ -1,3 +1,4 @@
+import { hasNativeMillionContext } from '../models/claude.js';
 import type { AssistantUsage } from './event-types';
 
 /**
@@ -35,6 +36,14 @@ export interface ClaudeModelPricing {
   webSearchPerRequest?: number;
 }
 
+const MODERN_OPUS_PRICING: ClaudeModelPricing = {
+  inputPerMTok: 5,
+  outputPerMTok: 25,
+  cacheWritePerMTok: 6.25,
+  cacheReadPerMTok: 0.5,
+  webSearchPerRequest: 0.01,
+};
+
 /**
  * Per-model pricing. Keys are the model-id prefix `getModelPricing()` matches
  * against (longest-prefix wins) — so `claude-opus-4-7` matches the `claude-opus-4`
@@ -64,7 +73,32 @@ const PRICING: ReadonlyArray<{ prefix: string; price: ClaudeModelPricing }> = [
       webSearchPerRequest: 0.01,
     },
   },
-  // Opus 4.x — most expensive tier.
+  // Opus 5 — $5/$25, unchanged from Opus 4.8 (half the cost of Fable 5).
+  // Needs its OWN entry so the longest-prefix match doesn't fall through to
+  // `claude-opus-4`.
+  {
+    prefix: 'claude-opus-5',
+    price: MODERN_OPUS_PRICING,
+  },
+  // Opus 4.5–4.8 use the same $5/$25 tier. Keep explicit prefixes so the
+  // older Opus 4/4.1 pricing below remains correct.
+  {
+    prefix: 'claude-opus-4-8',
+    price: MODERN_OPUS_PRICING,
+  },
+  {
+    prefix: 'claude-opus-4-7',
+    price: MODERN_OPUS_PRICING,
+  },
+  {
+    prefix: 'claude-opus-4-6',
+    price: MODERN_OPUS_PRICING,
+  },
+  {
+    prefix: 'claude-opus-4-5',
+    price: MODERN_OPUS_PRICING,
+  },
+  // Opus 4/4.1 — legacy pricing.
   {
     prefix: 'claude-opus-4',
     price: {
@@ -187,9 +221,7 @@ export function computeCost(
  */
 export function getContextWindowLimit(modelId: string | null | undefined): number {
   if (!modelId) return 200_000;
-  // Fable 5 ships a 1M context window natively — it's the default (and only)
-  // mode, not a beta opt-in, so the bare id already means 1M.
-  if (modelId.startsWith('claude-fable')) return 1_000_000;
+  if (hasNativeMillionContext(modelId)) return 1_000_000;
   // 1M context beta — encoded as a model-id suffix in Agor; bare `claude-*`
   // ids without the `[1m]` suffix get the standard 200K window.
   if (modelId.includes('[1m]') || modelId.endsWith('-1m')) return 1_000_000;

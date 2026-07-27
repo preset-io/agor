@@ -8,8 +8,7 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
-  PublicBaseUrlNotConfiguredError,
-  requirePublicBaseUrl,
+  getBaseUrl,
   resolveAgenticToolPreset,
 } from '@agor/core/config';
 import {
@@ -1684,12 +1683,12 @@ export class GatewayService {
     user: User
   ): Promise<string | null> {
     try {
-      const baseUrl = await requirePublicBaseUrl();
-      return getSessionUrl(sessionId, baseUrl);
+      const baseUrl = await getBaseUrl();
+      const sessionUrl = getSessionUrl(sessionId, baseUrl);
+      if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
+      return sessionUrl;
     } catch (error) {
-      if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
-        console.warn('[gateway] Failed to build public session URL:', error);
-      }
+      console.warn('[gateway] Failed to build public session URL:', error);
     }
 
     try {
@@ -2433,6 +2432,7 @@ export class GatewayService {
           const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
+            tenantId: getCurrentTenantId(),
           });
           failedAttachments = failed;
           if (paths.length > 0) {

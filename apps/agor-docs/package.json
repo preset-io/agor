@@ -9,6 +9,7 @@
     "build": "next build && next-sitemap --config next-sitemap.config.cjs && pnpm run build:search",
     "start": "next start",
     "typecheck": "tsc --noEmit --incremental false",
+    "validate:brand-assets": "tsx scripts/validate-brand-assets.ts",
     "validate:social-metadata": "tsx scripts/validate-social-metadata.ts",
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },

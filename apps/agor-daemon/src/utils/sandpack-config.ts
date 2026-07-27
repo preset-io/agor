@@ -237,7 +237,7 @@ function sanitizeStringMap(input: unknown): Record<string, string> {
 // Legacy format detection
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HANDLEBARS_TOKEN_RE = /\{\{\s*agor\.(token|apiUrl|proxies\.([\w-]+)|user\w*)/g;
+const HANDLEBARS_AGOR_GRANT_RE = /\{\{\s*agor\.(apiUrl|user\w*)/g;
 const HANDLEBARS_USER_ENV_RE = /\{\{\s*user\.env\.([A-Z_][A-Z0-9_]*)/g;
 // Old format also rendered top-level `{{user.email}}` (note: NOT `agor.user…`)
 // and `{{artifact.id}}` / `{{artifact.boardId}}`. Presence-only — no /g flag
@@ -278,15 +278,11 @@ export function detectLegacyFormat(artifact: {
 
   for (const [, content] of Object.entries(files)) {
     if (typeof content !== 'string') continue;
-    for (const m of content.matchAll(HANDLEBARS_TOKEN_RE)) {
-      signals.add('has_handlebars_token');
+    for (const m of content.matchAll(HANDLEBARS_AGOR_GRANT_RE)) {
+      signals.add('has_handlebars_agor_grant');
       const which = m[1];
-      if (which === 'token') detectedGrants.add('agor_token');
-      else if (which === 'apiUrl') detectedGrants.add('agor_api_url');
-      else if (which.startsWith('proxies.')) {
-        // matched group 2 is the vendor name
-        if (m[2]) detectedGrants.add(`agor_proxies:${m[2]}`);
-      } else if (which === 'userEmail' || which === 'user') {
+      if (which === 'apiUrl') detectedGrants.add('agor_api_url');
+      else if (which === 'userEmail' || which === 'user') {
         detectedGrants.add('agor_user_email');
       }
     }
@@ -334,17 +330,9 @@ function renderUpgradeInstructions(input: {
   signals: ArtifactLegacySignal[];
 }): string {
   // Translate the parsed detection result back into the new-format vocab.
-  const proxyVendors: string[] = [];
-  const grantsObj: Record<string, true | string[]> = {};
+  const grantsObj: Record<string, true> = {};
   for (const g of input.detectedGrants) {
-    if (g.startsWith('agor_proxies:')) {
-      proxyVendors.push(g.slice('agor_proxies:'.length));
-    } else {
-      grantsObj[g] = true;
-    }
-  }
-  if (proxyVendors.length > 0) {
-    grantsObj.agor_proxies = proxyVendors.sort();
+    grantsObj[g] = true;
   }
 
   const envVarsLine =
@@ -367,7 +355,7 @@ function renderUpgradeInstructions(input: {
     `Migrate ONLY this artifact: ${artifactRef}. Do not touch any other artifacts.`,
     '',
     `1. Read the current files: agor_artifacts_get(artifactId=${artifactRef}).`,
-    `2. Republish with the new format: agor_artifacts_publish(folderPath=<tmp folder you write the rewritten files to>, artifactId=${artifactRef}, …).`,
+    `2. Republish with the new format: agor_artifacts_publish(branchId=<branch id>, subpath=<branch-relative folder>, artifactId=${artifactRef}, …).`,
     '',
     'In the rewritten file map:',
     `  - Drop these legacy files: ${removalsLine}`,

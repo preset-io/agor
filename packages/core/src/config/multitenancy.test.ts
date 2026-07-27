@@ -56,6 +56,22 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/auth_claim or multi_tenancy\.trusted_header/);
   });
 
+  it('requires filesystem isolation in required_from_auth mode', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        database: { dialect: 'postgresql' },
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          auth_claim: 'tenant_id',
+          filesystem_isolation_enabled: false,
+        },
+      })
+    ).toThrow(/requires multi_tenancy\.filesystem_isolation_enabled: true/);
+  });
+
   it('rejects reserved JWT claims as the tenant auth claim', () => {
     vi.stubEnv('AGOR_DB_DIALECT', '');
     vi.stubEnv('DATABASE_URL', '');

@@ -109,7 +109,6 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
-import { registerProxies } from './setup/proxies.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
@@ -145,6 +144,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -356,6 +356,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ...options,
       around: [tenantIdentityAround, ...(options.around ?? [])],
     });
+
+  // Long routes carry tenant identity without holding a route-wide database
+  // transaction. Bind direct repository dependencies to short units of work;
+  // hooked service calls establish their own scopes.
+  const stopRouteRepositories = bindStopRouteRepositories(db, {
+    taskRepo: new TaskRepository(db),
+    branchRepo: branchRepository,
+  });
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
@@ -673,12 +681,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const permissionService = new PermissionService((event, data) => {
     app.service('sessions').emit(event, data);
   });
-
-  // ============================================================================
-  // HTTP proxies (off by default; mounted only when config.proxies has entries)
-  // ============================================================================
-
-  registerProxies(app, config, jwtSecret);
 
   // ============================================================================
   // Messages bulk + streaming routes
@@ -2238,7 +2240,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Stop endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  // Stop coordinates durable state with an external executor and may wait for
+  // its socket acknowledgement. It must not hold the route-wide tenant DB
+  // transaction while waiting: emitServiceEvent correctly defers realtime
+  // publication until commit, so a long transaction here would withhold the
+  // Stop event until after the cooperative grace expired and containment had
+  // already fallen back to SIGTERM. Internal service calls still use their
+  // normal short tenant transactions.
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
     {
@@ -2270,7 +2279,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const userId = params.user?.user_id;
             const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
             const isOwner =
-              !!userId && (await branchRepository.isOwner(session.branch_id, userId as UUID));
+              !!userId &&
+              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
             if (!isAdmin && !isOwner) {
               throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
             }
@@ -2298,7 +2308,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stopSessionPreserveQueue(
             {
               app,
-              taskRepo: new TaskRepository(db),
+              taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
             },
             id as SessionID,
