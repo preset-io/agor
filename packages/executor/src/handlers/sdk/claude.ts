@@ -22,6 +22,7 @@ export async function executeClaudeCodeTask(params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;

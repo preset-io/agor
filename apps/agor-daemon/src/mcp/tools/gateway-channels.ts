@@ -804,7 +804,7 @@ const slackManifestGenerateSchema = z.strictObject({
     .boolean()
     .default(false)
     .describe(
-      'Ingest images and text files attached to inbound messages (adds the files:read scope). The gateway downloads them server-side and hands the stored paths to the session agent.'
+      'Ingest images and text files attached to inbound messages (adds the files:read scope). The gateway stores them server-side and associates opaque storage keys with the created task.'
     ),
   threadHistory: z
     .boolean()
@@ -1024,7 +1024,7 @@ const slackFileUploadSchema = z.strictObject({
   ),
   path: mcpRequiredString(
     'path',
-    "File to upload: either an absolute path inside the daemon upload directory (e.g. a path you were given in an 'Attached files:' prompt), or a path relative to the calling session's branch workspace root. Arbitrary host filesystem paths are rejected."
+    'File to upload: either an absolute path inside the daemon upload directory (for example one returned by agor_gateway_slack_file_download), or a path relative to the calling session branch workspace root. Arbitrary host filesystem paths are rejected.'
   ),
   filename: mcpOptionalNonEmptyString(
     'filename',
@@ -1641,7 +1641,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_slack_file_upload',
     {
       description:
-        "Upload a file or image to a Slack channel or thread through a gateway channel without exposing Slack tokens. Gated by the channel's agent_tools.file_upload capability (disabled by default — an admin enables it per channel, which also adds the files:write OAuth scope to the app manifest). path must be either an absolute path inside the daemon upload directory (e.g. a path from an 'Attached files:' prompt) or a path relative to the calling session's branch workspace root; arbitrary host filesystem paths are rejected. When called from a gateway-created session, gatewayChannelId and slackChannelId default to that session's own channel; calls are restricted to gateway channels whose target branch matches the calling session's branch. Callers without session context need admin role or 'all' branch permission.",
+        "Upload a file or image to a Slack channel or thread through a gateway channel without exposing Slack tokens. Gated by the channel's agent_tools.file_upload capability (disabled by default — an admin enables it per channel, which also adds the files:write OAuth scope to the app manifest). path must be either an absolute path inside the daemon upload directory (for example one returned by agor_gateway_slack_file_download) or a path relative to the calling session's branch workspace root; arbitrary host filesystem paths are rejected. When called from a gateway-created session, gatewayChannelId and slackChannelId default to that session's own channel; calls are restricted to gateway channels whose target branch matches the calling session's branch. Callers without session context need admin role or 'all' branch permission.",
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: slackFileUploadSchema,
     },
@@ -1723,13 +1723,17 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       if (typeof botToken !== 'string' || !botToken) {
         throw new Error(`Gateway channel ${target.channel.id} has no bot token configured.`);
       }
-      const { paths } = await ingestInboundAttachments({ files: [file], botToken });
-      const storedPath = paths[0];
-      if (!storedPath) {
+      const { attachments } = await ingestInboundAttachments({ files: [file], botToken });
+      const storedAttachment = attachments[0];
+      if (!storedAttachment) {
         throw new Error(
           `Failed to download Slack file "${file.name}" (${args.fileId}); see daemon logs for details.`
         );
       }
+      // This standalone, explicitly path-returning agent tool predates task
+      // attachments. Preserve its behavior without leaking a daemon path into
+      // task metadata or gateway-created prompts.
+      const storedPath = path.join(getUploadDirectory(), storedAttachment.storage_key);
       return textResult({
         downloaded: true,
         gateway_channel: {

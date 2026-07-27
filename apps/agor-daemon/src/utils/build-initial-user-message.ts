@@ -34,6 +34,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { PREVIEW_IMAGE_MIME_TYPES } from './upload.js';
 
 const CONTENT_PREVIEW_MAX_CHARS = 200;
 
@@ -63,11 +64,14 @@ export function buildInitialUserMessage(input: BuildInitialUserMessageInput): Me
     typeof input.content === 'string'
       ? input.content.slice(0, CONTENT_PREVIEW_MAX_CHARS)
       : safeStringify(input.content).slice(0, CONTENT_PREVIEW_MAX_CHARS);
+  const previewAttachments = input.attachments?.flatMap((attachment, index) =>
+    PREVIEW_IMAGE_MIME_TYPES.has(attachment.mime_type) ? [{ attachment, index }] : []
+  );
   const content: string | ContentBlock[] =
-    typeof input.content === 'string' && input.attachments?.length && input.taskId
+    typeof input.content === 'string' && previewAttachments?.length && input.taskId
       ? [
           { type: 'text', text: input.content },
-          ...input.attachments.map<UrlImageContentBlock>((attachment, index) => ({
+          ...previewAttachments.map<UrlImageContentBlock>(({ attachment, index }) => ({
             type: 'image',
             filename: attachment.filename,
             media_type: attachment.mime_type,

@@ -136,7 +136,8 @@ export class GeminiTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    displayPrompt: string = prompt
   ): Promise<GeminiExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('GeminiTool not initialized with repositories for live execution');
@@ -154,7 +155,7 @@ export class GeminiTool implements ITool {
     // docs/never-lose-prompt-design.md).
     const userMessage = await createUserMessage(
       sessionId,
-      prompt,
+      displayPrompt,
       taskId,
       nextIndex,
       this.messagesService!,

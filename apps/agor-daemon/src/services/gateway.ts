@@ -63,6 +63,7 @@ import type {
   Session,
   SessionID,
   Task,
+  TaskAttachment,
   TenantID,
   ThreadSessionMap,
   User,
@@ -71,10 +72,7 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
-import {
-  buildPromptWithAttachments,
-  ingestInboundAttachments,
-} from '../utils/gateway-attachments.js';
+import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 
 /**
@@ -2315,7 +2313,12 @@ export class GatewayService {
     try {
       const promptService = this.app.service('/sessions/:id/prompt') as {
         create: (
-          data: { prompt: string; permissionMode?: string; messageSource?: MessageSource },
+          data: {
+            prompt: string;
+            permissionMode?: string;
+            messageSource?: MessageSource;
+            metadata?: { attachments?: TaskAttachment[] };
+          },
           params: Record<string, unknown>
         ) => Promise<Task>;
       };
@@ -2325,6 +2328,7 @@ export class GatewayService {
       // delivered prompt advances the last-delivered cursor. Non-mention replies
       // are picked up here the next time the bot is summoned.
       let promptText = data.text;
+      let taskAttachments: TaskAttachment[] = [];
       let slackCursorTsToWrite: string | undefined;
       if (channel.channel_type === 'slack' && !outboundSeed) {
         const currentTs = getSlackMessageTs(data.metadata);
@@ -2394,8 +2398,8 @@ export class GatewayService {
         promptText = buildShortcutInitialPrompt(data.text, data.metadata);
       }
 
-      // Download Slack image and text attachments server-side and fold their
-      // stored paths into the prompt so the agent can Read them. Gated on the
+      // Download Slack image and text attachments server-side and associate
+      // their opaque storage keys with the task. Gated on the
       // channel's ingest_files flag — channels without the files:read scope
       // never attempt downloads. Any failure degrades to a short note; the
       // prompt is always delivered.
@@ -2409,15 +2413,15 @@ export class GatewayService {
           typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
         let failedAttachments = 0;
         if (botToken) {
-          const { paths, failed } = await ingestInboundAttachments({
+          const { attachments, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
           });
           failedAttachments = failed;
-          if (paths.length > 0) {
-            promptText = buildPromptWithAttachments(promptText, paths);
+          if (attachments.length > 0) {
+            taskAttachments = attachments;
             console.log(
-              `[gateway] Ingested ${paths.length} Slack attachment(s) for session ${shortId(sessionId)}`
+              `[gateway] Ingested ${attachments.length} Slack attachment(s) for session ${shortId(sessionId)}`
             );
           }
         } else {
@@ -2463,7 +2467,12 @@ export class GatewayService {
       // Mark message source as 'gateway' so it won't be echoed back to the platform
       const tenantId = getCurrentTenantId();
       const task = await promptService.create(
-        { prompt: promptText, permissionMode, messageSource: 'gateway' },
+        {
+          prompt: promptText,
+          permissionMode,
+          messageSource: 'gateway',
+          ...(taskAttachments.length > 0 ? { metadata: { attachments: taskAttachments } } : {}),
+        },
         {
           route: { id: sessionId },
           user,

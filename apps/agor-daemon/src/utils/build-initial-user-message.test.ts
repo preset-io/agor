@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { buildInitialUserMessage } from './build-initial-user-message';
 
 describe('buildInitialUserMessage attachments', () => {
-  it('persists the exact prompt text with image blocks linked to the task retrieval route', () => {
+  it('persists the user-authored prompt with supported image blocks linked by task index', () => {
     const sessionId = '018f0000-0000-7000-8000-000000000001' as SessionID;
     const taskId = '018f0000-0000-7000-8000-000000000002' as TaskID;
-    const prompt = 'Attached files:\n- /tmp/chart.png\n\nCompare this chart';
+    const prompt = 'Compare this chart';
 
     const message = buildInitialUserMessage({
       sessionId,
@@ -16,8 +16,13 @@ describe('buildInitialUserMessage attachments', () => {
       content: prompt,
       attachments: [
         {
+          storage_key: 'notes_123.txt',
+          filename: 'notes.txt',
+          mime_type: 'text/plain',
+        },
+        {
+          storage_key: 'chart_123.png',
           filename: 'chart.png',
-          path: '/tmp/chart.png',
           mime_type: 'image/png',
         },
       ],
@@ -29,7 +34,7 @@ describe('buildInitialUserMessage attachments', () => {
         type: 'image',
         filename: 'chart.png',
         media_type: 'image/png',
-        url: `/sessions/${sessionId}/tasks/${taskId}/images/0`,
+        url: `/sessions/${sessionId}/tasks/${taskId}/images/1`,
       },
     ]);
     expect(message.content_preview).toBe(prompt);

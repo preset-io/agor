@@ -19,6 +19,7 @@ export async function executeCodexTask(params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;

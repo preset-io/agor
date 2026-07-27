@@ -4,7 +4,6 @@ import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildPromptWithAttachments,
   ingestInboundAttachments,
   isAllowedSlackFileUrl,
   isIngestableFile,
@@ -73,30 +72,6 @@ describe('isIngestableFile', () => {
   });
 });
 
-describe('buildPromptWithAttachments', () => {
-  it('returns the trimmed text when there are no attachments', () => {
-    expect(buildPromptWithAttachments('  hello  ', [])).toBe('hello');
-  });
-
-  it('prepends the attachment block to regular prompts', () => {
-    expect(buildPromptWithAttachments('look at this', ['/tmp/a.png'])).toBe(
-      'Attached files:\n- /tmp/a.png\n\nlook at this'
-    );
-  });
-
-  it('keeps slash commands first', () => {
-    expect(buildPromptWithAttachments('/review', ['/tmp/a.png'])).toBe(
-      '/review\n\nAttached files:\n- /tmp/a.png'
-    );
-  });
-
-  it('returns only the attachment block when the text is empty', () => {
-    expect(buildPromptWithAttachments('', ['/tmp/a.png', '/tmp/b.png'])).toBe(
-      'Attached files:\n- /tmp/a.png\n- /tmp/b.png'
-    );
-  });
-});
-
 describe('ingestInboundAttachments', () => {
   let uploadDir: string;
 
@@ -125,10 +100,15 @@ describe('ingestInboundAttachments', () => {
       { headers: { Authorization: 'Bearer xoxb-test' }, redirect: 'manual' }
     );
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
-    expect(result.paths[0].startsWith(uploadDir)).toBe(true);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_screenshot_\d+\.png$/);
-    expect(new Uint8Array(await fs.readFile(result.paths[0]))).toEqual(bytes);
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]).toMatchObject({
+      filename: 'screenshot.png',
+      mime_type: 'image/png',
+    });
+    expect(result.attachments[0].storage_key).toMatch(/^F123_screenshot_\d+\.png$/);
+    expect(
+      new Uint8Array(await fs.readFile(path.join(uploadDir, result.attachments[0].storage_key)))
+    ).toEqual(bytes);
   });
 
   it('downloads a text attachment and stores it in the upload dir', async () => {
@@ -155,9 +135,15 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_errors_\d+\.csv$/);
-    expect(await fs.readFile(result.paths[0], 'utf8')).toBe(body);
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]).toMatchObject({
+      filename: 'errors.csv',
+      mime_type: 'text/csv',
+    });
+    expect(result.attachments[0].storage_key).toMatch(/^F123_errors_\d+\.csv$/);
+    expect(await fs.readFile(path.join(uploadDir, result.attachments[0].storage_key), 'utf8')).toBe(
+      body
+    );
   });
 
   it('ignores non-ingestable attachments without counting them as failures', async () => {
@@ -171,7 +157,7 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 0 });
+    expect(result).toEqual({ attachments: [], failed: 0 });
   });
 
   it('never fetches disallowed hosts and counts them as failed', async () => {
@@ -186,7 +172,7 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -202,7 +188,7 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
   });
 
   it('rejects redirects to non-allowlisted hosts and never sends the token there', async () => {
@@ -222,7 +208,7 @@ describe('ingestInboundAttachments', () => {
       uploadDir,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
     // The Authorization header must only ever reach allowlisted slack.com
     // hosts: the redirect target is validated BEFORE any fetch to it.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -251,7 +237,7 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
+    expect(result.attachments).toHaveLength(1);
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       'https://files.slack.com/files-pri/T1-F123/other/screenshot.png',
@@ -286,7 +272,7 @@ describe('ingestInboundAttachments', () => {
       uploadDir,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
     // Reading stopped as soon as the running total crossed the 50MB ceiling.
     expect(chunksPulled).toBeLessThanOrEqual(MAX_UPLOAD_FILE_SIZE / chunkSize + 2);
     expect(await fs.readdir(uploadDir)).toEqual([]);
@@ -309,7 +295,7 @@ describe('ingestInboundAttachments', () => {
       uploadDir,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
@@ -330,7 +316,7 @@ describe('ingestInboundAttachments', () => {
       uploadDir,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
@@ -345,8 +331,8 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(2);
-    expect(result.paths[0]).not.toBe(result.paths[1]);
+    expect(result.attachments).toHaveLength(2);
+    expect(result.attachments[0].storage_key).not.toBe(result.attachments[1].storage_key);
     expect(await fs.readdir(uploadDir)).toHaveLength(2);
   });
 
@@ -367,7 +353,7 @@ describe('ingestInboundAttachments', () => {
       uploadDir,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ attachments: [], failed: 1 });
   });
 
   it('continues past failures and still stores the remaining images', async () => {
@@ -389,8 +375,8 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(result.failed).toBe(1);
-    expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F2_second_\d+\.png$/);
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0].storage_key).toMatch(/^F2_second_\d+\.png$/);
   });
 
   it('counts images beyond the per-message cap as failed without fetching them', async () => {
@@ -409,7 +395,7 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(10);
-    expect(result.paths).toHaveLength(10);
+    expect(result.attachments).toHaveLength(10);
     expect(result.failed).toBe(2);
   });
 });

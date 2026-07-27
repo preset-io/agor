@@ -74,7 +74,6 @@ import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
-  buildPromptWithAttachments,
   getComposerUploadAccept,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
@@ -1040,7 +1039,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
-      const attachmentPaths = uploadedFiles.map((file) => file.path);
       const composerStillOwnsSend =
         composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
         composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
@@ -1057,19 +1055,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             sendStartValue: value,
           })
         : value;
-      const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
-      if (!promptToSend.trim()) return;
       const attachmentTokens = uploadedFiles.flatMap((file) =>
-        file.previewToken ? [file.previewToken] : []
+        file.attachmentToken ? [file.attachmentToken] : []
       );
+      if (!latestValue.trim() && attachmentTokens.length === 0) return;
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
       // session state and reports it back via `task.status`. The 'queued'
       // WebSocket event populates the queue panel for queued prompts.
       const sendResult =
         attachmentTokens.length > 0
-          ? await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, attachmentTokens)
-          : await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+          ? await onSendPrompt?.(sendStartSessionId, latestValue, permissionMode, attachmentTokens)
+          : await onSendPrompt?.(sendStartSessionId, latestValue, permissionMode);
       if (sendResult === false) return;
 
       if (composerStillOwnsSend) {

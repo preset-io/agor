@@ -64,6 +64,26 @@ export function getUploadDirectory(): string {
   return path.join(getAgorHome(), 'uploads');
 }
 
+/** Keep user-facing attachment names inert and independent of host path syntax. */
+export function hasNoAsciiControlCharacters(value: string): boolean {
+  return Array.from(value).every((character) => {
+    const code = character.charCodeAt(0);
+    return code > 0x1f && code !== 0x7f;
+  });
+}
+
+export function sanitizeUploadDisplayFilename(
+  originalname: string,
+  fallback = 'attachment'
+): string {
+  const basename = path.basename(originalname.replaceAll('\\', '/'));
+  const sanitized = Array.from(basename, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? '_' : character;
+  }).join('');
+  return sanitized.slice(0, 200) || fallback;
+}
+
 export function validateUploadDestinationQuery(destination: unknown): void {
   if (destination == null || destination === '') return;
   if (Array.isArray(destination)) {

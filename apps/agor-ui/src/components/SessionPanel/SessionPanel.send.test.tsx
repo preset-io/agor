@@ -155,7 +155,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/chart.png',
           size: 5,
           mimeType: 'image/png',
-          previewToken: 'signed-chart-token',
+          attachmentToken: 'signed-chart-token',
         },
       ],
     });
@@ -163,10 +163,43 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/chart.png\n\nCompare this chart and mention the anomaly',
+      'Compare this chart and mention the anomaly',
       expect.any(String),
       ['signed-chart-token']
     );
+  });
+
+  it('sends an attachment-only task without synthesizing prompt text', async () => {
+    uploadMockState.uploadFilesToSession.mockResolvedValue({
+      success: true,
+      files: [
+        {
+          filename: 'chart.png',
+          path: '.agor/uploads/chart.png',
+          size: 5,
+          mimeType: 'image/png',
+          attachmentToken: 'signed-attachment-only-token',
+        },
+      ],
+    });
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['image'], 'chart.png', { type: 'image/png' })],
+      },
+    });
+
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+    expect(onSendPrompt).toHaveBeenCalledWith('session-1', '', expect.any(String), [
+      'signed-attachment-only-token',
+    ]);
   });
 
   it('does not mix or clear the newly selected session composer when upload resolves after session switch', async () => {
@@ -210,6 +243,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/old-session-chart.png',
           size: 9,
           mimeType: 'image/png',
+          attachmentToken: 'signed-old-session-token',
         },
       ],
     });
@@ -217,8 +251,9 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/old-session-chart.png\n\nOld session prompt snapshot',
-      expect.any(String)
+      'Old session prompt snapshot',
+      expect.any(String),
+      ['signed-old-session-token']
     );
     expect(onSendPrompt).not.toHaveBeenCalledWith(
       'session-1',
@@ -273,6 +308,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/rapid-chart.png',
           size: 11,
           mimeType: 'image/png',
+          attachmentToken: 'signed-rapid-token',
         },
       ],
     });
@@ -280,8 +316,9 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/rapid-chart.png\n\nSummarize this rapid chart',
-      expect.any(String)
+      'Summarize this rapid chart',
+      expect.any(String),
+      ['signed-rapid-token']
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
       expect.not.objectContaining({ destination: expect.anything() })
@@ -330,6 +367,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/uploading-chart.png',
           size: 5,
           mimeType: 'image/png',
+          attachmentToken: 'signed-uploading-token',
         },
       ],
     });
@@ -346,6 +384,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/preserve-chart.png',
           size: 12,
           mimeType: 'image/png',
+          attachmentToken: 'signed-preserve-token',
         },
       ],
     });
@@ -371,8 +410,9 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/preserve-chart.png\n\nKeep this prompt if submit fails',
-      expect.any(String)
+      'Keep this prompt if submit fails',
+      expect.any(String),
+      ['signed-preserve-token']
     );
     expect(textarea).toHaveValue('Keep this prompt if submit fails');
     expect(screen.getByLabelText('Preview preserve-chart.png')).toBeInTheDocument();

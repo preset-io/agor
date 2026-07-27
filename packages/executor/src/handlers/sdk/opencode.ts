@@ -28,11 +28,13 @@ export async function executeOpenCodeTask(params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   resolvedConfig?: ResolvedConfigSlice;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
+  const displayPrompt = params.displayPrompt ?? prompt;
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
@@ -146,8 +148,8 @@ export async function executeOpenCodeTask(params: {
       role: MessageRole.USER,
       index: nextIndex,
       timestamp: new Date().toISOString(),
-      content_preview: prompt.substring(0, 200),
-      content: prompt,
+      content_preview: displayPrompt.substring(0, 200),
+      content: displayPrompt,
     });
 
     // Execute task using OpenCode's executeTask interface

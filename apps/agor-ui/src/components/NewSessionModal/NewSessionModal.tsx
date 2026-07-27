@@ -58,8 +58,8 @@ export interface NewSessionConfig {
   envVarNames?: string[];
   /**
    * Raw files pasted/dropped into the initial prompt before the session
-   * exists. Uploaded to the new session after creation, then folded into the
-   * initial prompt. Never included in the session-create REST payload.
+   * exists. Uploaded after session creation and associated with the initial
+   * task through opaque tokens. Never included in the session-create payload.
    */
   attachmentFiles?: File[];
 }

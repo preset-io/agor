@@ -254,9 +254,11 @@ See **[Security](/security)** for the trust boundary on per-user secrets.
 
 ## 📎 File Uploads
 
-**Drop files into the agent's context with one click.** Uploads are stored under `~/.agor/uploads/`, and the agent receives that file path. A checked-by-default toggle auto-prompts the agent with a templated message referencing the path; the agent can copy or move the file into a branch if needed.
+**Paste or drop files into the session composer.** Agor keeps the uploaded bytes behind an authenticated task association. When the task starts, its executor downloads the files into executor-owned task storage and receives those local paths; the prompt shown in chat remains exactly what you wrote. Supported images remain available as authenticated thumbnails after reload.
 
 Useful for handing screenshots, designs, error logs, or test fixtures to the agent without leaving the chat.
+
+> **Legacy File Browser flow:** Uploading from a branch's **Files** tab still stores files under `~/.agor/uploads/` and can auto-prompt with the daemon-local path. That separate flow is retained for compatibility and does not use composer attachment materialization.
 
 ---
 

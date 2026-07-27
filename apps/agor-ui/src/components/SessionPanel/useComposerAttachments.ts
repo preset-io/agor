@@ -156,6 +156,9 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
         if (result.files.length !== uploadable.length) {
           throw new Error('Upload response did not include every selected file');
         }
+        if (result.files.some((file) => !file.attachmentToken)) {
+          throw new Error('Upload response did not include every attachment token');
+        }
 
         uploadable.forEach((attachment, index) => {
           const uploaded = result.files[index];

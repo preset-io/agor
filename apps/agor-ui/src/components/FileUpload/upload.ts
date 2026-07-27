@@ -4,11 +4,12 @@ export type UploadDestination = 'branch' | 'global';
 
 export interface UploadedFile {
   filename: string;
+  /** Daemon-local path used only by the legacy Branch File Browser upload flow. */
   path: string;
   size: number;
   mimeType: string;
-  /** Signed capability used once to associate a composer image with a task. */
-  previewToken?: string;
+  /** Signed capability used once to associate a composer upload with a task. */
+  attachmentToken?: string;
 }
 
 export interface UploadFilesToSessionOptions {

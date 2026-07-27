@@ -50,7 +50,8 @@ export interface BaseTool {
     permissionMode?: PermissionMode,
     callbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    displayPrompt?: string
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -398,6 +399,7 @@ export async function executeToolTask(params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   apiKeyEnvVar: ApiKeyName;
@@ -409,8 +411,17 @@ export async function executeToolTask(params: {
     useNativeAuth: boolean
   ) => BaseTool;
 }): Promise<void> {
-  const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
-    params;
+  const {
+    client,
+    sessionId,
+    taskId,
+    prompt,
+    displayPrompt,
+    permissionMode,
+    apiKeyEnvVar,
+    toolName,
+    createTool,
+  } = params;
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
@@ -498,7 +509,8 @@ export async function executeToolTask(params: {
       permissionMode,
       ctx.callbacks,
       params.abortController,
-      params.messageSource
+      params.messageSource,
+      displayPrompt
     );
 
     console.log(

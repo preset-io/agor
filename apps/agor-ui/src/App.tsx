@@ -39,7 +39,6 @@ import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -982,10 +981,10 @@ function AppContent() {
 
         showSuccess('Session created!');
 
-        // Upload any pasted/dropped files to the freshly created session, then
-        // fold their server paths into the initial prompt. A screenshot with no
-        // typed text is valid — the attachment block becomes the message — so we
-        // send whenever there is prompt text OR at least one attachment.
+        // Upload pasted/dropped files to the freshly created session and send
+        // their opaque association tokens beside the user-authored prompt.
+        // Attachment-only prompts are valid; executor-local paths are derived
+        // only after the task-scoped executor authenticates.
         const trimmedPrompt = config.initialPrompt?.trim() ?? '';
         if (attachmentFiles?.length) {
           try {
@@ -995,16 +994,18 @@ function AppContent() {
               files: attachmentFiles,
               notifyAgent: false,
             });
-            const finalPrompt = buildPromptWithAttachments(
-              config.initialPrompt ?? '',
-              uploaded.files.map((file) => file.path)
+            const attachmentTokens = uploaded.files.flatMap((file) =>
+              file.attachmentToken ? [file.attachmentToken] : []
             );
-            if (finalPrompt.trim()) {
+            if (attachmentTokens.length !== uploaded.files.length) {
+              throw new Error('Upload response did not include every attachment token');
+            }
+            if (trimmedPrompt || attachmentTokens.length > 0) {
               await handleSendPrompt(
                 session.session_id,
-                finalPrompt,
+                config.initialPrompt ?? '',
                 config.permissionMode,
-                uploaded.files.flatMap((file) => (file.previewToken ? [file.previewToken] : []))
+                attachmentTokens
               );
             }
           } catch (error) {

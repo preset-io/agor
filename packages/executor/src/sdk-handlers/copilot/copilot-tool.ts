@@ -145,7 +145,8 @@ export class CopilotTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    displayPrompt: string = prompt
   ): Promise<CopilotExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('CopilotTool not initialized with repositories for live execution');
@@ -163,7 +164,7 @@ export class CopilotTool implements ITool {
     // docs/never-lose-prompt-design.md).
     const userMessage = await createUserMessage(
       sessionId,
-      prompt,
+      displayPrompt,
       taskId,
       nextIndex,
       this.messagesService!,

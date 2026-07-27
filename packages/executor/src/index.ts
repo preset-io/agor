@@ -22,6 +22,7 @@ import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
+import { materializeTaskAttachments } from './task-attachments.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
 patchConsole();
@@ -53,9 +54,13 @@ export class AgorExecutor {
   private abortController: AbortController;
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
+  private executionPrompt: string;
+  private userPrompt: string;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
+    this.executionPrompt = config.prompt;
+    this.userPrompt = config.prompt;
   }
 
   /**
@@ -86,6 +91,17 @@ export class AgorExecutor {
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
+
+      const prompts = await materializeTaskAttachments({
+        client: this.client,
+        daemonUrl: this.config.daemonUrl,
+        sessionToken: this.config.sessionToken,
+        sessionId: this.config.sessionId,
+        taskId: this.config.taskId,
+        prompt: this.config.prompt,
+      });
+      this.executionPrompt = prompts.executionPrompt;
+      this.userPrompt = prompts.userPrompt;
 
       // Setup event listeners
       this.setupEventListeners();
@@ -181,7 +197,8 @@ export class AgorExecutor {
         client: this.client,
         sessionId: this.config.sessionId as SessionID,
         taskId: this.config.taskId as TaskID,
-        prompt: this.config.prompt,
+        prompt: this.executionPrompt,
+        displayPrompt: this.userPrompt,
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,

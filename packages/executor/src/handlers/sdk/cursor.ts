@@ -430,6 +430,7 @@ export async function executeCursorTask(params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
@@ -506,7 +507,7 @@ export async function executeCursorTask(params: {
         client,
         sessionId,
         taskId,
-        prompt,
+        prompt: params.displayPrompt ?? prompt,
         index: getNextMessageIndexFrom(existingMessages),
         messageSource: params.messageSource,
         existingMessages,

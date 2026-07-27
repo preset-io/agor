@@ -181,7 +181,8 @@ export class CodexTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    displayPrompt: string = prompt
   ): Promise<CodexExecutionResult> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('CodexTool not initialized with repositories for live execution');
@@ -199,7 +200,7 @@ export class CodexTool implements ITool {
     // docs/never-lose-prompt-design.md).
     const userMessage = await createUserMessage(
       sessionId,
-      prompt,
+      displayPrompt,
       taskId,
       nextIndex,
       this.messagesService!,

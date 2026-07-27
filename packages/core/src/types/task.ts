@@ -3,11 +3,17 @@ import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
-/** Image uploaded by the web composer and associated with a persisted task. */
+/**
+ * Daemon-owned file associated with a persisted task.
+ *
+ * `storage_key` is opaque to callers. Only the daemon may resolve it to its
+ * upload storage; executors retrieve the bytes through the task-scoped route
+ * and materialize their own local copy.
+ */
 export interface TaskAttachment {
+  storage_key: string;
   filename: string;
-  path: string;
-  mime_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  mime_type: string;
 }
 
 export const TaskStatus = {
@@ -72,7 +78,7 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
-  /** Web-composer images that may be previewed from this task's user turn. */
+  /** Files that may be materialized for this task; supported images are also previewable. */
   attachments?: TaskAttachment[];
 }
 

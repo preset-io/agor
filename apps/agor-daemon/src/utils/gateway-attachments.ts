@@ -4,8 +4,8 @@
  * Downloads image and text-like files attached to inbound Slack messages
  * using the channel's bot token and stores them in the daemon upload
  * directory — the same destination the session composer's
- * `/sessions/:sessionId/upload` route writes to — so the session's agent can
- * Read them by absolute path.
+ * `/sessions/:sessionId/upload` route writes to. The persisted association is
+ * an opaque storage key; the task executor retrieves and materializes bytes.
  *
  * Other attachment types (PDFs, office documents, archives, media) are out of
  * scope and never downloaded. Downloads are restricted to Slack-owned hosts
@@ -16,17 +16,19 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
+import type { TaskAttachment } from '@agor/core/types';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
   buildUploadFilename,
   getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILES_PER_REQUEST,
+  sanitizeUploadDisplayFilename,
 } from './upload.js';
 
 export interface AttachmentIngestResult {
-  /** Absolute paths of stored files, in the order the attachments arrived. */
-  paths: string[];
+  /** Daemon-owned storage-key metadata, in attachment order. */
+  attachments: TaskAttachment[];
   /** Ingestable attachments that could not be fetched or stored. */
   failed: number;
 }
@@ -67,27 +69,6 @@ function isAllowedIngestMime(rawMime: string): boolean {
 /** Image and text-like attachments the ingestion pipeline accepts. */
 export function isIngestableFile(file: InboundFile): boolean {
   return isAllowedIngestMime(file.mimetype);
-}
-
-/**
- * Fold stored attachment paths into a prompt.
- *
- * Server-side copy of the session composer's `buildPromptWithAttachments`
- * (`apps/agor-ui/src/components/SessionPanel/composerAttachments.ts`) — the
- * daemon must not import agor-ui. Keep the two in sync.
- */
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
-  const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
-
-  const attachmentBlock = [
-    'Attached files:',
-    ...attachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
-  ].join('\n');
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
 }
 
 /**
@@ -162,7 +143,7 @@ export async function ingestInboundAttachments(args: {
   const uploadDir = args.uploadDir ?? getUploadDirectory();
 
   const ingestable = args.files.filter(isIngestableFile);
-  const paths: string[] = [];
+  const attachments: TaskAttachment[] = [];
   let failed = 0;
 
   for (const [index, file] of ingestable.entries()) {
@@ -205,6 +186,7 @@ export async function ingestInboundAttachments(args: {
           `unexpected content-type ${contentType.split(';')[0].trim().toLowerCase() || 'unknown'}`
         );
       }
+      const mimeType = contentType.split(';')[0].trim().toLowerCase();
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
       if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
         throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
@@ -217,12 +199,17 @@ export async function ingestInboundAttachments(args: {
       // other (the timestamp in buildUploadFilename is not unique enough).
       const filePath = path.join(uploadDir, buildUploadFilename(`${file.id}_${file.name}`));
       await fs.writeFile(filePath, body);
-      paths.push(filePath);
+      const storageKey = path.basename(filePath);
+      attachments.push({
+        storage_key: storageKey,
+        filename: sanitizeUploadDisplayFilename(file.name, storageKey),
+        mime_type: mimeType,
+      });
     } catch (error) {
       failed++;
       console.warn(`[gateway] Failed to ingest attachment "${file.name}":`, error);
     }
   }
 
-  return { paths, failed };
+  return { attachments, failed };
 }

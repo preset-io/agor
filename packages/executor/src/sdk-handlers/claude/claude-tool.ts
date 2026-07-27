@@ -258,7 +258,8 @@ export class ClaudeTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: import('../base').StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    displayPrompt: string = prompt
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -294,7 +295,7 @@ export class ClaudeTool implements ITool {
     // nextIndex from the returned message's actual index.
     const userMessage = await createUserMessage(
       sessionId,
-      prompt,
+      displayPrompt,
       taskId,
       nextIndex,
       this.messagesService!,

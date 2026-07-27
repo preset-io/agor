@@ -23,6 +23,7 @@ export type ToolRunner = (params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  displayPrompt?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
@@ -100,6 +101,7 @@ export class ToolRegistry {
       sessionId: SessionID;
       taskId: TaskID;
       prompt: string;
+      displayPrompt?: string;
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
