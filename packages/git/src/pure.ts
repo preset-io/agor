@@ -21,7 +21,28 @@ function getAgorHome(): string {
   return path.join(os.homedir(), '.agor');
 }
 
-function getDataHome(): string {
+/**
+ * Tenant resolver injected by the daemon so the repo/worktree layout becomes
+ * per-tenant in-process. The git package cannot import @agor/core (dependency
+ * cycle), so the daemon wires getCurrentTenantId in at startup via
+ * setDataHomeTenantResolver. The executor process never sets a resolver — it
+ * receives fully-resolved absolute paths from the daemon — so it stays on the
+ * un-scoped root (see getDataHomeRoot and the delete safety checks).
+ */
+type DataHomeTenantResolver = () => string | undefined;
+let dataHomeTenantResolver: DataHomeTenantResolver | undefined;
+
+export function setDataHomeTenantResolver(resolver: DataHomeTenantResolver | undefined): void {
+  dataHomeTenantResolver = resolver;
+}
+
+// Mirrors @agor/core's DEFAULT_STATIC_TENANT_ID. The single-tenant OSS/static
+// deployment stays on the historical un-scoped layout (zero migration); only a
+// resolved non-default tenant gets its own `tenants/<id>` subtree.
+const DEFAULT_TENANT_ID = 'default';
+
+/** The un-scoped data-home root, with no tenant segment. */
+export function getDataHomeRoot(): string {
   if (process.env.AGOR_DATA_HOME) return expandHomePath(process.env.AGOR_DATA_HOME);
   try {
     const raw = readFileSync(path.join(getAgorHome(), 'config.yaml'), 'utf-8');
@@ -33,6 +54,13 @@ function getDataHome(): string {
     // @agor/core's full config loader.
   }
   return getAgorHome();
+}
+
+function getDataHome(): string {
+  const root = getDataHomeRoot();
+  const tenantId = dataHomeTenantResolver?.();
+  if (!tenantId || tenantId === DEFAULT_TENANT_ID) return root;
+  return path.join(root, 'tenants', tenantId);
 }
 
 export function getReposDir(): string {

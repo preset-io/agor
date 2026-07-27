@@ -16,7 +16,7 @@ import {
   buildAuthHeaderEnv,
   buildGitConfigEnv,
   extractRepoName,
-  getBranchesDir,
+  getDataHomeRoot,
   getReposDir,
   gitUrlHasUserinfo,
   parseHostFromGitUrl,
@@ -1737,29 +1737,33 @@ export async function deleteRepoDirectory(repoPath: string): Promise<void> {
   const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
-  // Safety check: ensure we're only deleting from ~/.agor/repos/
-  const reposDir = getReposDir();
+  // Safety check: ensure we're only deleting from within the data-home root.
+  // We validate against the un-scoped root (not getReposDir()) because this runs
+  // in the executor process, which has no ambient tenant context: a tenant-scoped
+  // repo path (root/tenants/<id>/repos/<slug>) is a sibling of the un-scoped
+  // root/repos, so containment only holds against the shared root.
+  const dataHomeRoot = getDataHomeRoot();
 
   // Use realpathSync to follow symlinks and canonicalize paths.
   // If the directory was already removed, fall back to resolving via parent.
-  const resolvedReposDir = realpathSync(reposDir);
+  const resolvedRoot = realpathSync(dataHomeRoot);
   const resolvedRepoPath = existsSync(repoPath)
     ? realpathSync(repoPath)
     : resolve(realpathSync(resolve(repoPath, '..')), resolve(repoPath).split('/').pop()!);
 
-  // Get relative path from reposDir to repoPath
-  const relativePath = relative(resolvedReposDir, resolvedRepoPath);
+  // Get relative path from the data-home root to repoPath
+  const relativePath = relative(resolvedRoot, resolvedRepoPath);
 
   // Check if relative path goes outside (starts with '..' or is absolute)
   if (relativePath.startsWith('..') || resolve(relativePath) === relativePath) {
     throw new Error(
-      `Safety check failed: Repository path must be inside ${reposDir}. Got: ${repoPath}`
+      `Safety check failed: Repository path must be inside ${dataHomeRoot}. Got: ${repoPath}`
     );
   }
 
-  // Additional safety: don't allow deleting the repos directory itself
-  if (resolvedRepoPath === resolvedReposDir || relativePath === '') {
-    throw new Error('Cannot delete the repos directory itself');
+  // Additional safety: don't allow deleting the data-home root itself
+  if (resolvedRepoPath === resolvedRoot || relativePath === '') {
+    throw new Error('Cannot delete the data-home root itself');
   }
 
   await rm(resolvedRepoPath, { recursive: true, force: true });
@@ -1778,30 +1782,34 @@ export async function deleteBranchDirectory(branchPath: string): Promise<void> {
   const { realpathSync, existsSync } = await import('node:fs');
   const { resolve, relative } = await import('node:path');
 
-  // Safety check: ensure we're only deleting from configured branches directory
-  const branchesDir = getBranchesDir();
+  // Safety check: ensure we're only deleting from within the data-home root.
+  // Validated against the un-scoped root (not getBranchesDir()) for the same
+  // reason as deleteRepoDirectory: this runs in the executor, which has no
+  // ambient tenant context, so a tenant-scoped branch path only stays contained
+  // relative to the shared root.
+  const dataHomeRoot = getDataHomeRoot();
 
   // Use realpathSync to follow symlinks and canonicalize paths.
   // If the branch directory was already removed (e.g. by `git worktree remove`),
   // fall back to resolve() — the safety check still works since the base dir exists.
-  const resolvedBranchesDir = realpathSync(branchesDir);
+  const resolvedRoot = realpathSync(dataHomeRoot);
   const resolvedBranchPath = existsSync(branchPath)
     ? realpathSync(branchPath)
     : resolve(realpathSync(resolve(branchPath, '..')), resolve(branchPath).split('/').pop()!);
 
-  // Get relative path from branchesDir to branchPath
-  const relativePath = relative(resolvedBranchesDir, resolvedBranchPath);
+  // Get relative path from the data-home root to branchPath
+  const relativePath = relative(resolvedRoot, resolvedBranchPath);
 
   // Check if relative path goes outside (starts with '..' or is absolute)
   if (relativePath.startsWith('..') || resolve(relativePath) === relativePath) {
     throw new Error(
-      `Safety check failed: Branch path must be inside ${branchesDir}. Got: ${branchPath}`
+      `Safety check failed: Branch path must be inside ${dataHomeRoot}. Got: ${branchPath}`
     );
   }
 
-  // Additional safety: don't allow deleting the branches directory itself
-  if (resolvedBranchPath === resolvedBranchesDir || relativePath === '') {
-    throw new Error('Cannot delete the branches directory itself');
+  // Additional safety: don't allow deleting the data-home root itself
+  if (resolvedBranchPath === resolvedRoot || relativePath === '') {
+    throw new Error('Cannot delete the data-home root itself');
   }
 
   await rm(resolvedBranchPath, { recursive: true, force: true });

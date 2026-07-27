@@ -15,6 +15,7 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
+  getCurrentTenantId,
   MessagesRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -22,6 +23,7 @@ import {
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { setDataHomeTenantResolver } from '@agor/core/git/pure';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
@@ -572,6 +574,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
     getSocketServer,
     terminalsService,
   } = ctx;
+
+  // 0. Make the repo/worktree layout tenant-aware in this daemon process. The
+  // git package can't import @agor/core (cycle), so we inject the ambient tenant
+  // resolver here; every repo/branch path then lands under tenants/<id>/ for a
+  // resolved non-default tenant. The executor stays un-scoped and operates on the
+  // absolute paths this daemon hands it.
+  setDataHomeTenantResolver(getCurrentTenantId);
 
   // 1. Correct orphaned task/session state from previous daemon instance.
   // Keep this blocking so clients never see stale RUNNING/AWAITING states from
