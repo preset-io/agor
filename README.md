@@ -38,6 +38,8 @@ interchangeable per session — bring your own provider and subscription, no ven
   <a href="https://github.com/sst/opencode"><img src="apps/agor-docs/public/tools/opencode.png" alt="OpenCode" height="44" /></a>
   &nbsp;&nbsp;
   <a href="https://cursor.com"><img src="apps/agor-docs/public/tools/cursor.png" alt="Cursor" height="44" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/can1357/oh-my-pi">🥧 Oh My Pi</a>
 </p>
 
 <!--
@@ -61,8 +63,8 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
   dev environment, conversation history, and PR. One entity to point at.
 - **Isolated dev environments** — a one-click dev server per branch, with ports auto-assigned so
   parallel branches never collide.
-- **Multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor (beta) are
-  interchangeable per session. Bring your own provider; no vendor lock-in.
+- **Multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor (beta), and Oh My Pi
+  (beta) are interchangeable per session. Bring your own provider; no vendor lock-in.
 - **Rich session UI** — per-prompt token and dollar accounting, structured tool blocks,
   model/effort selectors, completion chimes. The terminal experience, in the browser.
 - **MCP-native** — Agor exposes itself over MCP; sessions are auto-issued a token, so agents fork,

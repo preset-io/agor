@@ -128,6 +128,7 @@ export interface DefaultAgenticConfig {
   opencode?: DefaultAgenticToolConfig;
   copilot?: DefaultAgenticToolConfig;
   cursor?: DefaultAgenticToolConfig;
+  omp?: DefaultAgenticToolConfig;
 }
 
 export type UserAgenticDefaultSelections = Partial<
@@ -184,6 +185,8 @@ export interface AgenticToolsConfig {
   copilot?: CopilotConfig;
   cursor?: CursorConfig;
   opencode?: Record<string, never>;
+  /** OMP resolves credentials from its own profile — no Agor-stored fields. */
+  omp?: Record<string, never>;
 }
 
 /** Union of all valid env-var-named fields across all tool configs. */

@@ -37,6 +37,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
+  const [ompForm] = Form.useForm();
 
   const [saving, setSaving] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
@@ -46,6 +47,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
     opencode: false,
     copilot: false,
     cursor: false,
+    omp: false,
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
@@ -68,6 +70,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
         return copilotForm;
       case 'cursor':
         return cursorForm;
+      case 'omp':
+        return ompForm;
     }
   };
 
@@ -123,6 +127,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       label: 'OpenCode',
       tool: 'opencode',
       form: opencodeForm,
+    },
+    {
+      key: 'omp',
+      label: 'Oh My Pi',
+      tool: 'omp',
+      form: ompForm,
     },
     {
       key: 'cursor',

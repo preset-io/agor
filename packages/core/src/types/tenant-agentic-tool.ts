@@ -9,10 +9,12 @@ export const TENANT_AGENTIC_TOOL_NAMES = [
   'copilot',
   'cursor',
   'opencode',
+  'omp',
 ] as const;
 
 export type TenantAgenticToolName = (typeof TENANT_AGENTIC_TOOL_NAMES)[number];
-export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode'>;
+/** Tools Agor stores provider credentials for. OMP and OpenCode self-authenticate. */
+export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode' | 'omp'>;
 
 export const PROVIDER_RESOLUTION_POLICIES = [
   'user_required',
@@ -92,7 +94,7 @@ export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgentic
 export function isProviderConnectionTool(
   tool: TenantAgenticToolName
 ): tool is ProviderConnectionTool {
-  return tool !== 'opencode';
+  return tool !== 'opencode' && tool !== 'omp';
 }
 
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {

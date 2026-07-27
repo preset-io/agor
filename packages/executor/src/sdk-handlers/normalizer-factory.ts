@@ -16,12 +16,14 @@ import { ClaudeCodeNormalizer } from './claude/normalizer.js';
 import { CodexNormalizer } from './codex/normalizer.js';
 import { CopilotNormalizer } from './copilot/normalizer.js';
 import { GeminiNormalizer } from './gemini/normalizer.js';
+import { OmpNormalizer } from './omp/normalizer.js';
 
 // Singleton instances (normalizers are stateless, so one instance is fine)
 const claudeNormalizer = new ClaudeCodeNormalizer();
 const codexNormalizer = new CodexNormalizer();
 const copilotNormalizer = new CopilotNormalizer();
 const geminiNormalizer = new GeminiNormalizer();
+const ompNormalizer = new OmpNormalizer();
 
 /** `modelHint` refines `contextWindowLimit` lookup; never used as `primaryModel`. */
 export interface NormalizeOptions {
@@ -37,7 +39,15 @@ export interface NormalizeOptions {
  * @returns Normalized data with consistent structure, or undefined if normalization fails
  */
 export function normalizeRawSdkResponse(
-  agenticTool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor' | string,
+  agenticTool:
+    | 'claude-code'
+    | 'codex'
+    | 'gemini'
+    | 'opencode'
+    | 'copilot'
+    | 'cursor'
+    | 'omp'
+    | string,
   rawSdkResponse: unknown,
   options?: NormalizeOptions
 ): NormalizedSdkData | undefined {
@@ -67,6 +77,11 @@ export function normalizeRawSdkResponse(
       case 'copilot':
         return copilotNormalizer.normalize(
           rawSdkResponse as Parameters<typeof copilotNormalizer.normalize>[0]
+        );
+
+      case 'omp':
+        return ompNormalizer.normalize(
+          rawSdkResponse as Parameters<typeof ompNormalizer.normalize>[0]
         );
 
       case 'opencode':

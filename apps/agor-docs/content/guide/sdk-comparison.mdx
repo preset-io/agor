@@ -1,6 +1,6 @@
 ---
 title: SDK Feature Comparison
-description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations including streaming, tool approval, and SDK differences.
+description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Oh My Pi integrations including streaming, tool approval, and SDK differences.
 ---
 
 import { ScrollTable } from '../../components/ScrollTable';
@@ -13,19 +13,19 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 <ScrollTable>
 
-| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | OpenCode                  | Notes                                                                                       |
-| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | ✅ Text + tools           | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
-| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                      |
-| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                       |
-| **Session forkable**        | ✅ SDK-native       | ✅ App Server fork        | ❌ Not yet          | ❌ Not yet                | ❌ Not yet                | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar  |
-| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                              |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ⚠️ Auto-granted          | OpenCode permissions auto-granted by Agor to prevent session hangs                          |
-| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md             |
-| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | ✅ Rich events            | OpenCode streams tool parts with state tracking (pending/running/completed)                  |
-| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history            |
-| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ✅ Via step-finish        | OpenCode provides token counts and cost via `step-finish` message parts                     |
-| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | 🟡 Estimated              | Agor derives cumulative conversation usage from SDK metrics                                 |
+| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | OpenCode                  | Oh My Pi           | Notes                                                                                       |
+| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
+| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | ✅ Text + tools           | ✅ Text + thinking | Claude, Gemini, Copilot, OpenCode & Oh My Pi stream text token-by-token; Codex streams tool events only |
+| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | ⚠️ Limited                | ✅ Yes             | Claude & Oh My Pi support interrupt/abort; others may lose partial work                      |
+| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | ❌ No              | Only Claude Code stores sessions as JSONL transcripts                                       |
+| **Session forkable**        | ✅ SDK-native       | ✅ App Server fork        | ❌ Not yet          | ❌ Not yet                | ❌ Not yet                | ❌ Not yet          | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar  |
+| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | ✅ Native          | All agents support MCP with Agor's built-in self-access server                              |
+| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ⚠️ Auto-granted          | ✅ Modes           | OpenCode permissions auto-granted by Agor; Oh My Pi exposes default/acceptEdits/bypassPermissions |
+| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | ✅ AGENTS.md       | OpenCode reads `opencode.json`; Claude auto-loads CLAUDE.md; Oh My Pi auto-discovers context files from the branch worktree it runs in |
+| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | ✅ Rich events            | ✅ Start/end       | OpenCode streams tool parts (pending/running/completed); Oh My Pi emits tool_execution_start/end |
+| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | ✅ Resumed session | OpenCode, Claude & Copilot keep server-side state; Oh My Pi resumes its session file per turn; Codex/Gemini replay history |
+| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ✅ Via step-finish        | ✅ Tokens + $      | OpenCode provides tokens via `step-finish`; Oh My Pi reports tokens and real USD cost      |
+| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | 🟡 Estimated              | ✅ Reported        | Agor derives cumulative usage from SDK metrics; Oh My Pi reports context snapshots directly |
 
 </ScrollTable>
 
@@ -829,6 +829,16 @@ Copilot supports multiple underlying models selectable via the SDK:
 - You need flexibility to switch between providers without changing tools
 - Cost optimization is important (bring your own keys, no middleman)
 
+### Use Oh My Pi when:
+
+- You want a **terminal-native** coding agent driven over a stable RPC
+  protocol (no SDK import, no separate server process to babysit)
+- **Slash commands** matter to your workflow — they work in Agor
+- You want **accurate** per-prompt cost (real USD, reported by OMP) and
+  **accurate** context-window usage (snapshots, not estimates)
+- You want **streaming reasoning** alongside streaming text
+- You need fine-grained **reasoning levels** (low, medium, high, xhigh, max)
+
 ---
 
 ## OpenCode-Specific Notes
@@ -867,6 +877,65 @@ OpenCode supports MCP servers via its REST API:
 - **Session import/export** not available
 - **Permissions** are auto-granted by Agor (no interactive approval UI)
 - **Server must be running.** `opencode serve` must be started separately before using in Agor
+
+---
+
+## Oh My Pi-Specific Notes
+
+### Integration: RPC over stdio
+
+Agor does **not** import OMP's SDK in-process. OMP's npm package ships raw
+TypeScript and targets the Bun runtime, so it cannot be loaded by Agor's
+Node executor. Instead, Agor spawns the `omp` CLI in RPC mode:
+
+```bash
+omp --mode rpc
+```
+
+This speaks a **newline-delimited JSON (JSONL)** protocol over stdio. Agor
+writes request frames to the process stdin and reads response/event frames
+from stdout. Every capability below is surfaced through that RPC channel.
+
+### Authentication
+
+Oh My Pi manages its own credentials (under `~/.omp`). Agor stores **no OMP
+API key**. To use OMP in Agor, authenticate the `omp` CLI once on the host
+that runs the Agor executor:
+
+```bash
+omp        # complete the sign-in flow once
+```
+
+OMP-managed auth is identical to how Agor treats OpenCode.
+
+### Capabilities surfaced over RPC
+
+- **Streaming text + thinking deltas** — token-level text and reasoning
+  streamed as the model generates, for a real-time typewriter effect.
+- **Structured tool events** — `tool_execution_start` / `tool_execution_end`
+  frames with tool name, arguments, and results.
+- **Token usage + real cost** — per-message token counts **and** a real USD
+  cost figure reported by OMP itself (not estimated by Agor).
+- **Context-window snapshots** — OMP reports its current context-window
+  usage directly, so Agor shows accurate (not estimated) usage.
+- **Abort / interrupt** — a prompt in flight can be cancelled over RPC.
+- **Model selection** — the model is chosen per session over RPC.
+- **Reasoning levels** — `low`, `medium`, `high`, `xhigh`, `max`.
+- **Permission modes** — `default`, `acceptEdits`, `bypassPermissions`.
+
+### Slash commands
+
+Slash commands are OMP's distinctive capability and **work in Agor**. OMP
+advertises its command set over RPC (`available_commands_update` frames and
+a `get_available_commands` request). A prompt that begins with `/` is
+expanded by OMP itself; local-only commands complete without an agent turn.
+
+### Session model
+
+- **Spawn subsessions** — supported. Delegate a fresh-context child for a
+  focused subtask.
+- **Fork** — not yet supported in Agor.
+- **Session import/export** — not yet supported.
 
 ---
 

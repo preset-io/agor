@@ -73,6 +73,7 @@ const AGENTIC_TOOL_TABS = [
   'opencode',
   'copilot',
   'cursor',
+  'omp',
 ] as const satisfies readonly AgenticToolName[];
 
 type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
@@ -126,6 +127,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
+  const [ompForm] = Form.useForm();
   const [audioForm] = Form.useForm();
 
   const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
@@ -137,8 +139,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       opencode: opencodeForm,
       copilot: copilotForm,
       cursor: cursorForm,
+      omp: ompForm,
     }),
-    [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
+    [
+      claudeCliForm,
+      claudeForm,
+      codexForm,
+      copilotForm,
+      cursorForm,
+      geminiForm,
+      ompForm,
+      opencodeForm,
+    ]
   );
 
   // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
@@ -157,6 +169,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     opencode: {},
     copilot: {},
     cursor: {},
+    omp: {},
   });
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
   const [agenticAuthMethods, setAgenticAuthMethods] = useState<
@@ -185,6 +198,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     opencode: false,
     copilot: false,
     cursor: false,
+    omp: false,
   });
   const [dirtyAgenticConfigTools, setDirtyAgenticConfigTools] = useState<Set<AgenticToolName>>(
     () => new Set()
@@ -331,6 +345,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       opencode: {},
       copilot: {},
       cursor: {},
+      omp: {},
     };
     const stored = user?.agentic_tools;
     if (stored) {
@@ -696,6 +711,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'opencode':
       case 'copilot':
       case 'cursor':
+      case 'omp':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
@@ -770,6 +786,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           key: 'opencode',
           label: 'OpenCode',
           icon: <ToolIcon tool="opencode" size={18} />,
+        },
+        {
+          key: 'omp',
+          label: 'Oh My Pi',
+          icon: <ToolIcon tool="omp" size={18} />,
         },
         {
           key: 'cursor',
@@ -1009,6 +1030,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'gemini':
       case 'opencode':
       case 'copilot':
+      case 'omp':
       case 'cursor': {
         const toolName = activeTab as AgenticToolName;
         const currentForm = agenticFormByTool[toolName];

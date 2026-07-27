@@ -89,7 +89,16 @@ export const sessions = pgTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'],
+      enum: [
+        'claude-code',
+        'claude-code-cli',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'cursor',
+        'omp',
+      ],
     }).notNull(),
     agentic_tool_preset_id: varchar('agentic_tool_preset_id', { length: 36 }).references(
       (): AnyPgColumn => agenticToolPresets.preset_id,
@@ -1265,7 +1274,7 @@ export const agenticToolPresets = pgTable(
     tenant_id: text('tenant_id').notNull().default('default'),
     preset_id: varchar('preset_id', { length: 36 }).primaryKey(),
     tool: text('tool', {
-      enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'],
+      enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode', 'omp'],
     }).notNull(),
     name: text('name').notNull(),
     description: text('description'),
