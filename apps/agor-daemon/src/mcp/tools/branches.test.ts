@@ -4,6 +4,27 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
+vi.mock('../../utils/executor-read-impersonation.js', () => ({
+  resolveExecutorReadAsUser: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/spawn-executor.js')>();
+  return {
+    ...actual,
+    generateScopedServiceToken: vi.fn(() => 'service-token'),
+    runExecutorCommand: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
+      success: true,
+      data: {
+        statuses: (payload.params?.branchIds ?? []).map((branchId) => ({
+          branchId,
+          exists: !branchId.startsWith('missing-'),
+        })),
+      },
+    })),
+  };
+});
+
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
