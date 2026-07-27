@@ -126,6 +126,11 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
     case 'cursor':
       return 'bypassPermissions'; // Cursor SDK is experimental/autonomous until permission callbacks exist
+    case 'omp':
+      // OMP applies its own approval settings inside the agent; Agor does not
+      // drive a per-turn approval handshake over RPC, so record the neutral
+      // mode rather than a Claude-specific one.
+      return 'default';
     default:
       return 'auto'; // Claude Code (SDK + CLI): model-classifier permissions
   }

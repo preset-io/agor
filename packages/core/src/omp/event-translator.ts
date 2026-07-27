@@ -95,6 +95,8 @@ export class OmpTurnAccumulator {
   private sawError = false;
   /** Tool call ids already emitted, so a retried frame cannot duplicate a block. */
   private readonly seenToolCalls = new Set<string>();
+  /** Tool call ids already completed, so a retried end frame cannot duplicate. */
+  private readonly settledToolCalls = new Set<string>();
 
   /**
    * Consume one frame.
@@ -270,9 +272,14 @@ export class OmpTurnAccumulator {
    * and adapt — that is normal progress, not a task failure. The error is
    * flagged on the block so the UI renders it as such, but only transport and
    * agent-level failures set `hadError`.
+   *
+   * Deduplicated by call id, mirroring `handleToolStart`: a repeated end frame
+   * would otherwise append a second `tool_result` with no matching `tool_use`.
    */
   private handleToolEnd(frame: OmpFrame): void {
     if (!('toolCallId' in frame) || typeof frame.toolCallId !== 'string') return;
+    if (this.settledToolCalls.has(frame.toolCallId)) return;
+    this.settledToolCalls.add(frame.toolCallId);
     const isError = 'isError' in frame && frame.isError === true;
     this.blocks.push({
       type: 'tool_result',

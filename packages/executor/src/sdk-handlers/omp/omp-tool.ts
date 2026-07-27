@@ -18,7 +18,7 @@
 
 import { spawn } from 'node:child_process';
 import { generateId, shortId } from '@agor/core';
-import type { OmpFrame, OmpTurnResult } from '@agor/core/omp';
+import type { OmpFrame, OmpRpcClientOptions, OmpTurnResult } from '@agor/core/omp';
 import {
   buildOmpEnv,
   ensureAgorMcpConfig,
@@ -45,12 +45,20 @@ const LOCAL_COMMAND_DRAIN_MS = 750;
 /** Hard ceiling on a single OMP turn, so a wedged agent cannot hang the task. */
 const TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
+/**
+ * Ceiling for the prompt ACCEPTANCE ack, which OMP sends immediately — this is
+ * not the turn budget (see `TURN_TIMEOUT_MS`).
+ */
+const PROMPT_ACK_TIMEOUT_MS = 60 * 1000;
+
 export interface OmpConfig {
   enabled: boolean;
   /** Executable to spawn; defaults to `omp` on PATH. */
   binPath?: string;
   /** OMP profile Agor runs under. */
   profile?: string;
+  /** Injection seam for tests, forwarded to the RPC client. */
+  spawnFn?: OmpRpcClientOptions['spawnFn'];
 }
 
 interface OmpSessionContext {
@@ -164,6 +172,16 @@ export class OmpTool implements ITool {
     let streamStarted = false;
     let sequence = 0;
     let streamedPreview = '';
+    /**
+     * Serializes streaming callbacks.
+     *
+     * `onFrame` is invoked synchronously from the stdout reader's loop, so
+     * several deltas can be dispatched before the first `await` resumes.
+     * Firing an independent async task per delta would let a later chunk
+     * overtake an earlier one — and overtake `onStreamStart` itself — so every
+     * delta is appended to one chain instead.
+     */
+    let streamChain: Promise<void> = Promise.resolve();
 
     // Turn completion has two paths: a model turn ends with `agent_end`, while
     // a local-only slash command never invokes the agent at all. Both funnel
@@ -186,11 +204,18 @@ export class OmpTool implements ITool {
       finishTurn();
     }, TURN_TIMEOUT_MS);
 
-    // Register the Agor MCP endpoint in the profile before the agent starts, so
-    // its tool registry includes Agor self-drive tools on the first turn.
-    await ensureAgorMcpConfig({ profile: this.config.profile }).catch((error: unknown) => {
-      console.warn('[omp] Could not write Agor MCP config:', error);
-    });
+    // Register the Agor MCP endpoint so the agent's tool registry includes
+    // Agor self-drive tools on the first turn.
+    //
+    // Gated on actually having a token: the entry lives in the user's own OMP
+    // config, and its `${...}` placeholders do NOT resolve outside Agor — OMP
+    // treats an unexpanded value literally and reports a failed server. So we
+    // only add it for installs that genuinely use Agor's MCP.
+    if (this.context.mcpToken && this.context.daemonUrl) {
+      await ensureAgorMcpConfig({ profile: this.config.profile }).catch((error: unknown) => {
+        console.warn('[omp] Could not write Agor MCP config:', error);
+      });
+    }
 
     const client = new OmpRpcClient({
       cwd: this.context.workingDirectory ?? process.cwd(),
@@ -198,6 +223,7 @@ export class OmpTool implements ITool {
       profile: this.config.profile,
       model: this.context.model,
       resume: this.context.resumeRef,
+      spawnFn: this.config.spawnFn,
       env: buildOmpEnv({
         base: process.env,
         daemonUrl: this.context.daemonUrl,
@@ -216,22 +242,24 @@ export class OmpTool implements ITool {
         // Agor renders one streaming surface per message; thinking deltas are
         // captured into blocks at message_end rather than streamed as text.
         if (delta.kind !== 'text') return;
-        void (async () => {
-          if (!streamStarted) {
-            streamStarted = true;
-            await streamingCallbacks.onStreamStart(assistantMessageId, {
-              session_id: sessionId as SessionID,
-              task_id: taskId as TaskID | undefined,
-              role: 'assistant',
-              timestamp: new Date().toISOString(),
-            });
-          }
-          sequence += 1;
-          streamedPreview += delta.text;
-          await streamingCallbacks.onStreamChunk(assistantMessageId, delta.text, sequence);
-        })().catch((error: unknown) => {
-          console.warn('[omp] Streaming callback failed:', error);
-        });
+        streamChain = streamChain
+          .then(async () => {
+            if (!streamStarted) {
+              streamStarted = true;
+              await streamingCallbacks.onStreamStart(assistantMessageId, {
+                session_id: sessionId as SessionID,
+                task_id: taskId as TaskID | undefined,
+                role: 'assistant',
+                timestamp: new Date().toISOString(),
+              });
+            }
+            sequence += 1;
+            streamedPreview += delta.text;
+            await streamingCallbacks.onStreamChunk(assistantMessageId, delta.text, sequence);
+          })
+          .catch((error: unknown) => {
+            console.warn('[omp] Streaming callback failed:', error);
+          });
       },
     });
     this.activeClient = client;
@@ -240,17 +268,30 @@ export class OmpTool implements ITool {
       await client.start();
       await this.applyModelSelection(client);
 
-      // `prompt` is acknowledged on acceptance, not on completion — the turn
+      // `prompt` is acknowledged on ACCEPTANCE, not on completion — the turn
       // itself finishes via the frames observed above.
-      const response = await client.request({ type: 'prompt', message: prompt }, 0);
-      if (!response.success) {
+      //
+      // The ack is raced against turn completion so a wedged OMP that accepts
+      // the prompt but never acks cannot hang the task forever: `agent_end`,
+      // process exit, or the turn timeout all release us. Waiting on the ack
+      // alone would make the turn timer unreachable, since it only resolves
+      // `turnComplete`.
+      const ack = client.request({ type: 'prompt', message: prompt }, PROMPT_ACK_TIMEOUT_MS);
+      // Swallow a late rejection; the race below already decided the outcome.
+      ack.catch(() => undefined);
+      const response = await Promise.race([ack, turnComplete.then(() => undefined)]);
+
+      if (response && !response.success) {
         throw new Error(response.error ?? 'OMP rejected the prompt');
       }
-      if (this.isLocalOnlyAck(response.data)) {
+      if (response && this.isLocalOnlyAck(response.data)) {
         // Let queued `command_output` frames land before closing the turn.
         setTimeout(finishTurn, isSlashCommandPrompt(prompt) ? LOCAL_COMMAND_DRAIN_MS : 0);
       }
       await turnComplete;
+      // Drain queued chunks so `streamedPreview` is complete before it is used
+      // as a preview fallback, and so no chunk lands after `onStreamEnd`.
+      await streamChain;
 
       await this.captureContextUsage(client);
 

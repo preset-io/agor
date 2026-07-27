@@ -23,8 +23,15 @@
  * That file is shared by every session, so the Agor endpoint is templated with
  * `${...}` placeholders that OMP expands per process from the environment.
  * One static file therefore stays correct for concurrent sessions instead of
- * racing to rewrite per-session values — and outside Agor the placeholders
- * resolve to nothing, so the entry is inert in a normal terminal session.
+ * racing to rewrite per-session values.
+ *
+ * Known tradeoff: an unexpanded `${...}` is kept as a literal string by OMP,
+ * so outside Agor this entry is not inert — OMP will try to reach a nonsense
+ * URL and report that one server as failed. It is non-fatal (other servers and
+ * the session are unaffected), and callers only write the entry once a session
+ * actually has an MCP token, but a user running plain `omp` under the same
+ * profile will see it. Set `AGOR_OMP_PROFILE` to keep Agor's MCP entry in an
+ * isolated profile instead; that profile then needs its own OMP login.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';

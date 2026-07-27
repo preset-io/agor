@@ -81,7 +81,10 @@ function asResponseFrame(frame: OmpFrame): OmpResponseFrame | undefined {
 interface ChunkAccumulator {
   chunkId: string;
   count: number;
+  /** Declared total size of the logical frame, as advertised by OMP. */
   byteLength: number;
+  /** Base64 characters actually buffered so far. */
+  buffered: number;
   parts: string[];
   received: number;
 }
@@ -244,7 +247,18 @@ export class OmpRpcClient {
     while (newlineIndex >= 0) {
       const line = this.stdoutBuffer.slice(0, newlineIndex);
       this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-      if (line.trim()) this.handleLine(line);
+      if (line.trim()) {
+        // This runs inside a stream 'data' listener: an escaping throw would be
+        // an uncaught exception and take the executor process down. A bad frame
+        // must degrade to a dropped frame, never a crash.
+        try {
+          this.handleLine(line);
+        } catch (error) {
+          this.options.onStderr?.(
+            `[omp-rpc] dropped frame: ${error instanceof Error ? error.message : String(error)}\n`
+          );
+        }
+      }
       newlineIndex = this.stdoutBuffer.indexOf('\n');
     }
   }
@@ -285,6 +299,7 @@ export class OmpRpcClient {
         chunkId: chunk.chunkId,
         count: chunk.count,
         byteLength: chunk.byteLength,
+        buffered: 0,
         parts: new Array<string>(chunk.count).fill(''),
         received: 0,
       };
@@ -294,7 +309,11 @@ export class OmpRpcClient {
       this.chunk = undefined;
       return undefined;
     }
-    if (acc.byteLength > this.maxReassembledBytes) {
+    // Bound on bytes ACTUALLY buffered, not the declared `byteLength` of the
+    // first chunk — a sequence of small chunks must not be able to grow the
+    // buffer past the negotiated ceiling unchecked.
+    acc.buffered += chunk.data.length;
+    if (acc.buffered > this.maxReassembledBytes || acc.byteLength > this.maxReassembledBytes) {
       this.chunk = undefined;
       throw new Error('OMP frame exceeded the negotiated reassembly limit');
     }

@@ -87,6 +87,22 @@ describe('OmpTurnAccumulator', () => {
     expect(acc.result().toolUses).toHaveLength(1);
   });
 
+  it('does not emit an orphan tool_result when an end frame repeats', () => {
+    // Asymmetric dedup used to let a retried end frame append a second
+    // tool_result with no matching tool_use.
+    const acc = new OmpTurnAccumulator();
+    const end = {
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      result: { content: [{ type: 'text', text: 'body' }] },
+    } as OmpFrame;
+    acc.handle(end);
+    acc.handle(end);
+    const results = acc.result().contentBlocks.filter((b) => b.type === 'tool_result');
+    expect(results).toHaveLength(1);
+  });
+
   it('treats a failing tool as normal progress, not a failed turn', () => {
     // Agents routinely probe, hit an error, and adapt. Only transport/agent
     // failures may set hadError, otherwise every exploratory turn fails.
