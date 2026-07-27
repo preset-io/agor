@@ -58,7 +58,16 @@ vi.mock('../AutocompleteTextarea', () => ({
 
 // Heavy children that need a live client/store are irrelevant to this test.
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => <div data-testid="agent-grid" />,
+  AgentSelectionGrid: ({ onSelect }: { onSelect: (agentId: string) => void }) => (
+    <div data-testid="agent-grid">
+      <button type="button" onClick={() => onSelect('claude-code')}>
+        Claude Agent SDK
+      </button>
+      <button type="button" onClick={() => onSelect('claude-code-cli')}>
+        Claude Code CLI
+      </button>
+    </div>
+  ),
 }));
 vi.mock('../MCPServerSelect', () => ({
   SessionMcpServersField: () => <div data-testid="mcp-servers-field" />,
@@ -124,5 +133,45 @@ describe('NewSessionModal attachment intake', { timeout: 10_000 }, () => {
     // A late paste during creation is refused: no new tray item is added.
     fireEvent.click(screen.getByTestId('simulate-paste'));
     expect(removeButtons()).toHaveLength(1);
+  });
+
+  it('clears and disables attachments when Claude Code CLI is selected', async () => {
+    const onCreate = vi.fn();
+
+    render(
+      <NewSessionModal
+        open
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        availableAgents={[]}
+        branchId="branch-1"
+        client={null}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('simulate-paste'));
+    expect(screen.getAllByRole('button', { name: /^Remove/ })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code CLI' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('prompt-textarea')).toHaveAttribute(
+        'data-files-drop-disabled',
+        'true'
+      )
+    );
+    expect(screen.queryAllByRole('button', { name: /^Remove/ })).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId('simulate-paste'));
+    expect(screen.queryAllByRole('button', { name: /^Remove/ })).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Session' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'claude-code-cli',
+        attachmentFiles: undefined,
+      })
+    );
   });
 });

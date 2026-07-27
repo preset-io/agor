@@ -1,5 +1,5 @@
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd';
+import { Button, Input, Modal, Space, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
@@ -7,7 +7,6 @@ import { useThemedMessage } from '../../utils/message';
 import { uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
-const { Text } = Typography;
 
 const DEFAULT_AGENT_UPLOAD_MESSAGE =
   'Please review the attached file(s) and use them as context for this task.';
@@ -33,7 +32,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
 
@@ -99,21 +97,18 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         files,
       });
 
-      if (notifyAgent) {
-        const attachmentTokens = result.files.flatMap((file) =>
-          file.attachmentToken ? [file.attachmentToken] : []
-        );
-        if (attachmentTokens.length !== result.files.length) {
-          throw new Error('Uploaded files could not be associated with the agent task');
-        }
-        await onNotifyAgent(agentMessage, attachmentTokens);
+      const attachmentTokens = result.files.flatMap((file) =>
+        file.attachmentToken ? [file.attachmentToken] : []
+      );
+      if (attachmentTokens.length !== result.files.length) {
+        throw new Error('Uploaded files could not be associated with the agent task');
       }
+      await onNotifyAgent(agentMessage, attachmentTokens);
 
       showSuccess(`Uploaded ${result.files.length} file(s) successfully`);
 
       // Reset and close
       resetFileList();
-      setNotifyAgent(true);
       setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
       onClose();
     } catch (error) {
@@ -126,7 +121,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
   const handleCancel = () => {
     resetFileList();
-    setNotifyAgent(true);
     setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
     onClose();
   };
@@ -160,27 +154,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
 
-        <Text type="secondary" style={{ fontSize: '12px' }}>
-          When notified, files are securely attached to the agent task.
-        </Text>
-
-        {/* Notify agent option */}
-        <div>
-          <Checkbox checked={notifyAgent} onChange={(e) => setNotifyAgent(e.target.checked)}>
-            Notify the agent about this file
-          </Checkbox>
-
-          {notifyAgent && (
-            <div style={{ marginTop: 8 }}>
-              <TextArea
-                value={agentMessage}
-                onChange={(e) => setAgentMessage(e.target.value)}
-                placeholder="Message to agent"
-                autoSize={{ minRows: 2, maxRows: 4 }}
-              />
-            </div>
-          )}
-        </div>
+        <TextArea
+          value={agentMessage}
+          onChange={(e) => setAgentMessage(e.target.value)}
+          placeholder="Message to agent"
+          autoSize={{ minRows: 2, maxRows: 4 }}
+        />
       </Space>
     </Modal>
   );

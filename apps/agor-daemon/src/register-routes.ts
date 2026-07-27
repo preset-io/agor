@@ -1547,7 +1547,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         } catch {
           throw new BadRequest('Invalid task attachment');
         }
-        ensureToolSupportsTaskAttachments(session.agentic_tool, attachments);
         if (!data.prompt && attachments.length === 0) {
           throw new Error('Prompt required');
         }
@@ -1576,6 +1575,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const shouldQueue =
               !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
               queuedTasks.length > 0;
+            ensureToolSupportsTaskAttachments(lockedSession.agentic_tool, attachments);
 
             if (shouldQueue) {
               const queuedTask = await taskRepo.createPending({

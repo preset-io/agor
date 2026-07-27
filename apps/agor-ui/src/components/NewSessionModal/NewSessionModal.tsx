@@ -97,6 +97,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({ sessionId: null, showError });
   const isFormValid = !!selectedAgent;
+  const attachmentsSupported = selectedAgent !== 'claude-code-cli';
 
   // Reset form when modal opens, using user defaults if available
   // Only depends on `open` — branch/user refs may change while modal is open
@@ -146,7 +147,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         }),
       });
     }
-  }, [selectedAgent, form, currentUser]);
+    if (!attachmentsSupported) {
+      clearAttachments();
+    }
+  }, [selectedAgent, form, currentUser, attachmentsSupported, clearAttachments]);
 
   const handleCreate = () => {
     form.validateFields().then(() => {
@@ -186,7 +190,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
         attachmentFiles:
-          attachments.length > 0 ? attachments.map((attachment) => attachment.file) : undefined,
+          attachmentsSupported && attachments.length > 0
+            ? attachments.map((attachment) => attachment.file)
+            : undefined,
       };
 
       if (selectedAgent === 'codex') {
@@ -287,7 +293,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             enableKnowledgeMentions
             kbLinkTarget="absolute-route"
             onFilesDrop={addAttachments}
-            filesDropDisabled={isCreating}
+            filesDropDisabled={isCreating || !attachmentsSupported}
           />
         </Form.Item>
         {attachments.length > 0 && (

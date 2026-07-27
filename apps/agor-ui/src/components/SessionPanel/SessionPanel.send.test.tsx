@@ -394,6 +394,7 @@ describe('SessionPanel composer send', () => {
     renderSessionPanel({ onSendPrompt });
 
     fireEvent.click(screen.getByRole('button', { name: 'Advanced upload' }));
+    expect(screen.queryByRole('checkbox', { name: /Notify the agent/i })).not.toBeInTheDocument();
     const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
     const input = inputs.item(inputs.length - 1);
     expect(input).not.toBeNull();
