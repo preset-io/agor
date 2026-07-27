@@ -421,6 +421,11 @@ export const App: React.FC<AppProps> = ({
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardTeammatePanelTab>('teammate');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  // Deep-links the settings modal to a tool tab; cleared on close so a later
+  // plain settings click doesn't re-land on a stale tab.
+  const [userSettingsInitialTool, setUserSettingsInitialTool] = useState<
+    AgenticToolName | undefined
+  >(undefined);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth
   );
@@ -845,10 +850,14 @@ export const App: React.FC<AppProps> = ({
     const sessionId = await onCreateSession?.(config, currentBoardId);
     setNewSessionBranchId(null);
 
-    // Route through the URL so useUrlState owns selection — setting
-    // selectedSessionId directly raced with the cleanup effect (and the
-    // state→URL self-heal) before the socket `created` event arrived.
+    // Select synchronously, then let the URL catch up. The create seam inserts
+    // the session into the store before returning, so `selectedSessionExists`
+    // is already true and the cleanup effect won't clear this — selecting
+    // directly no longer races. This keeps the drawer's SessionPanel mounted
+    // across the transition instead of blanking for the render it took
+    // `useUrlState` to derive selection from the new URL.
     if (sessionId) {
+      setSelectedSessionId(sessionId);
       navigation.goToSession(sessionId);
     }
   };
@@ -878,6 +887,21 @@ export const App: React.FC<AppProps> = ({
       );
       if (!sessionId) return null;
 
+      // Select the new session synchronously, in the same render that clears
+      // the picker, so the drawer never has a frame with neither target set.
+      // Routing selection through the URL alone leaves a one-render gap:
+      // `useUrlState` sets `selectedSessionId` a render after `goToSession`, so
+      // `effectiveSelectedSessionId` would be null while pending is already
+      // cleared → the drawer unmounts and fades back in. Safe because the
+      // create seam already inserted the session, so `selectedSessionExists` is
+      // true and the cleanup effect won't clear this. `goToSession` then just
+      // catches the URL up; its later `onSessionChange` re-sets the same id.
+      // Set selection BEFORE removing the replaced session (switch-tool path)
+      // so the new session already wins the ternary when the old one goes.
+      setPendingToolChoiceBranchId(null);
+      setSelectedSessionId(sessionId);
+      navigation.goToSession(sessionId);
+
       if (replacingSessionId && client) {
         try {
           // `_swapReplace` tells the daemon this is a switch-tool swap, not a
@@ -897,11 +921,6 @@ export const App: React.FC<AppProps> = ({
         }
       }
 
-      // Clear the pending picker before navigating: without this the state
-      // lingers and resurrects a phantom "pick a tool" screen (for an already
-      // created session) the next time selection clears — e.g. browser Back.
-      setPendingToolChoiceBranchId(null);
-      navigation.goToSession(sessionId);
       return sessionId;
     },
     [user, onCreateSession, currentBoardId, client, navigation, showError]
@@ -1306,6 +1325,10 @@ export const App: React.FC<AppProps> = ({
       onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
       onChooseAgenticTool: stableChooseAgenticTool,
       availableAgents,
+      onOpenAgenticToolSettings: (tool: AgenticToolName) => {
+        setUserSettingsInitialTool(tool);
+        setUserSettingsOpen(true);
+      },
     }),
     [
       stableOnSendPrompt,
@@ -1669,8 +1692,7 @@ export const App: React.FC<AppProps> = ({
                           branch={pendingToolChoiceBranch}
                           availableAgents={availableAgents}
                           onChoose={async (tool) => {
-                            const id = await chooseAgenticTool(pendingToolChoiceBranchId, tool);
-                            if (id) setPendingToolChoiceBranchId(null);
+                            await chooseAgenticTool(pendingToolChoiceBranchId, tool);
                           }}
                           onClose={handleCloseSessionPanel}
                           onAdvancedSetup={() => {
@@ -1840,9 +1862,10 @@ export const App: React.FC<AppProps> = ({
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
         <UserSettingsModal
           open={effectiveUserSettingsOpen}
-          initialTab={initialUserSettingsTab}
+          initialTab={userSettingsInitialTool ?? initialUserSettingsTab}
           onClose={() => {
             setUserSettingsOpen(false);
+            setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
           }}
           user={user || null}
@@ -1851,6 +1874,7 @@ export const App: React.FC<AppProps> = ({
           onUpdate={onUpdateUser}
           onRestartOnboarding={async () => {
             setUserSettingsOpen(false);
+            setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
             await onRestartOnboarding?.();
           }}

@@ -140,8 +140,8 @@ export class ConfigService {
     // This method returns plaintext secret material and is only for trusted
     // daemon/executor flows. External callers must authenticate either as the
     // service account or with a task-scoped executor runtime JWT. Normal
-    // user/API-key auth may read masked config via /config but must not resolve
-    // raw configured keys.
+    // user/API-key auth must not resolve raw configured keys. The former
+    // general-purpose /config read endpoint no longer exists.
     let executorPayload = getExecutorTokenPayload(params);
     if (!executorPayload && params?.provider && data.executorSessionToken) {
       const sessionTokenService = (

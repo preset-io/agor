@@ -155,10 +155,12 @@ Possible response shapes:
 {
   "success": true,
   "taskId": "0195d3c0-82df-7a75-b9b3-83f58de12345",
-  "status": "running",
+  "status": "dispatching",
   "streaming": true
 }
 ```
+
+For non-CLI sessions, the immediate response is `dispatching`; the authenticated executor changes the task to `running` after it connects. `claude-code-cli` sessions have no separate executor connection and return `running` directly.
 
 ```json
 {
@@ -194,7 +196,7 @@ curl -X POST http://localhost:3030/tasks/<task-id>/run \
   -d '{ "stream": true }'
 ```
 
-The response is the patched `Task` row with `status: 'running'`. The endpoint only accepts tasks in `created` state on an `idle` session, while `queued` tasks drain automatically in queue-position order, and busy sessions should be prompted via `POST /sessions/:id/prompt` (which creates and queues the task atomically).
+The response is the patched `Task` row with `status: 'dispatching'` for non-CLI sessions; the authenticated executor changes it to `running` after connecting. `claude-code-cli` sessions return `running` directly because they have no separate executor connection. The endpoint only accepts tasks in `created` state on an `idle` session — `queued` tasks drain automatically in queue-position order, and busy sessions should be prompted via `POST /sessions/:id/prompt` (which creates and queues the task atomically).
 
 ## Message Content Shape
 

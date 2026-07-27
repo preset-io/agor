@@ -12,10 +12,12 @@ import {
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBaseUrl,
   getBranchesDir,
   getBranchPath,
   getConfigPath,
   getConfigValue,
+  getDaemonBaseUrl,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
@@ -225,6 +227,7 @@ describe('loadConfig', () => {
     'credentials',
     'opencode',
     'codex',
+    'knowledge',
   ])('rejects the removed %s config surface', async (key) => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
@@ -248,6 +251,26 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('rejects the removed proxies config surface as an unknown top-level key', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ proxies: { shortcut: { upstream: 'https://api.app.shortcut.com' } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: proxies/);
+  });
+
+  it('continues to accept daemon.trust_proxy_hops for deployment reverse proxies', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ daemon: { trust_proxy_hops: 2 } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
   });
 
   it('reports every unrecognized nested key with its full path', async () => {
@@ -274,6 +297,8 @@ describe('loadConfig', () => {
         daemon: { allowAnonymous: false, requireAuth: true },
         defaults: { board: 'main', agent: 'claude-code' },
         display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+        execution: { managed_envs_minimum_role: 'admin' },
+        branches: { others_can_default: 'view', others_fs_access_default: 'none' },
         onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
       }),
       'utf-8'
@@ -282,6 +307,8 @@ describe('loadConfig', () => {
       daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'main', agent: 'claude-code' },
       display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+      execution: { managed_envs_minimum_role: 'admin' },
+      branches: { others_can_default: 'view', others_fs_access_default: 'none' },
       onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
     });
   });
@@ -344,6 +371,72 @@ describe('loadConfig', () => {
     );
 
     await expect(loadConfig()).rejects.toThrow(/external_launch\.login_redirect_url.*http/i);
+  });
+
+  it('rejects external_launch.return_host_param equal to the reserved return_to', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'return_to' },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/return_host_param.*return_to/i);
+  });
+
+  it('accepts a custom external_launch.return_host_param', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'workspace_host' },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.return_host_param).toBe('workspace_host');
+  });
+
+  it('allows an empty external_launch.return_host_param (falls back to the default)', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: '' },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    expect(loaded.external_launch?.return_host_param).toBe('');
+  });
+
+  it('rejects an external_launch.return_host_param with invalid characters', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        external_launch: { enabled: true, return_host_param: 'return host&x' },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/return_host_param.*letters/i);
   });
 });
 
@@ -562,7 +655,7 @@ describe('loadConfig cache', () => {
   });
 });
 
-describe('requirePublicBaseUrl', () => {
+describe('base URL resolution', () => {
   let tempDir: string;
   let originalBaseUrl: string | undefined;
 
@@ -585,6 +678,8 @@ describe('requirePublicBaseUrl', () => {
 
   it('returns AGOR_BASE_URL env when set', async () => {
     process.env.AGOR_BASE_URL = 'https://agor.example.com';
+    await expect(getBaseUrl()).resolves.toBe('https://agor.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
   });
 
@@ -597,6 +692,8 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
 
@@ -609,10 +706,31 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
   });
 
+  it('separates UI links from daemon endpoints when both base URLs are configured', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: { base_url: 'http://[::1]:3030' },
+        ui: { base_url: 'http://localhost:5173' },
+      }),
+      'utf-8'
+    );
+
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:5173');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://[::1]:3030');
+    await expect(requirePublicBaseUrl()).resolves.toBe('http://[::1]:3030');
+  });
+
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:3030');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://localhost:3030');
     await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
   });
 
@@ -806,16 +924,24 @@ describe('getConfigValue', () => {
     expect(value).toBeUndefined();
   });
 
-  it('ignores retired display settings from an existing config file', async () => {
+  it('ignores retired settings from an existing config file', async () => {
     await saveConfig({
+      daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'legacy', agent: 'legacy-agent' },
       display: { tableStyle: 'ascii', colorOutput: false },
+      execution: { managed_envs_minimum_role: 'admin' },
+      branches: { others_can_default: 'view', others_fs_access_default: 'none' },
       onboarding: { teammatePending: true },
     } as unknown as AgorConfig);
 
+    expect(await getConfigValue('daemon.allowAnonymous')).toBeUndefined();
+    expect(await getConfigValue('daemon.requireAuth')).toBeUndefined();
     expect(await getConfigValue('defaults.board')).toBeUndefined();
     expect(await getConfigValue('display.tableStyle')).toBeUndefined();
     expect(await getConfigValue('display.colorOutput')).toBeUndefined();
+    expect(await getConfigValue('execution.managed_envs_minimum_role')).toBeUndefined();
+    expect(await getConfigValue('branches.others_can_default')).toBeUndefined();
+    expect(await getConfigValue('branches.others_fs_access_default')).toBeUndefined();
     expect(await getConfigValue('onboarding.teammatePending')).toBeUndefined();
   });
 
@@ -839,9 +965,14 @@ describe('setConfigValue', () => {
   });
 
   it.each([
+    'daemon.allowAnonymous',
+    'daemon.requireAuth',
     'display.tableStyle',
     'display.colorOutput',
     'display.shortIdLength',
+    'execution.managed_envs_minimum_role',
+    'branches.others_can_default',
+    'branches.others_fs_access_default',
   ])('rejects newly setting retired key %s', async (key) => {
     await expect(setConfigValue(key, 'legacy')).rejects.toThrow(/has been retired/);
   });

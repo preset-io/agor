@@ -10,6 +10,7 @@
  */
 
 import {
+  type AgenticToolName,
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
@@ -26,7 +27,7 @@ import { Bubble } from '@ant-design/x';
 import { Button, Tooltip, theme } from 'antd';
 
 import React, { useState } from 'react';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { BRAND, brandBadgeHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -34,6 +35,7 @@ import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -108,6 +110,7 @@ interface MessageBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -225,8 +228,10 @@ function getAgentAvatar({
   if (isCallback) {
     return (
       <img
-        src={brandMarkHref()}
-        alt={BRAND.name}
+        src={brandBadgeHref()}
+        alt={`${BRAND.name} callback`}
+        width={32}
+        height={32}
         style={{ width: 32, height: 32, borderRadius: '50%' }}
       />
     );
@@ -338,6 +343,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onPermissionDecision,
   teammateEmoji,
   client = null,
+  onOpenAgenticToolSettings,
 }) => {
   const { token } = theme.useToken();
 
@@ -497,6 +503,17 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         </div>
         <MarkdownRenderer content={markdownContent} />
       </div>
+    );
+  }
+
+  // Missing-credential failure — show the Connect-AI panel, not the raw error.
+  if (isSystem && message.metadata?.error_kind === 'missing_credential' && message.metadata?.tool) {
+    return (
+      <MissingCredentialPanel
+        tool={message.metadata.tool}
+        client={client}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
     );
   }
 
@@ -737,6 +754,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 }
                 variant={isUser || isCallback ? 'filled' : 'outlined'}
                 styles={{
+                  // Bubble.body defaults to min-width:auto. A wide intrinsic
+                  // child (notably Streamdown's max-content code <pre>) can
+                  // therefore make an end-aligned user bubble wider than the
+                  // conversation viewport and push its left edge off-screen.
+                  // Bound the whole row (including avatar) and allow the body
+                  // to shrink; the code body then owns horizontal scrolling.
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
                   content: {
                     backgroundColor: isCallback
                       ? token.colorWarningBg
@@ -865,15 +890,17 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   </CopyableContent>
                 }
                 variant={isCallback ? 'filled' : 'outlined'}
-                styles={
-                  isCallback
+                styles={{
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
+                  ...(isCallback
                     ? {
                         content: {
                           backgroundColor: token.colorWarningBg,
                         },
                       }
-                    : undefined
-                }
+                    : {}),
+                }}
               />
             </div>
           );

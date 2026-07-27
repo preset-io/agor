@@ -63,4 +63,16 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(sqliteSchema).not.toContain('tenant_id');
     expect(sqliteSchema).not.toContain("tenant_id'");
   });
+
+  it('limits cross-tenant gateway discovery to enabled rows and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0066_gateway_listener_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"enabled" = true');
+    expect(migration).toContain("current_setting('agor.system_scope', true)");
+    expect(migration).toContain("= 'gateway_listener_discovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
 });

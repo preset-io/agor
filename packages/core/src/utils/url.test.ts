@@ -5,6 +5,7 @@ import {
   getArtifactUrl,
   getBoardUrl,
   getBranchUrl,
+  getKnowledgeUrl,
   getSessionUrl,
   isAllowedHealthCheckUrl,
   normalizeOptionalHttpUrl,
@@ -57,6 +58,15 @@ describe('entity URL builders — fullUrl double-prefix regression', () => {
     expect(url).toMatch(/^https:\/\/agor\.example\.com\/ui\/a\//);
     expect(url).toMatch(/\/fullscreen$/);
     expect(url).not.toContain('/ui/ui/');
+  });
+
+  it('produces a canonical Knowledge deep link from the UI origin', () => {
+    const url = getKnowledgeUrl(
+      'agor-cloud-team',
+      'engineering/plans/example.md',
+      'http://localhost:5173'
+    );
+    expect(url).toBe('http://localhost:5173/ui/kb/agor-cloud-team/engineering/plans/example.md');
   });
 
   it('does not strip /ui from a path-prefixed base (e.g. https://host/myapp)', () => {

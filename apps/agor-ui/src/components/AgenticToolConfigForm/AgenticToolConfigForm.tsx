@@ -15,7 +15,7 @@
  */
 
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
-import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
+import { AGENTIC_TOOL_CAPABILITIES, DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -45,6 +45,11 @@ export interface AgenticToolConfigFormProps {
    * dynamic discovery (e.g., default-settings preview, schedule editor).
    */
   client?: AgorClient | null;
+  /**
+   * Render the Claude advisor model inline with the model selector. Surfaces
+   * that relocate it into their own "Advanced" area pass `false`.
+   */
+  showAdvisor?: boolean;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -60,9 +65,12 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   client,
+  showAdvisor = true,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
+  const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[agenticTool];
+  const effortLevels = toolCapabilities.reasoningEffortLevels;
 
   return (
     <>
@@ -75,7 +83,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
             : undefined
         }
       >
-        <ModelSelector agentic_tool={agenticTool} client={client} />
+        <ModelSelector agentic_tool={agenticTool} client={client} showAdvisor={showAdvisor} />
       </Form.Item>
 
       <Form.Item
@@ -83,20 +91,26 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         label="Permission Mode"
         help={showHelpText ? 'Control how the agent handles tool execution approvals' : undefined}
       >
-        <PermissionModeSelector agentic_tool={agenticTool} compact={compact} />
+        <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
       </Form.Item>
 
-      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
+      {effortLevels && (
         <Form.Item
           name="effort"
           label="Reasoning Effort"
           help={
             showHelpText
-              ? 'Control how much reasoning Claude applies (low = fast, high = thorough, max = Opus only)'
+              ? toolCapabilities.defaultReasoningEffort
+                ? 'Control how much reasoning the agent applies'
+                : 'Control how much reasoning the agent applies; inherited uses the runtime configuration'
               : undefined
           }
         >
-          <EffortSelector />
+          <EffortSelector
+            levels={effortLevels}
+            fallbackValue={toolCapabilities.defaultReasoningEffort}
+            allowInherited={!toolCapabilities.defaultReasoningEffort}
+          />
         </Form.Item>
       )}
 

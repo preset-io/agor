@@ -17,6 +17,7 @@ import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
   SessionStatus,
+  shortId,
   TaskStatus,
 } from '@agor-live/client';
 import {
@@ -456,8 +457,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
     session?.permission_config?.codex?.approvalPolicy ?? initialCodexDefaults.approvalPolicy
   );
-  const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
-    session?.model_config?.effort || 'high'
+  const [effortLevel, setEffortLevel] = React.useState<EffortLevel | undefined>(
+    session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort
   );
   /**
    * Claude Code CLI view toggle: 'terminal' shows the embedded `claude`
@@ -688,6 +689,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let index = tasks.length - 1; index >= 0; index -= 1) {
       const candidate = tasks[index];
       if (
+        candidate.status === TaskStatus.DISPATCHING ||
         candidate.status === TaskStatus.RUNNING ||
         candidate.status === TaskStatus.STOPPING ||
         candidate.status === TaskStatus.AWAITING_PERMISSION ||
@@ -714,10 +716,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, [session?.permission_config?.mode, session?.permission_config?.codex, session?.agentic_tool]);
 
-  // Update effort level when session changes (default to 'high' for sessions without effort config)
+  // Keep explicit overrides distinct from runtime-owned defaults (for example Codex config.toml).
   React.useEffect(() => {
-    setEffortLevel(session?.model_config?.effort || 'high');
-  }, [session?.model_config?.effort]);
+    setEffortLevel(session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort);
+  }, [session?.model_config?.effort, toolCaps?.defaultReasoningEffort]);
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -767,7 +769,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onSpawnOpen: () => void;
     onAttachFiles: () => void;
     onUploadOpen: () => void;
-    onEffortChange: (v: EffortLevel) => void;
+    onEffortChange: (v: EffortLevel | undefined) => void;
     onPermissionModeChange: (v: PermissionMode) => void;
     onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   } | null>(null);
@@ -782,7 +784,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onSpawnOpen: () => footerHandlersRef.current?.onSpawnOpen(),
       onAttachFiles: () => footerHandlersRef.current?.onAttachFiles(),
       onUploadOpen: () => footerHandlersRef.current?.onUploadOpen(),
-      onEffortChange: (v: EffortLevel) => footerHandlersRef.current?.onEffortChange(v),
+      onEffortChange: (v: EffortLevel | undefined) => footerHandlersRef.current?.onEffortChange(v),
       onPermissionModeChange: (v: PermissionMode) =>
         footerHandlersRef.current?.onPermissionModeChange(v),
       onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) =>
@@ -976,7 +978,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           {
             key: 'settings',
             icon: <SettingOutlined />,
-            label: 'Session Settings',
+            label: 'Session settings',
             onClick: () => onOpenSettings(session.session_id),
           },
         ]
@@ -1097,6 +1099,37 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleStop = async () => {
     if (!session || !client || stopRequestInFlight) return;
+
+    const unverifiedTask = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+      );
+    if (unverifiedTask) {
+      const expected = shortId(unverifiedTask.task_id);
+      const confirmation = window.prompt(
+        `Agor could not verify that this executor stopped. It may still be running and writing to the branch. Type ${expected} to force-fail the Task anyway.`
+      );
+      if (confirmation === null) return;
+      if (confirmation !== expected) {
+        showError(`Type ${expected} to confirm force-fail.`);
+        return;
+      }
+      setStopRequestInFlight(true);
+      try {
+        await client.service(`sessions/${session.session_id}/stop`).create({
+          force_unverified: true,
+          confirmation,
+        });
+      } catch (error) {
+        console.error('Failed to force-fail execution:', error);
+        showError('Failed to force-fail execution. You can try again.');
+      } finally {
+        setStopRequestInFlight(false);
+      }
+      return;
+    }
 
     // Show feedback immediately if this is a retry
     if (isStopping) {
@@ -1246,18 +1279,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleEffortChange = (newEffort: EffortLevel) => {
+  const handleEffortChange = (newEffort: EffortLevel | undefined) => {
     setEffortLevel(newEffort);
 
-    if (session && onUpdateSession) {
-      if (session.model_config) {
-        onUpdateSession(session.session_id, {
-          model_config: {
-            ...session.model_config,
-            effort: newEffort,
-          },
-        });
-      }
+    if (session?.model_config && onUpdateSession) {
+      const nextModelConfig = {
+        ...session.model_config,
+        updated_at: new Date().toISOString(),
+      };
+      if (newEffort) nextModelConfig.effort = newEffort;
+      else delete nextModelConfig.effort;
+      onUpdateSession(session.session_id, { model_config: nextModelConfig });
     }
   };
 

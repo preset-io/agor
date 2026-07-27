@@ -184,7 +184,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
                 end_index: created.index,
               },
             },
-            ctx.baseServiceParams
+            { ...ctx.baseServiceParams, provider: undefined }
           );
         } catch (err) {
           // Non-fatal — widget will still render via task_id lookup.
@@ -339,7 +339,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
                 end_index: created.index,
               },
             },
-            ctx.baseServiceParams
+            { ...ctx.baseServiceParams, provider: undefined }
           );
         } catch (err) {
           console.warn(

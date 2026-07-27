@@ -2,12 +2,12 @@
  * EffortSelector - Compact selector for reasoning effort level
  *
  * Effort controls how much reasoning the agent applies to responses.
- * Maps to the SDK's effort parameter (output_config.effort in the API).
+ * Runtime adapters map the shared value to their native effort option.
  *
  * Levels:
  * - Low: Minimal thinking, fastest responses
  * - Medium: Moderate thinking
- * - High: Deep reasoning (default)
+ * - High: Deep reasoning
  * - X-High: Extra reasoning depth, below maximum
  * - Max: Highest effort level (model-dependent)
  */
@@ -19,7 +19,10 @@ import type React from 'react';
 
 interface EffortSelectorProps {
   value?: EffortLevel;
-  onChange?: (effort: EffortLevel) => void;
+  onChange?: (effort: EffortLevel | undefined) => void;
+  levels?: readonly EffortLevel[];
+  fallbackValue?: EffortLevel;
+  allowInherited?: boolean;
   size?: 'small' | 'middle' | 'large';
   compact?: boolean;
   plain?: boolean;
@@ -39,7 +42,7 @@ const EFFORT_OPTIONS: {
     description: 'Minimal thinking, fastest responses',
   },
   { value: 'medium', shortLabel: 'Md', label: 'Medium', description: 'Moderate thinking' },
-  { value: 'high', shortLabel: 'Hi', label: 'High', description: 'Deep reasoning (default)' },
+  { value: 'high', shortLabel: 'Hi', label: 'High', description: 'Deep reasoning' },
   {
     value: 'xhigh',
     shortLabel: 'Xh',
@@ -55,23 +58,32 @@ const EFFORT_OPTIONS: {
 ];
 
 /**
- * EffortSelector - Dropdown for selecting Claude reasoning effort level
+ * EffortSelector - Dropdown for selecting a supported reasoning effort level
  */
 export const EffortSelector: React.FC<EffortSelectorProps> = ({
-  value = 'high',
+  value,
   onChange,
+  levels,
+  fallbackValue,
+  allowInherited = false,
   size = 'middle',
   compact = false,
   plain = false,
   fullWidth = false,
 }) => {
   const { token } = theme.useToken();
+  const options = levels
+    ? EFFORT_OPTIONS.filter((option) => levels.includes(option.value))
+    : EFFORT_OPTIONS;
+  const resolvedValue = value ?? fallbackValue;
 
   return (
     <Tooltip title="Reasoning effort level">
       <Select
-        value={value}
+        value={resolvedValue}
         onChange={onChange}
+        allowClear={allowInherited}
+        placeholder={allowInherited ? 'Inherited' : undefined}
         size={size}
         style={{
           width: fullWidth ? '100%' : compact ? undefined : 160,
@@ -79,7 +91,7 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
         }}
         popupMatchSelectWidth={false}
         optionLabelProp="label"
-        options={EFFORT_OPTIONS.map((opt) => ({
+        options={options.map((opt) => ({
           value: opt.value,
           label: plain ? (
             opt.label
@@ -96,13 +108,13 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
           ),
         }))}
         optionRender={(option) => {
-          const opt = EFFORT_OPTIONS.find((o) => o.value === option.value);
+          const opt = options.find((o) => o.value === option.value);
           return (
             <Space size={6} align="start">
               <BulbOutlined style={{ marginTop: 3 }} />
-              <div style={{ lineHeight: 1.3 }}>
+              <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
                 <div>{opt?.label}</div>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
                   {opt?.description}
                 </Typography.Text>
               </div>

@@ -17,6 +17,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -48,18 +49,6 @@ export interface PromptResult {
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
-
-  /**
-   * Idle timeout for SDK event loop - throws error if no messages are received
-   * for this duration.
-   *
-   * This is only a guard for a truly stuck SDK stream. Executor liveness is
-   * tracked separately by task heartbeats, so this must be long enough for
-   * legitimate silent tool calls (for example, a foreground Bash `sleep` or a
-   * long-running test command) to finish without Agor misclassifying the turn
-   * as hung.
-   */
-  private static readonly IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -126,7 +115,8 @@ If you continue to see authentication errors, please contact your Agor administr
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     _chunkCallback?: (messageId: string, chunk: string) => void,
-    abortController?: AbortController
+    abortController?: AbortController,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<ProcessedEvent> {
     // Intercept slash commands that don't work via the Claude Agent SDK.
     // Commands like /compact and /cost are handled natively by the SDK and pass through.
@@ -222,7 +212,6 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: ClaudePromptService.ENABLE_TOKEN_STREAMING,
-      idleTimeoutMs: ClaudePromptService.IDLE_TIMEOUT_MS,
     });
 
     // With AbortController passed to SDK, cancellation is handled natively.
@@ -230,23 +219,14 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
-        // Check for timeout - throw error to trigger proper cleanup
-        if (processor.hasTimedOut()) {
-          const state = processor.getState();
-          const idleSeconds = Math.round((Date.now() - state.lastActivityTime) / 1000);
-          const timeoutSeconds = Math.round(state.idleTimeoutMs / 1000);
-
-          throw new Error(
-            `Claude SDK idle timeout: No activity for ${idleSeconds}s (timeout: ${timeoutSeconds}s). ` +
-              `SDK may have hung or crashed. Last message type was #${state.messageCount}.`
-          );
-        }
-
+        reportSdkActivity(onActivity, 'claude-code', msg.type);
         // Process message through processor
         const events = await processor.process(msg);
 
         // Handle each event from processor
         for (const event of events) {
+          if (event.type === 'tool_start') onActivity?.('progress', 'tool.start');
+          if (event.type === 'tool_complete') onActivity?.('progress', 'tool.complete');
           // Handle session ID capture (only set if not already set — sdk_session_id is immutable)
           if (event.type === 'session_id_captured') {
             if (this.sessionsRepo && !existingSdkSessionId) {
@@ -388,7 +368,6 @@ If you continue to see authentication errors, please contact your Agor administr
       sessionId,
       existingSdkSessionId,
       enableTokenStreaming: false, // Non-streaming mode
-      idleTimeoutMs: ClaudePromptService.IDLE_TIMEOUT_MS,
     });
 
     // Collect response messages from async generator

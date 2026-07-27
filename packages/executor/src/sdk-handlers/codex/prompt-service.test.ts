@@ -20,6 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionMode } from '../../types.js';
 
 const appServerMocks = vi.hoisted(() => ({
   forkCodexThreadViaAppServer: vi.fn(),
@@ -49,6 +50,8 @@ let mockInstanceConfigs: Array<unknown> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 let mockStartThreadId: string | undefined = 'mock-thread-id';
+let mockStartThreadOptions: unknown[] = [];
+let mockResumeThreadOptions: unknown[] = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -80,7 +83,8 @@ vi.mock('@agor/core/sdk', () => {
       mockClosedInstanceIds.push(this.instanceId);
     }
 
-    startThread() {
+    startThread(options: unknown) {
+      mockStartThreadOptions.push(options);
       return {
         id: mockStartThreadId,
         run: vi.fn(),
@@ -88,7 +92,8 @@ vi.mock('@agor/core/sdk', () => {
       };
     }
 
-    resumeThread(threadId: string) {
+    resumeThread(threadId: string, options: unknown) {
+      mockResumeThreadOptions.push(options);
       return {
         id: threadId,
         run: vi.fn(),
@@ -126,6 +131,8 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -316,11 +323,141 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
+    delete process.env.AGOR_CODEX_SANDBOX_MODE;
     vi.clearAllMocks();
   });
 
-  it('builds session config, initializes the Codex client, and uses the configured accessor', async () => {
+  it.each([
+    {
+      name: 'persisted allow-all',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'prompt allow-all overriding persisted auto',
+      persistedPermissionMode: 'auto',
+      promptPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'prompt auto overriding persisted allow-all',
+      persistedPermissionMode: 'allow-all',
+      promptPermissionMode: 'auto',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'mode-less legacy session using the Codex system default',
+      persistedPermissionMode: undefined,
+      codexPermissions: {},
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'allow-all with the k8s sandbox override',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      sandboxModeEnvOverride: 'danger-full-access',
+      expectedApps: {
+        _default: {
+          default_tools_approval_mode: 'approve',
+        },
+      },
+    },
+    {
+      name: 'allow-all with a read-only sandbox environment override',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      sandboxModeEnvOverride: 'read-only',
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with network disabled',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: false,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with approval required',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'on-request',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'allow-all with a configured read-only sandbox',
+      persistedPermissionMode: 'allow-all',
+      codexPermissions: {
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+    {
+      name: 'persisted auto mode with never approval',
+      persistedPermissionMode: 'auto',
+      codexPermissions: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'never',
+        networkAccess: true,
+      },
+      expectedApps: undefined,
+    },
+  ])('builds session config for $name permissions and uses the configured accessor', async ({
+    persistedPermissionMode,
+    promptPermissionMode,
+    codexPermissions,
+    sandboxModeEnvOverride,
+    expectedApps,
+  }) => {
+    if (sandboxModeEnvOverride) {
+      process.env.AGOR_CODEX_SANDBOX_MODE = sandboxModeEnvOverride;
+    }
+
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -350,8 +487,11 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       branch_id: 'branch-1',
       created_at: new Date().toISOString(),
       sdk_session_id: null,
-      permission_config: { codex: {} },
-      model_config: {},
+      permission_config: {
+        ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
+        codex: codexPermissions,
+      },
+      model_config: { effort: 'medium' },
       mcp_token: 'test-token',
     });
     mockSessionsRepo.update.mockResolvedValue(undefined);
@@ -368,7 +508,12 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     ];
 
     const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('session-flow' as any, 'review')) {
+    for await (const event of service.promptSessionStreaming(
+      'session-flow' as any,
+      'review',
+      undefined,
+      promptPermissionMode as PermissionMode | undefined
+    )) {
       emitted.push(event as Record<string, unknown>);
     }
 
@@ -382,10 +527,14 @@ describe('CodexPromptService - prompt flow client initialization', () => {
             default_tools_approval_mode: 'approve',
           },
         },
+        ...(expectedApps ? { apps: expectedApps } : {}),
       },
     ]);
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
       threadId: 'mock-thread-id',
+    });
+    expect(mockStartThreadOptions.at(-1)).toMatchObject({
+      modelReasoningEffort: 'medium',
     });
   });
 
@@ -466,6 +615,8 @@ describe('CodexPromptService - forked sessions', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -502,7 +653,7 @@ describe('CodexPromptService - forked sessions', () => {
       sdk_session_id: null,
       genealogy: { forked_from_session_id: 'parent-session' },
       permission_config: { codex: {} },
-      model_config: {},
+      model_config: { effort: 'max' },
       mcp_token: 'test-token',
     };
     const parentSession = {
@@ -548,6 +699,9 @@ describe('CodexPromptService - forked sessions', () => {
     });
     expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
       threadId: 'forked-thread-id',
+    });
+    expect(mockResumeThreadOptions.at(-1)).toMatchObject({
+      modelReasoningEffort: 'xhigh',
     });
   });
 });

@@ -34,6 +34,18 @@ export interface AgenticFormValues {
   codexNetworkAccess?: boolean;
 }
 
+/** Fold the standalone form field into the canonical model config without retaining stale effort. */
+export function buildModelConfigFromFormValues(
+  values: Pick<AgenticFormValues, 'modelConfig' | 'effort'>
+): DefaultModelConfig | undefined {
+  const { effort: _storedEffort, ...modelConfig } = values.modelConfig ?? {};
+  if (Object.keys(modelConfig).length === 0 && values.effort === undefined) return undefined;
+  return {
+    ...modelConfig,
+    ...(values.effort !== undefined ? { effort: values.effort } : {}),
+  };
+}
+
 /**
  * Convert a stored DefaultAgenticToolConfig into form field values.
  * Returns sensible defaults when config is undefined.
@@ -42,20 +54,14 @@ export function getFormValuesFromConfig(
   tool: AgenticToolName,
   config?: DefaultAgenticToolConfig
 ): AgenticFormValues {
-  if (!config) {
-    return {
-      permissionMode: getDefaultPermissionMode(tool),
-    };
-  }
-
   return {
-    modelConfig: config.modelConfig,
-    effort: config.modelConfig?.effort,
-    permissionMode: config.permissionMode || getDefaultPermissionMode(tool),
+    modelConfig: config?.modelConfig,
+    effort: config?.modelConfig?.effort,
+    permissionMode: config?.permissionMode || getDefaultPermissionMode(tool),
     ...(tool === 'codex' && {
-      codexSandboxMode: config.codexSandboxMode,
-      codexApprovalPolicy: config.codexApprovalPolicy,
-      codexNetworkAccess: config.codexNetworkAccess,
+      codexSandboxMode: config?.codexSandboxMode,
+      codexApprovalPolicy: config?.codexApprovalPolicy,
+      codexNetworkAccess: config?.codexNetworkAccess,
     }),
   };
 }
@@ -68,12 +74,7 @@ export function buildConfigFromFormValues(
   tool: AgenticToolName,
   values: AgenticFormValues
 ): DefaultAgenticToolConfig {
-  // Merge effort back into modelConfig
-  const modelConfig = values.modelConfig
-    ? { ...values.modelConfig, effort: values.effort }
-    : values.effort
-      ? { effort: values.effort }
-      : undefined;
+  const modelConfig = buildModelConfigFromFormValues(values);
 
   return {
     modelConfig,

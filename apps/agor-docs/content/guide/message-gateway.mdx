@@ -39,7 +39,13 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
   alt="Slack thread where a user mentions an Agor teammate and the bot creates an Agor session, replies with a view-session link, and starts reading context"
-  style={{ maxWidth: '920px', width: '100%', borderRadius: '14px', marginTop: '16px', marginBottom: '28px' }}
+  style={{
+    maxWidth: '920px',
+    width: '100%',
+    borderRadius: '14px',
+    marginTop: '16px',
+    marginBottom: '28px',
+  }}
 />
 
 ## What is a Channel?
@@ -95,6 +101,29 @@ Slack DM                    Agor Daemon                    Agent
 ```
 
 The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately, effectively a no-op.
+
+### Multi-tenant listener lifecycle
+
+Static and single-tenant installations require no new configuration. Listener
+startup uses the configured static tenant exactly as before.
+
+With `multi_tenancy.mode: required_from_auth`, the daemon restarts enabled
+gateway channels for every tenant after a daemon restart. Startup performs one
+narrow PostgreSQL discovery query that can return only enabled channel and
+tenant IDs. It then leaves system scope, reloads the full channel (including
+credentials) under that tenant's normal RLS scope, and starts the connector
+with an immutable tenant binding. Provider callbacks re-enter that captured
+tenant before reading mappings or creating sessions.
+
+Listener instances and the outbound fast path are also tenant-qualified. A
+channel refresh in a tenant with no enabled channels cannot stop or suppress
+delivery for another tenant. Missing, stale, or inconsistent discovery
+metadata is skipped rather than falling back to the static tenant.
+
+PostgreSQL migration `0066_gateway_listener_discovery` installs the narrowly
+named read policy used by this startup phase. Apply normal Agor migrations
+before serving traffic with the upgraded daemon; no database role with
+`BYPASSRLS` and no superuser daemon connection is required.
 
 ### Outbound branch binding
 

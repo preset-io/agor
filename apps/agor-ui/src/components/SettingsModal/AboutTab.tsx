@@ -3,19 +3,13 @@
  */
 
 import type { AgorClient, UnixUserMode } from '@agor-live/client';
-import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography } from 'antd';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { resolveUiRuntime } from '../../config/urlRuntime';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import { isOutOfSync } from '../../hooks/useServerVersion';
-
-// Lazy load particles
-const ParticleBackground = lazy(() =>
-  import('../LoginPage/ParticleBackground').then((module) => ({
-    default: module.ParticleBackground,
-  }))
-);
+import { GradientBackdrop } from '../GradientBackdrop/GradientBackdrop';
 
 export interface AboutTabProps {
   client: AgorClient | null;
@@ -87,6 +81,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   connectionError,
   isAdmin = false,
 }) => {
+  const { token } = theme.useToken();
   const daemonUrl = getDaemonUrl();
   const uiRuntime = resolveUiRuntime({
     baseUrl: import.meta.env.BASE_URL,
@@ -100,6 +95,14 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   // SHA captured at tab-load time (resets on hard reload). Provider-owned in
   // App.tsx via useServerVersion so this and the banner stay in lockstep.
   const { capturedSha } = useConnectionState();
+  const cardStyle: React.CSSProperties = {
+    width: '100%',
+    maxWidth: 800,
+    margin: '0 auto',
+    borderColor: token.colorBorderSecondary,
+    background: `color-mix(in srgb, ${token.colorBgContainer} 94%, transparent)`,
+    boxShadow: token.boxShadowTertiary,
+  };
 
   useEffect(() => {
     // Determine which detection method was used
@@ -130,21 +133,22 @@ export const AboutTab: React.FC<AboutTabProps> = ({
   }, [client, uiRuntime.mode]);
 
   return (
-    <div style={{ position: 'relative', minHeight: 500, padding: '24px 0' }}>
-      {/* Particle background */}
-      <Suspense fallback={null}>
-        <ParticleBackground />
-      </Suspense>
+    <div
+      style={{
+        position: 'relative',
+        minHeight: 500,
+        padding: 'clamp(12px, 3vw, 24px) 0',
+        overflow: 'hidden',
+        borderRadius: token.borderRadiusLG,
+      }}
+    >
+      <GradientBackdrop variant="panel" />
 
       {/* Content */}
       <div style={{ position: 'relative', zIndex: 1 }}>
         <Space orientation="vertical" size="large" style={{ width: '100%' }}>
           {/* Connection Info */}
-          <Card
-            title="Connection Info"
-            variant="borderless"
-            style={{ maxWidth: 800, margin: '0 auto' }}
-          >
+          <Card title="Connection Info" style={cardStyle}>
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="Status">
                 {connected ? (
@@ -199,11 +203,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
           {isAdmin && (
             <>
               {/* Daemon Config */}
-              <Card
-                title="Daemon Config (Admin Only)"
-                variant="borderless"
-                style={{ maxWidth: 800, margin: '0 auto' }}
-              >
+              <Card title="Daemon Config (Admin Only)" style={cardStyle}>
                 <Descriptions column={1} bordered size="small">
                   <Descriptions.Item label="Daemon URL">
                     <code>{daemonUrl}</code>
@@ -273,11 +273,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
 
               {/* Security Headers (CSP + CORS posture) */}
               {healthInfo?.security && (
-                <Card
-                  title="Security Headers (Admin Only)"
-                  variant="borderless"
-                  style={{ maxWidth: 800, margin: '0 auto' }}
-                >
+                <Card title="Security Headers (Admin Only)" style={cardStyle}>
                   <Descriptions column={1} bordered size="small">
                     <Descriptions.Item label="CSP">
                       {healthInfo.security.csp.enabled ? (
@@ -358,11 +354,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
               )}
 
               {/* System Debug Info */}
-              <Card
-                title="System Debug Info (Admin Only)"
-                variant="borderless"
-                style={{ maxWidth: 800, margin: '0 auto' }}
-              >
+              <Card title="System Debug Info (Admin Only)" style={cardStyle}>
                 <Descriptions column={1} bordered size="small">
                   <Descriptions.Item label="Mode">
                     {uiRuntime.mode === 'bundled-daemon-ui' ? (
@@ -400,10 +392,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
           )}
 
           {/* Links */}
-          <Card
-            variant="borderless"
-            style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center' }}
-          >
+          <Card style={{ ...cardStyle, textAlign: 'center' }}>
             <Space size="large">
               <a href="https://github.com/preset-io/agor" target="_blank" rel="noopener noreferrer">
                 GitHub

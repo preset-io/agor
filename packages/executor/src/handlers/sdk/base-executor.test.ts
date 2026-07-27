@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installProviderConnection, resolveApiKeyForTask } from './base-executor.js';
+import {
+  executeToolTask,
+  installProviderConnection,
+  resolveApiKeyForTask,
+} from './base-executor.js';
+
+vi.mock('./git-safe-directory.js', () => ({
+  configureSessionGitSafeDirectories: vi.fn().mockResolvedValue(undefined),
+}));
 
 function makeClient(error: unknown) {
   return {
@@ -78,6 +86,114 @@ describe('resolveApiKeyForTask', () => {
         'codex' as never
       )
     ).rejects.toThrow('fetch failed');
+  });
+});
+
+describe('executeToolTask credential preflight', () => {
+  it('persists an explicit missing-credential failure before invoking the tool', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: null,
+              connection: {},
+              source: 'none',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
+        }
+        if (name === 'messages' || name === 'tasks' || name === '/tasks/streaming') {
+          return {};
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const createTool = vi.fn();
+
+    await expect(
+      executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        toolName: 'gemini',
+        createTool,
+      })
+    ).rejects.toThrow('No scoped gemini credential');
+
+    expect(createTool).not.toHaveBeenCalled();
+    expect(taskPatch).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));
+    expect(messageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: {
+          is_task_failure: true,
+          is_missing_credential_failure: true,
+        },
+      })
+    );
+  });
+
+  it('does not launch provider work when cancellation arrives before tool execution', async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const stopTask = vi.fn().mockResolvedValue({ success: true });
+    const executePromptWithStreaming = vi.fn();
+    const createTool = vi.fn(() => ({
+      stopTask,
+      executePromptWithStreaming,
+    }));
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
+        }
+        if (name === 'messages' || name === 'tasks' || name === '/tasks/streaming') {
+          return {};
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        toolName: 'gemini',
+        createTool,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(createTool).toHaveBeenCalledOnce();
+    expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
+    expect(executePromptWithStreaming).not.toHaveBeenCalled();
   });
 });
 

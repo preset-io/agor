@@ -8,5 +8,21 @@
     "./biome-plugins/noHardcodedColorProperty.grit",
     "./biome-plugins/noHardcodedColorLiteral.grit",
     "./biome-plugins/noHardcodedCssColor.grit"
+  ],
+  "overrides": [
+    {
+      "includes": ["**/*.generated.css", "**/streamdown-theme.css"],
+      "css": {
+        "parser": {
+          "tailwindDirectives": true
+        }
+      },
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      }
+    }
   ]
 }

@@ -36,6 +36,7 @@ import {
 import {
   formatModelToolMismatchWarning,
   formatUnsupportedAgorCodexModelMessage,
+  isResolvedModelConfig,
   isUnsupportedAgorCodexModel,
   lintModelToolMatch,
 } from '@agor/core/models';
@@ -44,6 +45,7 @@ import type {
   AuthenticatedParams,
   Branch,
   BranchPermissionLevel,
+  CreateSessionInput,
   MCPServerID,
   Paginated,
   QueryParams,
@@ -278,29 +280,57 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
   }
 
-  async create(data: Partial<Session>, params?: SessionParams): Promise<Session | Session[]> {
+  async create(data: CreateSessionInput, params?: SessionParams): Promise<Session>;
+  async create(
+    data: Partial<Session> | Partial<Session>[],
+    params?: SessionParams
+  ): Promise<Session | Session[]>;
+  async create(
+    data: CreateSessionInput | Partial<Session>[],
+    params?: SessionParams
+  ): Promise<Session | Session[]> {
+    if (Array.isArray(data)) {
+      return Promise.all(data.map((session) => this.create(session, params)));
+    }
     const agenticTool = data.agentic_tool ?? 'claude-code';
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
-    let createData = data;
-    if (data.agentic_tool_preset_id) {
+    const {
+      agentic_tool_preset_id: configurationReference,
+      model_config: modelConfig,
+      ...sessionData
+    } = data;
+    let createData: Partial<Session>;
+    if (configurationReference) {
       const resolved = await resolveAgenticConfigurationReference(
         this.db,
         agenticTool,
-        data.agentic_tool_preset_id,
+        configurationReference,
         params?.user?.user_id as import('@agor/core/types').UserID | undefined
       );
       const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
       createData = {
-        ...data,
+        ...sessionData,
         agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
         ...presetConfigurationToSessionPatch(agenticTool, configuration),
       };
     } else {
       await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
+      if (modelConfig != null && !isResolvedModelConfig(modelConfig)) {
+        throw new BadRequest('model_config must be resolved before session creation');
+      }
+      createData = {
+        ...sessionData,
+        agentic_tool_preset_id: configurationReference,
+        model_config: modelConfig,
+      };
     }
-    return super.create(createData, params);
+    const created = await super.create(createData, params);
+    if (Array.isArray(created)) {
+      throw new Error('Single-session creation returned multiple sessions');
+    }
+    return created;
   }
 
   /** Re-resolve a live preset immediately before a task starts. */

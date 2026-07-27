@@ -71,7 +71,7 @@ Each content update creates an immutable version, so the page can evolve without
 
 ## Search
 
-Text search is always available. Optional semantic and hybrid search become available when the instance is configured for Knowledge embeddings.
+Text search is always available. Optional semantic and hybrid search become available when a workspace admin enables embeddings in **Knowledge → Settings → Semantic search**.
 
 | Mode         | Use it for                                                     | Requirements                                         |
 | ------------ | -------------------------------------------------------------- | ---------------------------------------------------- |
@@ -80,6 +80,14 @@ Text search is always available. Optional semantic and hybrid search become avai
 | **Hybrid**   | Blend keyword precision with semantic recall                   | Same as semantic                                     |
 
 Semantic search is intentionally optional: the Knowledge base still works without it, but embeddings make it much more powerful as the corpus grows.
+
+Semantic-search policy is workspace-scoped. Admins choose the enabled state, OpenAI model, chunking, and indexing settings in the Knowledge UI; the provider API key is stored encrypted and is never returned to the browser. Operators do not configure this policy in `config.yaml`.
+
+The deployment still supplies the underlying capability. Vector search requires PostgreSQL with pgvector available; SQLite can retain workspace settings and build text-search units, but it cannot perform semantic or hybrid vector search.
+
+> **Upgrading from YAML-based semantic settings:** Before restarting Agor, record any values under `knowledge.semantic_search`, then remove the entire top-level `knowledge:` block from `config.yaml`. Agor rejects that removed configuration instead of silently applying one operator policy to every workspace. After startup, a workspace admin can re-enter the policy in **Knowledge → Settings → Semantic search**. Existing encrypted workspace embedding API keys remain stored and do not need to be copied into YAML.
+
+> **Multi-tenant indexer limitation:** In `required_from_auth` deployments, semantic policy and queued units are isolated correctly per workspace, but the singleton background indexer currently drains only the startup/bootstrap tenant. Other workspaces can safely configure semantic search and queue work, but automatic all-tenant queue discovery is still pending. Static/single-workspace deployments are unaffected.
 
 ---
 
@@ -122,7 +130,7 @@ This makes Knowledge a natural companion to [Teammates](/guide/teammates): teamm
 
 ## Permissions and control plane fit
 
-Knowledge is tied into Agor's existing role-based control plane. Members can create and work with documents and namespaces, admins manage namespace governance and semantic-search settings, and each document carries visibility and edit-policy controls.
+Knowledge is tied into Agor's existing role-based control plane. Members can create and work with documents and namespaces, workspace admins manage semantic-search settings, and namespace owners/admins manage namespace governance. Each document also carries visibility and edit-policy controls.
 
 In practice, that means Knowledge follows the same posture as the rest of Agor: humans and agents collaborate in one system, with view/edit boundaries enforced by the daemon rather than scattered across ad hoc files and local MCP servers.
 

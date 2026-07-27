@@ -19,7 +19,7 @@ import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import type { Part as OpenCodePart } from '@opencode-ai/sdk';
+import type { Event as OpenCodeEvent, Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -27,6 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
+import { reportSdkActivity } from '../../sdk-watchdog.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
@@ -40,6 +41,22 @@ import type {
 } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { ITool } from '../base/tool.interface.js';
+
+export function isOpenCodeSessionEvent(event: OpenCodeEvent, sessionId: string): boolean {
+  const properties = event.properties as Record<string, unknown>;
+  if (typeof properties.sessionID === 'string') return properties.sessionID === sessionId;
+
+  for (const field of ['info', 'part'] as const) {
+    const nested = properties[field];
+    if (!nested || typeof nested !== 'object') continue;
+    const record = nested as Record<string, unknown>;
+    if (typeof record.sessionID === 'string') return record.sessionID === sessionId;
+    if (field === 'info' && event.type.startsWith('session.') && typeof record.id === 'string') {
+      return record.id === sessionId;
+    }
+  }
+  return false;
+}
 
 export interface OpenCodeConfig {
   enabled: boolean;
@@ -394,6 +411,24 @@ export class OpenCodeTool implements ITool {
     }
   }
 
+  async stopTask(sessionId: string): Promise<{ success: boolean; reason?: string }> {
+    const context = this.getSessionContext(sessionId);
+    if (!context) return { success: false, reason: 'OpenCode session is not initialized' };
+
+    try {
+      const response = await this.getClientForDirectory(context.branchPath).session.abort({
+        path: { id: context.opencodeSessionId },
+        query: context.branchPath ? { directory: context.branchPath } : undefined,
+      });
+      if (response.error) {
+        return { success: false, reason: JSON.stringify(response.error) };
+      }
+      return { success: true };
+    } catch (error) {
+      return { success: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   /**
    * Create a new OpenCode session
    */
@@ -567,8 +602,11 @@ export class OpenCodeTool implements ITool {
         console.log('[OpenCodeTool] Listening for events...');
 
         for await (const event of eventStream.stream) {
+          if (!isOpenCodeSessionEvent(event, context.opencodeSessionId)) continue;
+
           // Log event type (skip noisy heartbeats)
           const eventType = event.type as string;
+          reportSdkActivity(streamingCallbacks.onPulse, 'opencode', eventType);
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }

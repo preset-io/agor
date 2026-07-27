@@ -1,8 +1,8 @@
 // src/types/session.ts
 
 /**
- * Effort level controls how much reasoning Claude applies.
- * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
+ * Effort level controls how much reasoning a supported agent applies.
+ * Runtime adapters map this shared value to their native effort option.
  */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -16,6 +16,7 @@ import type {
   GeminiPermissionMode,
   OpenCodePermissionMode,
 } from './agentic-tool';
+import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
@@ -256,7 +257,7 @@ export interface Session {
     updated_at: string;
     /** Optional user notes about why this model was selected */
     notes?: string;
-    /** Effort level for reasoning depth (default: high) */
+    /** Optional session override for reasoning depth; unset delegates to the runtime default. */
     effort?: EffortLevel;
     /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
     advisorModel?: string;
@@ -511,6 +512,15 @@ export interface Session {
   };
 }
 
+/** Session data accepted before defaults and configuration references are materialized. */
+export type CreateSessionInput = Omit<
+  Partial<Session>,
+  'agentic_tool_preset_id' | 'model_config'
+> & {
+  agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
+  model_config?: Partial<NonNullable<Session['model_config']>> | null;
+};
+
 /**
  * Minimal persisted session state needed to decide whether a new task can
  * start immediately.
@@ -709,8 +719,8 @@ export interface SpawnConfig {
   /** Agentic tool to use (defaults to parent's tool) */
   agent?: AgenticToolName;
 
-  /** Live tenant preset. Same-tool children inherit the parent's preset by default. */
-  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
+  /** Configuration source. Same-tool children inherit the parent's preset by default. */
+  presetId?: AgenticToolConfigurationReference;
 
   /** Permission mode override (defaults based on config preset) */
   permissionMode?: PermissionMode;

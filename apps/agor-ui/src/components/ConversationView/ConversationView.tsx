@@ -10,16 +10,23 @@
  * - Auto-scrolling to latest content
  */
 
-import type { AgorClient, Message, PermissionScope, SessionID, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  Message,
+  PermissionScope,
+  SessionID,
+  User,
+} from '@agor-live/client';
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
-import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
+import { BrandMark } from '../BrandMark';
 import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
@@ -125,6 +132,8 @@ export interface ConversationViewProps {
    * When true, all task blocks are force-expanded (used by in-session search)
    */
   forceExpandAll?: boolean;
+
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -145,6 +154,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     genealogy,
     teammateEmoji,
     forceExpandAll = false,
+    onOpenAgenticToolSettings,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -390,16 +400,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
             gap: '24px',
           }}
         >
-          <img
-            src={brandMarkHref()}
-            alt={BRAND.name}
-            style={{
-              width: 160,
-              height: 160,
-              opacity: 0.5,
-              borderRadius: '50%',
-            }}
-          />
+          <BrandMark size={160} style={{ opacity: 0.5 }} />
           <Text type="secondary">{emptyStateMessage}</Text>
         </div>
       );
@@ -505,6 +506,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
+              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
             />
           ))}
         </div>

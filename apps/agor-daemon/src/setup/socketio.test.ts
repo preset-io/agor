@@ -24,6 +24,7 @@
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   boardPresenceRoomName,
   configureChannels,
@@ -743,6 +744,18 @@ describe('terminal:* handler authorization', () => {
       expect(s.joined.size).toBe(0);
     });
 
+    it('does not expose executor control rooms through the client join event', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock');
+      asUser(s, ALICE);
+      connect(io, s);
+      const room = executorTaskChannelName('tenant-a', 'task-1');
+
+      s.handlers.get('join')?.(room);
+
+      expect(s.joined.has(room)).toBe(false);
+    });
+
     it("rejects a user joining another user's terminal channel", () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
@@ -946,6 +959,9 @@ describe('configureChannels tenant isolation', () => {
     const joins = new Map<string, unknown[]>();
     const leaves = new Map<string, unknown[]>();
     const app = {
+      get channels() {
+        return [...new Set([...joins.keys(), ...leaves.keys()])];
+      },
       on(event: string, fn: (...args: any[]) => void) {
         handlers.set(event, fn);
       },
@@ -1064,6 +1080,92 @@ describe('configureChannels tenant isolation', () => {
     );
 
     expect(joins.get('authenticated')).toEqual([connection]);
+  });
+
+  it('joins only the Task room proven by a verified executor-session login', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: ALICE },
+        task_id: 'task-1',
+        authentication: {
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            task_id: 'task-1',
+            session_id: 'session-1',
+            tenant_id: 'tenant-a',
+          },
+        },
+      },
+      { connection }
+    );
+
+    expect(joins.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
+  });
+
+  it('does not trust an unscoped login or mismatched result task claim', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: ALICE },
+        task_id: 'task-2',
+        authentication: {
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            task_id: 'task-1',
+          },
+        },
+      },
+      { connection }
+    );
+
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
+  });
+
+  it('drops the prior Task room before replacing socket authentication', () => {
+    const { app, handlers, joins, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = { data: {} } as any;
+    const login = (taskId: string) =>
+      handlers.get('login')?.(
+        {
+          user: { user_id: ALICE },
+          task_id: taskId,
+          authentication: {
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: taskId,
+            },
+          },
+        },
+        { connection }
+      );
+
+    login('task-1');
+    login('task-2');
+
+    expect(joins.get(executorTaskChannelName('tenant-a', 'task-2'))).toEqual([connection]);
+    expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
   });
 
   it('leaves tenant-scoped channels on logout', () => {

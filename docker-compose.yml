@@ -98,6 +98,13 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     environment:
+      # The development image tag is shared across branch projects, so a manual
+      # `docker compose up` can briefly reuse an older image/entrypoint. Keep
+      # pnpm startup safeguards at the Compose boundary too: current source must
+      # never hang on an interactive node_modules purge, even with a stale image.
+      - CI=true
+      - pnpm_config_verify_deps_before_run=false
+
       # Daemon configuration
       - NODE_ENV=development
       - DAEMON_PORT=${DAEMON_PORT:-3030}

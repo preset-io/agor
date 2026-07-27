@@ -34,6 +34,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -135,45 +136,59 @@ export class GeminiPromptService {
     sessionId: SessionID,
     prompt: string,
     taskId?: TaskID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    onActivity?: SdkActivityCallback,
+    outerAbortSignal?: AbortSignal
   ): AsyncGenerator<GeminiStreamEvent> {
-    // Get session metadata for model
-    const session = await this.sessionsRepo.findById(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    // Context user for per-user OAuth/API-key resolution — the task creator
-    // (prompter) when known, else the session owner.
-    const contextUserId = await resolveContextUserId({
-      session,
-      taskId,
-      tasksService: this.tasksService,
-    });
-
-    // Get or create Gemini client for this session
-    const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
-
-    // For recording on stream events. SDK invocation uses the model bound
-    // on the cached client (see getOrCreateClient).
-    const configuredModel = session.model_config?.model;
-
-    // Prepare initial prompt (just text for now - can enhance with file paths later)
-    let parts: Part[] = [{ text: prompt }];
-
-    // Create abort controller for cancellation support
+    // Register cancellation before any asynchronous initialization. Stop can
+    // otherwise arrive while credentials/client configuration is loading,
+    // before Gemini has an active SDK request to abort.
     const abortController = new AbortController();
+    const forwardOuterAbort = () => abortController.abort(outerAbortSignal?.reason);
+    if (outerAbortSignal?.aborted) {
+      forwardOuterAbort();
+    } else {
+      outerAbortSignal?.addEventListener('abort', forwardOuterAbort, { once: true });
+    }
     this.activeControllers.set(sessionId, abortController);
 
-    // Generate unique prompt ID for this turn
-    const promptId = `${sessionId}-${Date.now()}`;
-
     try {
+      // Get session metadata for model
+      const session = await this.sessionsRepo.findById(sessionId);
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      // Context user for per-user OAuth/API-key resolution — the task creator
+      // (prompter) when known, else the session owner.
+      const contextUserId = await resolveContextUserId({
+        session,
+        taskId,
+        tasksService: this.tasksService,
+      });
+
+      // Get or create Gemini client for this session
+      const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
+
+      // For recording on stream events. SDK invocation uses the model bound
+      // on the cached client (see getOrCreateClient).
+      const configuredModel = session.model_config?.model;
+
+      // Prepare initial prompt (just text for now - can enhance with file paths later)
+      let parts: Part[] = [{ text: prompt }];
+
+      // Generate unique prompt ID for this turn
+      const promptId = `${sessionId}-${Date.now()}`;
+
       // Tool execution loop - keep going until no more tool calls
       let loopCount = 0;
       const MAX_LOOPS = 50; // Safety limit to prevent infinite loops
 
       while (loopCount < MAX_LOOPS) {
+        // Initialization and tool execution can both outlive the original Stop
+        // callback. Never submit another provider request after cancellation.
+        if (abortController.signal.aborted) return;
+
         loopCount++;
         console.debug(`[Gemini Loop ${loopCount}] Starting turn with ${parts.length} parts`);
 
@@ -194,6 +209,7 @@ export class GeminiPromptService {
 
         // Stream all events from this turn
         for await (const event of stream) {
+          reportSdkActivity(onActivity, 'gemini', String(event.type));
           // Debug logging for all events
           const eventValue = 'value' in event ? event.value : undefined;
           console.debug(
@@ -495,8 +511,10 @@ export class GeminiPromptService {
       console.error('Gemini streaming error:', error);
       throw error;
     } finally {
-      // Clean up abort controller
-      this.activeControllers.delete(sessionId);
+      outerAbortSignal?.removeEventListener('abort', forwardOuterAbort);
+      if (this.activeControllers.get(sessionId) === abortController) {
+        this.activeControllers.delete(sessionId);
+      }
     }
   }
 

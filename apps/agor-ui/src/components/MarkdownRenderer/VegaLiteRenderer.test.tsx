@@ -76,6 +76,8 @@ describe('VegaLiteRenderer', () => {
     expect(screen.getByText('Loading Vega-Lite chart…')).toBeInTheDocument();
     const chart = screen.getByLabelText('Monthly revenue');
     expect(chart).toHaveAttribute('aria-busy', 'true');
+    expect(container.querySelector('[data-code-block-header]')).toHaveTextContent('vega-lite');
+    expect(screen.getByLabelText('Copy Vega-Lite spec')).toBeEnabled();
 
     await waitFor(() => expect(chart).toHaveAttribute('aria-busy', 'false'));
     expect(container.querySelector('svg')).toBeInTheDocument();

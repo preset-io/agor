@@ -361,7 +361,8 @@ export class ClaudeTool implements ITool {
       taskId,
       mappedPermissionMode,
       undefined, // chunkCallback (unused)
-      abortController
+      abortController,
+      streamingCallbacks?.onPulse
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
@@ -803,7 +804,8 @@ export class ClaudeTool implements ITool {
               this.messagesService!,
               this.tasksService,
               completeEvent.parent_tool_use_id ?? null,
-              tokenUsage
+              tokenUsage,
+              completeEvent.isSynthesizedResult
             );
             return true;
           });
@@ -1165,7 +1167,8 @@ export class ClaudeTool implements ITool {
               this.messagesService!,
               this.tasksService,
               completeEvent.parent_tool_use_id ?? null,
-              tokenUsage
+              tokenUsage,
+              completeEvent.isSynthesizedResult
             );
             return true;
           } else if (completeEvent.role === MessageRole.SYSTEM) {

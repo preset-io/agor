@@ -261,13 +261,6 @@ export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
 }
 
 /**
- * Keys that used to control the (now-removed) anonymous-mode path. Surfaced
- * as deprecation warnings on startup so operators upgrading from an older
- * release see a clear migration note instead of a silent ignore.
- */
-const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
-
-/**
  * Print a clear stderr banner if the loaded config still carries retired
  * upgrade-only keys. The keys have no runtime effect anymore — this is purely
  * an operator-UX nudge.
@@ -278,15 +271,18 @@ const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
  */
 export function warnDeprecatedConfig(config: AgorConfig): void {
   const legacy = config as AgorConfig & {
+    daemon?: Record<string, unknown>;
     defaults?: Record<string, unknown>;
     display?: Record<string, unknown>;
+    execution?: Record<string, unknown>;
+    branches?: Record<string, unknown>;
     onboarding?: Record<string, unknown>;
   };
-  const daemon = (config as { daemon?: Record<string, unknown> }).daemon;
+  const daemon = legacy.daemon;
   const display = legacy.display;
 
-  const present = daemon
-    ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
+  const presentDaemon = daemon
+    ? RETIRED_CONFIG_KEYS.daemon.filter((key) => Object.hasOwn(daemon, key))
     : [];
   const presentDisplay = display
     ? RETIRED_CONFIG_KEYS.display.filter((key) => Object.hasOwn(display, key))
@@ -294,15 +290,23 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   const presentDefaults = legacy.defaults
     ? RETIRED_CONFIG_KEYS.defaults.filter((key) => Object.hasOwn(legacy.defaults!, key))
     : [];
+  const presentExecution = legacy.execution
+    ? RETIRED_CONFIG_KEYS.execution.filter((key) => Object.hasOwn(legacy.execution!, key))
+    : [];
+  const presentBranches = legacy.branches
+    ? RETIRED_CONFIG_KEYS.branches.filter((key) => Object.hasOwn(legacy.branches!, key))
+    : [];
   const presentOnboarding = legacy.onboarding
     ? RETIRED_CONFIG_KEYS.onboarding.filter((key) => Object.hasOwn(legacy.onboarding!, key))
     : [];
   const hasLegacyFrameworkRepoUrl =
     !!legacy.onboarding && Object.hasOwn(legacy.onboarding, 'frameworkRepoUrl');
   if (
-    present.length === 0 &&
+    presentDaemon.length === 0 &&
     presentDisplay.length === 0 &&
     presentDefaults.length === 0 &&
+    presentExecution.length === 0 &&
+    presentBranches.length === 0 &&
     presentOnboarding.length === 0 &&
     !hasLegacyFrameworkRepoUrl
   )
@@ -315,7 +319,7 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
     '----------------------------------------------------------------',
     '  Your config.yaml contains:',
   ];
-  for (const key of present) {
+  for (const key of presentDaemon) {
     lines.push(`    daemon.${key}: ${String(daemon?.[key])}`);
   }
   for (const key of presentDisplay) {
@@ -323,6 +327,12 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   }
   for (const key of presentDefaults) {
     lines.push(`    defaults.${key}: ${String(legacy.defaults?.[key])}`);
+  }
+  for (const key of presentExecution) {
+    lines.push(`    execution.${key}: ${String(legacy.execution?.[key])}`);
+  }
+  for (const key of presentBranches) {
+    lines.push(`    branches.${key}: ${String(legacy.branches?.[key])}`);
   }
   for (const key of presentOnboarding) {
     lines.push(`    onboarding.${key}: ${String(legacy.onboarding?.[key])}`);
@@ -335,13 +345,15 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   }
   lines.push(
     '',
-    '  Retired keys no longer have any effect. Onboarding progress is stored',
-    '  per user. The renamed framework repository key remains a compatibility',
-    '  fallback, but new configuration should use the replacement shown above.',
+    '  Retired keys no longer have any effect. Branch creation permissions now',
+    '  come from typed board defaults, managed-environment control comes from',
+    '  effective branch permissions, and onboarding progress is stored per user.',
+    '  The renamed framework repository key remains a compatibility fallback,',
+    '  but new configuration should use the replacement shown above.',
     '',
     '  Action: remove these keys from your config.yaml at your convenience.'
   );
-  if (present.length > 0) {
+  if (presentDaemon.length > 0) {
     lines.push(
       '  If you previously ran anonymously, the daemon has auto-generated',
       `  admin credentials at ${getAdminCredentialsPath()}`,

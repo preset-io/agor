@@ -192,6 +192,7 @@ export function EnvironmentPill({
                 padding: '0 7px',
                 textDecoration: 'none',
                 height: '22px',
+                cursor: 'pointer',
               }}
             >
               <Space size={4} align="center">
@@ -208,6 +209,7 @@ export function EnvironmentPill({
                 height: '22px',
                 display: 'inline-flex',
                 alignItems: 'center',
+                cursor: 'default',
               }}
             >
               <Space size={4} align="center">

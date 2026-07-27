@@ -78,10 +78,10 @@ export type TranslatedEvent =
     }
   | {
       type: 'turn_end';
-      /** `messageId` of the turn that closed (always populated since we only
-       *  emit on an `assistant` line). */
+      /** `messageId` of the assistant turn, or the interruption event UUID. */
       messageId: string;
       timestamp: string | null;
+      interrupted?: boolean;
     }
   | {
       type: 'ai_title';
@@ -197,13 +197,33 @@ export class JsonlEventTranslator {
         },
       ];
     }
+    const content = line.message?.content;
+    const interrupted = Array.isArray(content)
+      ? content.some(
+          (block) =>
+            typeof block === 'object' &&
+            block !== null &&
+            'text' in block &&
+            block.text === '[Request interrupted by user for tool use]'
+        )
+      : content === '[Request interrupted by user for tool use]';
+    if (interrupted) {
+      return [
+        {
+          type: 'turn_end',
+          messageId: line.uuid ?? 'claude-cli-interrupt',
+          timestamp: line.timestamp ?? null,
+          interrupted: true,
+        },
+      ];
+    }
     return [
       {
         type: 'user_message',
         uuid: line.uuid ?? null,
         timestamp: line.timestamp ?? null,
         permissionMode: line.permissionMode ?? null,
-        content: line.message?.content,
+        content,
         isSidechain,
       },
     ];

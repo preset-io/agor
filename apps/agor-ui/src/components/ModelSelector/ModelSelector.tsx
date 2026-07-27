@@ -10,12 +10,16 @@ import {
   type GeminiModel,
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
+import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
+  curateModelOptions,
   DEFAULT_CURSOR_MODEL,
   ensureDefaultModelOption,
+  getModelDisplayName,
   getModelSelectorFallbackModel,
+  normalizeModelOption,
 } from './modelDefaults';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
@@ -56,6 +60,11 @@ export interface ModelSelectorProps {
   client?: AgorClient | null;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
+  /**
+   * Render the Claude Code advisor model select inline. Surfaces that relocate
+   * the advisor into an "Advanced" area (e.g. NewSessionModal) pass `false`.
+   */
+  showAdvisor?: boolean;
 }
 
 interface DynamicModelOption {
@@ -114,14 +123,19 @@ function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel:
   ];
 }
 
+const PIN_PLACEHOLDERS: Record<string, string> = {
+  codex: `e.g., ${DEFAULT_CODEX_MODEL}`,
+  gemini: 'e.g., gemini-2.5-pro',
+  copilot: 'e.g., gpt-4o or claude-3.5-sonnet',
+  cursor: `e.g., ${DEFAULT_CURSOR_MODEL}`,
+};
+
 /**
  * Model Selector Component
  *
- * Allows users to choose between:
- * - Model aliases (e.g., 'claude-sonnet-4-5-latest') - automatically uses latest version
- * - Exact model IDs (e.g., 'claude-sonnet-4-5-20250929') - pins to specific release
- *
- * Shows agent-specific models based on the agent prop.
+ * Presents a curated, richly-labelled list of model aliases (latest per family)
+ * and a "Pin a specific version…" affordance for exact model IDs. Picking from
+ * the list maps to `mode: 'alias'`; a pinned/custom ID maps to `mode: 'exact'`.
  */
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
@@ -130,39 +144,36 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agentic_tool,
   client,
   compact = false,
+  showAdvisor = true,
 }) => {
   const { token } = theme.useToken();
 
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
+  const isClaude = effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli';
 
   // Dynamic model lists — fetched once when the picker opens for a given tool
-  // and a client is available. The daemon returns either the live SDK result
-  // (source: 'dynamic') or the static fallback (source: 'static'). The local
-  // static list is a last-resort fallback for when the call itself fails.
+  // and a client is available.
   const [claudeServerOptions, setClaudeServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
-  const [claudeSource, setClaudeSource] = useState<'dynamic' | 'static' | null>(null);
   const [copilotServerOptions, setCopilotServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
-  const [copilotSource, setCopilotSource] = useState<'dynamic' | 'static' | null>(null);
   const [cursorServerOptions, setCursorServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
-  const [cursorSource, setCursorSource] = useState<'dynamic' | 'static' | null>(null);
   const [copilotDefaultModel, setCopilotDefaultModel] = useState(DEFAULT_COPILOT_MODEL);
   const [cursorDefaultModel, setCursorDefaultModel] = useState(DEFAULT_CURSOR_MODEL);
 
   useEffect(() => {
-    if ((effectiveTool !== 'claude-code' && effectiveTool !== 'claude-code-cli') || !client) return;
+    if (!isClaude || !client) return;
     let cancelled = false;
     (async () => {
       try {
@@ -175,7 +186,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           description: m.description,
         }));
         setClaudeServerOptions(models);
-        setClaudeSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -183,7 +193,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [effectiveTool, client]);
+  }, [isClaude, client]);
 
   useEffect(() => {
     if (effectiveTool !== 'copilot' || !client) return;
@@ -210,7 +220,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )
         );
         setCopilotDefaultModel(defaultModel);
-        setCopilotSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -245,7 +254,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )
         );
         setCursorDefaultModel(defaultModel);
-        setCursorSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -255,7 +263,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
   }, [effectiveTool, client]);
 
-  const modelList =
+  const rawModelList =
     effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
@@ -268,13 +276,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
               : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
 
-  // Determine initial mode based on whether the value is in the aliases list
-  // If no value provided, default to 'alias' mode (recommended)
-  const isValueInAliases = value?.model ? modelList.some((m) => m.id === value.model) : true; // Default to true when no value (will use alias mode)
-  const initialMode = value?.mode || (isValueInAliases ? 'alias' : 'exact');
-
-  // IMPORTANT: Call hooks unconditionally before any early returns (React rules of hooks)
-  const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
+  // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
+  // version, anything else is a curated alias selection.
+  const [pinned, setPinned] = useState(value?.mode === 'exact');
+  useEffect(() => {
+    setPinned(value?.mode === 'exact');
+  }, [value?.mode]);
 
   // OpenCode uses a different UI (2 dropdowns: provider + model)
   if (effectiveTool === 'opencode') {
@@ -301,241 +308,194 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   }
 
-  const fallbackModel = getModelSelectorFallbackModel(effectiveTool, modelList, {
+  const fallbackModel = getModelSelectorFallbackModel(effectiveTool, rawModelList, {
     copilotDefaultModel,
     cursorDefaultModel,
   });
 
-  const handleModeChange = (newMode: 'alias' | 'exact') => {
-    setMode(newMode);
-    if (onChange) {
-      // When switching modes, provide the same effective default the daemon
-      // applies if the form is submitted without a model_config.
-      onChange({
-        ...value,
-        mode: newMode,
-        model: value?.model || fallbackModel,
-      });
-    }
-  };
+  const normalizedList = rawModelList.map(normalizeModelOption);
+  const curated = curateModelOptions(effectiveTool, normalizedList, fallbackModel);
+  const currentModel = value?.model || fallbackModel;
 
-  const handleModelChange = (newModel: string) => {
-    if (onChange) {
-      onChange({
-        ...value,
-        mode,
-        model: newModel,
-      });
-    }
+  const selectAlias = (model: string) => {
+    onChange?.({ ...value, mode: 'alias', model });
   };
-
+  const selectPinned = (model: string) => {
+    onChange?.({ ...value, mode: 'exact', model });
+  };
   const handleAdvisorModelChange = (advisorModel: string | undefined) => {
-    if (onChange) {
-      onChange({
-        ...value,
-        mode,
-        model: value?.model || fallbackModel,
-        advisorModel,
-      });
-    }
+    onChange?.({
+      ...value,
+      mode: value?.mode ?? 'alias',
+      model: currentModel,
+      advisorModel,
+    });
   };
 
-  if (compact) {
-    const currentValue = value?.model || fallbackModel;
-    const options = modelList.map((m) => ({
-      value: m.id,
-      label: m.id,
-    }));
-    if (currentValue && !options.some((option) => option.value === currentValue)) {
-      options.unshift({ value: currentValue, label: currentValue });
-    }
+  const enablePin = () => {
+    setPinned(true);
+  };
+  const disablePin = () => {
+    setPinned(false);
+    selectAlias(curated.some((m) => m.id === currentModel) ? currentModel : fallbackModel);
+  };
 
+  // Alias options: curated list, with the currently-selected alias preserved
+  // even if curation would otherwise hide it (e.g. a superseded version).
+  const aliasOptions = curated.map((m) => ({
+    value: m.id,
+    label: m.displayName,
+    description: m.description,
+    isDefault: m.id === fallbackModel,
+    searchText: `${m.displayName} ${m.id} ${m.description ?? ''}`.toLowerCase(),
+  }));
+  if (!pinned && currentModel && !aliasOptions.some((o) => o.value === currentModel)) {
+    const norm = normalizedList.find((m) => m.id === currentModel);
+    aliasOptions.unshift({
+      value: currentModel,
+      label: norm?.displayName ?? getModelDisplayName(effectiveTool, currentModel),
+      description: norm?.description,
+      isDefault: false,
+      searchText: currentModel.toLowerCase(),
+    });
+  }
+
+  const renderAliasOption = (optionValue: string) => {
+    const data = aliasOptions.find((o) => o.value === optionValue);
+    return (
+      <Flex justify="space-between" align="start" gap={12} style={{ minWidth: 300 }}>
+        {/* whiteSpace:normal + flex:1/minWidth:0 lets descriptions wrap to
+            multiple lines instead of antd's default option ellipsis. */}
+        <div style={{ lineHeight: 1.3, whiteSpace: 'normal', flex: 1, minWidth: 0 }}>
+          <div>{data?.label ?? optionValue}</div>
+          {data?.description && (
+            <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
+              {data.description}
+            </Typography.Text>
+          )}
+        </div>
+        {data?.isDefault && (
+          <Tag bordered={false} color="blue" style={{ marginInlineEnd: 0, fontSize: 10 }}>
+            default
+          </Tag>
+        )}
+      </Flex>
+    );
+  };
+
+  // Compact: single dropdown for toolbars/popovers. Rich rows, displayName label.
+  if (compact) {
+    const compactOptions = aliasOptions.map((o) => ({
+      value: o.value,
+      label: o.label,
+      searchText: o.searchText,
+    }));
+    // Compact has no pin toggle, so an exact/pinned current value would be
+    // absent from the curated list — always surface the current selection.
+    if (currentModel && !compactOptions.some((o) => o.value === currentModel)) {
+      const norm = normalizedList.find((m) => m.id === currentModel);
+      compactOptions.unshift({
+        value: currentModel,
+        label: norm?.displayName ?? getModelDisplayName(effectiveTool, currentModel),
+        searchText: currentModel.toLowerCase(),
+      });
+    }
     const modelSelect = (
       <Select
-        value={currentValue}
-        onChange={handleModelChange}
+        value={currentModel}
+        onChange={selectAlias}
         size="small"
         showSearch
-        optionFilterProp="label"
+        filterOption={(input, option) => (option?.searchText ?? '').includes(input.toLowerCase())}
+        optionLabelProp="label"
         popupMatchSelectWidth={false}
         style={{ width: '100%', fontSize: token.fontSizeSM }}
-        options={options}
+        options={compactOptions}
+        optionRender={(option) => renderAliasOption(String(option.value))}
       />
     );
 
-    // Surface the optional Claude Code advisor model in compact contexts too
-    // (e.g. the session run-settings popover) so it can be set OR cleared per
-    // session. `allowClear` → undefined removes the session-level override.
-    const showAdvisor = effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli';
-    if (!showAdvisor) return modelSelect;
+    if (!isClaude || !showAdvisor) return modelSelect;
 
     return (
       <Space orientation="vertical" size={6} style={{ width: '100%' }}>
         {modelSelect}
-        <Select
-          allowClear
-          showSearch
-          size="small"
-          optionFilterProp="label"
-          placeholder="Advisor model: off"
+        <AdvisorModelSelect
           value={value?.advisorModel}
           onChange={handleAdvisorModelChange}
-          popupMatchSelectWidth={false}
-          style={{ width: '100%', fontSize: token.fontSizeSM }}
-          options={(claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES).map((model) => ({
-            value: model.id,
-            label: `Advisor: ${model.id}`,
-          }))}
+          options={claudeServerOptions ?? undefined}
+          client={client}
+          size="small"
+          style={{ fontSize: token.fontSizeSM }}
         />
       </Space>
     );
   }
 
+  const pinOptions = normalizedList.map((m) => ({ value: m.id, label: m.displayName }));
+
   return (
-    <Space orientation="vertical" style={{ width: '100%' }}>
-      <Radio.Group value={mode} onChange={(e) => handleModeChange(e.target.value)}>
-        <Space orientation="vertical">
-          <Radio value="alias">
-            <Space>
-              Use model alias (recommended)
-              <Tooltip title="Automatically uses the latest version of the model">
-                <InfoCircleOutlined />
-              </Tooltip>
-            </Space>
-          </Radio>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
+      {!pinned ? (
+        <Select
+          showSearch
+          value={currentModel}
+          onChange={selectAlias}
+          optionLabelProp="label"
+          filterOption={(input, option) => (option?.searchText ?? '').includes(input.toLowerCase())}
+          style={{ width: '100%' }}
+          options={aliasOptions}
+          optionRender={(option) => renderAliasOption(String(option.value))}
+        />
+      ) : (
+        <AutoComplete
+          value={currentModel}
+          onChange={selectPinned}
+          options={pinOptions}
+          filterOption={(input, option) =>
+            `${option?.value ?? ''} ${option?.label ?? ''}`
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
+          placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-8-20251115'}
+          style={{ width: '100%' }}
+        />
+      )}
 
-          {mode === 'alias' && (
-            <div style={{ marginLeft: 24, marginTop: 8 }}>
-              <Select
-                showSearch
-                optionFilterProp="label"
-                value={value?.model || fallbackModel}
-                onChange={handleModelChange}
-                style={{ width: '100%', minWidth: 400 }}
-                options={modelList.map((m) => ({
-                  value: m.id,
-                  label: m.id,
-                }))}
-              />
-              {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') &&
-                claudeSource && (
-                  <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
-                    {claudeSource === 'dynamic' ? (
-                      <>Live list from the Anthropic Models API.</>
-                    ) : (
-                      <>
-                        Showing static fallback. Set <code>ANTHROPIC_API_KEY</code> to see the live
-                        model list.
-                      </>
-                    )}
-                  </div>
-                )}
-              {effectiveTool === 'copilot' && copilotSource && (
-                <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
-                  {copilotSource === 'dynamic' ? (
-                    <>
-                      Live list from your Copilot account (via SDK <code>listModels()</code>).
-                    </>
-                  ) : (
-                    <>
-                      Showing static fallback. Set <code>COPILOT_GITHUB_TOKEN</code> on the daemon
-                      to see your account's live list (including BYOK models).
-                    </>
-                  )}
-                </div>
-              )}
-              {effectiveTool === 'cursor' && cursorSource && (
-                <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
-                  {cursorSource === 'dynamic' ? (
-                    <>
-                      Live list from your Cursor account (via SDK <code>Cursor.models.list()</code>
-                      ).
-                    </>
-                  ) : (
-                    <>
-                      Showing static fallback. Set <code>CURSOR_API_KEY</code> to see your account's
-                      live Cursor model list.
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+      {!pinned ? (
+        <Button
+          type="link"
+          size="small"
+          onClick={enablePin}
+          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+        >
+          Pin a specific version…
+        </Button>
+      ) : (
+        <Button
+          type="link"
+          size="small"
+          onClick={disablePin}
+          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+        >
+          Use a recommended model
+        </Button>
+      )}
 
-          <Radio value="exact">
-            <Space>
-              Specify exact model ID
-              <Tooltip title="Pin to a specific model release for reproducibility">
-                <InfoCircleOutlined />
-              </Tooltip>
-            </Space>
-          </Radio>
-
-          {mode === 'exact' && (
-            <div style={{ marginLeft: 24, marginTop: 8 }}>
-              <Input
-                value={value?.model}
-                onChange={(e) => handleModelChange(e.target.value)}
-                placeholder={
-                  effectiveTool === 'codex'
-                    ? `e.g., ${DEFAULT_CODEX_MODEL}`
-                    : effectiveTool === 'gemini'
-                      ? 'e.g., gemini-2.5-pro'
-                      : effectiveTool === 'copilot'
-                        ? 'e.g., gpt-4o or claude-3.5-sonnet'
-                        : effectiveTool === 'cursor'
-                          ? `e.g., ${DEFAULT_CURSOR_MODEL}`
-                          : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
-                }
-                style={{ width: '100%', minWidth: 400 }}
-              />
-              <div style={{ marginTop: 8, fontSize: 12, color: token.colorTextTertiary }}>
-                Enter any model ID to pin to a specific version.{' '}
-                <Typography.Link
-                  href={
-                    effectiveTool === 'codex'
-                      ? 'https://platform.openai.com/docs/models'
-                      : effectiveTool === 'gemini'
-                        ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : effectiveTool === 'copilot'
-                          ? 'https://github.com/features/copilot'
-                          : effectiveTool === 'cursor'
-                            ? 'https://cursor.com/docs/api/sdk/typescript'
-                            : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ fontSize: 12 }}
-                >
-                  View available models
-                </Typography.Link>
-              </div>
-            </div>
-          )}
-        </Space>
-      </Radio.Group>
-
-      {(effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli') && (
+      {isClaude && showAdvisor && (
         <div>
           <Space size={4}>
             <span>Advisor model</span>
-            <Tooltip title="Optional Claude Code advisor tool model. Leave unset to use existing Claude settings or disable session-level override.">
+            <Tooltip title="Optional Claude Code advisor-tool model. Leave off to use existing Claude settings.">
               <InfoCircleOutlined />
             </Tooltip>
           </Space>
-          <Select
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder="Not set"
+          <AdvisorModelSelect
             value={value?.advisorModel}
             onChange={handleAdvisorModelChange}
-            style={{ width: '100%', minWidth: 400, marginTop: 8 }}
-            options={(claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES).map((model) => ({
-              value: model.id,
-              label: model.id,
-            }))}
+            options={claudeServerOptions ?? undefined}
+            client={client}
+            style={{ marginTop: 8 }}
           />
         </div>
       )}

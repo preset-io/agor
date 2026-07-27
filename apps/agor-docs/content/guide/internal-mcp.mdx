@@ -23,7 +23,7 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 ## Key Ideas
 
 - **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments. Anything you can click or reach via the `agor` CLI is available as JSON-RPC.
-- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, branch, and board it's in, and can act on that context.
+- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows _which_ session, branch, and board it's in, and can act on that context.
 - **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
 - **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even invite new users).
 
@@ -31,15 +31,15 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 ## Capabilities At a Glance
 
-| Domain                 | What agents can do                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Sessions**           | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
-| **Repositories**       | List repositories, clone remote repos, register local repos, manage repo metadata                       |
-| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially  |
-| **Board Zones**        | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
-| **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
-| **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
-| **Context Resources**  | Enumerate context files, load concept docs, ingest repo metadata                                        |
+| Domain                | What agents can do                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
+| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                       |
+| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially   |
+| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
+| **Tasks & Reports**   | Fetch task history, create follow-up tasks, log progress, generate reports                              |
+| **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                            |
+| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata                                        |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 
@@ -97,6 +97,35 @@ External agents can use the same MCP endpoint:
 
 This makes Agor a control plane for other AI systems, enabling remote triage bots, automation pipelines, or custom dashboards to work against live boards.
 
+### Multi-tenant authentication boundary
+
+The default `multi_tenancy.mode: static` behavior is unchanged: MCP requests
+use `multi_tenancy.static_tenant_id`, and clients do not send a tenant header.
+
+In hosted `required_from_auth` deployments:
+
+- Internal MCP session JWTs carry a signed tenant binding. The daemon verifies
+  that binding before it reads the session or user, and a token cannot be
+  replayed with another tenant header.
+- Personal API keys are opaque and do not contain a signed tenant. Using them
+  at `/mcp` therefore requires `multi_tenancy.trusted_header`; the trusted
+  reverse proxy must remove any client-supplied value and set the header from
+  its authenticated routing decision. It must send exactly one tenant value;
+  duplicate or comma/list-valued tenant headers are rejected. Do not expose the
+  daemon directly when this mode relies on a trusted header.
+- If more than one tenant signal is present, all signals must agree. Missing or
+  conflicting identity fails closed before tenant-owned authentication data is
+  queried.
+- Streamable HTTP sessions retain their initialize-time tenant, user, and
+  optional Agor-session bindings. Every later GET, POST, or DELETE request is
+  re-authenticated. Tenant and user identity must still match; an optional
+  Agor-session binding may be omitted and reused, but cannot be added or
+  replaced, and is re-authorized before each request.
+
+Tenant identity is ambient for the MCP operation, but it does not hold a
+database transaction open. Individual service and repository calls use short
+tenant-scoped units of work.
+
 ## Best Practices
 
 - **Keep permission policies tight.** MCP calls respect Agor’s permission system. Configure approvals so agents only do what the team expects.
@@ -107,30 +136,36 @@ This makes Agor a control plane for other AI systems, enabling remote triage bot
 ## MCP Tokens
 
 MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
-a `jti` (per-issuance ID) and an `exp`. Tokens are re-minted fresh on every
-`GET /sessions/:id` and `POST /sessions`.
+the session (`sub`), authenticated caller (`uid`), tenant (`tid`), a
+per-issuance ID (`jti`), and an expiry (`exp`). A still-valid token may be
+reused from a cache keyed by tenant, session, and user; otherwise `GET
+/sessions/:id` or `POST /sessions` mints a new one.
 
 There is no revocation mechanics, no per-jti ledger, no session-generation
 counter. The authorised blast radius of a leak is bounded by `exp` (default
-24h). Validation additionally rejects tokens whose session has been deleted.
-If/when MCP is opened externally we'd design auth from scratch (OAuth / API
-keys) rather than extending this.
+24h). Validation additionally rejects tokens whose session has been deleted
+from the signed tenant. Tokens issued before the tenant binding was introduced
+are rejected and are replaced the next time the session is fetched or created.
+These session tokens are for daemon-to-executor use; external clients should
+use personal API keys rather than treating this JWT format as a general-purpose
+authentication protocol.
 
 ### Access gating
 
-Because an MCP token binds `uid = session.created_by` and lets the bearer
-act AS the creator on the MCP channel, it's only issued to callers who are
-already allowed to act as that creator:
+Because an MCP token binds `uid` to the authorized caller and lets the bearer
+act as that user on the MCP channel, it is only issued to callers who are
+allowed to receive a token for the session:
 
-- **`GET /sessions/:id`** issues a token to the creator themselves (provided they are still
-  `member+`), a superadmin, or the executor's service identity
-  (`role: 'service'`, used when spawning the child process). A plain
-  `member+` with `view` permission on the branch does **not** receive a
-  token. Handing one out would let them impersonate the creator, sidestepping
-  the `session`-tier "own sessions only" rule enforced elsewhere.
+- **`GET /sessions/:id`** first applies normal session and branch
+  authorization, then issues a caller-scoped token to any authenticated
+  `member+` or to the executor's service identity (`role: 'service'`, used when
+  spawning the child process). The caller need not be the session creator:
+  MCP tools continue to act as that caller and enforce their normal
+  authorization checks.
 - For **`POST /sessions`**, the caller is the creator by construction, so
   `member+` is the only gate here.
-- **Viewers** never receive an `mcp_token` on either path. They cannot
+- Callers with the account role **viewer** never receive an `mcp_token` on
+  either path. They cannot
   prompt via REST either, so MCP would be useless for them regardless.
 
 ### Config knobs
@@ -138,16 +173,17 @@ already allowed to act as that creator:
 ```yaml
 execution:
   # Token lifetime — keep short to cap the damage from a leak.
-  mcp_token_expiration_ms: 86400000            # 24h (default)
+  mcp_token_expiration_ms: 86400000 # 24h (default)
 ```
 
 ### Troubleshooting
 
-| Symptom                                            | Likely cause                                               | Fix                                           |
-|----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
-| `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
-| `token rejected: session … not found`              | Token's session was deleted                                | Expected, token can no longer be used         |
-| `token rejected: missing jti`                      | Pre-rollout token (no `jti`/`exp`)                         | Re-prompt / restart the session to re-mint    |
+| Symptom                               | Likely cause                          | Fix                                          |
+| ------------------------------------- | ------------------------------------- | -------------------------------------------- |
+| `token rejected: expired`             | Token past its `exp`                  | Session will re-mint on next `GET /sessions` |
+| `token rejected: session … not found` | Token's session was deleted           | Expected — token can no longer be used       |
+| `token rejected: missing sub/uid/tid` | Pre-tenant-binding or malformed token | Fetch / recreate the session to re-mint      |
+| `token rejected: missing jti or exp`  | Pre-expiry-binding or malformed token | Fetch / recreate the session to re-mint      |
 
 ## Related Reading
 

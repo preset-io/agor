@@ -5,7 +5,8 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor-live/client';
+import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,11 @@ import { SessionFooter } from './SessionFooter';
 // ModelSelector makes async network calls — replace with a stub
 vi.mock('../ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector-stub" />,
+}));
+vi.mock('../EffortSelector', () => ({
+  EffortSelector: ({ value }: { value?: EffortLevel }) => (
+    <div data-testid="effort-selector-stub">{value ?? 'Inherited'}</div>
+  ),
 }));
 
 // TimerPill uses complex internal state not needed for footer layout tests
@@ -53,6 +59,7 @@ const baseProps = {
   sessionMcpServerIds: [] as string[],
   unauthedMcpServers: [],
   mcpServerById: new Map(),
+  userAuthenticatedMcpServerIds: new Set<string>(),
   isRunning: false,
   isStopping: false,
   stopRequestInFlight: false,
@@ -121,6 +128,16 @@ describe('SessionFooter', () => {
   it('Stop button is rendered when session is running', () => {
     render(<SessionFooter {...baseProps} isRunning={true} />, { wrapper: Wrapper });
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('shows stopping feedback immediately while the Stop request is in flight', () => {
+    const { container } = render(
+      <SessionFooter {...baseProps} isRunning={true} stopRequestInFlight={true} />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
+    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
   it('Model chip is hidden when no model is present', () => {
@@ -199,6 +216,67 @@ describe('SessionFooter', () => {
     const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
+  });
+
+  it('opens session settings from the final footer overflow action', async () => {
+    const onOpenSessionSettings = vi.fn();
+    render(<SessionFooter {...baseProps} onOpenSessionSettings={onOpenSessionSettings} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    const settingsButton = await screen.findByRole('button', { name: 'Session settings' });
+    const overflowButtons = within(overflowOptions).getAllByRole('button');
+
+    expect(overflowButtons[overflowButtons.length - 1]).toBe(settingsButton);
+    fireEvent.click(settingsButton);
+    expect(onOpenSessionSettings).toHaveBeenCalledWith('test-session-123');
+  });
+
+  it('does not expose session settings from the MCP control', async () => {
+    render(<SessionFooter {...baseProps} onOpenSessionSettings={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByTitle(/No MCP servers attached/));
+
+    expect(await screen.findByText('Session MCP servers')).toBeInTheDocument();
+    expect(screen.queryByText('Open session settings')).not.toBeInTheDocument();
+  });
+
+  it('shows inherited reasoning effort for Codex in session settings', async () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, agentic_tool: 'codex' } as Session}
+        toolCaps={AGENTIC_TOOL_CAPABILITIES.codex}
+        effortLevel={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    expect(within(overflowOptions).getByText('Effort')).toBeInTheDocument();
+    expect(within(overflowOptions).getByText('Inherited')).toBeInTheDocument();
+  });
+
+  it('does not expose live reasoning effort for Claude Code CLI sessions', async () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItems: [] }));
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, agentic_tool: 'claude-code-cli' } as Session}
+        toolCaps={AGENTIC_TOOL_CAPABILITIES['claude-code-cli']}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    expect(within(overflowOptions).queryByText('Effort')).not.toBeInTheDocument();
+    expect(within(overflowOptions).queryByTestId('effort-selector-stub')).not.toBeInTheDocument();
   });
 });
 

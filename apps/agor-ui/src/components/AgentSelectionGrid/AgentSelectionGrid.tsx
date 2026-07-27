@@ -16,7 +16,7 @@
  */
 
 import type { TenantAgenticToolName } from '@agor-live/client';
-import { Select, Space, Typography } from 'antd';
+import { Select, Space, Typography, theme } from 'antd';
 import { useEffect } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
@@ -39,13 +39,15 @@ export interface AgentSelectionGridProps {
   /** Rendering style. `cards` (default) = grid of cards; `select` = compact Antd Select. */
   variant?: 'cards' | 'select';
   /** Number of columns (cards variant only) */
-  columns?: 2 | 3;
+  columns?: 2 | 3 | 4;
   /** Show helper text when no agent selected (cards variant only) */
   showHelperText?: boolean;
   /** Helper text to display (cards variant only) */
   helperText?: string;
   /** Show SDK comparison link (both variants) */
   showComparisonLink?: boolean;
+  /** Card density (cards variant only). `small` uses the dense half-height tile. */
+  size?: 'default' | 'small';
 }
 
 export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
@@ -57,7 +59,9 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   showHelperText = false,
   helperText = 'Click on an agent card to select it',
   showComparisonLink = false,
+  size = 'default',
 }) => {
+  const { token } = theme.useToken();
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
   const visibleAgents = agents.filter((agent) => {
     const canonical = agent.id === 'claude-code-cli' ? 'claude-code' : agent.id;
@@ -105,9 +109,17 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gap: 6,
-          marginTop: 8,
+          // Dense tiles use auto-fit so they always wrap within the container
+          // instead of overflowing; the fixed-column layout is unchanged for the
+          // default variant. `minmax(min, 1fr)` caps the min track width.
+          gridTemplateColumns:
+            size === 'small'
+              ? `repeat(auto-fit, minmax(${token.sizeXXL * 3}px, 1fr))`
+              : `repeat(${columns}, 1fr)`,
+          // Small tiles use the token scale; the default variant keeps #1801's
+          // tightened 6px gap.
+          gap: size === 'small' ? token.marginXS : 6,
+          marginTop: token.marginXS,
         }}
       >
         {visibleAgents.map((agent) => (
@@ -116,6 +128,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
             agent={agent}
             selected={selectedAgentId === agent.id}
             onClick={() => onSelect(agent.id)}
+            size={size}
           />
         ))}
       </div>

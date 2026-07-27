@@ -7,6 +7,27 @@ echo "🚀 Starting Agor development environment..."
 # No pnpm install needed at runtime - this is the key to fast startups!
 echo "✅ Using pre-built dependencies from Docker image"
 
+# pnpm runs a workspace-wide deps-status check (runDepsStatusCheck) before every
+# `pnpm run` / `pnpm --filter … <script>`. This image bakes in deps for only 8 of the
+# 10 workspace packages (apps/agor-docs and packages/agor-live are neither installed
+# nor shadowed by an anonymous node_modules volume), so that check always decides
+# node_modules is out of sync and kicks off a full `pnpm install`. That install then
+# wants to purge and reinstall node_modules "from scratch" and asks to confirm — a
+# prompt that hangs forever under `docker compose up` (the dev service runs with
+# tty:true, so pnpm prompts instead of erroring, and nothing ever answers it). The
+# packages we actually build and run below all have their deps baked in, so disable
+# the pre-run check entirely: the builds use what's already in the image, startup
+# stays fast, and nothing tries to reinstall.
+#
+# NB: this setting is pnpm-specific and is only read from the `pnpm_config_*` env
+# namespace — `npm_config_verify_deps_before_run` is silently ignored (verified
+# against pnpm 11.13, the version this repo pins).
+export pnpm_config_verify_deps_before_run=false
+# Belt-and-suspenders: force non-interactive mode so that if any pnpm command still
+# decides to touch node_modules, it auto-answers its modules-purge confirmation
+# instead of blocking on it (CI=true → pnpm skips the confirmation prompt).
+export CI=true
+
 # Mark /app as a safe git directory for non-branch clones (where the
 # bind-mounted source tree is owned by the host UID and trips git's
 # "dubious ownership" guard inside the container). Harmless in Agor's

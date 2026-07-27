@@ -3,10 +3,11 @@
  *
  * CSRF protection for the GitHub App install flow. When an admin initiates
  * an install via the UI (authenticated request), we issue a random one-time
- * state token bound to the admin's user_id and embed it in the GitHub App's
- * setup_url. GitHub forwards the state query param on the post-install
- * redirect; the callback route consumes the state once, which is what
- * proves the request originated from our authenticated initiation endpoint.
+ * state token bound to the admin's user_id and tenant_id and embed it in the
+ * GitHub App's setup_url. GitHub forwards the state query param on the
+ * post-install redirect; the callback route consumes the state once, which is
+ * what proves the request originated from our authenticated initiation
+ * endpoint and retains the tenant identity associated with the flow.
  *
  * The stored user_id is available via the `expectedUserId` parameter of
  * `consumeInstallState` but is not currently enforced at the callback —
@@ -30,6 +31,7 @@ const STATE_BYTES = 32; // 256 bits of entropy
 
 interface PendingState {
   userId: string;
+  tenantId: string;
   expiresAt: number;
 }
 
@@ -54,21 +56,25 @@ function ensurePurgeTimer(): void {
  * The token is only valid for a single `consumeInstallState` call
  * within the TTL window.
  */
-export function issueInstallState(userId: string): string {
+export function issueInstallState(userId: string, tenantId: string): string {
   if (!userId || typeof userId !== 'string') {
     throw new Error('issueInstallState requires a non-empty userId');
+  }
+  if (!tenantId || typeof tenantId !== 'string') {
+    throw new Error('issueInstallState requires a non-empty tenantId');
   }
   ensurePurgeTimer();
   const state = randomBytes(STATE_BYTES).toString('hex');
   pendingStates.set(state, {
     userId,
+    tenantId,
     expiresAt: Date.now() + STATE_TTL_MS,
   });
   return state;
 }
 
 export type ConsumeResult =
-  | { ok: true; userId: string }
+  | { ok: true; userId: string; tenantId: string }
   | { ok: false; reason: 'missing' | 'unknown' | 'expired' | 'user-mismatch' };
 
 /**
@@ -98,7 +104,7 @@ export function consumeInstallState(
   if (expectedUserId !== undefined && entry.userId !== expectedUserId) {
     return { ok: false, reason: 'user-mismatch' };
   }
-  return { ok: true, userId: entry.userId };
+  return { ok: true, userId: entry.userId, tenantId: entry.tenantId };
 }
 
 /**
