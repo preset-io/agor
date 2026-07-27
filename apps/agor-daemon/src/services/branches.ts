@@ -72,7 +72,6 @@ import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
-  executorExecutionScopeForParams,
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -446,7 +445,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           logPrefix,
           asUser,
           preparedEnv: env,
-          executionScope: executorExecutionScopeForParams(params),
           templateVariables: {
             branch_id: branch.branch_id,
           },
@@ -481,14 +479,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<void> {
-    const { branch, action, params } = options;
+    const { branch, action } = options;
     const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
 
     const result = await runExecutorCommand(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       asUser,
       preparedEnv: env,
-      executionScope: executorExecutionScopeForParams(params),
       // Mixed webhook/shell restart needs the daemon to wait for shell stop
       // before it invokes the daemon-owned webhook start. Keep this generous
       // enough for docker compose down while still bounding the request.
@@ -550,7 +547,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         logPrefix: `[Environment.logs ${branch.name}]`,
         asUser,
         preparedEnv: env,
-        executionScope: executorExecutionScopeForParams(params),
         timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
         templateVariables: {
           branch_id: branch.branch_id,
@@ -1339,7 +1335,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             {
               logPrefix: `[BranchesService.remove ${branch.name}]`,
               asUser, // Run as resolved user (fresh groups via sudo -u)
-              executionScope: executorExecutionScopeForParams(params),
             }
           );
         })
@@ -1425,7 +1420,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             {
               logPrefix: `[BranchesService.clean ${branch.name}]`,
-              executionScope: executorExecutionScopeForParams(params),
             }
           );
         })
@@ -1476,7 +1470,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             {
               logPrefix: `[BranchesService.delete ${branch.name}]`,
-              executionScope: executorExecutionScopeForParams(params),
             }
           );
         })
@@ -1599,8 +1592,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
     const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      params
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
     const statusResult = await runExecutorCommand(
       {
@@ -1675,10 +1667,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // Use a service JWT so the executor can patch rendered env command
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
-        const executionScope = executorExecutionScopeForParams(params);
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          executionScope
+          this.app as unknown as { settings: { authentication?: { secret?: string } } }
         );
         spawnExecutor(
           {
@@ -1720,7 +1710,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             logPrefix: `[BranchesService.unarchive ${branch.name}]`,
-            executionScope,
           }
         );
       } catch (error) {

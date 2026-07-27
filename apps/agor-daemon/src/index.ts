@@ -267,7 +267,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
-  configureExecutor(config.execution);
+  configureExecutor(config.execution, {
+    requireTenantContext: multiTenancy.mode === 'required_from_auth',
+  });
 
   // --------------------------------------------------------------------------
   // Create Feathers app + Express middleware

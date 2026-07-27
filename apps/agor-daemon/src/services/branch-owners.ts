@@ -21,13 +21,12 @@
 import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, BranchID, HookContext, User, UUID } from '@agor/core/types';
+import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   createServiceToken,
-  executorExecutionScopeForParams,
   getDaemonUrl,
-  serviceTokenScopeForExecutionScope,
+  serviceTokenScopeForCurrentTenant,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -260,13 +259,10 @@ export function setupBranchOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the branch will pick up the new owner from the DB
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
-          const executionScope = executorExecutionScopeForParams(
-            context.params as Partial<AuthenticatedParams>
-          );
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
             branch_id: branchId,
             command: 'unix.sync-branch',
-            ...serviceTokenScopeForExecutionScope(executionScope),
+            ...serviceTokenScopeForCurrentTenant(),
           });
           spawnExecutorFireAndForget(
             {
@@ -278,10 +274,7 @@ export function setupBranchOwnersService(
                 daemonUser: config.daemonUser,
               },
             },
-            {
-              logPrefix: '[Executor/branch-owners.create]',
-              executionScope,
-            }
+            { logPrefix: '[Executor/branch-owners.create]' }
           );
 
           return context;
@@ -301,13 +294,10 @@ export function setupBranchOwnersService(
           // Fire-and-forget sync to executor
           // Syncing the branch will handle the removed owner
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
-          const executionScope = executorExecutionScopeForParams(
-            context.params as Partial<AuthenticatedParams>
-          );
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
             branch_id: branchId,
             command: 'unix.sync-branch',
-            ...serviceTokenScopeForExecutionScope(executionScope),
+            ...serviceTokenScopeForCurrentTenant(),
           });
           spawnExecutorFireAndForget(
             {
@@ -319,10 +309,7 @@ export function setupBranchOwnersService(
                 daemonUser: config.daemonUser,
               },
             },
-            {
-              logPrefix: '[Executor/branch-owners.remove]',
-              executionScope,
-            }
+            { logPrefix: '[Executor/branch-owners.remove]' }
           );
 
           return context;

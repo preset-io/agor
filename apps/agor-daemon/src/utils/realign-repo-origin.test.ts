@@ -8,11 +8,9 @@ import {
 import { spawnExecutorFireAndForget } from './spawn-executor.js';
 
 vi.mock('./spawn-executor.js', () => ({
-  executorExecutionScopeForParams: vi.fn(() => undefined),
   generateSessionToken: vi.fn(() => 'service-token'),
   generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://localhost:3030'),
-  serviceTokenScopeForParams: vi.fn(() => ({})),
   spawnExecutorFireAndForget: vi.fn(),
 }));
 

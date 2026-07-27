@@ -16,7 +16,6 @@ import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import {
-  executorExecutionScopeForParams,
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -104,10 +103,8 @@ export class FilesService {
         return [];
       }
 
-      const executionScope = executorExecutionScopeForParams(params);
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        executionScope
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;
@@ -130,7 +127,6 @@ export class FilesService {
           // In simple/insulated mode this stays undefined so default installs
           // do not require sudo and configured executor defaults can apply.
           asUser: await resolveExecutorReadAsUser(this.db, currentUser ?? currentUserId),
-          executionScope,
         }
       );
 

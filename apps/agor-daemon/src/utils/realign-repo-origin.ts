@@ -1,7 +1,6 @@
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Repo, RepoID } from '@agor/core/types';
 import {
-  executorExecutionScopeForParams,
   generateScopedServiceToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
@@ -40,10 +39,8 @@ export async function ensureRepoOriginAlignedForRepo(
   if (!repo.remote_url) return;
   if (!repo.local_path) return;
 
-  const executionScope = executorExecutionScopeForParams(params);
   const sessionToken = generateScopedServiceToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } },
-    executionScope
+    app as unknown as { settings: { authentication?: { secret?: string } } }
   );
 
   spawnExecutorFireAndForget(
@@ -57,7 +54,6 @@ export async function ensureRepoOriginAlignedForRepo(
     },
     {
       logPrefix: `[git.repo.realign-origin ${repo.slug}]`,
-      executionScope,
     }
   );
 }

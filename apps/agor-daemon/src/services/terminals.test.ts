@@ -102,11 +102,8 @@ vi.mock('../utils/mcp-token-authorization.js', () => ({
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  executorExecutionScopeForParams: () =>
-    mocks.tenantId ? { tenantId: mocks.tenantId } : undefined,
   generateSessionToken: () => 'session-token',
   generateScopedServiceToken: mocks.generateScopedServiceToken,
-  serviceTokenScopeForParams: () => ({}),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
@@ -267,7 +264,6 @@ describe('TerminalsService readiness ack gating', () => {
 
     expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
       expect.anything(),
-      { tenantId: 'tenant-x' },
       { terminal_user_id: params.user.user_id },
       '30d'
     );

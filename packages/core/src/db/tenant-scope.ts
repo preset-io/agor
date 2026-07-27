@@ -7,7 +7,7 @@ import {
   tenantDatabaseScope,
 } from './tenant-context';
 
-export type { SystemDatabaseCapability, TenantContextScope } from './tenant-context';
+export type { SystemDatabaseCapability } from './tenant-context';
 export {
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,

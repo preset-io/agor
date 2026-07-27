@@ -59,7 +59,6 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
-  executorExecutionScopeForParams,
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -227,10 +226,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    const executionScope = executorExecutionScopeForParams(params);
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      executionScope
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
 
     // Unix group initialization is a filesystem concern controlled by
@@ -302,7 +299,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
-        executionScope,
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients (the existing
@@ -920,10 +916,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
-      const executionScope = executorExecutionScopeForParams(params);
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        executionScope
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -972,7 +966,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
           asUser, // Run as resolved user (fresh groups via sudo -u)
-          executionScope,
         }
       );
     } catch (error) {
@@ -1013,10 +1006,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params: Record<string, unknown>,
     serviceParams?: RepoParams
   ) {
-    const executionScope = executorExecutionScopeForParams(serviceParams);
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      executionScope
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,
@@ -1039,7 +1030,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
         asUser,
-        executionScope,
       }
     );
   }
@@ -1204,10 +1194,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
-      const executionScope = executorExecutionScopeForParams(params);
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        executionScope
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       const cleanupResult = await runExecutorCommand(
@@ -1226,7 +1214,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[repo.delete ${repo.slug}]`,
           timeoutMs: 5 * 60_000,
-          executionScope,
         }
       );
 

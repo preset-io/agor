@@ -1,67 +1,43 @@
 import { runWithTenantContext } from '@agor/core/db';
-import type { AuthenticatedParams } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  configureExecutor,
   createServiceToken,
-  executorExecutionScopeForParams,
   generateScopedServiceToken,
-  serviceTokenScopeForExecutionScope,
-  serviceTokenScopeForParams,
+  serviceTokenScopeForCurrentTenant,
 } from './spawn-executor';
 
 describe('executor service token scoping', () => {
-  it('copies tenant context into service token claims', () => {
-    const scope = serviceTokenScopeForParams({
-      tenant: { tenant_id: 'tenant-a' as never, source: 'auth_claim' },
-    } satisfies Partial<AuthenticatedParams>);
+  beforeEach(() => configureExecutor(null));
 
-    const token = createServiceToken('test-secret', '5m', scope);
+  it('copies ambient tenant context into service token claims', () => {
+    const token = runWithTenantContext('tenant-a', () =>
+      createServiceToken('test-secret', '5m', serviceTokenScopeForCurrentTenant())
+    );
     const decoded = jwt.decode(token) as { tenant_id?: string; type?: string };
 
     expect(decoded.type).toBe('service');
     expect(decoded.tenant_id).toBe('tenant-a');
   });
 
-  it('falls back to user tenant metadata when explicit params are absent', () => {
-    expect(
-      serviceTokenScopeForParams({
-        user: {
-          user_id: 'u1',
-          email: 'u1@example.test',
-          role: 'member',
-          tenant_id: 'tenant-from-user' as never,
-        },
-      })
-    ).toEqual({ tenant_id: 'tenant-from-user' });
+  it('omits the tenant claim outside tenant context when it is not required', () => {
+    expect(serviceTokenScopeForCurrentTenant()).toEqual({});
   });
 
-  it('omits tenant claim for single-tenant/internal calls without tenant context', () => {
-    expect(serviceTokenScopeForParams({})).toEqual({});
-  });
-
-  it('uses one narrow execution scope for template and token identity', () => {
-    const executionScope = executorExecutionScopeForParams({
-      tenant: { tenant_id: 'tenant-a' as never, source: 'auth_claim' },
+  it('preserves ambient tenant identity across asynchronous orchestration', async () => {
+    const token = await runWithTenantContext('tenant-async', async () => {
+      await Promise.resolve();
+      return generateScopedServiceToken({
+        settings: { authentication: { secret: 'test-secret' } },
+      });
     });
+    const decoded = jwt.decode(token) as { tenant_id?: string };
 
-    expect(executionScope).toEqual({ tenantId: 'tenant-a' });
-    expect(serviceTokenScopeForExecutionScope(executionScope)).toEqual({
-      tenant_id: 'tenant-a',
-    });
+    expect(decoded.tenant_id).toBe('tenant-async');
   });
 
-  it('rejects a request tenant that conflicts with ambient execution context', () => {
-    expect(() =>
-      runWithTenantContext('tenant-ambient', () =>
-        executorExecutionScopeForParams({
-          tenant: { tenant_id: 'tenant-request' as never, source: 'auth_claim' },
-        })
-      )
-    ).toThrow('Conflicting tenant identities at executor boundary');
-  });
-
-  it('stamps role: service for a plain (unscoped) service token', () => {
+  it('stamps role: service for a plain service token', () => {
     const decoded = jwt.decode(createServiceToken('test-secret', '5m', {})) as { role?: string };
     expect(decoded.role).toBe('service');
   });
@@ -77,15 +53,29 @@ describe('executor service token scoping', () => {
     expect(decoded.terminal_user_id).toBe('u1');
   });
 
-  it('keeps trusted execution scope authoritative over extra token claims', () => {
-    const token = generateScopedServiceToken(
-      { settings: { authentication: { secret: 'test-secret' } } },
-      { tenantId: 'tenant-b' },
-      { tenant_id: 'spoofed-tenant' }
+  it('keeps ambient tenant identity authoritative over extra token claims', () => {
+    const token = runWithTenantContext('tenant-b', () =>
+      generateScopedServiceToken(
+        { settings: { authentication: { secret: 'test-secret' } } },
+        { tenant_id: 'spoofed-tenant' }
+      )
     );
     const decoded = jwt.decode(token) as { tenant_id?: string; type?: string };
 
     expect(decoded.type).toBe('service');
     expect(decoded.tenant_id).toBe('tenant-b');
+  });
+
+  it('fails closed without ambient tenant context when required', () => {
+    configureExecutor(null, { requireTenantContext: true });
+
+    expect(() => serviceTokenScopeForCurrentTenant()).toThrow(
+      'Missing active tenant context for executor launch'
+    );
+    expect(() =>
+      generateScopedServiceToken({
+        settings: { authentication: { secret: 'test-secret' } },
+      })
+    ).toThrow('Missing active tenant context for executor launch');
   });
 });

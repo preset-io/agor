@@ -51,11 +51,7 @@ import {
 } from '@agor/core/unix';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import { canControlCliSession } from '../utils/mcp-token-authorization.js';
-import {
-  executorExecutionScopeForParams,
-  generateScopedServiceToken,
-  spawnExecutorFireAndForget,
-} from '../utils/spawn-executor.js';
+import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 import {
   buildSpawnConfigForSession,
   isClaudeRunningFor,
@@ -993,10 +989,8 @@ export class TerminalsService {
       // would be more robust but there's no authenticated channel to fetch a
       // new token on an expired socket; a long TTL fits the current auth model.)
       const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
-      const executionScope = executorExecutionScopeForParams(params);
       const sessionToken = generateScopedServiceToken(
         this.app,
-        executionScope,
         { terminal_user_id: userId },
         TERMINAL_EXECUTOR_TOKEN_TTL
       );
@@ -1024,7 +1018,6 @@ export class TerminalsService {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
           asUser: finalUnixUser || undefined,
           env: executorEnv,
-          executionScope,
           // Clean up map when executor exits (handles crashes too)
           onExit: () => this.handleExecutorExit(userId),
         }

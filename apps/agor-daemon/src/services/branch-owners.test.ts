@@ -8,11 +8,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   createServiceToken: mocks.createServiceToken,
-  executorExecutionScopeForParams: (params?: { tenant?: { tenant_id?: string } }) =>
-    params?.tenant?.tenant_id ? { tenantId: params.tenant.tenant_id } : undefined,
   getDaemonUrl: () => 'http://localhost:3030',
-  serviceTokenScopeForExecutionScope: (scope?: { tenantId?: string }) =>
-    scope?.tenantId ? { tenant_id: scope.tenantId } : {},
+  serviceTokenScopeForCurrentTenant: () => ({ tenant_id: 'tenant-a' }),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
@@ -88,10 +85,7 @@ describe('setupBranchOwnersService Unix sync hooks', () => {
         sessionToken: 'service-token',
         params: expect.objectContaining({ branchId: 'branch-1', daemonUser: 'agor' }),
       }),
-      {
-        logPrefix: '[Executor/branch-owners.create]',
-        executionScope: { tenantId: 'tenant-a' },
-      }
+      { logPrefix: '[Executor/branch-owners.create]' }
     );
   });
 });

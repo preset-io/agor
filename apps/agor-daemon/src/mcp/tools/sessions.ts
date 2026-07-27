@@ -34,7 +34,6 @@ import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.j
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
-import { executorExecutionScopeForParams } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -986,11 +985,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const asUser = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         resolveExecutorReadAsUser(db, user)
       );
-      const executionScope = executorExecutionScopeForParams(ctx.baseServiceParams);
       const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
         asUser,
         logPrefix: `[mcp.sessions.create ${branch.name}]`,
-        executionScope,
       });
 
       // Resolve permission_config / model_config / inherited mcp_server_ids

@@ -1637,7 +1637,6 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             command: 'branch.gateway.slack-file-upload',
             sessionToken: generateScopedServiceToken(
               ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-              ctx.baseServiceParams,
               {
                 executor_action: 'gateway.slack-file-upload',
                 executor_user_id: ctx.authenticatedUser.user_id,

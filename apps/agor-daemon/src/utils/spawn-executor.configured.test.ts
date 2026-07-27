@@ -174,17 +174,19 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('substitutes a shell-safe {tenant_id} from the trusted execution scope', async () => {
+  it('substitutes a shell-safe {tenant_id} from the ambient tenant context', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
+    const { runWithTenantContext } = await import('@agor/core/db');
     const { spawnExecutor } = await import('./spawn-executor');
 
-    spawnExecutor(
-      { command: 'git.clone' },
-      {
-        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
-        executionScope: { tenantId: "tenant-'abc" },
-      }
+    runWithTenantContext("tenant-'abc", () =>
+      spawnExecutor(
+        { command: 'git.clone' },
+        {
+          executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        }
+      )
     );
 
     expect(spawnMock).toHaveBeenCalledWith(
@@ -194,7 +196,7 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('refuses a tenant-dependent template without an execution scope', async () => {
+  it('refuses a tenant-dependent template without ambient tenant context', async () => {
     const { spawnExecutor } = await import('./spawn-executor');
 
     expect(() =>
@@ -203,23 +205,25 @@ describe('configured executor spawning', () => {
         { executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}' }
       )
     ).toThrow(
-      'executor_command_template requires {tenant_id}, but no tenant execution scope is active'
+      'executor_command_template requires {tenant_id}, but no active tenant context is available'
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('does not let caller template overrides replace the trusted tenant', async () => {
+  it('does not let caller template overrides replace the ambient tenant', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
+    const { runWithTenantContext } = await import('@agor/core/db');
     const { spawnExecutor } = await import('./spawn-executor');
 
-    spawnExecutor(
-      { command: 'git.clone' },
-      {
-        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
-        executionScope: { tenantId: 'trusted-tenant' },
-        templateVariables: { tenant_id: 'spoofed-tenant' } as never,
-      }
+    runWithTenantContext('trusted-tenant', () =>
+      spawnExecutor(
+        { command: 'git.clone' },
+        {
+          executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+          templateVariables: { tenant_id: 'spoofed-tenant' } as never,
+        }
+      )
     );
 
     expect(spawnMock).toHaveBeenCalledWith(
@@ -229,17 +233,19 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('uses the trusted tenant scope for short-lived templated commands', async () => {
+  it('uses ambient tenant context for short-lived templated commands', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
+    const { runWithTenantContext } = await import('@agor/core/db');
     const { runExecutorCommand } = await import('./spawn-executor');
 
-    const resultPromise = runExecutorCommand(
-      { command: 'branch.inspect' },
-      {
-        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
-        executionScope: { tenantId: 'tenant-run' },
-      }
+    const resultPromise = runWithTenantContext('tenant-run', () =>
+      runExecutorCommand(
+        { command: 'branch.inspect' },
+        {
+          executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        }
+      )
     );
     proc.stdout.emit('data', Buffer.from('{"success":true,"data":{"ok":true}}\n'));
     proc.emit('exit', 0);
@@ -253,6 +259,16 @@ describe('configured executor spawning', () => {
       ['-c', "launch --tenant-id 'tenant-run' -- branch.inspect"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
+  });
+
+  it('refuses every unscoped executor launch when tenant context is required', async () => {
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+    configureExecutor(null, { requireTenantContext: true });
+
+    expect(() => spawnExecutor({ command: 'prompt' })).toThrow(
+      'Missing active tenant context for executor launch'
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('propagates an explicit LOG_LEVEL to local executor processes at startup', async () => {
@@ -369,7 +385,7 @@ describe('substituteTemplateVariables', () => {
         command: 'git.clone',
       })
     ).toThrow(
-      'executor_command_template requires {tenant_id}, but no tenant execution scope is active'
+      'executor_command_template requires {tenant_id}, but no active tenant context is available'
     );
   });
 });
