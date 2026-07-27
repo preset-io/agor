@@ -162,8 +162,10 @@ Terms you'll see across the codebase, UI, and docs:
 
 - For every feature and bugfix, assess during task shaping whether the change affects a tenant-owned resource or crosses a tenant boundary; review must reassess the resulting change.
 - Current single-tenant or development behavior is not evidence that multi-tenancy is irrelevant.
-- When a change touches persisted data or files, tokens, credentials, configuration, caches, shared infrastructure, API/realtime/async boundaries, or lifecycle cleanup, read [`context/concepts/multitenancy.md`](context/concepts/multitenancy.md), preserve tenant context through every affected boundary, and add cross-tenant negative coverage.
-- This is required analysis, not a requirement to add tenant-specific abstractions to every change.
+- When a change touches persisted data or files, tokens, credentials, configuration, caches, shared infrastructure, API/realtime/async boundaries, or lifecycle cleanup, read [`context/concepts/multitenancy.md`](context/concepts/multitenancy.md) and classify the affected resources.
+- For tenant-owned or derived resources, preserve trusted tenant context through every affected boundary and add proportional cross-tenant negative coverage.
+- Keep intentional system/global paths explicit and narrow, and prove their boundary and any required capability.
+- Broad applicability requires analysis, not tenant-specific abstractions on every path.
 
 **Branch-Centric Architecture:**
 
