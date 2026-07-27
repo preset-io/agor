@@ -754,7 +754,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ...(options?.delete ? { delete: true } : {}),
         },
       },
-      { logPrefix }
+      // params surfaces {tenant_id} to the executor command template
+      { logPrefix, params }
     );
   };
 
@@ -789,7 +790,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           daemonUser: config.daemon?.unix_user,
         },
       },
-      { logPrefix }
+      // params surfaces {tenant_id} to the executor command template
+      { logPrefix, params }
     );
   };
 
@@ -2321,7 +2323,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            { logPrefix: '[Executor/user.create]' }
+            // params surfaces {tenant_id} to the executor command template
+            {
+              logPrefix: '[Executor/user.create]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;
@@ -2394,7 +2400,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            { logPrefix: '[Executor/user.patch]' }
+            // params surfaces {tenant_id} to the executor command template
+            {
+              logPrefix: '[Executor/user.patch]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;

@@ -274,7 +274,11 @@ export function setupBranchOwnersService(
                 daemonUser: config.daemonUser,
               },
             },
-            { logPrefix: '[Executor/branch-owners.create]' }
+            // params surfaces {tenant_id} to the executor command template
+            {
+              logPrefix: '[Executor/branch-owners.create]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;
@@ -309,7 +313,11 @@ export function setupBranchOwnersService(
                 daemonUser: config.daemonUser,
               },
             },
-            { logPrefix: '[Executor/branch-owners.remove]' }
+            // params surfaces {tenant_id} to the executor command template
+            {
+              logPrefix: '[Executor/branch-owners.remove]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;

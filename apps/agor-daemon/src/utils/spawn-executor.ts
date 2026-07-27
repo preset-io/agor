@@ -91,6 +91,17 @@ export interface ExecutorTemplateVariables {
   session_id?: string;
   branch_id?: string;
   log_level?: string;
+  /**
+   * The runtime tenant that owns this request, as resolved from the request's
+   * auth claim (`params.tenant`). Exposed as a general `{tenant_id}` placeholder
+   * so operator-supplied command templates can forward it (e.g. a multi-tenant
+   * remote launcher that must attribute each run to its tenant). Left as-is when
+   * absent (single-tenant / unauthenticated paths). This is intentionally the
+   * runtime's own generic primitive — do NOT extend it with deployment-specific
+   * identifiers (workspace/cell/team/instance); those mappings live outside the
+   * runtime.
+   */
+  tenant_id?: string;
 }
 
 export type ExecutorSpawnMode = 'local' | 'templated';
@@ -108,6 +119,13 @@ export interface SpawnExecutorOptions {
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
   templateVariables?: ExecutorTemplateVariables;
+  /**
+   * Authenticated request params. Only consumed to derive the `{tenant_id}`
+   * template variable in one place (via `serviceTokenScopeForParams`) so call
+   * sites don't each re-derive it. Optional: paths without a resolved tenant
+   * simply leave `{tenant_id}` unsubstituted.
+   */
+  params?: Partial<AuthenticatedParams>;
   onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
@@ -158,6 +176,7 @@ export function substituteTemplateVariables(
     session_id: variables.session_id,
     branch_id: variables.branch_id,
     log_level: variables.log_level,
+    tenant_id: variables.tenant_id,
   };
 
   for (const [key, value] of Object.entries(substitutions)) {
@@ -251,6 +270,7 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        tenant_id: serviceTokenScopeForParams(options.params).tenant_id as string | undefined,
         ...templateVariables,
       },
       logPrefix,
@@ -547,6 +567,7 @@ export async function runExecutorCommand(
         task_id: generateTaskId(),
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
+        tenant_id: serviceTokenScopeForParams(options.params).tenant_id as string | undefined,
         ...templateVariables,
       },
       logPrefix,

@@ -301,6 +301,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
+        params, // Surfaces {tenant_id} to the executor command template
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients (the existing
@@ -968,6 +969,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
           asUser, // Run as resolved user (fresh groups via sudo -u)
+          params, // Surfaces {tenant_id} to the executor command template
         }
       );
     } catch (error) {

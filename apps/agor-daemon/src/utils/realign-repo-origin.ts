@@ -55,6 +55,7 @@ export async function ensureRepoOriginAlignedForRepo(
     },
     {
       logPrefix: `[git.repo.realign-origin ${repo.slug}]`,
+      params, // Surfaces {tenant_id} to the executor command template
     }
   );
 }

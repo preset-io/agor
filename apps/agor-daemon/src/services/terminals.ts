@@ -1019,6 +1019,7 @@ export class TerminalsService {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
           asUser: finalUnixUser || undefined,
           env: executorEnv,
+          params, // Surfaces {tenant_id} to the executor command template
           // Clean up map when executor exits (handles crashes too)
           onExit: () => this.handleExecutorExit(userId),
         }
