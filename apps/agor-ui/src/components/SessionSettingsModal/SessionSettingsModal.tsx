@@ -24,7 +24,11 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import {
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  usesExecutorRuntime,
+} from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
@@ -35,6 +39,7 @@ import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
@@ -132,11 +137,14 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
   }
 
   if (!presetId && values.modelConfig) {
+    const modelConfig = buildModelConfigFromFormValues({
+      modelConfig: values.modelConfig,
+      effort: values.effort,
+    });
     updates.model_config = {
-      ...values.modelConfig,
-      ...(values.effort ? { effort: values.effort } : {}),
+      ...modelConfig,
       updated_at: new Date().toISOString(),
-    };
+    } as NonNullable<Session['model_config']>;
   }
 
   if (!presetId && values.permissionMode) {
@@ -432,6 +440,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           currentUser={currentUser}
           client={client ?? null}
           enableSaveAsDefault
+          showEffort={usesExecutorRuntime(session.agentic_tool)}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}

@@ -459,10 +459,11 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // These endpoints perform network/process work after their tenant DB reads,
 // so they carry tenant identity for the full request and open short database
 // units of work at the call site instead of holding an HTTP-long transaction.
-const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
+export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
   'codex-auth/device',
   'codex-auth/import',
+  'codex-auth/logout',
   'claude-models',
   'copilot-models',
   'cursor-models',
@@ -3030,6 +3031,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
+      reportTerminationComplete: [requireExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireExecutorRuntimeToken()],
       remove: [

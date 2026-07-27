@@ -17,6 +17,7 @@ import { getDefaultPermissionMode } from '@agor-live/client';
 import { Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
   getUserAgenticToolDefault,
@@ -180,12 +181,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             spawnConfig.presetId = values.agenticToolPresetId;
           } else {
             spawnConfig.permissionMode = values.permissionMode;
-            // Fold the standalone effort field back into model_config.
-            spawnConfig.modelConfig = values.modelConfig
-              ? { ...values.modelConfig, ...(values.effort ? { effort: values.effort } : {}) }
-              : values.effort
-                ? { effort: values.effort }
-                : undefined;
+            spawnConfig.modelConfig = buildModelConfigFromFormValues({
+              modelConfig: values.modelConfig,
+              effort: values.effort,
+            });
             spawnConfig.codexSandboxMode = values.codexSandboxMode;
             spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
             spawnConfig.codexNetworkAccess = values.codexNetworkAccess;

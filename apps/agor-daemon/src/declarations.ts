@@ -141,6 +141,10 @@ export interface SessionsServiceImpl
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  reportTerminationComplete(
+    data: import('@agor/core/types').ExecutorTerminationCompleteInput,
+    params?: FeathersParams
+  ): Promise<Task>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,

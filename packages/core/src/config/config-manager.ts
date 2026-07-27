@@ -233,6 +233,7 @@ function validateConfig(config: AgorConfig): void {
     credentials?: unknown;
     opencode?: unknown;
     codex?: unknown;
+    knowledge?: unknown;
     execution?: AgorConfig['execution'] & { cursor_sdk_enabled?: unknown };
   };
   if (removedProviderConfig.credentials !== undefined) {
@@ -250,6 +251,11 @@ function validateConfig(config: AgorConfig): void {
   if (removedProviderConfig.codex !== undefined) {
     throw new Error(
       "Config error: 'codex' has been removed. Codex home directories are managed per-session automatically."
+    );
+  }
+  if (removedProviderConfig.knowledge !== undefined) {
+    throw new Error(
+      "Config error: 'knowledge' has been removed. Configure semantic search in workspace Knowledge settings."
     );
   }
   if (removedProviderConfig.execution?.cursor_sdk_enabled !== undefined) {
@@ -272,10 +278,8 @@ function validateConfig(config: AgorConfig): void {
     'paths',
     'analytics',
     'telemetry',
-    'knowledge',
     'onboarding',
     'multi_tenancy',
-    'proxies',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -468,35 +472,12 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
   ]);
-  only(config.knowledge, 'knowledge', ['semantic_search']);
-  only(config.knowledge?.semantic_search, 'knowledge.semantic_search', [
-    'enabled',
-    'provider',
-    'model',
-    'dimensions',
-    'chunking',
-    'indexing',
-  ]);
-  only(config.knowledge?.semantic_search?.chunking, 'knowledge.semantic_search.chunking', [
-    'target_tokens',
-    'max_tokens',
-    'overlap_tokens',
-    'min_tokens',
-  ]);
-  only(config.knowledge?.semantic_search?.indexing, 'knowledge.semantic_search.indexing', [
-    'paused',
-    'batch_size',
-    'concurrency',
-  ]);
   only(config.multi_tenancy, 'multi_tenancy', [
     'mode',
     'static_tenant_id',
     'auth_claim',
     'trusted_header',
   ]);
-  for (const [name, proxy] of Object.entries(config.proxies ?? {})) {
-    only(proxy, `proxies.${name}`, ['upstream', 'description', 'docs_url', 'allowed_methods']);
-  }
   if (unknownPaths.length > 0) {
     throw new Error(
       `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`
@@ -903,16 +884,8 @@ export async function getDaemonUrl(): Promise<string> {
   }
 
   console.log('[getDaemonUrl] DAEMON_URL not in env, loading config...');
-  const config = await loadConfig();
-  const defaults = getDefaultConfig();
-
-  // 2. Build URL from config (with env var overrides for port)
-  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
-  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
-
-  // 3. Construct from host:port (always localhost for internal communication)
-  return `http://${host}:${port}`;
+  // 2. Construct from host:port (always localhost for internal communication)
+  return constructDaemonLocalUrl(await loadConfig());
 }
 
 /**
@@ -926,44 +899,90 @@ function validateBaseUrl(url: string): string {
   return validateHttpUrlString(url, 'base URL', { stripTrailingSlash: true });
 }
 
+/** Construct `http://{host}:{port}` from daemon config + env overrides. */
+function constructDaemonLocalUrl(config: AgorConfig): string {
+  const defaults = getDefaultConfig();
+  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
+  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
+  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
+  return `http://${host}:${port}`;
+}
+
 /**
- * Get base URL for external/user-facing links
+ * Shared base URL resolver for browser-reachable URLs.
+ *
+ * All three public resolvers ({@link getBaseUrl}, {@link getDaemonBaseUrl},
+ * {@link requirePublicBaseUrl}) differ only in which config key they prefer
+ * and whether a missing explicit URL should throw.
+ *
+ * @param prefer - `'ui'` checks `ui.base_url` first (for browser entity links),
+ *   `'daemon'` checks `daemon.base_url` first (for API endpoints / OAuth).
+ * @param requireExplicit - When true, throws instead of falling back to localhost.
+ */
+function resolveBaseUrl(
+  config: AgorConfig,
+  prefer: 'ui' | 'daemon',
+  requireExplicit?: boolean
+): string {
+  const first = prefer === 'ui' ? config.ui?.base_url : config.daemon?.base_url;
+  const second = prefer === 'ui' ? config.daemon?.base_url : config.ui?.base_url;
+
+  if (first) return validateBaseUrl(first);
+  if (second) return validateBaseUrl(second);
+
+  if (requireExplicit) {
+    throw new PublicBaseUrlNotConfiguredError(
+      'No public base URL configured. Set the AGOR_BASE_URL environment variable ' +
+        'or `daemon.base_url` (preferred) / `ui.base_url` (legacy) in ~/.agor/config.yaml ' +
+        "to the daemon's " +
+        'browser-reachable URL (e.g. https://agor.example.com). This is required ' +
+        'so OAuth providers can redirect users back to a URL their browser can reach — ' +
+        'the localhost fallback only works for browsers on the daemon machine.'
+    );
+  }
+
+  return constructDaemonLocalUrl(config);
+}
+
+/**
+ * Get the daemon base URL for browser-reachable API endpoints
+ * (e.g. artifact `AGOR_API_URL` grants).
+ *
+ * Distinct from {@link getDaemonUrl}, which uses `DAEMON_URL` for internal
+ * backend-to-backend communication.
+ *
+ * Resolution order:
+ * 1. AGOR_BASE_URL environment variable (highest priority)
+ * 2. daemon.base_url from config.yaml
+ * 3. ui.base_url from legacy one-origin configs
+ * 4. Default daemon host and port
+ */
+export async function getDaemonBaseUrl(): Promise<string> {
+  if (process.env.AGOR_BASE_URL) {
+    return validateBaseUrl(process.env.AGOR_BASE_URL);
+  }
+  return resolveBaseUrl(await loadConfig(), 'daemon');
+}
+
+/**
+ * Get base URL for external/user-facing UI links.
  *
  * Used to generate clickable URLs to sessions, boards, and other resources
  * that are sent to external platforms like Slack, email, etc.
  *
  * Resolution order:
  * 1. AGOR_BASE_URL environment variable (highest priority)
- * 2. daemon.base_url from config.yaml
- * 3. Default: http://localhost:{port} (constructed from daemon port)
+ * 2. ui.base_url from config.yaml
+ * 3. daemon.base_url from config.yaml
+ * 4. Default: http://localhost:{port} (constructed from daemon port)
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
 export async function getBaseUrl(): Promise<string> {
-  // 1. Check for explicit AGOR_BASE_URL env var (highest priority)
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-
-  const config = await loadConfig();
-
-  // 2. Check config.yaml
-  if (config.daemon?.base_url) {
-    return validateBaseUrl(config.daemon.base_url);
-  }
-
-  // 3. Backward-compatible UI public URL used by older configs.
-  if (config.ui?.base_url) {
-    return validateBaseUrl(config.ui.base_url);
-  }
-
-  // 4. Default: construct from daemon port (no validation needed for default)
-  const defaults = getDefaultConfig();
-  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const port = envPort || config.daemon?.port || defaults.daemon?.port || DAEMON.DEFAULT_PORT;
-  const host = config.daemon?.host || defaults.daemon?.host || DAEMON.DEFAULT_HOST;
-
-  return `http://${host}:${port}`;
+  return resolveBaseUrl(await loadConfig(), 'ui');
 }
 
 /**
@@ -985,14 +1004,15 @@ export class PublicBaseUrlNotConfiguredError extends Error {
 /**
  * Get the daemon's public, browser-reachable base URL.
  *
- * Strict variant of {@link getBaseUrl} — required for any URL that will be handed
+ * Strict variant of {@link getDaemonBaseUrl} — required for any URL that will be handed
  * to a remote system (e.g. an OAuth `redirect_uri` registered with an upstream
  * provider) and then loaded by an end-user's browser.
  *
  * Resolution:
  * 1. `AGOR_BASE_URL` environment variable
  * 2. `daemon.base_url` from `~/.agor/config.yaml`
- * 3. **Throws** {@link PublicBaseUrlNotConfiguredError}
+ * 3. Legacy `ui.base_url` fallback
+ * 4. **Throws** {@link PublicBaseUrlNotConfiguredError}
  *
  * Unlike {@link getBaseUrl}, this never silently falls back to
  * `http://localhost:{port}` — that fallback is broken for any browser not on
@@ -1006,24 +1026,7 @@ export async function requirePublicBaseUrl(): Promise<string> {
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-
-  const config = await loadConfig();
-  if (config.daemon?.base_url) {
-    return validateBaseUrl(config.daemon.base_url);
-  }
-
-  if (config.ui?.base_url) {
-    return validateBaseUrl(config.ui.base_url);
-  }
-
-  throw new PublicBaseUrlNotConfiguredError(
-    'No public base URL configured. Set the AGOR_BASE_URL environment variable ' +
-      'or `daemon.base_url` (preferred) / `ui.base_url` (legacy) in ~/.agor/config.yaml ' +
-      "to the daemon's " +
-      'browser-reachable URL (e.g. https://agor.example.com). This is required ' +
-      'so OAuth providers can redirect users back to a URL their browser can reach — ' +
-      'the localhost fallback only works for browsers on the daemon machine.'
-  );
+  return resolveBaseUrl(await loadConfig(), 'daemon', true);
 }
 
 /**

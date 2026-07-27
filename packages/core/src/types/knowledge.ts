@@ -121,6 +121,164 @@ export type KnowledgeSearchMode = (typeof KNOWLEDGE_SEARCH_MODES)[number];
 export const KNOWLEDGE_EMBEDDING_PROVIDERS = ['openai', 'voyage', 'openai-compatible'] as const;
 export type KnowledgeEmbeddingProvider = (typeof KNOWLEDGE_EMBEDDING_PROVIDERS)[number];
 
+export const KNOWLEDGE_OPENAI_EMBEDDING_MODELS = [
+  'text-embedding-3-small',
+  'text-embedding-3-large',
+] as const;
+export type KnowledgeOpenAIEmbeddingModel = (typeof KNOWLEDGE_OPENAI_EMBEDDING_MODELS)[number];
+
+export interface KnowledgeSemanticChunkingSettings {
+  target_tokens: number;
+  max_tokens: number;
+  overlap_tokens: number;
+  min_tokens: number;
+}
+
+export interface KnowledgeSemanticIndexingSettings {
+  paused: boolean;
+  batch_size: number;
+}
+
+export interface KnowledgeSemanticPolicy {
+  enabled: boolean;
+  provider: KnowledgeEmbeddingProvider;
+  model: string;
+  dimensions: number;
+  chunking: KnowledgeSemanticChunkingSettings;
+  indexing: KnowledgeSemanticIndexingSettings;
+}
+
+export interface StoredKnowledgeSemanticPolicy {
+  enabled?: true;
+  provider?: KnowledgeEmbeddingProvider;
+  model?: string;
+  dimensions?: number;
+  chunking?: Partial<KnowledgeSemanticChunkingSettings>;
+  indexing?: Partial<KnowledgeSemanticIndexingSettings>;
+}
+
+type NullableSettingsPatch<T> = {
+  [K in keyof T]?: T[K] | null;
+};
+
+export interface KnowledgeSemanticSettingsPatch {
+  enabled?: boolean;
+  provider?: KnowledgeEmbeddingProvider | null;
+  model?: string | null;
+  dimensions?: number | null;
+  api_key?: string | null;
+  chunking?: NullableSettingsPatch<KnowledgeSemanticChunkingSettings> | null;
+  indexing?: NullableSettingsPatch<KnowledgeSemanticIndexingSettings> | null;
+}
+
+export const DEFAULT_KNOWLEDGE_SEMANTIC_POLICY: KnowledgeSemanticPolicy = {
+  enabled: false,
+  provider: 'openai',
+  model: 'text-embedding-3-small',
+  dimensions: 1536,
+  chunking: {
+    target_tokens: 850,
+    max_tokens: 1200,
+    overlap_tokens: 100,
+    min_tokens: 80,
+  },
+  indexing: {
+    paused: false,
+    batch_size: 32,
+  },
+};
+
+export class KnowledgeSemanticPolicyValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KnowledgeSemanticPolicyValidationError';
+  }
+}
+
+/**
+ * Validate portable semantic-policy invariants at the persistence boundary.
+ * Provider capabilities (currently supported provider/model/dimensions) remain
+ * a daemon concern because they depend on deployed infrastructure.
+ */
+export function assertValidKnowledgeSemanticPolicy(policy: KnowledgeSemanticPolicy): void {
+  if (typeof policy.enabled !== 'boolean') {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge semantic search enabled must be a boolean'
+    );
+  }
+  if (!(KNOWLEDGE_EMBEDDING_PROVIDERS as readonly unknown[]).includes(policy.provider)) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge embedding provider is not supported'
+    );
+  }
+  if (typeof policy.model !== 'string' || policy.model.trim().length === 0) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge embedding model must be a non-empty string'
+    );
+  }
+  if (!Number.isInteger(policy.dimensions) || policy.dimensions <= 0) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge embedding dimensions must be a positive integer'
+    );
+  }
+
+  const chunkEntries = [
+    ['target_tokens', policy.chunking.target_tokens],
+    ['max_tokens', policy.chunking.max_tokens],
+    ['overlap_tokens', policy.chunking.overlap_tokens],
+    ['min_tokens', policy.chunking.min_tokens],
+  ] as const;
+  for (const [name, value] of chunkEntries) {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new KnowledgeSemanticPolicyValidationError(
+        `Knowledge chunking ${name} must be a non-negative integer`
+      );
+    }
+    if (value > 8000) {
+      throw new KnowledgeSemanticPolicyValidationError(
+        `Knowledge chunking ${name} must be 8000 or less`
+      );
+    }
+  }
+  if (policy.chunking.min_tokens <= 0) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge chunking min_tokens must be greater than 0'
+    );
+  }
+  if (policy.chunking.target_tokens <= 0) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge chunking target_tokens must be greater than 0'
+    );
+  }
+  if (policy.chunking.max_tokens < policy.chunking.min_tokens) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge chunking max_tokens must be greater than or equal to min_tokens'
+    );
+  }
+  if (policy.chunking.target_tokens > policy.chunking.max_tokens) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge chunking target_tokens must be less than or equal to max_tokens'
+    );
+  }
+  if (policy.chunking.overlap_tokens >= policy.chunking.max_tokens) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge chunking overlap_tokens must be less than max_tokens'
+    );
+  }
+  if (typeof policy.indexing.paused !== 'boolean') {
+    throw new KnowledgeSemanticPolicyValidationError('Knowledge indexing paused must be a boolean');
+  }
+  if (
+    !Number.isInteger(policy.indexing.batch_size) ||
+    policy.indexing.batch_size < 1 ||
+    policy.indexing.batch_size > 128
+  ) {
+    throw new KnowledgeSemanticPolicyValidationError(
+      'Knowledge indexing batch_size must be an integer between 1 and 128'
+    );
+  }
+}
+
 export const KNOWLEDGE_VECTOR_STORAGE_TYPES = ['vector', 'halfvec', 'bit', 'sparsevec'] as const;
 export type KnowledgeVectorStorageType = (typeof KNOWLEDGE_VECTOR_STORAGE_TYPES)[number];
 
@@ -575,21 +733,12 @@ export interface KnowledgeIndexingStatus {
 
 export interface KnowledgeSemanticSettingsPublic {
   enabled: boolean;
-  provider?: KnowledgeEmbeddingProvider | null;
-  model?: string | null;
-  dimensions?: number | null;
+  provider: KnowledgeEmbeddingProvider;
+  model: string;
+  dimensions: number;
   api_key_configured: boolean;
-  chunking?: {
-    target_tokens?: number;
-    max_tokens?: number;
-    overlap_tokens?: number;
-    min_tokens?: number;
-  };
-  indexing?: {
-    paused?: boolean;
-    batch_size?: number;
-    concurrency?: number;
-  };
+  chunking: KnowledgeSemanticChunkingSettings;
+  indexing: KnowledgeSemanticIndexingSettings;
 }
 
 export interface KnowledgeGraphNode {

@@ -457,8 +457,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
     session?.permission_config?.codex?.approvalPolicy ?? initialCodexDefaults.approvalPolicy
   );
-  const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
-    session?.model_config?.effort || 'high'
+  const [effortLevel, setEffortLevel] = React.useState<EffortLevel | undefined>(
+    session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort
   );
   /**
    * Claude Code CLI view toggle: 'terminal' shows the embedded `claude`
@@ -716,10 +716,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, [session?.permission_config?.mode, session?.permission_config?.codex, session?.agentic_tool]);
 
-  // Update effort level when session changes (default to 'high' for sessions without effort config)
+  // Keep explicit overrides distinct from runtime-owned defaults (for example Codex config.toml).
   React.useEffect(() => {
-    setEffortLevel(session?.model_config?.effort || 'high');
-  }, [session?.model_config?.effort]);
+    setEffortLevel(session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort);
+  }, [session?.model_config?.effort, toolCaps?.defaultReasoningEffort]);
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -769,7 +769,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onSpawnOpen: () => void;
     onAttachFiles: () => void;
     onUploadOpen: () => void;
-    onEffortChange: (v: EffortLevel) => void;
+    onEffortChange: (v: EffortLevel | undefined) => void;
     onPermissionModeChange: (v: PermissionMode) => void;
     onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   } | null>(null);
@@ -784,7 +784,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onSpawnOpen: () => footerHandlersRef.current?.onSpawnOpen(),
       onAttachFiles: () => footerHandlersRef.current?.onAttachFiles(),
       onUploadOpen: () => footerHandlersRef.current?.onUploadOpen(),
-      onEffortChange: (v: EffortLevel) => footerHandlersRef.current?.onEffortChange(v),
+      onEffortChange: (v: EffortLevel | undefined) => footerHandlersRef.current?.onEffortChange(v),
       onPermissionModeChange: (v: PermissionMode) =>
         footerHandlersRef.current?.onPermissionModeChange(v),
       onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) =>
@@ -977,7 +977,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           {
             key: 'settings',
             icon: <SettingOutlined />,
-            label: 'Session Settings',
+            label: 'Session settings',
             onClick: () => onOpenSettings(session.session_id),
           },
         ]
@@ -1274,18 +1274,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleEffortChange = (newEffort: EffortLevel) => {
+  const handleEffortChange = (newEffort: EffortLevel | undefined) => {
     setEffortLevel(newEffort);
 
-    if (session && onUpdateSession) {
-      if (session.model_config) {
-        onUpdateSession(session.session_id, {
-          model_config: {
-            ...session.model_config,
-            effort: newEffort,
-          },
-        });
-      }
+    if (session?.model_config && onUpdateSession) {
+      const nextModelConfig = {
+        ...session.model_config,
+        updated_at: new Date().toISOString(),
+      };
+      if (newEffort) nextModelConfig.effort = newEffort;
+      else delete nextModelConfig.effort;
+      onUpdateSession(session.session_id, { model_config: nextModelConfig });
     }
   };
 

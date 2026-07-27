@@ -205,6 +205,30 @@ export function writeCodexAuthFile(content: string, asUser?: string | null): voi
   }
 }
 
+/**
+ * Delete `auth.json` from the given Unix user's Codex home (or the daemon's).
+ *
+ * Best-effort and idempotent: a missing file is success, not an error — removal
+ * should converge on "no login on disk" regardless of the starting state. The
+ * impersonated path runs `rm -f` AS the target user (resolving `$HOME` inside
+ * the shell, matching the read/write helpers) so ownership/permissions hold in
+ * insulated/strict modes. Throws only on a genuine sudo/transport failure.
+ */
+export function deleteCodexAuthFile(asUser?: string | null): void {
+  if (asUser) {
+    if (!isValidUnixUsername(asUser)) {
+      throw new Error(`deleteCodexAuthFile: invalid Unix username: ${JSON.stringify(asUser)}`);
+    }
+    execFileSync('sudo', ['-n', '-u', asUser, 'bash', '-c', 'rm -f -- "$HOME/.codex/auth.json"'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: SUDO_TIMEOUT_MS,
+    });
+    return;
+  }
+
+  fs.rmSync(path.join(daemonCodexHome(), 'auth.json'), { force: true });
+}
+
 export type ReadCodexAuthResult =
   | { ok: true; content: string }
   | { ok: false; reason: 'not-found' | 'unreadable' };

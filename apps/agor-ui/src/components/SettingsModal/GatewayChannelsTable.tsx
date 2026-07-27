@@ -14,6 +14,8 @@ import type {
   AgorClient,
   Branch,
   ChannelType,
+  DefaultModelConfig,
+  EffortLevel,
   GatewayAgenticConfig,
   GatewayChannel,
   GatewayConnectionTestResult,
@@ -78,6 +80,7 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
+import { buildModelConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
@@ -3211,16 +3214,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       return;
     }
     const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
-    if (agentDefaults) {
-      const activeForm = editModalOpen ? editForm : createForm;
-      activeForm.setFieldsValue({
-        permissionMode: agentDefaults.permissionMode,
-        modelConfig: agentDefaults.modelConfig,
-        codexSandboxMode: agentDefaults.codexSandboxMode,
-        codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
-        codexNetworkAccess: agentDefaults.codexNetworkAccess,
-      });
-    }
+    const activeForm = editModalOpen ? editForm : createForm;
+    activeForm.setFieldsValue(
+      getFormValuesFromConfig(selectedAgent as AgenticToolName, agentDefaults)
+    );
   }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
 
   const extractFormData = (
@@ -3337,15 +3334,19 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
         ? (values.agenticToolPresetId as GatewayAgenticConfig['presetId'])
         : undefined;
+    const modelConfig = !presetId
+      ? buildModelConfigFromFormValues({
+          modelConfig: values.modelConfig as DefaultModelConfig | undefined,
+          effort: values.effort as EffortLevel | undefined,
+        })
+      : undefined;
     const agenticConfig: GatewayAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
       ...(presetId ? { presetId } : {}),
       ...(!presetId && values.permissionMode
         ? { permissionMode: values.permissionMode as PermissionMode }
         : {}),
-      ...(!presetId && values.modelConfig
-        ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
-        : {}),
+      ...(modelConfig ? { modelConfig } : {}),
       ...(!presetId && values.codexSandboxMode
         ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
         : {}),
@@ -3500,6 +3501,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
+      effort: channel.agentic_config?.modelConfig?.effort,
       mcpServerIds: channel.mcp_server_ids ?? [],
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,

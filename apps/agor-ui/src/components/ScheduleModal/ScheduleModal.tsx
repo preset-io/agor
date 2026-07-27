@@ -143,7 +143,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const [form] = Form.useForm<ScheduleFormValues>();
 
   // Agent picker is controlled via local state because it drives which
-  // fields AgenticToolConfigForm shows (e.g., effort for Claude only).
+  // fields AgenticToolConfigForm shows (for example runtime-supported effort).
   // The selected value is mirrored into the form as `agenticTool` so save
   // can read it consistently with the rest of the form.
   const [agentTool, setAgentTool] = useState<AgenticToolName>(

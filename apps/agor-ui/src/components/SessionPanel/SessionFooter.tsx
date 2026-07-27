@@ -1,4 +1,5 @@
 import type {
+  AgenticToolCapabilities,
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -8,6 +9,7 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
+import { usesExecutorRuntime } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -23,6 +25,7 @@ import {
   QuestionCircleOutlined,
   RobotOutlined,
   SendOutlined,
+  SettingOutlined,
   StopOutlined,
   ToolOutlined,
   UploadOutlined,
@@ -68,9 +71,9 @@ export interface SessionFooterProps {
   composerAttachmentsPresent?: boolean;
   composerAttachmentUploading?: boolean;
   connectionDisabled: boolean;
-  toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
+  toolCaps?: AgenticToolCapabilities;
   // Settings state
-  effortLevel: EffortLevel;
+  effortLevel?: EffortLevel;
   permissionMode: PermissionMode;
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
@@ -88,7 +91,7 @@ export interface SessionFooterProps {
   onSpawnOpen: () => void;
   onAttachFiles: () => void;
   onUploadOpen: () => void;
-  onEffortChange: (v: EffortLevel) => void;
+  onEffortChange: (v: EffortLevel | undefined) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   // Prompt textarea rendered between the two bars
@@ -141,6 +144,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   promptInputSlot,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
+  const supportsLiveEffort = usesExecutorRuntime(session.agentic_tool);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [prefs, setPref] = useFooterPreferences();
@@ -224,7 +228,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
 
   const moreContent = (
-    <div style={{ width: 260, paddingTop: 6, paddingBottom: 6 }}>
+    <fieldset
+      aria-label="More options"
+      style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
+    >
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
 
@@ -277,8 +284,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       </div>
 
-      {/* Effort — only for claude-code */}
-      {session.agentic_tool === 'claude-code' && (
+      {supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -305,6 +311,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             <EffortSelector
               value={effortLevel}
               onChange={onEffortChange}
+              levels={toolCaps.reasoningEffortLevels}
+              fallbackValue={toolCaps.defaultReasoningEffort}
+              allowInherited={!toolCaps.defaultReasoningEffort}
               size="small"
               compact
               plain
@@ -1203,11 +1212,35 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Tooltip>
         </div>
       </Popover>
-    </div>
+
+      {onOpenSessionSettings && (
+        <>
+          <Divider style={{ margin: '4px 0' }} />
+          <Button
+            block
+            type="text"
+            icon={<SettingOutlined />}
+            aria-label="Session settings"
+            style={{
+              height: 32,
+              justifyContent: 'flex-start',
+              paddingInline: 12,
+              fontSize: 13,
+            }}
+            onClick={() => {
+              setMoreOpen(false);
+              onOpenSessionSettings(session.session_id);
+            }}
+          >
+            Session settings
+          </Button>
+        </>
+      )}
+    </fieldset>
   );
 
   const stopTooltip = stopRequestInFlight
-    ? 'Sending stop request...'
+    ? 'Stopping...'
     : isStopping
       ? 'Stopping... (Click again to retry if stuck)'
       : 'Stop Execution';
@@ -1297,7 +1330,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 sessionMcpServerIds={sessionMcpServerIds}
                 mcpServerById={mcpServerById}
                 userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-                onOpenSessionSettings={onOpenSessionSettings}
               />
             )}
 
@@ -1554,7 +1586,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               title={null}
             >
               <Tooltip title="More options">
-                <Button size="small" type="text" icon={<EllipsisOutlined />} />
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<EllipsisOutlined />}
+                  aria-label="More options"
+                />
               </Tooltip>
             </Popover>
           </Space>
@@ -1570,7 +1607,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   danger
                   size="small"
                   icon={
-                    isStopping && !stopRequestInFlight ? <Spin size="small" /> : <StopOutlined />
+                    stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
                   onClick={onStop}
                   disabled={!isRunning || stopRequestInFlight}

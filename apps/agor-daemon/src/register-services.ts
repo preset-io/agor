@@ -79,6 +79,7 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
+import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
@@ -122,6 +123,7 @@ import { createSessionMCPServersService } from './services/session-mcp-servers.j
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
+import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
@@ -251,6 +253,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'patch',
       'remove',
       'connectExecutor',
+      'reportTerminationComplete',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
     ],
@@ -265,7 +268,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //      task.
     //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
     //      the executor for live tool/thinking visualization.
-    events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
+    events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
@@ -575,6 +578,13 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app
     .service('/codex-auth/device')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+
+  // Removes the caller's Codex login — deletes their auth.json as the right Unix
+  // identity and clears the stored codex auth method (emitting `patched` so the
+  // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
+  // grant, so other machines stay signed in.
+  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
+  app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)

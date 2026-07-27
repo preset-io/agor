@@ -25,5 +25,8 @@ services:
       # node_modules) doesn't clobber the image's install.
       - /app/node_modules
       - /app/.next
-    command: pnpm exec next dev -H 0.0.0.0 -p 3001
+    # Invoke next directly: `pnpm exec` runs a deps-status check against the
+    # bind-mounted source, which can't see the image-side install config
+    # (see Dockerfile) and aborts trying to purge node_modules without a TTY.
+    command: node_modules/.bin/next dev -H 0.0.0.0 -p 3001
     restart: unless-stopped

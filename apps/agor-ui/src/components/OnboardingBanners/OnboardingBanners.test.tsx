@@ -93,15 +93,33 @@ describe('OnboardingBanners probe effect', () => {
 
   it('does not re-probe on an unrelated user-record patch (e.g. a name edit)', async () => {
     const onCheckAuth = vi.fn(async () => result('authenticated'));
-    const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    // Seed a codex method so the effect's method deps are non-empty in BOTH
+    // renders (each a FRESH object). This pins the object-identity hazard: the
+    // deps must be the derived primitive, not `user.agentic_auth_methods` — the
+    // latter is a new object on every patch and would spuriously re-fire.
+    const authMethods = { codex: 'subscription' } as const;
+    const { rerender } = render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            agentic_auth_methods: { ...authMethods },
+          } as Partial<User>),
+          onCheckAuth,
+        })}
+      />
+    );
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
 
     // A field that touches neither identity, stored keys, nor auth methods must
-    // NOT spawn another ~5–10s probe.
+    // NOT spawn another ~5–10s probe — even though the whole user object (and its
+    // agentic_auth_methods) is a fresh reference from the patch.
     rerender(
       <OnboardingBanners
         {...baseProps({
-          user: onboardedUser('user-1', { name: 'Renamed' } as Partial<User>),
+          user: onboardedUser('user-1', {
+            name: 'Renamed',
+            agentic_auth_methods: { ...authMethods },
+          } as Partial<User>),
           onCheckAuth,
         })}
       />

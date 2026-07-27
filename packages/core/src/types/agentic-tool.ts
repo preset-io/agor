@@ -1,6 +1,7 @@
 // src/types/agentic-tool.ts
 
 import type { AgenticToolID } from './id';
+import type { EffortLevel } from './session';
 
 /**
  * The set of credential env-var names the resolver knows how to look up.
@@ -195,6 +196,16 @@ export interface AgenticToolCapabilities {
   supportsSessionImport: boolean;
   /** Supports stateless filesystem mode (session state serialized to DB) */
   supportsStatelessFsMode: boolean;
+  /**
+   * Supported reasoning-effort overrides. Absent when the runtime has no
+   * effort control.
+   */
+  reasoningEffortLevels?: readonly EffortLevel[];
+  /**
+   * Effective effort when Agor does not store an override. Absent means the
+   * underlying runtime owns the default.
+   */
+  defaultReasoningEffort?: EffortLevel;
 }
 
 /**
@@ -238,6 +249,16 @@ export interface CodexAuthImportResult {
   /** ChatGPT plan type parsed from the id_token claims (e.g. "plus", "pro"), when present. */
   planType?: string;
   hint?: string;
+}
+
+/**
+ * Result of removing a Codex login via the daemon's `/codex-auth/logout`
+ * endpoint. Delete-only and Agor-scoped: it removes the login from THIS server
+ * (deletes auth.json + clears the stored method) and does NOT revoke the OAuth
+ * tokens — the account stays signed in on other machines.
+ */
+export interface CodexAuthLogoutResult {
+  status: 'removed';
 }
 
 /**
@@ -319,6 +340,8 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsChildSpawn: true,
     supportsSessionImport: true,
     supportsStatelessFsMode: true,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningEffort: 'high',
   },
   'claude-code-cli': {
     // First-class CLI flag: `claude --resume <id> --fork-session`
@@ -331,12 +354,15 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     // CLI sessions live in long-running PTYs; state is on disk in the JSONL,
     // not a serializable filesystem snapshot the daemon manages.
     supportsStatelessFsMode: false,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningEffort: 'high',
   },
   codex: {
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: false,
     supportsStatelessFsMode: true,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
   },
   gemini: {
     supportsSessionFork: false,

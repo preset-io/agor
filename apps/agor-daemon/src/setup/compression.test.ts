@@ -21,13 +21,6 @@ function res(contentType?: string): Response {
 }
 
 describe('shouldCompressResponse', () => {
-  it('does not compress pass-through proxy responses', () => {
-    expect(shouldCompressResponse(req('/proxies'), res('application/json'))).toBe(false);
-    expect(shouldCompressResponse(req('/proxies/shortcut/stories'), res('application/json'))).toBe(
-      false
-    );
-  });
-
   it('does not compress event streams', () => {
     expect(shouldCompressResponse(req('/events'), res('text/event-stream; charset=utf-8'))).toBe(
       false

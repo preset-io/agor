@@ -41,7 +41,6 @@ Agor is open-source software licensed under BSL 1.1, created by Preset Inc.
 - [API Reference](https://agor.live/api-reference): Interactive REST API documentation with Swagger UI
 - [WebSocket Events](https://agor.live/api-reference/websockets): Real-time Socket.io event reference for sessions, tasks, messages, and presence
 - [TypeScript Client](https://agor.live/guide/typescript-client): Drive Agor from TypeScript/JavaScript with @agor-live/client — REST, real-time Socket.IO, and a reactive session API
-- [API Proxies](https://agor.live/guide/api-proxies): Daemon HTTP proxy that lets Sandpack artifacts call CORS-less enterprise APIs
 - [One-Time Launch Auth](https://agor.live/guide/one-time-launch-auth): Launch-code handoff so trusted external apps can open authenticated Agor sessions
 
 ## Deployment

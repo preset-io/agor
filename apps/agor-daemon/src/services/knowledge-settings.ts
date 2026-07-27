@@ -1,128 +1,138 @@
-import { type AgorKnowledgeSettings, loadConfig, saveConfig } from '@agor/core/config';
 import {
-  AppVariableRepository,
   executeRaw,
   isPostgresDatabase,
+  KnowledgeSemanticSettingsRepository,
   kbDocumentUnits,
   sql,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   update,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
-  KnowledgeEmbeddingProvider,
   KnowledgeEmbeddingStatus,
+  KnowledgeSemanticPolicy,
+  KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
   Params,
   User,
   UserID,
 } from '@agor/core/types';
+import { KnowledgeSemanticPolicyValidationError } from '@agor/core/types';
 import {
-  DEFAULT_KNOWLEDGE_CHUNKING,
-  DEFAULT_KNOWLEDGE_INDEXING,
   DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
   isUsableOpenAIEmbeddingConfig,
-  KNOWLEDGE_EMBEDDINGS_API_KEY,
-  KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-  normalizeKnowledgeEmbeddingApiKey,
   SUPPORTED_OPENAI_EMBEDDING_MODELS,
 } from '../knowledge/embeddings.js';
 import {
   ensureKnowledgePgvectorStorage,
   getKnowledgePgvectorCapability,
 } from '../knowledge/pgvector.js';
+import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { rebuildCurrentKnowledgeUnits } from '../knowledge/units.js';
 
-const DEFAULT_PROVIDER: KnowledgeEmbeddingProvider = 'openai';
-
-type KnowledgeSemanticSearchSettings = NonNullable<AgorKnowledgeSettings['semantic_search']>;
-type KnowledgeChunkingSettings = NonNullable<KnowledgeSemanticSearchSettings['chunking']>;
-
-export interface KnowledgeSettingsPatch {
-  enabled?: boolean;
-  provider?: KnowledgeEmbeddingProvider;
-  model?: string | null;
-  dimensions?: number | null;
-  api_key?: string | null;
-  chunking?: KnowledgeSemanticSearchSettings['chunking'];
-  indexing?: KnowledgeSemanticSearchSettings['indexing'];
-}
+export type KnowledgeSettingsPatch = KnowledgeSemanticSettingsPatch;
 
 export type KnowledgeSettingsParams = Params & AuthenticatedParams;
+type KnowledgeSettingsDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 export class KnowledgeSettingsService {
-  private variables: AppVariableRepository;
+  private settings: KnowledgeSemanticSettingsRepository;
 
   constructor(
     private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
-    this.variables = new AppVariableRepository(db);
+    this.settings = new KnowledgeSemanticSettingsRepository(db);
   }
 
   private async publicSettings(): Promise<KnowledgeSemanticSettingsPublic> {
-    const config = await loadConfig();
-    const settings = config.knowledge?.semantic_search ?? {};
-    const apiKey = await this.variables.find(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
-    );
-    return {
-      enabled: settings.enabled === true,
-      provider: settings.provider ?? DEFAULT_PROVIDER,
-      model: settings.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
-      dimensions: settings.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-      api_key_configured: Boolean(apiKey?.value_encrypted),
-      chunking: { ...DEFAULT_KNOWLEDGE_CHUNKING, ...(settings.chunking ?? {}) },
-      indexing: { ...DEFAULT_KNOWLEDGE_INDEXING, ...(settings.indexing ?? {}) },
-    };
+    return this.settings.find();
   }
 
-  private validateChunking(chunking?: KnowledgeChunkingSettings): void {
-    if (!chunking) return;
-    const entries = [
-      ['target_tokens', chunking.target_tokens],
-      ['max_tokens', chunking.max_tokens],
-      ['overlap_tokens', chunking.overlap_tokens],
-      ['min_tokens', chunking.min_tokens],
-    ] as const;
-    for (const [name, value] of entries) {
-      if (value === undefined) continue;
-      if (!Number.isInteger(value) || value < 0) {
-        throw new BadRequest(`Knowledge chunking ${name} must be a non-negative integer`);
-      }
-      if (value > 8000) {
-        throw new BadRequest(`Knowledge chunking ${name} must be 8000 or less`);
-      }
+  private validateProviderCapability(policy: KnowledgeSemanticPolicy): void {
+    if (policy.provider !== 'openai') {
+      throw new BadRequest('Knowledge semantic search currently supports only OpenAI embeddings');
     }
-
-    const merged = { ...DEFAULT_KNOWLEDGE_CHUNKING, ...chunking };
-    if (merged.min_tokens <= 0) {
-      throw new BadRequest('Knowledge chunking min_tokens must be greater than 0');
+    if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(policy.model)) {
+      throw new BadRequest(`Unsupported OpenAI embedding model: ${policy.model}`);
     }
-    if (merged.target_tokens <= 0) {
-      throw new BadRequest('Knowledge chunking target_tokens must be greater than 0');
-    }
-    if (merged.max_tokens < merged.min_tokens) {
+    if (policy.dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) {
       throw new BadRequest(
-        'Knowledge chunking max_tokens must be greater than or equal to min_tokens'
+        'Knowledge semantic search currently supports 1536-dimensional OpenAI embeddings'
       );
-    }
-    if (merged.target_tokens > merged.max_tokens) {
-      throw new BadRequest(
-        'Knowledge chunking target_tokens must be less than or equal to max_tokens'
-      );
-    }
-    if (merged.overlap_tokens >= merged.max_tokens) {
-      throw new BadRequest('Knowledge chunking overlap_tokens must be less than max_tokens');
     }
   }
 
-  private async markCurrentUnitsForEmbedding(status: KnowledgeEmbeddingStatus): Promise<number> {
-    const rows = await update(this.db, kbDocumentUnits)
+  private validatePatchShape(data: KnowledgeSettingsPatch): void {
+    const allowedFields = new Set([
+      'enabled',
+      'provider',
+      'model',
+      'dimensions',
+      'api_key',
+      'chunking',
+      'indexing',
+    ]);
+    const unknownField = Object.keys(data).find((field) => !allowedFields.has(field));
+    if (unknownField) {
+      throw new BadRequest(`Unknown Knowledge semantic-search setting: ${unknownField}`);
+    }
+    if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
+      throw new BadRequest('Knowledge semantic search enabled must be a boolean');
+    }
+    if (
+      data.provider !== undefined &&
+      data.provider !== null &&
+      typeof data.provider !== 'string'
+    ) {
+      throw new BadRequest('Knowledge embedding provider must be a string');
+    }
+    if (data.model !== undefined && data.model !== null && typeof data.model !== 'string') {
+      throw new BadRequest('Knowledge embedding model must be a string');
+    }
+    if (
+      data.dimensions !== undefined &&
+      data.dimensions !== null &&
+      typeof data.dimensions !== 'number'
+    ) {
+      throw new BadRequest('Knowledge embedding dimensions must be a number');
+    }
+    if (data.api_key !== undefined && data.api_key !== null && typeof data.api_key !== 'string') {
+      throw new BadRequest('Knowledge embedding API key must be a string or null');
+    }
+    for (const [section, value] of [
+      ['chunking', data.chunking],
+      ['indexing', data.indexing],
+    ] as const) {
+      if (
+        value !== undefined &&
+        value !== null &&
+        (!value || typeof value !== 'object' || Array.isArray(value))
+      ) {
+        throw new BadRequest(`Knowledge ${section} settings must be an object or null`);
+      }
+      const allowedSectionFields =
+        section === 'chunking'
+          ? new Set(['target_tokens', 'max_tokens', 'overlap_tokens', 'min_tokens'])
+          : new Set(['paused', 'batch_size']);
+      const unknownSectionField =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? Object.keys(value).find((field) => !allowedSectionFields.has(field))
+          : undefined;
+      if (unknownSectionField) {
+        throw new BadRequest(`Unknown Knowledge ${section} setting: ${unknownSectionField}`);
+      }
+    }
+  }
+
+  private async markCurrentUnitsForEmbedding(
+    db: KnowledgeSettingsDatabase,
+    status: KnowledgeEmbeddingStatus
+  ): Promise<number> {
+    const rows = await update(db, kbDocumentUnits)
       .set({
         embedding_status: status,
         embedding_model: null,
@@ -136,11 +146,11 @@ export class KnowledgeSettingsService {
       .returning({ unit_id: kbDocumentUnits.unit_id })
       .all();
 
-    if (isPostgresDatabase(this.db) && rows.length > 0) {
-      const pgvector = await getKnowledgePgvectorCapability(this.db);
+    if (isPostgresDatabase(db) && rows.length > 0) {
+      const pgvector = await getKnowledgePgvectorCapability(db);
       if (pgvector.storageReady) {
         await executeRaw(
-          this.db,
+          db,
           sql`DELETE FROM kb_unit_embeddings WHERE unit_id IN (SELECT unit_id FROM kb_document_units WHERE version_id IN (SELECT current_version_id FROM kb_documents WHERE current_version_id IS NOT NULL AND archived = false))`
         );
       }
@@ -164,92 +174,53 @@ export class KnowledgeSettingsService {
     data: KnowledgeSettingsPatch,
     params?: KnowledgeSettingsParams
   ): Promise<KnowledgeSemanticSettingsPublic> {
-    const config = await loadConfig();
-    const current = config.knowledge?.semantic_search ?? {};
-    const next = {
-      ...current,
-      ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),
-      ...(data.provider !== undefined ? { provider: data.provider } : {}),
-      ...(data.model !== undefined ? { model: data.model ?? undefined } : {}),
-      ...(data.dimensions !== undefined ? { dimensions: data.dimensions ?? undefined } : {}),
-      ...(data.chunking !== undefined ? { chunking: data.chunking } : {}),
-      ...(data.indexing !== undefined ? { indexing: data.indexing } : {}),
-    };
-
-    if ((next.provider ?? DEFAULT_PROVIDER) !== 'openai') {
-      throw new BadRequest('Knowledge semantic search currently supports only OpenAI embeddings');
-    }
-    this.validateChunking(next.chunking);
-    if (
-      next.dimensions !== undefined &&
-      (!Number.isInteger(next.dimensions) || next.dimensions <= 0)
-    ) {
-      throw new BadRequest('Knowledge embedding dimensions must be a positive integer');
-    }
-    if ((next.provider ?? DEFAULT_PROVIDER) === 'openai') {
-      const model = next.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL;
-      if (!SUPPORTED_OPENAI_EMBEDDING_MODELS.has(model)) {
-        throw new BadRequest(`Unsupported OpenAI embedding model: ${model}`);
-      }
-      if (
-        (next.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) !==
-        DEFAULT_OPENAI_EMBEDDING_DIMENSIONS
-      ) {
-        throw new BadRequest(
-          'Knowledge semantic search currently supports 1536-dimensional OpenAI embeddings'
-        );
-      }
-    }
-
-    const previousIdentity = {
-      enabled: current.enabled === true,
-      provider: current.provider ?? DEFAULT_PROVIDER,
-      model: current.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
-      dimensions: current.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-    };
-    const nextIdentity = {
-      enabled: next.enabled === true,
-      provider: next.provider ?? DEFAULT_PROVIDER,
-      model: next.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL,
-      dimensions: next.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
-    };
-    const identityChanged =
-      previousIdentity.enabled !== nextIdentity.enabled ||
-      previousIdentity.provider !== nextIdentity.provider ||
-      previousIdentity.model !== nextIdentity.model ||
-      previousIdentity.dimensions !== nextIdentity.dimensions ||
-      data.api_key !== undefined;
-    const chunkingChanged = data.chunking !== undefined;
-
-    config.knowledge = { ...(config.knowledge ?? {}), semantic_search: next };
-    await saveConfig(config);
-
-    if (data.api_key !== undefined) {
-      const user = params?.user as User | undefined;
-      await this.variables.setEncrypted(
-        KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-        KNOWLEDGE_EMBEDDINGS_API_KEY,
-        normalizeKnowledgeEmbeddingApiKey(data.api_key),
-        (user?.user_id as UserID | undefined) ?? null
+    this.validatePatchShape(data);
+    const user = params?.user as User | undefined;
+    const updatedBy = (user?.user_id as UserID | undefined) ?? null;
+    const apply = async (
+      db: TenantScopedDatabase
+    ): Promise<{ saved: KnowledgeSemanticSettingsPublic; shouldWake: boolean }> => {
+      const settings = new KnowledgeSemanticSettingsRepository(db);
+      const { previous: current, saved } = await settings.patchInTransaction(
+        db,
+        data,
+        updatedBy,
+        (policy) => this.validateProviderCapability(policy)
       );
-    }
+      const identityChanged =
+        current.enabled !== saved.enabled ||
+        current.provider !== saved.provider ||
+        current.model !== saved.model ||
+        current.dimensions !== saved.dimensions ||
+        data.api_key !== undefined;
+      const chunkingChanged = JSON.stringify(current.chunking) !== JSON.stringify(saved.chunking);
 
-    if (identityChanged || chunkingChanged) {
-      const apiKey = await this.variables.find(
-        KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-        KNOWLEDGE_EMBEDDINGS_API_KEY
-      );
-      const configured =
-        isPostgresDatabase(this.db) &&
-        isUsableOpenAIEmbeddingConfig(next, Boolean(apiKey?.value_encrypted)) &&
-        (await ensureKnowledgePgvectorStorage(this.db)).available;
-      const queued = chunkingChanged
-        ? await rebuildCurrentKnowledgeUnits(this.db, config, { embeddingConfigured: configured })
-        : await this.markCurrentUnitsForEmbedding(configured ? 'pending' : 'not_configured');
-      if (queued > 0 && configured) this.wakeIndexer();
-    }
+      if (identityChanged || chunkingChanged) {
+        const configured =
+          isPostgresDatabase(db) &&
+          isUsableOpenAIEmbeddingConfig(saved, saved.api_key_configured) &&
+          (await ensureKnowledgePgvectorStorage(db)).available;
+        const queued = chunkingChanged
+          ? await rebuildCurrentKnowledgeUnits(db, saved, {
+              embeddingConfigured: configured,
+            })
+          : await this.markCurrentUnitsForEmbedding(db, configured ? 'pending' : 'not_configured');
+        return { saved, shouldWake: queued > 0 && configured };
+      }
 
-    return this.publicSettings();
+      return { saved, shouldWake: false };
+    };
+
+    try {
+      const result = await runKnowledgePolicyTransaction(this.db, apply);
+      if (result.shouldWake) this.wakeIndexer();
+      return result.saved;
+    } catch (error) {
+      if (error instanceof KnowledgeSemanticPolicyValidationError) {
+        throw new BadRequest(error.message);
+      }
+      throw error;
+    }
   }
 
   async create(data: KnowledgeSettingsPatch, params?: KnowledgeSettingsParams) {

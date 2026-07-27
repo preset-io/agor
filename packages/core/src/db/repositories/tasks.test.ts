@@ -1261,6 +1261,50 @@ describe('TaskRepository.update', () => {
     ).toBe('terminal');
   });
 
+  dbTest('records only the current termination request as executor-quiesced', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+    const claim = await taskRepo.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      now: new Date('2026-07-10T20:01:00.000Z'),
+    });
+    const requestedAt = claim.task.termination_request!.requested_at;
+
+    expect(
+      await taskRepo.recordExecutorQuiescence({
+        task_id: task.task_id,
+        requested_at: '2026-07-10T19:59:00.000Z',
+      })
+    ).toBeNull();
+
+    const reported = await taskRepo.recordExecutorQuiescence(
+      { task_id: task.task_id, requested_at: requestedAt },
+      new Date('2026-07-10T20:01:00.125Z')
+    );
+    expect(reported).toMatchObject({
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        requested_at: requestedAt,
+        executor_quiesced_at: '2026-07-10T20:01:00.125Z',
+      },
+    });
+    expect(
+      await taskRepo.recordExecutorQuiescence(
+        { task_id: task.task_id, requested_at: requestedAt },
+        new Date('2026-07-10T20:01:01.000Z')
+      )
+    ).toEqual(reported);
+  });
+
   dbTest(
     'releases a stopping task after restart without claiming verified absence',
     async ({ db }) => {

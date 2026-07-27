@@ -26,6 +26,7 @@ interface HarnessOptions {
   importCreate?: ReturnType<typeof vi.fn>;
   deviceCreate?: ReturnType<typeof vi.fn>;
   deviceFind?: ReturnType<typeof vi.fn>;
+  logoutCreate?: ReturnType<typeof vi.fn>;
   onSaveField?: ReturnType<typeof vi.fn>;
   onClearField?: ReturnType<typeof vi.fn>;
 }
@@ -41,6 +42,7 @@ function Harness({
   importCreate,
   deviceCreate,
   deviceFind,
+  logoutCreate,
   onSaveField,
   onClearField,
 }: HarnessOptions) {
@@ -52,6 +54,9 @@ function Harness({
     'codex-auth/device': {
       create: deviceCreate ?? vi.fn(async () => ({ phase: 'idle' })),
       find: deviceFind ?? vi.fn(async () => ({ phase: 'idle' })),
+    },
+    'codex-auth/logout': {
+      create: logoutCreate ?? vi.fn(async () => ({ status: 'removed' })),
     },
   };
   // Stable client identity across rerenders (mirrors the real modal, where the
@@ -356,6 +361,64 @@ describe('CodexAuthSettings', () => {
 
     expect(
       await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).toBeInTheDocument();
+  });
+
+  it('offers Remove login only for a ChatGPT subscription, not for API keys', async () => {
+    const { rerender } = render(<Harness initialMethod="api_key" />);
+    await waitFor(() => expect(screen.getByText('API key')).toBeInTheDocument());
+    // API keys use ApiKeyFields' own Clear action — no subscription removal here.
+    expect(screen.queryByText('Remove login')).not.toBeInTheDocument();
+
+    rerender(<Harness initialMethod="subscription" />);
+    expect(await screen.findByText('Remove login')).toBeInTheDocument();
+  });
+
+  it('removes the login via a confirm and returns the card to the disconnected state', async () => {
+    const logoutCreate = vi.fn(async () => ({ status: 'removed' }));
+    const checkAuth = vi.fn(
+      async (): Promise<AuthCheckResult> => ({
+        status: 'authenticated',
+        authenticated: true,
+        method: 'native',
+      })
+    );
+    const { rerender } = render(
+      <Harness initialMethod="subscription" checkAuth={checkAuth} logoutCreate={logoutCreate} />
+    );
+    expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
+
+    // The confirm's destructive action calls the daemon logout endpoint (no
+    // token material crosses this boundary — the request body is empty). The
+    // copy is server-scoped (delete-only) and points at ChatGPT settings /
+    // `codex logout` for true, everywhere revocation.
+    clickText('Remove login');
+    expect(await screen.findByText(/your other devices stay signed in/i)).toBeInTheDocument();
+    expect(screen.getByText(/codex logout/i)).toBeInTheDocument();
+    fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
+    await waitFor(() => expect(logoutCreate).toHaveBeenCalledWith({}));
+
+    // The daemon clears agentic_auth_methods.codex; it arrives as a user patch
+    // that flips authMethod to the api_key default. The card then shows the
+    // disconnected (API-key) state and never affirms a ChatGPT login.
+    rerender(<Harness initialMethod="api_key" checkAuth={checkAuth} logoutCreate={logoutCreate} />);
+    await waitFor(() => expect(screen.queryByText('Codex is connected')).not.toBeInTheDocument());
+    expect(await screen.findByPlaceholderText('sk-proj-...')).toBeInTheDocument();
+    expect(screen.queryByText('A ChatGPT login is active on this server.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remove login')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a daemon error when removal fails, without crashing', async () => {
+    const logoutCreate = vi.fn(async () => {
+      throw new Error('Could not remove the Codex credentials file on the server.');
+    });
+    render(<Harness initialMethod="subscription" logoutCreate={logoutCreate} />);
+
+    clickText('Remove login');
+    fireEvent.click((await screen.findByText('Remove')).closest('button') as HTMLButtonElement);
+
+    expect(
+      await screen.findByText(/Could not remove the Codex credentials file on the server\./)
     ).toBeInTheDocument();
   });
 });

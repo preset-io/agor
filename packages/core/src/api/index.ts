@@ -30,6 +30,7 @@ import type {
   KnowledgeNamespace,
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
+  KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
@@ -268,6 +269,33 @@ export type AgenticToolPresetsService = AgorService<
   PatchAgenticToolPreset
 >;
 
+/** Singleton workspace Knowledge semantic-search settings endpoint. */
+export interface KnowledgeSettingsService {
+  find(params?: Params): Promise<KnowledgeSemanticSettingsPublic>;
+  create(
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+  patch(
+    id: null,
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+}
+
+/** Singleton workspace Knowledge indexing status endpoint. */
+export interface KnowledgeIndexingStatusService {
+  find(params?: Params): Promise<KnowledgeIndexingStatus>;
+}
+
+/** Workspace-wide Knowledge reindex command endpoint. */
+export interface KnowledgeReindexService {
+  create(
+    data?: Record<string, never>,
+    params?: Params
+  ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
+}
+
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
  */
@@ -307,6 +335,11 @@ export interface SessionsService
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Report that a requested cooperative stop has fully quiesced SDK work. */
+  reportTerminationComplete(
+    data: import('../types/task').ExecutorTerminationCompleteInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
@@ -604,6 +637,9 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'kb/settings'): KnowledgeSettingsService;
+  service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
+  service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 
@@ -894,7 +930,12 @@ function extendTasksService(client: AgorClient): void {
   };
   if (tasksService[TASKS_SERVICE_EXTENDED]) return;
   if (typeof tasksService.methods === 'function') {
-    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry', 'reportSdkHealthFailure');
+    tasksService.methods(
+      'connectExecutor',
+      'reportTerminationComplete',
+      'reportRuntimeTelemetry',
+      'reportSdkHealthFailure'
+    );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }

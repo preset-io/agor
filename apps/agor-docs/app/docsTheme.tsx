@@ -15,20 +15,12 @@ export const logo = (
     <img
       src={`${basePath}${LOGO_MARK_PATH}`}
       alt=""
+      width="42"
+      height="42"
       style={{ height: '42px', width: '42px' }}
       suppressHydrationWarning
     />
-    <strong
-      style={{
-        fontSize: '18px',
-        background: 'linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%)',
-        WebkitBackgroundClip: 'text',
-        WebkitTextFillColor: 'transparent',
-        backgroundClip: 'text',
-      }}
-    >
-      agor
-    </strong>
+    <strong className="agor-docs-wordmark">agor</strong>
   </span>
 );
 

@@ -58,6 +58,7 @@ import {
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
@@ -968,6 +969,14 @@ function AppContent() {
       });
 
       if (session) {
+        // Optimistically insert the authoritative row `create` just returned so
+        // the store knows the session before we navigate to it. Selection is
+        // routed through URL→store resolution, which can only resolve a session
+        // that's already in `sessionById`; without this the drawer would blank
+        // until the socket `created` event re-delivered the same object. That
+        // event is now a harmless no-op — `sessionCreated` is idempotent.
+        sessionCreated(session);
+
         // Associate MCP servers if provided
         if (config.mcpServerIds && config.mcpServerIds.length > 0) {
           for (const serverId of config.mcpServerIds) {

@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { blogPosts } from '../lib/blogPosts';
 import {
   DEFAULT_SOCIAL_IMAGE,
-  FAVICON_PATH,
   type FrontMatterLike,
   getSocialImage,
   isAbsoluteUrl,
@@ -116,7 +115,6 @@ const pages: PageMetadata[] = walk(pagesDir)
 const errors: string[] = [];
 
 assertLocalPublicImageExists(DEFAULT_SOCIAL_IMAGE, 'default social image', errors);
-assertLocalPublicImageExists(FAVICON_PATH, 'favicon (siteMetadata.FAVICON_PATH)', errors);
 assertLocalPublicImageExists(LOGO_PATH, 'logo (siteMetadata.LOGO_PATH)', errors);
 assertBlogPostsMatchPages(pages, errors);
 

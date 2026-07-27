@@ -4,7 +4,7 @@ import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCodexAuthFile } from '../utils/codex-auth-file.js';
 import { createCheckAuthService } from './check-auth';
-import { resolveCodexUnixIdentity } from './codex-auth-import.js';
+import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -31,7 +31,7 @@ vi.mock('../utils/codex-auth-file.js', async () => {
   };
 });
 
-vi.mock('./codex-auth-import.js', () => ({
+vi.mock('./codex-auth-shared.js', () => ({
   resolveCodexUnixIdentity: vi.fn(),
 }));
 
