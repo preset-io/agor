@@ -26,6 +26,7 @@ Tight, code-pointer-heavy notes on internals.
 | [`architecture.md`](concepts/architecture.md)           | System shape: services / repos / executor / storage. Where to look first. |
 | [`branches.md`](concepts/branches.md)                   | Branch-centric architecture (read before touching boards).                |
 | [`security.md`](concepts/security.md)                   | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
+| [`multitenancy.md`](concepts/multitenancy.md)           | Applicability triggers, tenant-aware seams, and isolation proof.          |
 | [`id-management.md`](concepts/id-management.md)         | UUIDv7, branded ID types, short-ID resolution.                            |
 | [`task-queueing.md`](concepts/task-queueing.md)         | Task lifecycle and queue-on-busy semantics.                               |
 | [`mcp-session-tools.md`](concepts/mcp-session-tools.md) | `agor_sessions_*` MCP tool surface and override semantics.                |
