@@ -86,7 +86,12 @@ describe('setupBranchOwnersService Unix sync hooks', () => {
         sessionToken: 'service-token',
         params: expect.objectContaining({ branchId: 'branch-1', daemonUser: 'agor' }),
       }),
-      { logPrefix: '[Executor/branch-owners.create]' }
+      expect.objectContaining({
+        logPrefix: '[Executor/branch-owners.create]',
+        // The authenticated params are threaded through so `{tenant_id}` can be
+        // derived for the executor command template.
+        params: expect.objectContaining({ tenant: { tenant_id: 'tenant-a' } }),
+      })
     );
   });
 });

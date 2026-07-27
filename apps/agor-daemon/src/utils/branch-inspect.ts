@@ -1,6 +1,11 @@
 import type { Application } from '@agor/core/feathers';
-import type { BranchID } from '@agor/core/types';
-import { generateSessionToken, getDaemonUrl, runExecutorCommand } from './spawn-executor.js';
+import type { AuthenticatedParams, BranchID } from '@agor/core/types';
+import {
+  generateSessionToken,
+  getDaemonUrl,
+  runExecutorCommand,
+  serviceTokenScopeForParams,
+} from './spawn-executor.js';
 
 export interface BranchInspectResult {
   currentSha: string;
@@ -22,12 +27,13 @@ export async function inspectBranchViaExecutor(
   options: {
     asUser?: string | null;
     logPrefix?: string;
-    serviceTokenScope?: Record<string, unknown>;
+    /** Authenticated request params; used for token scope and template substitution. */
+    params?: Partial<AuthenticatedParams>;
   } = {}
 ): Promise<BranchInspectResult> {
   const sessionToken = generateSessionToken(
     app as unknown as { settings: { authentication?: { secret?: string } } },
-    options.serviceTokenScope
+    serviceTokenScopeForParams(options.params)
   );
 
   const result = await runExecutorCommand(
@@ -40,6 +46,7 @@ export async function inspectBranchViaExecutor(
     {
       logPrefix: options.logPrefix ?? `[branch.inspect ${branchId}]`,
       asUser: options.asUser ?? undefined,
+      params: options.params,
     }
   );
 

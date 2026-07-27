@@ -1011,6 +1011,7 @@ function createExecuteHandler(
       asUser: executorUnixUser || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      params,
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,

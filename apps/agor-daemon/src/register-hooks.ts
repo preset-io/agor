@@ -754,7 +754,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ...(options?.delete ? { delete: true } : {}),
         },
       },
-      { logPrefix }
+      { logPrefix, params }
     );
   };
 
@@ -789,7 +789,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           daemonUser: config.daemon?.unix_user,
         },
       },
-      { logPrefix }
+      { logPrefix, params }
     );
   };
 
@@ -2321,7 +2321,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            { logPrefix: '[Executor/user.create]' }
+            {
+              logPrefix: '[Executor/user.create]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;
@@ -2394,7 +2397,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 configureGitSafeDirectory: isUnixImpersonationEnabled(), // Configure git when impersonating
               },
             },
-            { logPrefix: '[Executor/user.patch]' }
+            {
+              logPrefix: '[Executor/user.patch]',
+              params: context.params as Partial<AuthenticatedParams>,
+            }
           );
 
           return context;
@@ -2531,9 +2537,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                             | undefined
                         ),
                         logPrefix: `[sessions.create ${branch.name}]`,
-                        serviceTokenScope: serviceTokenScopeForParams(
-                          context.params as AuthenticatedParams
-                        ),
+                        params: context.params as AuthenticatedParams,
                       }
                     );
                     (context.data as Record<string, unknown>).git_state = {

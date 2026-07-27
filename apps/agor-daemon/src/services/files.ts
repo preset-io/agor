@@ -124,6 +124,7 @@ export class FilesService {
         },
         {
           logPrefix: `[FilesService ${sessionId}]`,
+          params,
           // In strict mode, autocomplete runs as the requesting Unix user.
           // In simple/insulated mode this stays undefined so default installs
           // do not require sudo and configured executor defaults can apply.

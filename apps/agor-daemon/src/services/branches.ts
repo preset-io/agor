@@ -444,6 +444,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           logPrefix,
           asUser,
           preparedEnv: env,
+          params,
           templateVariables: {
             branch_id: branch.branch_id,
           },
@@ -478,13 +479,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
   }): Promise<void> {
-    const { branch, action } = options;
+    const { branch, action, params } = options;
     const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
 
     const result = await runExecutorCommand(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       asUser,
       preparedEnv: env,
+      params,
       // Mixed webhook/shell restart needs the daemon to wait for shell stop
       // before it invokes the daemon-owned webhook start. Keep this generous
       // enough for docker compose down while still bounding the request.
@@ -546,6 +548,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         logPrefix: `[Environment.logs ${branch.name}]`,
         asUser,
         preparedEnv: env,
+        params,
         timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
         templateVariables: {
           branch_id: branch.branch_id,
@@ -1332,6 +1335,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             {
               logPrefix: `[BranchesService.remove ${branch.name}]`,
               asUser, // Run as resolved user (fresh groups via sudo -u)
+              params,
             }
           );
         })
@@ -1417,6 +1421,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             {
               logPrefix: `[BranchesService.clean ${branch.name}]`,
+              params,
             }
           );
         })
@@ -1465,6 +1470,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             {
               logPrefix: `[BranchesService.delete ${branch.name}]`,
+              params,
             }
           );
         })
@@ -1681,6 +1687,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             logPrefix: `[BranchesService.unarchive ${branch.name}]`,
+            params,
           }
         );
       } catch (error) {

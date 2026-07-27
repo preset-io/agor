@@ -301,6 +301,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
+        params,
         onExit: (code) => {
           if (code !== 0 && code !== null) {
             // Broadcast clone failure to all connected clients (the existing
@@ -968,6 +969,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
           asUser, // Run as resolved user (fresh groups via sudo -u)
+          params,
         }
       );
     } catch (error) {
@@ -1033,6 +1035,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
         asUser,
+        params: serviceParams,
       }
     );
   }
@@ -1214,6 +1217,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         {
           logPrefix: `[repo.delete ${repo.slug}]`,
           timeoutMs: 5 * 60_000,
+          params,
         }
       );
 

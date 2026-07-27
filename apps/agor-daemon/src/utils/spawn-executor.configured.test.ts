@@ -173,6 +173,67 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('substitutes {tenant_id} from the request tenant params for templated spawns', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor(
+      { command: 'git.clone' },
+      {
+        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        params: { tenant: { tenant_id: 'tenant-abc' as never, source: 'auth_claim' } },
+      }
+    );
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --tenant-id tenant-abc -- git.clone'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
+  it('leaves {tenant_id} unsubstituted when the request has no resolved tenant', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor(
+      { command: 'git.clone' },
+      { executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}' }
+    );
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --tenant-id {tenant_id} -- git.clone'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
+  it('substitutes {tenant_id} from the request tenant params for templated runExecutorCommand', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+
+    const resultPromise = runExecutorCommand(
+      { command: 'branch.inspect' },
+      {
+        executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
+        params: { tenant: { tenant_id: 'tenant-abc' as never, source: 'auth_claim' } },
+      }
+    );
+    // Settle the awaited command so no timer/promise dangles.
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({ success: true, data: {} })));
+    proc.emit('exit', 0);
+    await resultPromise;
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --tenant-id tenant-abc -- branch.inspect'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
   it('propagates an explicit LOG_LEVEL to local executor processes at startup', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -264,5 +325,28 @@ describe('configured executor spawning', () => {
         process.env.AGOR_EXECUTOR_PATH = previous;
       }
     }
+  });
+});
+
+describe('substituteTemplateVariables', () => {
+  it('substitutes a {tenant_id} placeholder with the provided tenant', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    const result = substituteTemplateVariables('launch --tenant-id {tenant_id} -- {command}', {
+      tenant_id: 'tenant-xyz',
+      command: 'git.clone',
+    });
+
+    expect(result).toBe('launch --tenant-id tenant-xyz -- git.clone');
+  });
+
+  it('leaves {tenant_id} as-is when no tenant is provided', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    const result = substituteTemplateVariables('launch --tenant-id {tenant_id} -- {command}', {
+      command: 'git.clone',
+    });
+
+    expect(result).toBe('launch --tenant-id {tenant_id} -- git.clone');
   });
 });
