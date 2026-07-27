@@ -957,10 +957,14 @@ export function generateScopedServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  executionScope?: TenantContextScope,
+  executionScopeOrParams?: TenantContextScope | Partial<AuthenticatedParams>,
   extraScope: Record<string, unknown> = {},
   expiresIn?: SignOptions['expiresIn']
 ): string {
+  const executionScope =
+    executionScopeOrParams && 'tenantId' in executionScopeOrParams
+      ? executionScopeOrParams
+      : executorExecutionScopeForParams(executionScopeOrParams);
   return generateSessionToken(
     app,
     { ...extraScope, ...serviceTokenScopeForExecutionScope(executionScope) },
