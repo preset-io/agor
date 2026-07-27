@@ -52,7 +52,6 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
 import { AuthenticatedMessageImage } from './AuthenticatedMessageImage';
-import { hidePreviewedImageAttachments } from './imageAttachmentPresentation';
 import { WidgetBlock } from './WidgetBlock';
 
 interface ToolUseBlock {
@@ -626,13 +625,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
     return {
       thinkingBlocks,
-      textBeforeTools: textBeforeTools.map((text) =>
-        hidePreviewedImageAttachments(text, imageBlocks)
-      ),
+      textBeforeTools,
       toolBlocks,
-      textAfterTools: textAfterTools.map((text) =>
-        hidePreviewedImageAttachments(text, imageBlocks)
-      ),
+      textAfterTools,
       imageBlocks,
     };
   };

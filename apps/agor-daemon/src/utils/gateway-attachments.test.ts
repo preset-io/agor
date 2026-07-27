@@ -105,7 +105,9 @@ describe('ingestInboundAttachments', () => {
       filename: 'screenshot.png',
       mime_type: 'image/png',
     });
-    expect(result.attachments[0].storage_key).toMatch(/^F123_screenshot_\d+\.png$/);
+    expect(result.attachments[0].storage_key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     expect(
       new Uint8Array(await fs.readFile(path.join(uploadDir, result.attachments[0].storage_key)))
     ).toEqual(bytes);
@@ -140,7 +142,9 @@ describe('ingestInboundAttachments', () => {
       filename: 'errors.csv',
       mime_type: 'text/csv',
     });
-    expect(result.attachments[0].storage_key).toMatch(/^F123_errors_\d+\.csv$/);
+    expect(result.attachments[0].storage_key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     expect(await fs.readFile(path.join(uploadDir, result.attachments[0].storage_key), 'utf8')).toBe(
       body
     );
@@ -376,7 +380,9 @@ describe('ingestInboundAttachments', () => {
 
     expect(result.failed).toBe(1);
     expect(result.attachments).toHaveLength(1);
-    expect(result.attachments[0].storage_key).toMatch(/^F2_second_\d+\.png$/);
+    expect(result.attachments[0].storage_key).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
   });
 
   it('counts images beyond the per-message cap as failed without fetching them', async () => {

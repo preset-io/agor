@@ -198,7 +198,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const contextWarning = contextPct > 0.8;
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
   const composerUploadTooltip = 'Uploading files...';
-  const uploadDisabled = connectionDisabled || composerAttachmentUploading;
+  const taskAttachmentsSupported = session.agentic_tool !== 'claude-code-cli';
+  const uploadDisabled =
+    connectionDisabled || composerAttachmentUploading || !taskAttachmentsSupported;
   const advancedUploadDisabled = uploadDisabled;
   const forkDisabled = connectionDisabled || composerAttachmentsPresent;
   const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;

@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createTaskAttachmentHandler,
+  ensureToolSupportsTaskAttachments,
   signComposerAttachment,
   stripUntrustedAttachments,
   validateTrustedTaskAttachments,
@@ -168,9 +169,25 @@ describe('composer attachment tokens', () => {
     expect(() =>
       validateTrustedTaskAttachments([{ ...file, filename: 'notes\r\nx-header.txt' }])
     ).toThrow('Invalid trusted task attachments');
+    expect(
+      validateTrustedTaskAttachments([{ ...file, path: '/daemon/uploads/notes.txt' }])
+    ).toEqual([file]);
     expect(stripUntrustedAttachments({ system_authored: true, attachments: [file] })).toEqual({
       system_authored: true,
     });
+  });
+
+  it('rejects Claude Code CLI attachments instead of silently dropping them', () => {
+    const file = attachment('notes-key', {
+      filename: 'notes.txt',
+      mime_type: 'text/plain',
+    });
+
+    expect(() => ensureToolSupportsTaskAttachments('claude-code-cli', [file])).toThrow(
+      'Attachments are not supported by claude-code-cli sessions'
+    );
+    expect(() => ensureToolSupportsTaskAttachments('claude-code', [file])).not.toThrow();
+    expect(() => ensureToolSupportsTaskAttachments('claude-code-cli', [])).not.toThrow();
   });
 });
 

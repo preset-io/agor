@@ -992,7 +992,6 @@ function AppContent() {
               sessionId: session.session_id,
               daemonUrl: getDaemonUrl(),
               files: attachmentFiles,
-              notifyAgent: false,
             });
             const attachmentTokens = uploaded.files.flatMap((file) =>
               file.attachmentToken ? [file.attachmentToken] : []

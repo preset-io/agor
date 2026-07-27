@@ -1966,7 +1966,9 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         file: { id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 },
       });
       expect(payload.file.path.startsWith(dir)).toBe(true);
-      expect(payload.file.path).toContain('F123_error');
+      expect(path.basename(payload.file.path)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
       expect(fs.readFileSync(payload.file.path, 'utf8')).toBe('log line one');
       expect(JSON.stringify(payload)).not.toContain('url_private_download');
       expect(JSON.stringify(payload)).not.toContain('files.slack.com');

@@ -63,6 +63,7 @@ import type {
   Paginated,
   Params,
   Session,
+  TaskMetadata,
   User,
   UserID,
 } from '@agor/core/types';
@@ -151,6 +152,7 @@ import {
   serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
+import { validateTrustedTaskAttachments } from './utils/task-attachments.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
@@ -176,6 +178,42 @@ const BRANCH_ENV_FIELDS = [
 
 function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[]): boolean {
   return fields.some((field) => Object.hasOwn(item, field));
+}
+
+/**
+ * Keep task attachment association daemon-owned at the generic task service seam.
+ * External callers must use signed composer tokens through the prompt route.
+ */
+export function protectTaskAttachmentMetadata() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const data = context.data as { metadata?: TaskMetadata } | undefined;
+    const metadata = data?.metadata;
+    if (
+      !metadata ||
+      typeof metadata !== 'object' ||
+      Array.isArray(metadata) ||
+      !Object.hasOwn(metadata, 'attachments')
+    ) {
+      return context;
+    }
+
+    if (context.params.provider) {
+      throw new BadRequest('Task attachment metadata must be associated through signed uploads');
+    }
+
+    try {
+      context.data = {
+        ...data,
+        metadata: {
+          ...metadata,
+          attachments: validateTrustedTaskAttachments(metadata.attachments),
+        },
+      };
+    } catch {
+      throw new BadRequest('Invalid task attachment metadata');
+    }
+    return context;
+  };
 }
 
 export function shouldValidateRepoEnvironmentPayload(value: unknown): boolean {
@@ -2911,6 +2949,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         injectCreatedBy(),
+        protectTaskAttachmentMetadata(),
       ],
       patch: [
         ...(branchRbacEnabled
@@ -2921,6 +2960,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectTaskAttachmentMetadata(),
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),

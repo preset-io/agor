@@ -279,4 +279,22 @@ describe('SessionFooter pinned items', () => {
     expect(screen.getByTestId('upload-bar-btn')).toBeDisabled();
     expect(screen.getByTitle('Advanced upload')).toBeDisabled();
   });
+
+  it('disables attachment controls for Claude Code CLI sessions', () => {
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedItems: ['upload', 'advanced-upload'] })
+    );
+
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, agentic_tool: 'claude-code-cli' } as Session}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(screen.getByTestId('upload-bar-btn')).toBeDisabled();
+    expect(screen.getByTitle('Advanced upload')).toBeDisabled();
+  });
 });

@@ -150,7 +150,6 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
           sessionId: uploadSessionId,
           daemonUrl: getDaemonUrl(),
           files: uploadable.map((attachment) => attachment.file),
-          notifyAgent: false,
         });
 
         if (result.files.length !== uploadable.length) {

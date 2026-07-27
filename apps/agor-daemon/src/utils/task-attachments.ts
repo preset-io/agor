@@ -1,7 +1,14 @@
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { AuthenticatedParams, Task, TaskAttachment, TaskMetadata } from '@agor/core/types';
+import { BadRequest } from '@agor/core/feathers';
+import type {
+  AgenticToolName,
+  AuthenticatedParams,
+  Task,
+  TaskAttachment,
+  TaskMetadata,
+} from '@agor/core/types';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { isPathInsideRoot } from './branch-workspace-path.js';
@@ -113,7 +120,20 @@ export function validateTrustedTaskAttachments(value: unknown): TaskAttachment[]
   if (!Array.isArray(value) || value.length > 10 || !value.every(isValidTaskAttachment)) {
     throw new Error('Invalid trusted task attachments');
   }
-  return value;
+  return value.map((attachment) => ({
+    storage_key: attachment.storage_key,
+    filename: attachment.filename,
+    mime_type: attachment.mime_type,
+  }));
+}
+
+export function ensureToolSupportsTaskAttachments(
+  agenticTool: AgenticToolName,
+  attachments: TaskAttachment[]
+): void {
+  if (attachments.length > 0 && agenticTool === 'claude-code-cli') {
+    throw new BadRequest(`Attachments are not supported by ${agenticTool} sessions`);
+  }
 }
 
 interface TaskAttachmentHandlerOptions {

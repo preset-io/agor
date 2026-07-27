@@ -4,8 +4,11 @@
  * Stores daemon-side uploads under ~/.agor/uploads/.
  */
 
+import { randomUUID } from 'node:crypto';
+import type { FileHandle } from 'node:fs/promises';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { getAgorHome } from '@agor/core/config';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
@@ -103,74 +106,110 @@ export function validateUploadDestinationQuery(destination: unknown): void {
   );
 }
 
-/**
- * Sanitize an original filename (path traversal, unsafe chars) and suffix it
- * with a timestamp so concurrent uploads of the same name never overwrite.
- */
-export function buildUploadFilename(originalname: string): string {
-  const basename = path.basename(originalname);
+/** Generate a cryptographically unique opaque storage key. */
+export function buildUploadFilename(_originalname: string): string {
+  return randomUUID();
+}
 
-  const sanitized = basename
-    .replace(/\.\./g, '_') // Remove path traversal attempts
-    .replace(/[/\\:*?"<>|]/g, '_') // Remove filesystem-unsafe chars (Windows + Unix)
-    .replace(/\.+$/g, '') // Remove trailing dots (Windows issue)
-    .substring(0, 200); // Limit length (leave room for timestamp)
+const MAX_EXCLUSIVE_CREATE_ATTEMPTS = 10;
 
-  const timestamp = Date.now();
-  const ext = path.extname(sanitized);
-  const nameWithoutExt = sanitized.slice(0, -ext.length || undefined);
-  return `${nameWithoutExt}_${timestamp}${ext}`;
+interface ExclusiveUploadFile {
+  filename: string;
+  path: string;
+  handle: FileHandle;
 }
 
 /**
- * Create multer storage configuration
+ * Reserve a fresh upload key using exclusive create. The random key prevents
+ * practical collisions; O_EXCL and retry make collisions unable to overwrite
+ * already-authoritative bytes.
  */
-export function createUploadStorage() {
-  const storage = multer.diskStorage({
-    destination: async (req: Request, _file, cb) => {
-      try {
-        const { sessionId } = req.params;
-        // NOTE: req.body is NOT available yet during multer's destination callback
-        // because multer hasn't parsed the body fields yet. Legacy clients may
-        // still send destination as a query param; only the old no-op values are
-        // tolerated, and all uploads are written to ~/.agor/uploads/.
-        validateUploadDestinationQuery(req.query.destination);
+export async function createExclusiveUploadFile(
+  uploadDirectory: string,
+  originalname: string,
+  generateFilename: (originalname: string) => string = buildUploadFilename
+): Promise<ExclusiveUploadFile> {
+  for (let attempt = 0; attempt < MAX_EXCLUSIVE_CREATE_ATTEMPTS; attempt++) {
+    const filename = generateFilename(originalname);
+    if (
+      !filename ||
+      path.isAbsolute(filename) ||
+      filename.includes('\\') ||
+      path.basename(filename) !== filename
+    ) {
+      throw new Error('Invalid upload storage key');
+    }
+    const filePath = path.join(uploadDirectory, filename);
+    try {
+      return {
+        filename,
+        path: filePath,
+        handle: await fs.open(filePath, 'wx'),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+  throw new Error('Could not allocate a unique upload storage key');
+}
 
-        if (DEBUG_UPLOAD) {
-          console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId || 'unknown'}`
-          );
+/** Store already-buffered upload bytes without ever replacing an existing key. */
+export async function writeUploadBytesExclusive(
+  uploadDirectory: string,
+  originalname: string,
+  bytes: Uint8Array
+): Promise<string> {
+  await fs.mkdir(uploadDirectory, { recursive: true });
+  const reserved = await createExclusiveUploadFile(uploadDirectory, originalname);
+  try {
+    await reserved.handle.writeFile(bytes);
+    return reserved.filename;
+  } catch (error) {
+    await fs.unlink(reserved.path).catch(() => undefined);
+    throw error;
+  } finally {
+    await reserved.handle.close();
+  }
+}
+
+/** Create multer storage that streams directly into an exclusive file handle. */
+export function createUploadStorage(): multer.StorageEngine {
+  return {
+    _handleFile(req, file, callback) {
+      void (async () => {
+        let reserved: ExclusiveUploadFile | undefined;
+        try {
+          // req.body is unavailable while multer streams file parts. Only
+          // legacy no-op destination query values remain accepted.
+          validateUploadDestinationQuery(req.query.destination);
+          const destination = getUploadDirectory();
+          await fs.mkdir(destination, { recursive: true });
+          reserved = await createExclusiveUploadFile(destination, file.originalname);
+          const output = reserved.handle.createWriteStream();
+          await pipeline(file.stream, output);
+          callback(null, {
+            destination,
+            filename: reserved.filename,
+            path: reserved.path,
+            size: output.bytesWritten,
+          });
+        } catch (error) {
+          if (reserved) {
+            await reserved.handle.close().catch(() => undefined);
+            await fs.unlink(reserved.path).catch(() => undefined);
+          }
+          console.error('❌ [Upload Storage] Error:', error);
+          callback(error);
         }
-
-        const dest = getUploadDirectory();
-
-        if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
-
-        // Ensure directory exists
-        await fs.mkdir(dest, { recursive: true });
-        if (DEBUG_UPLOAD) console.log(`✅ [Upload Storage] Directory created/verified: ${dest}`);
-
-        cb(null, dest);
-      } catch (error) {
-        console.error('❌ [Upload Storage] Error:', error);
-        cb(error instanceof Error ? error : new Error(String(error)), '');
-      }
+      })();
     },
-
-    filename: (_req, file, cb) => {
-      const uniqueFilename = buildUploadFilename(file.originalname);
-
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📝 [Upload Storage] Sanitized filename: ${file.originalname} → ${uniqueFilename}`
-        );
-      }
-
-      cb(null, uniqueFilename);
+    _removeFile(_req, file, callback) {
+      fs.unlink(file.path).then(
+        () => callback(null),
+        (error) => callback(error)
+      );
     },
-  });
-
-  return storage;
+  };
 }
 
 /**

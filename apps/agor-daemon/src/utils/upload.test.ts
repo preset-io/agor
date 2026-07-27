@@ -8,12 +8,15 @@
  *   - aggregate-size middlewares reject oversize requests (pre + post multer)
  */
 
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
+  buildUploadFilename,
+  createExclusiveUploadFile,
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
@@ -87,6 +90,36 @@ describe('upload destination handling', () => {
   it('rejects unsupported upload destinations', () => {
     expect(() => validateUploadDestinationQuery('temp')).toThrow(/no longer supported/i);
     expect(() => validateUploadDestinationQuery('workspace')).toThrow(/no longer supported/i);
+  });
+});
+
+describe('upload storage keys', () => {
+  it('uses cryptographically random opaque basenames', () => {
+    const first = buildUploadFilename('report.txt');
+    const second = buildUploadFilename('report.txt');
+
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(second).not.toBe(first);
+    expect(path.basename(first)).toBe(first);
+    expect(first).not.toContain('report');
+  });
+
+  it('retries an exclusive-create collision without overwriting existing bytes', async () => {
+    const uploadDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-upload-collision-'));
+    await fs.writeFile(path.join(uploadDirectory, 'collision-key'), 'original');
+    const candidates = ['collision-key', 'fresh-key'];
+    const reserved = await createExclusiveUploadFile(
+      uploadDirectory,
+      'report.txt',
+      () => candidates.shift() ?? 'unexpected'
+    );
+
+    await reserved.handle.writeFile('new');
+    await reserved.handle.close();
+
+    expect(await fs.readFile(path.join(uploadDirectory, 'collision-key'), 'utf8')).toBe('original');
+    expect(await fs.readFile(path.join(uploadDirectory, 'fresh-key'), 'utf8')).toBe('new');
+    await fs.rm(uploadDirectory, { recursive: true, force: true });
   });
 });
 

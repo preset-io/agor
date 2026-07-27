@@ -392,6 +392,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const toolCaps = session?.agentic_tool
     ? AGENTIC_TOOL_CAPABILITIES[session.agentic_tool]
     : undefined;
+  const taskAttachmentsSupported = session?.agentic_tool !== 'claude-code-cli';
 
   // Compute which session MCP servers need authentication
   const unauthedMcpServers = React.useMemo(() => {
@@ -822,7 +823,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return null;
     return (
       <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
+        disabled={composerAttachmentUploading || !taskAttachmentsSupported}
         onDragActiveChange={setComposerDropActive}
         onFilesDrop={addComposerAttachments}
       >
@@ -858,7 +859,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
-          filesDropDisabled={composerAttachmentUploading}
+          filesDropDisabled={composerAttachmentUploading || !taskAttachmentsSupported}
           showFilesDropOverlay={false}
           suppressEmptyHighlight={composerDropActive}
           slashCommands={
@@ -875,7 +876,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           type="file"
           accept={getComposerUploadAccept()}
           multiple
-          disabled={composerAttachmentUploading}
+          disabled={composerAttachmentUploading || !taskAttachmentsSupported}
           style={{ display: 'none' }}
           onChange={(event) => {
             addComposerAttachments(Array.from(event.target.files ?? []));
@@ -887,6 +888,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [
     session,
     sessionCustomContext,
+    taskAttachmentsSupported,
     composerAttachmentUploading,
     composerAttachmentValidationError,
     composerAttachments,
@@ -1643,8 +1645,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
           sessionFooter}
 
-        {/* Advanced upload modal preserves the existing file upload flow for
-            non-image files and notify-agent options. */}
+        {/* Advanced uploads associate signed tokens through the normal prompt route. */}
         <FileUpload
           sessionId={session.session_id}
           daemonUrl={getDaemonUrl()}
@@ -1654,11 +1655,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setAdvancedUploadInitialFiles([]);
           }}
           initialFiles={advancedUploadInitialFiles}
-          onUploadComplete={(files) => {
-            showSuccess(`Uploaded ${files.length} file(s)`);
-          }}
-          onInsertMention={(filepath) => {
-            promptRef.current?.insertText(`@${filepath}`);
+          onNotifyAgent={async (message, attachmentTokens) => {
+            if (!onSendPrompt) {
+              throw new Error('Cannot send prompt from this view');
+            }
+            const sent = await onSendPrompt(
+              session.session_id,
+              message,
+              permissionMode,
+              attachmentTokens
+            );
+            if (sent === false) {
+              throw new Error('Failed to associate uploaded files with the agent task');
+            }
           }}
         />
 

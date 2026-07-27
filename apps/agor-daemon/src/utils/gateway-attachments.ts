@@ -13,17 +13,15 @@
  * enforces.
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import type { TaskAttachment } from '@agor/core/types';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
-  buildUploadFilename,
   getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILES_PER_REQUEST,
   sanitizeUploadDisplayFilename,
+  writeUploadBytesExclusive,
 } from './upload.js';
 
 export interface AttachmentIngestResult {
@@ -193,13 +191,7 @@ export async function ingestInboundAttachments(args: {
       }
       const body = await readBodyWithLimit(response, MAX_UPLOAD_FILE_SIZE);
 
-      await fs.mkdir(uploadDir, { recursive: true });
-      // Slack names every pasted screenshot "image.png"; prefix the unique
-      // Slack file ID so same-millisecond downloads can never overwrite each
-      // other (the timestamp in buildUploadFilename is not unique enough).
-      const filePath = path.join(uploadDir, buildUploadFilename(`${file.id}_${file.name}`));
-      await fs.writeFile(filePath, body);
-      const storageKey = path.basename(filePath);
+      const storageKey = await writeUploadBytesExclusive(uploadDir, file.name, body);
       attachments.push({
         storage_key: storageKey,
         filename: sanitizeUploadDisplayFilename(file.name, storageKey),

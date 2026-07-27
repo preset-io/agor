@@ -18,12 +18,14 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectTaskAttachmentMetadata,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -47,6 +49,48 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectTaskAttachmentMetadata', () => {
+  const attachment = {
+    storage_key: 'opaque-key',
+    filename: 'notes.txt',
+    mime_type: 'text/plain',
+  };
+
+  it.each(['create', 'patch'])('rejects external task %s attachment metadata', async (method) => {
+    const hook = protectTaskAttachmentMetadata();
+    const context = {
+      method,
+      data: { metadata: { attachments: [attachment] } },
+      params: { provider: 'rest' },
+    } as unknown as HookContext;
+
+    await expect(hook(context)).rejects.toThrow(
+      'Task attachment metadata must be associated through signed uploads'
+    );
+  });
+
+  it('canonicalizes trusted daemon associations to the three persisted fields', async () => {
+    const hook = protectTaskAttachmentMetadata();
+    const context = {
+      method: 'create',
+      data: {
+        metadata: {
+          system_authored: true,
+          attachments: [{ ...attachment, path: '/daemon/uploads/notes.txt', extra: true }],
+        },
+      },
+      params: {},
+    } as unknown as HookContext;
+
+    await hook(context);
+
+    expect(context.data.metadata).toEqual({
+      system_authored: true,
+      attachments: [attachment],
+    });
+  });
+});
 
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {

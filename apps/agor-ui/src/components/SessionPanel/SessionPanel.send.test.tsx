@@ -142,7 +142,7 @@ describe('SessionPanel composer send', () => {
       expect.not.objectContaining({ destination: expect.anything() })
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
-      expect.objectContaining({ files: [sendStartFile], notifyAgent: false })
+      expect.objectContaining({ files: [sendStartFile] })
     );
 
     fireEvent.change(textarea, { target: { value: 'Compare this chart and mention the anomaly' } });
@@ -324,7 +324,7 @@ describe('SessionPanel composer send', () => {
       expect.not.objectContaining({ destination: expect.anything() })
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
-      expect.objectContaining({ files: [file], notifyAgent: false })
+      expect.objectContaining({ files: [file] })
     );
     await waitFor(() => expect(textarea).toHaveValue(''));
     expect(screen.queryByLabelText('Preview rapid-chart.png')).not.toBeInTheDocument();
@@ -373,6 +373,47 @@ describe('SessionPanel composer send', () => {
     });
 
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+  });
+
+  it('associates advanced uploads by signed token without prompting with daemon paths', async () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItems: ['advanced-upload'] }));
+    const file = new File(['notes'], 'notes.txt', { type: 'text/plain' });
+    uploadMockState.uploadFilesToSession.mockResolvedValue({
+      success: true,
+      files: [
+        {
+          filename: 'opaque-key',
+          path: '/daemon/home/.agor/uploads/opaque-key',
+          size: 5,
+          mimeType: 'text/plain',
+          attachmentToken: 'signed-token',
+        },
+      ],
+    });
+    const onSendPrompt = vi.fn().mockResolvedValue(true);
+    renderSessionPanel({ onSendPrompt });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced upload' }));
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const input = inputs.item(inputs.length - 1);
+    expect(input).not.toBeNull();
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Upload', exact: true }));
+
+    await waitFor(() => {
+      expect(onSendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Please review the attached file(s) and use them as context for this task.',
+        expect.any(String),
+        ['signed-token']
+      );
+    });
+    expect(onSendPrompt.mock.calls[0][1]).not.toContain('/daemon/');
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      daemonUrl: expect.any(String),
+      files: [file],
+    });
   });
 
   it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {

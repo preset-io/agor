@@ -58,6 +58,7 @@ import type {
   SessionMCPServer,
   StreamingEventType,
   Task,
+  TaskAttachment,
   TaskID,
   User,
   UUID,
@@ -146,6 +147,7 @@ import {
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import {
   createTaskAttachmentHandler,
+  ensureToolSupportsTaskAttachments,
   signComposerAttachment,
   stripUntrustedAttachments,
   validateTrustedTaskAttachments,
@@ -1530,7 +1532,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         ) {
           throw new BadRequest('Invalid task attachment');
         }
-        let attachments: import('@agor/core/types').TaskAttachment[] = [];
+        let attachments: TaskAttachment[] = [];
         try {
           attachments = verifyComposerAttachmentTokens(
             data.attachmentTokens ?? [],
@@ -1545,6 +1547,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         } catch {
           throw new BadRequest('Invalid task attachment');
         }
+        ensureToolSupportsTaskAttachments(session.agentic_tool, attachments);
         if (!data.prompt && attachments.length === 0) {
           throw new Error('Prompt required');
         }
@@ -2051,14 +2054,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       }
 
       const { sessionId } = req.params;
-      const { notifyAgent, message } = req.body;
       const files = req.files as Express.Multer.File[];
 
       if (DEBUG_UPLOAD) {
         console.log(
           `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
         );
-        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
         console.log(`   Files received: ${files?.length || 0}`);
       }
 
@@ -2105,39 +2106,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         });
       }
 
-      let notificationError: string | null = null;
-      if ((notifyAgent === 'true' || notifyAgent === true) && message) {
-        try {
-          // Explicit legacy File Browser behavior. Composer/new-session sends
-          // use attachmentToken and never place this daemon-local path in a
-          // task prompt.
-          const filePaths = uploadedFiles.map((f) => f.path).join(', ');
-          const promptText = message.replace(/\{filepath\}/g, filePaths);
-
-          if (DEBUG_UPLOAD) {
-            console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
-          }
-
-          const promptService = app.service('/sessions/:id/prompt');
-          // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
-          const promptParams: any = {
-            route: { id: sessionId },
-            user: params.user,
-            authentication: params.authentication,
-            tenant: params.tenant,
-          };
-          await promptService.create({ prompt: promptText }, promptParams);
-        } catch (error) {
-          console.error('❌ [Upload Handler] Failed to notify agent:', error);
-          notificationError =
-            error instanceof Error ? error.message : 'Failed to send notification to agent';
-        }
-      }
-
       res.json({
         success: true,
         files: uploadedFiles,
-        ...(notificationError && { warning: notificationError }),
       });
     } catch (error) {
       next(error);

@@ -18,7 +18,7 @@ function imageMessage(): Message {
     content: [
       {
         type: 'text',
-        text: 'Attached files:\n- /uploads/chart.png\n\nCompare this chart',
+        text: 'Attached files:\n- chart.png\n\nCompare this chart',
       },
       {
         type: 'image',
@@ -66,8 +66,8 @@ describe('MessageBlock image previews', () => {
     const thumbnail = await screen.findByRole('img', { name: 'chart.png' });
     expect(thumbnail).toHaveAttribute('src', 'blob:authenticated-image');
     expect(screen.getByText('Compare this chart')).toBeInTheDocument();
-    expect(screen.queryByText('Attached files:')).not.toBeInTheDocument();
-    expect(screen.queryByText('/uploads/chart.png')).not.toBeInTheDocument();
+    expect(screen.getByText('Attached files:')).toBeInTheDocument();
+    expect(screen.getByText('chart.png')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/sessions/session-1/tasks/task-1/images/0'),
       expect.objectContaining({

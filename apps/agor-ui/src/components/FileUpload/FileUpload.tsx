@@ -4,14 +4,13 @@ import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import type { UploadedFile } from './upload';
 import { uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
 const { Text } = Typography;
 
 const DEFAULT_AGENT_UPLOAD_MESSAGE =
-  'Note: the user uploaded file(s): {filepath}\n\nPlease review and use them as context for this task.';
+  'Please review the attached file(s) and use them as context for this task.';
 
 export type { UploadDestination, UploadedFile } from './upload';
 
@@ -20,8 +19,7 @@ export interface FileUploadProps {
   daemonUrl: string;
   open: boolean;
   onClose: () => void;
-  onUploadComplete?: (files: UploadedFile[]) => void;
-  onInsertMention?: (filepath: string) => void;
+  onNotifyAgent: (message: string, attachmentTokens: string[]) => Promise<void>;
   initialFiles?: File[]; // Allow passing dropped files
 }
 
@@ -30,8 +28,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   daemonUrl,
   open,
   onClose,
-  onUploadComplete,
-  onInsertMention,
+  onNotifyAgent,
   initialFiles,
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
@@ -100,30 +97,19 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         sessionId,
         daemonUrl,
         files,
-        notifyAgent,
-        message: agentMessage,
       });
 
-      // Show success message with final filename(s) so user knows what to reference
-      if (result.files.length === 1) {
-        showSuccess(`Uploaded as: ${result.files[0].filename}`);
-      } else {
-        showSuccess(`Uploaded ${result.files.length} files successfully`);
+      if (notifyAgent) {
+        const attachmentTokens = result.files.flatMap((file) =>
+          file.attachmentToken ? [file.attachmentToken] : []
+        );
+        if (attachmentTokens.length !== result.files.length) {
+          throw new Error('Uploaded files could not be associated with the agent task');
+        }
+        await onNotifyAgent(agentMessage, attachmentTokens);
       }
 
-      // Call completion callback
-      if (onUploadComplete) {
-        onUploadComplete(result.files);
-      }
-
-      // If not notifying agent, optionally insert @filepath mention
-      if (!notifyAgent && onInsertMention && result.files.length > 0) {
-        // Insert first file path as mention
-        const firstFile = result.files[0];
-        // Quote paths with spaces to prevent breaking mention parser
-        const mentionPath = firstFile.path.includes(' ') ? `"${firstFile.path}"` : firstFile.path;
-        onInsertMention(mentionPath);
-      }
+      showSuccess(`Uploaded ${result.files.length} file(s) successfully`);
 
       // Reset and close
       resetFileList();
@@ -175,8 +161,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         </Upload>
 
         <Text type="secondary" style={{ fontSize: '12px' }}>
-          Files are uploaded to <Text code>~/.agor/uploads/</Text>. When notified, the agent
-          receives the full file path and can copy or move it into the branch if needed.
+          When notified, files are securely attached to the agent task.
         </Text>
 
         {/* Notify agent option */}
@@ -190,12 +175,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               <TextArea
                 value={agentMessage}
                 onChange={(e) => setAgentMessage(e.target.value)}
-                placeholder="Message to agent (use {filepath} for file path)"
+                placeholder="Message to agent"
                 autoSize={{ minRows: 2, maxRows: 4 }}
               />
-              <Text type="secondary" style={{ fontSize: '12px', marginTop: 4 }}>
-                Use {'{filepath}'} to reference the uploaded file path
-              </Text>
             </div>
           )}
         </div>
