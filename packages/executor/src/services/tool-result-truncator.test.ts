@@ -143,6 +143,25 @@ describe('truncateContentIfNeeded', () => {
     expect(byteSize(result.blocks)).toBeLessThanOrEqual(BUDGET);
   });
 
+  it('preserves all sibling fields in truncated objects', () => {
+    const bigObj = {
+      large_field: 'z'.repeat(BUDGET * 2),
+      small_a: 'kept-a',
+      small_b: 'kept-b',
+    };
+    const blocks: ContentBlock[] = [
+      makeToolUseBlock('t1', 'custom_tool'),
+      makeToolResultBlock('t1', bigObj),
+    ];
+    const result = truncateContentIfNeeded(blocks, undefined, BUDGET);
+    expect(result.truncated).toBe(true);
+    const obj = result.blocks[1].content as Record<string, unknown>;
+    expect(obj).toHaveProperty('large_field');
+    expect(obj).toHaveProperty('small_a');
+    expect(obj).toHaveProperty('small_b');
+    expect(typeof obj.large_field === 'string' && obj.large_field.includes('truncated')).toBe(true);
+  });
+
   it('uses default budget from EXECUTOR_REQUEST_DATA_BUDGET_BYTES', () => {
     const blocks: ContentBlock[] = [
       makeToolUseBlock('t1', 'Bash'),

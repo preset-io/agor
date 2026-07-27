@@ -91,17 +91,18 @@ function genericTruncator(content: unknown, targetBytes: number): unknown {
     entries.sort((a, b) => b.size - a.size);
     const result: Record<string, unknown> = {};
     let remaining = targetBytes - 2; // {}
+    let didTruncate = false;
     for (const entry of entries) {
       const keyOverhead = Buffer.byteLength(JSON.stringify(entry.key), 'utf8') + 1; // :
       if (entry.size + keyOverhead <= remaining) {
         result[entry.key] = entry.val;
         remaining -= entry.size + keyOverhead + 1; // comma
-      } else if (remaining > keyOverhead + 50) {
+      } else if (!didTruncate && remaining > keyOverhead + 50) {
         result[entry.key] = genericTruncator(entry.val, remaining - keyOverhead);
-        break;
+        remaining = 0;
+        didTruncate = true;
       } else {
         result[entry.key] = `[truncated: ${entry.size.toLocaleString()} bytes]`;
-        break;
       }
     }
     return result;

@@ -437,10 +437,7 @@ export class CodexTool implements ITool {
           const toolUseRefs = [
             { id: event.toolUse.id, name: event.toolUse.name, input: event.toolUse.input },
           ];
-          const { blocks: safeToolContent, truncated: wasTruncated } = truncateContentIfNeeded(
-            toolContent,
-            toolUseRefs
-          );
+          const { blocks: safeToolContent } = truncateContentIfNeeded(toolContent, toolUseRefs);
 
           const existingToolMessageId = pendingToolMessageIds.get(event.toolUse.id);
           if (existingToolMessageId) {
@@ -448,7 +445,6 @@ export class CodexTool implements ITool {
               content: safeToolContent as Message['content'],
               content_preview:
                 typeof toolResultContent === 'string' ? toolResultContent.substring(0, 200) : '',
-              ...(wasTruncated ? { metadata: { truncated: true } } : {}),
             });
             pendingToolMessageIds.delete(event.toolUse.id);
           } else {
