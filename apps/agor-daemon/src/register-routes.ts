@@ -45,7 +45,11 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
-import { isRootSessionGenealogy, resolvePriorityContextForWorktree } from '@agor/core/sessions';
+import {
+  canInjectPriorityContextForBranch,
+  isRootSessionGenealogy,
+  resolvePriorityContextForWorktree,
+} from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -1350,14 +1354,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // as established context. Root-only and first-task-only so this
             // never re-fires on later turns, spawned/forked children, or repos
             // that haven't opted in (the common case — resolves to undefined).
+            //
+            // The daemon reads these files with its own (broader) privileges, so
+            // for non-owner sessions we gate injection on the branch's
+            // `others_fs_access` — the same signal that decides whether that
+            // user's own executor is allowed to read the worktree at all in
+            // insulated/strict Unix modes. Without this, a non-owner denied
+            // filesystem access via `others_fs_access: 'none'` could still
+            // receive file contents through the injected prompt.
             let effectivePrompt = data.prompt;
             const isRootSession = isRootSessionGenealogy(lockedSession.genealogy);
             if (isRootSession && (await taskRepo.countBySession(id as SessionID)) === 0) {
               try {
                 const branch = await branchRepository.findById(lockedSession.branch_id);
-                const priorityContext = branch
-                  ? await resolvePriorityContextForWorktree(branch.path)
-                  : undefined;
+                const canReadWorktreeFiles =
+                  !!branch &&
+                  canInjectPriorityContextForBranch({
+                    isOwner: await branchRepository.isOwner(
+                      branch.branch_id,
+                      lockedSession.created_by as UUID
+                    ),
+                    othersFsAccess: branch.others_fs_access,
+                  });
+                const priorityContext =
+                  branch && canReadWorktreeFiles
+                    ? await resolvePriorityContextForWorktree(branch.path)
+                    : undefined;
                 if (priorityContext) {
                   effectivePrompt = `${priorityContext}\n\n${data.prompt}`;
                 }

@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  canInjectPriorityContextForBranch,
   formatPriorityContextMessage,
   isRootSessionGenealogy,
   MAX_FILE_BYTES,
@@ -28,6 +29,36 @@ describe('isRootSessionGenealogy', () => {
 
   it('is false for a forked sibling session', () => {
     expect(isRootSessionGenealogy({ forked_from_session_id: 'session-1' })).toBe(false);
+  });
+});
+
+describe('canInjectPriorityContextForBranch', () => {
+  it('always allows injection for the branch owner, regardless of others_fs_access', () => {
+    expect(canInjectPriorityContextForBranch({ isOwner: true, othersFsAccess: 'none' })).toBe(true);
+    expect(canInjectPriorityContextForBranch({ isOwner: true, othersFsAccess: undefined })).toBe(
+      true
+    );
+  });
+
+  it('denies injection for a non-owner when others_fs_access is none', () => {
+    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'none' })).toBe(
+      false
+    );
+  });
+
+  it('allows injection for a non-owner when others_fs_access grants read or write', () => {
+    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'read' })).toBe(
+      true
+    );
+    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'write' })).toBe(
+      true
+    );
+  });
+
+  it('defaults to allowed for a non-owner when others_fs_access is unset (open-access mode)', () => {
+    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: undefined })).toBe(
+      true
+    );
   });
 });
 

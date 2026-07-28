@@ -64,6 +64,22 @@ export function isRootSessionGenealogy(genealogy: PriorityContextGenealogy): boo
   return !genealogy?.parent_session_id && !genealogy?.forked_from_session_id;
 }
 
+/**
+ * The daemon reads manifest-listed files with its own (broader) filesystem
+ * privileges, not the session creator's. That's fine for branch owners, but
+ * for non-owners it would otherwise bypass `others_fs_access` — the same
+ * setting that decides whether that user's own executor can read the
+ * worktree at all under `insulated`/`strict` Unix isolation. Gate injection
+ * on it so a non-owner denied filesystem access can't receive file contents
+ * through the injected prompt instead.
+ */
+export function canInjectPriorityContextForBranch(args: {
+  isOwner: boolean;
+  othersFsAccess: 'none' | 'read' | 'write' | undefined;
+}): boolean {
+  return args.isOwner || args.othersFsAccess !== 'none';
+}
+
 const MANIFEST_RELATIVE_PATH = path.join('.agor', 'priority-context.json');
 const TODAY_TOKEN = '{today}';
 
