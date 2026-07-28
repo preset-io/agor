@@ -11,6 +11,7 @@ import {
   type ScheduleAgenticToolConfig,
   type ScheduleCreateData,
   type SchedulePatchData,
+  TIMEZONE_MODES,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
@@ -165,7 +166,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
             "Cron expression (5/6 fields), e.g. '0 9 * * 1-5'"
           ),
           timezone_mode: z
-            .enum(['local', 'utc'])
+            .enum(TIMEZONE_MODES)
             .describe("'local' uses `timezone`; 'utc' fires in UTC."),
           timezone: mcpOptionalString(
             'timezone',
@@ -197,6 +198,13 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
               message: "timezone is required when timezone_mode='local'",
             });
           }
+          if (value.timezone_mode === 'utc' && value.timezone !== undefined) {
+            refinementContext.addIssue({
+              code: 'custom',
+              path: ['timezone'],
+              message: "timezone must be omitted when timezone_mode='utc'",
+            });
+          }
         }),
     },
     async (args) => {
@@ -209,6 +217,10 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         }
         timezoneConfig = { timezone_mode: 'local', timezone: args.timezone };
       } else {
+        if (args.timezone !== undefined) {
+          // Defense-in-depth for direct handler consumers that bypass schema parsing.
+          throw new BadRequest("timezone must be omitted when timezone_mode='utc'");
+        }
         timezoneConfig = { timezone_mode: 'utc' };
       }
       const payload: ScheduleCreateData = {
@@ -243,7 +255,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         name: mcpOptionalString('name', 'Display name'),
         description: mcpOptionalString('description', 'Freeform description'),
         cron_expression: mcpOptionalString('cron_expression', 'Cron expression (5/6 fields)'),
-        timezone_mode: z.enum(['local', 'utc']).optional(),
+        timezone_mode: z.enum(TIMEZONE_MODES).optional(),
         timezone: mcpOptionalString('timezone', 'IANA timezone'),
         prompt: mcpOptionalString('prompt', 'Handlebars prompt template'),
         agentic_tool_config: agenticToolConfigSchema.optional(),

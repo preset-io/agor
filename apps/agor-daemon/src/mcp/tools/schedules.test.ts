@@ -125,6 +125,18 @@ describe('schedule MCP input schemas', () => {
     expect(localWithoutTimezone).toMatchObject({ success: false });
     expect(JSON.stringify(localWithoutTimezone)).toContain('timezone');
 
+    const utcWithTimezone = createSchema?.safeParse({
+      branchId: 'branch-1',
+      name: 'Heartbeat',
+      cron_expression: '0 9 * * *',
+      timezone_mode: 'utc',
+      timezone: 'America/Los_Angeles',
+      prompt: 'Run',
+      agentic_tool_config: { agentic_tool: 'codex' },
+    });
+    expect(utcWithTimezone).toMatchObject({ success: false });
+    expect(JSON.stringify(utcWithTimezone)).toContain('must be omitted');
+
     const negativeRetention = createSchema?.safeParse({
       branchId: 'branch-1',
       name: 'Heartbeat',

@@ -32,7 +32,13 @@ export type ScheduleID = UUID;
  * blob) get `utc` to preserve today's hardcoded-UTC behavior. New
  * schedules default to `local`.
  */
-export type TimezoneMode = 'local' | 'utc';
+export const TIMEZONE_MODES = ['local', 'utc'] as const;
+export type TimezoneMode = (typeof TIMEZONE_MODES)[number];
+
+/** Narrow untyped transport data before it reaches schedule persistence. */
+export function isTimezoneMode(value: unknown): value is TimezoneMode {
+  return TIMEZONE_MODES.some((mode) => mode === value);
+}
 
 /**
  * Agentic-tool configuration for a scheduled session.
