@@ -95,8 +95,11 @@ function isValidManifest(value: unknown): value is PriorityContextManifest {
  * pair would leave open:
  *
  * - A regular file can grow between an initial size check and a later
- *   unbounded read; reading a fixed number of bytes from one already-open
- *   descriptor can't be affected by writes that happen after the open.
+ *   unbounded read. An already-open descriptor can still observe writes
+ *   made after the open — the safety property isn't that the descriptor is
+ *   a snapshot, it's that reading a fixed `maxBytes + 1` from it can never
+ *   itself become an unbounded read, regardless of how large the file
+ *   grows underneath it.
  * - A FIFO/named pipe (or other non-regular file) placed in the worktree
  *   can report a harmless size via `stat()` yet block indefinitely on
  *   `readFile()` — fatal here, since this runs inside the daemon's
