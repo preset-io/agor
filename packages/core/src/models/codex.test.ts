@@ -80,6 +80,15 @@ describe('Codex model registry', () => {
     expect(error).toContain('mode "exact"');
   });
 
+  it('requires dated provider snapshots to use exact mode', () => {
+    const snapshot = 'gpt-5.6-sol-2026-07-09';
+
+    expect(getCodexModelSelectionError({ mode: 'alias', model: snapshot })).toContain(
+      'mode "exact"'
+    );
+    expect(getCodexModelSelectionError({ mode: 'exact', model: snapshot })).toBeUndefined();
+  });
+
   it('allows unknown exact provider IDs but still rejects known unsupported aliases', () => {
     expect(
       getCodexModelSelectionError({ mode: 'exact', model: 'account-preview-model' })

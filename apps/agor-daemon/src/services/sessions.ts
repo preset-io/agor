@@ -214,7 +214,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private db: TenantScopeAwareDatabase;
 
   private assertSupportedModelConfig(
-    agenticTool: AgenticToolName,
+    agenticTool: Session['agentic_tool'],
     modelConfig: Session['model_config'] | undefined
   ): void {
     if (agenticTool !== 'codex' || !modelConfig) return;

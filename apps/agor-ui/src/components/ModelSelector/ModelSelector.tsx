@@ -72,6 +72,7 @@ const CODEX_MODEL_OPTIONS = Object.entries(CODEX_MODEL_METADATA).map(([modelId, 
   id: modelId,
   label: meta.name,
   description: meta.description,
+  availability: meta.availability,
 }));
 
 // Gemini model options (convert from GEMINI_MODELS metadata)
@@ -333,8 +334,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     value: m.id,
     label: m.displayName,
     description: m.description,
+    availability: m.availability,
     isDefault: m.id === fallbackModel,
-    searchText: `${m.displayName} ${m.id} ${m.description ?? ''}`.toLowerCase(),
+    searchText:
+      `${m.displayName} ${m.id} ${m.description ?? ''} ${m.availability ?? ''}`.toLowerCase(),
   }));
   if (!pinned && currentModel && !aliasOptions.some((o) => o.value === currentModel)) {
     const norm = normalizedList.find((m) => m.id === currentModel);
@@ -342,6 +345,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       value: currentModel,
       label: norm?.displayName ?? getModelDisplayName(effectiveTool, currentModel),
       description: norm?.description,
+      availability: norm?.availability,
       isDefault: false,
       searchText: currentModel.toLowerCase(),
     });
@@ -361,11 +365,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </Typography.Text>
           )}
         </div>
-        {data?.isDefault && (
-          <Tag bordered={false} color="blue" style={{ marginInlineEnd: 0, fontSize: 10 }}>
-            default
-          </Tag>
-        )}
+        <Space size={4}>
+          {data?.availability === 'provider-dependent' && (
+            <Tag bordered={false} color="gold" style={{ marginInlineEnd: 0, fontSize: 10 }}>
+              account-dependent
+            </Tag>
+          )}
+          {data?.isDefault && (
+            <Tag bordered={false} color="blue" style={{ marginInlineEnd: 0, fontSize: 10 }}>
+              default
+            </Tag>
+          )}
+        </Space>
       </Flex>
     );
   };
@@ -374,7 +385,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   if (compact) {
     const compactOptions = aliasOptions.map((o) => ({
       value: o.value,
-      label: o.label,
+      label: o.availability === 'provider-dependent' ? `${o.label} (account-dependent)` : o.label,
       searchText: o.searchText,
     }));
     // Compact has no pin toggle, so an exact/pinned current value would be

@@ -89,6 +89,22 @@ describe('curateModelOptions (Claude)', () => {
   });
 });
 
+describe('normalizeModelOption', () => {
+  it('preserves provider availability metadata for picker presentation', () => {
+    expect(
+      normalizeModelOption({
+        id: 'older-model',
+        label: 'Older model',
+        availability: 'provider-dependent',
+      })
+    ).toMatchObject({
+      id: 'older-model',
+      displayName: 'Older model',
+      availability: 'provider-dependent',
+    });
+  });
+});
+
 describe('getModelDisplayName', () => {
   it('resolves Claude ids to their friendly display name', () => {
     expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5');

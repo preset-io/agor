@@ -23,6 +23,7 @@ export interface NormalizedModelOption {
   id: string;
   displayName: string;
   description?: string;
+  availability?: 'supported' | 'provider-dependent' | 'unsupported';
 }
 
 /** The picker's upstream lists disagree on the name field (`displayName` vs `label`). */
@@ -31,6 +32,7 @@ type LooseModelOption = {
   displayName?: string;
   label?: string;
   description?: string;
+  availability?: 'supported' | 'provider-dependent' | 'unsupported';
 };
 
 export function normalizeModelOption(model: LooseModelOption): NormalizedModelOption {
@@ -38,6 +40,7 @@ export function normalizeModelOption(model: LooseModelOption): NormalizedModelOp
     id: model.id,
     displayName: model.displayName ?? model.label ?? model.id,
     description: model.description,
+    availability: model.availability,
   };
 }
 

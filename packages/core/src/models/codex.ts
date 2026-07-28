@@ -327,14 +327,12 @@ export function getCodexModelSelectionError(
     return formatUnsupportedAgorCodexModelMessage(selection.model);
   }
   if (selection.mode === 'exact') return undefined;
-  if (lifecycle?.selectable) return undefined;
+  const normalized = selection.model.toLowerCase();
+  if (Object.hasOwn(CODEX_MODEL_METADATA, normalized)) return undefined;
 
   const replacement = lifecycle?.replacement ?? DEFAULT_CODEX_MODEL;
-  const reason = lifecycle
-    ? 'is known but is not selectable'
-    : 'is not a selectable Agor Codex alias';
   return (
-    `Codex model "${selection.model}" ${reason}. ` +
+    `Codex model "${selection.model}" is not a selectable Agor Codex alias. ` +
     `Call agor_models_list for current selectable aliases, omit modelConfig to use the default ` +
     `(${DEFAULT_CODEX_MODEL}), or use "${replacement}". ` +
     'If this is an intentional provider-specific model ID, pass modelConfig with mode "exact"; ' +
