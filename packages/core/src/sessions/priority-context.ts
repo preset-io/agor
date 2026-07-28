@@ -40,6 +40,28 @@ export interface PriorityContextFile {
   content: string;
 }
 
+/** Minimal genealogy shape this predicate reads — keeps tests free of full Session fixtures. */
+export type PriorityContextGenealogy =
+  | {
+      parent_session_id?: unknown;
+      forked_from_session_id?: unknown;
+    }
+  | null
+  | undefined;
+
+/**
+ * A session is eligible for priority-context injection only if it's a root
+ * session — no parent (spawn) and no fork source. Spawned/forked/continued
+ * sessions already inherit context from their parent and are out of scope
+ * (see the spec's Decision 4). Combine with a first-task check (e.g.
+ * `taskRepo.countBySession(id) === 0`) at the call site to also exclude a
+ * root session's later turns — this predicate alone doesn't know about
+ * tasks.
+ */
+export function isRootSessionGenealogy(genealogy: PriorityContextGenealogy): boolean {
+  return !genealogy?.parent_session_id && !genealogy?.forked_from_session_id;
+}
+
 const MANIFEST_RELATIVE_PATH = path.join('.agor', 'priority-context.json');
 const TODAY_TOKEN = '{today}';
 

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   formatPriorityContextMessage,
+  isRootSessionGenealogy,
   MAX_FILE_BYTES,
   MAX_MANIFEST_FILES,
   MAX_TOTAL_BYTES,
@@ -11,6 +12,22 @@ import {
   readPriorityContextManifest,
   resolvePriorityContextForWorktree,
 } from './priority-context.js';
+
+describe('isRootSessionGenealogy', () => {
+  it('is true for a session with no parent and no fork source', () => {
+    expect(isRootSessionGenealogy({ children: [] } as never)).toBe(true);
+    expect(isRootSessionGenealogy(undefined)).toBe(true);
+    expect(isRootSessionGenealogy(null)).toBe(true);
+  });
+
+  it('is false for a spawned child session', () => {
+    expect(isRootSessionGenealogy({ parent_session_id: 'session-1' })).toBe(false);
+  });
+
+  it('is false for a forked sibling session', () => {
+    expect(isRootSessionGenealogy({ forked_from_session_id: 'session-1' })).toBe(false);
+  });
+});
 
 let worktree: string;
 

@@ -45,7 +45,7 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
-import { resolvePriorityContextForWorktree } from '@agor/core/sessions';
+import { isRootSessionGenealogy, resolvePriorityContextForWorktree } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -1351,9 +1351,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // never re-fires on later turns, spawned/forked children, or repos
             // that haven't opted in (the common case — resolves to undefined).
             let effectivePrompt = data.prompt;
-            const isRootSession =
-              !lockedSession.genealogy?.parent_session_id &&
-              !lockedSession.genealogy?.forked_from_session_id;
+            const isRootSession = isRootSessionGenealogy(lockedSession.genealogy);
             if (isRootSession && (await taskRepo.countBySession(id as SessionID)) === 0) {
               try {
                 const branch = await branchRepository.findById(lockedSession.branch_id);
