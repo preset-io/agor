@@ -20,26 +20,34 @@ export interface PanelHeaderProps {
 }
 
 /** One heading shape for every panel; the provider variant is just icon + extra. */
-export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, description, icon, extra }) => (
-  <div style={{ marginBottom: 28 }}>
-    <Flex align="center" gap={12}>
-      {icon}
-      <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
-        {title}
-      </Title>
-      {extra}
-    </Flex>
-    {description && (
-      <Paragraph type="secondary" style={{ margin: '4px 0 0', maxWidth: 560 }}>
-        {description}
-      </Paragraph>
-    )}
-  </div>
-);
+export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, description, icon, extra }) => {
+  const { token } = theme.useToken();
+  return (
+    <div style={{ paddingTop: token.marginLG, marginBottom: 28 }}>
+      <Flex align="center" gap={12}>
+        {icon}
+        <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
+          {title}
+        </Title>
+        {extra}
+      </Flex>
+      {description && (
+        <Paragraph type="secondary" style={{ margin: '4px 0 0', maxWidth: 560 }}>
+          {description}
+        </Paragraph>
+      )}
+    </div>
+  );
+};
 
 export interface FieldRowProps {
   label: ReactNode;
-  /** Always-visible caption below the control (never a hover-only tooltip). */
+  /**
+   * Always-visible caption below the control (never a hover-only tooltip).
+   * Rendered via Form.Item `extra` (not `help`) so it never triggers Ant's
+   * explain margin-offset — which would eat the row's bottom spacing — and so
+   * it coexists with, rather than suppresses, validation messages.
+   */
   help?: ReactNode;
   /** Renders a red asterisk after the label. Pair with a `required` rule. */
   required?: boolean;
@@ -83,7 +91,7 @@ export const FieldRow: React.FC<FieldRowProps> = ({
           {required && <Text type="danger">*</Text>}
         </Space>
       }
-      help={
+      extra={
         help != null ? (
           <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {help}
@@ -106,6 +114,7 @@ export const SectionDivider: React.FC<SectionDividerProps> = ({ label }) => {
   return (
     <Divider
       titlePlacement="left"
+      orientationMargin={0}
       style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM, margin: '8px 0 20px' }}
     >
       {label}

@@ -4,10 +4,11 @@ import type {
   AgorClient,
   AuthCheckResult,
 } from '@agor-live/client';
-import { Alert, Button, Popconfirm, Segmented, Space, Typography, theme } from 'antd';
+import { Alert, Button, Form, Popconfirm, Radio, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
+import { FieldRow } from '../SettingsModal/panelPrimitives';
 import { type CodexAuthFallback, CodexDeviceSignIn } from './CodexDeviceSignIn';
 import { CodexImportAuthJson } from './CodexImportAuthJson';
 
@@ -241,106 +242,113 @@ export function CodexAuthSettings({
   })();
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Text type="secondary">
-        Personal credentials are encrypted at rest and injected only into the agent runtime.
-      </Text>
+    <Form component={false} layout="vertical" requiredMark={false}>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Text type="secondary">
+          Personal credentials are encrypted at rest and injected only into the agent runtime.
+        </Text>
 
-      {allowChatgptLogin && (connectionBanner || authMethod === 'subscription') && (
-        <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          {connectionBanner}
-          <Space size="middle" wrap>
-            <Button
-              type="link"
-              size="small"
-              loading={probing}
-              onClick={() => void runProbe()}
-              style={{ paddingInline: 0 }}
-            >
-              Recheck connection
-            </Button>
-            {/* Removal applies only to a ChatGPT login; API keys use ApiKeyFields' Clear. */}
-            {authMethod === 'subscription' && (
-              <Popconfirm
-                title="Remove Codex login?"
-                description={
-                  <div style={{ maxWidth: 340 }}>
-                    Signs Codex out on this server only — your other devices stay signed in. In
-                    shared-identity setups this is one login for the whole server, so removing it
-                    disconnects Codex for everyone on it. To revoke this login everywhere, use
-                    ChatGPT's security settings or run <Text code>codex logout</Text> on a machine
-                    where you're signed in.
-                  </div>
-                }
-                okText="Remove"
-                okButtonProps={{ danger: true, loading: removing }}
-                cancelText="Keep login"
-                onConfirm={handleRemoveLogin}
+        {allowChatgptLogin && (connectionBanner || authMethod === 'subscription') && (
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            {connectionBanner}
+            <Space size="middle" wrap>
+              <Button
+                type="link"
+                size="small"
+                loading={probing}
+                onClick={() => void runProbe()}
+                style={{ paddingInline: 0 }}
               >
-                <Button
-                  type="link"
-                  size="small"
-                  danger
-                  loading={removing}
-                  style={{ paddingInline: 0 }}
+                Recheck connection
+              </Button>
+              {/* Removal applies only to a ChatGPT login; API keys use ApiKeyFields' Clear. */}
+              {authMethod === 'subscription' && (
+                <Popconfirm
+                  title="Remove Codex login?"
+                  description={
+                    <div style={{ maxWidth: 340 }}>
+                      Signs Codex out on this server only — your other devices stay signed in. In
+                      shared-identity setups this is one login for the whole server, so removing it
+                      disconnects Codex for everyone on it. To revoke this login everywhere, use
+                      ChatGPT's security settings or run <Text code>codex logout</Text> on a machine
+                      where you're signed in.
+                    </div>
+                  }
+                  okText="Remove"
+                  okButtonProps={{ danger: true, loading: removing }}
+                  cancelText="Keep login"
+                  onConfirm={handleRemoveLogin}
                 >
-                  Remove login
-                </Button>
-              </Popconfirm>
+                  <Button
+                    type="link"
+                    size="small"
+                    danger
+                    loading={removing}
+                    style={{ paddingInline: 0 }}
+                  >
+                    Remove login
+                  </Button>
+                </Popconfirm>
+              )}
+            </Space>
+            {removeError && (
+              <Alert
+                type="error"
+                showIcon
+                message={removeError}
+                style={{ fontSize: token.fontSizeSM }}
+              />
             )}
           </Space>
-          {removeError && (
-            <Alert
-              type="error"
-              showIcon
-              message={removeError}
-              style={{ fontSize: token.fontSizeSM }}
-            />
-          )}
-        </Space>
-      )}
+        )}
 
-      {allowChatgptLogin && (
-        <Segmented<CodexMethodView>
-          block
-          value={view}
-          onChange={handleSelect}
-          options={[
-            { label: 'API key', value: 'api_key' },
-            { label: 'Sign in with ChatGPT', value: 'chatgpt' },
-            { label: 'Import login file', value: 'import' },
-          ]}
-        />
-      )}
+        {allowChatgptLogin && (
+          <FieldRow
+            label="Sign-in method"
+            help="Choose one — Agor uses whichever is selected, the other is ignored."
+            style={{ marginBottom: 0 }}
+          >
+            <Radio.Group
+              buttonStyle="solid"
+              value={view}
+              onChange={(event) => handleSelect(event.target.value as CodexMethodView)}
+            >
+              <Radio.Button value="api_key">API key</Radio.Button>
+              <Radio.Button value="chatgpt">Sign in with ChatGPT</Radio.Button>
+              <Radio.Button value="import">Import login file</Radio.Button>
+            </Radio.Group>
+          </FieldRow>
+        )}
 
-      {(!allowChatgptLogin || view === 'api_key') && (
-        <ApiKeyFields
-          tool="codex"
-          fields={apiKeyFields}
-          fieldStatus={fieldStatus}
-          onSave={onSaveField}
-          onClear={onClearField}
-          saving={savingFields}
-          publicValues={publicValues}
-        />
-      )}
-      {allowChatgptLogin && view === 'chatgpt' && (
-        <div>
-          <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
-            Sign in with your ChatGPT account — no OpenAI API key stored in Agor. The login is
-            shared per server user, so signing in replaces any Codex login already on this server.
-          </Text>
-          <CodexDeviceSignIn
-            client={client}
-            onVerified={handleAuthenticated}
-            onUseFallback={handleFallback}
-            autoStart={false}
+        {(!allowChatgptLogin || view === 'api_key') && (
+          <ApiKeyFields
+            tool="codex"
+            fields={apiKeyFields}
+            fieldStatus={fieldStatus}
+            onSave={onSaveField}
+            onClear={onClearField}
+            saving={savingFields}
+            publicValues={publicValues}
           />
-        </div>
-      )}
-      {allowChatgptLogin && view === 'import' && (
-        <CodexImportAuthJson client={client} onImported={handleAuthenticated} />
-      )}
-    </Space>
+        )}
+        {allowChatgptLogin && view === 'chatgpt' && (
+          <div>
+            <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
+              Sign in with your ChatGPT account — no OpenAI API key stored in Agor. The login is
+              shared per server user, so signing in replaces any Codex login already on this server.
+            </Text>
+            <CodexDeviceSignIn
+              client={client}
+              onVerified={handleAuthenticated}
+              onUseFallback={handleFallback}
+              autoStart={false}
+            />
+          </div>
+        )}
+        {allowChatgptLogin && view === 'import' && (
+          <CodexImportAuthJson client={client} onImported={handleAuthenticated} />
+        )}
+      </Space>
+    </Form>
   );
 }

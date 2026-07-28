@@ -14,7 +14,7 @@ import type {
 import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   BellOutlined,
-  CheckCircleOutlined,
+  CheckCircleFilled,
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
@@ -29,6 +29,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  ConfigProvider,
   Divider,
   Form,
   Input,
@@ -844,6 +845,22 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [token.colorSuccess, token.colorTextQuaternary, token.colorPrimary]
   );
 
+  // Scoped theme for the modal body: a muted selected-pill so the nav rail reads
+  // like the mockup (v6's default selected bg is too bright), plus the mockup's
+  // tighter 6px vertical label padding for every form.
+  const scopedTheme = useMemo(
+    () => ({
+      components: {
+        Menu: {
+          itemSelectedBg: token.colorFillTertiary,
+          itemSelectedColor: token.colorPrimary,
+        },
+        Form: { verticalLabelPadding: '0 0 6px' },
+      },
+    }),
+    [token.colorFillTertiary, token.colorPrimary]
+  );
+
   // Sidebar navigation model. Kept as plain data so the same structure feeds
   // both the AntD menu and the search filter.
   const navGroups = useMemo(() => {
@@ -1022,7 +1039,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          help="Shows your Slack-synced profile image instead of the emoji tile above. Turn this off to keep using your emoji tile."
+          help="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
         >
           <Switch />
         </FieldRow>
@@ -1227,7 +1244,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     const statusTag =
       status === 'connected' ? (
-        <Tag color="success" icon={<CheckCircleOutlined />}>
+        <Tag color="success" icon={<CheckCircleFilled />}>
           Connected
         </Tag>
       ) : status === 'workspace_managed' ? (
@@ -1286,7 +1303,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ? 'Your personal configuration is used first, with workspace configuration as fallback.'
           : 'Workspace configuration is used first. Your personal configuration is retained as fallback.';
 
-    const authNote = managedByWorkspace ? (
+    // Actionable states surface as a compact Alert above the fields; the
+    // steady-state "effective source" reads as a caption below them.
+    const aboveNote = managedByWorkspace ? (
       <Alert
         type="info"
         showIcon
@@ -1300,18 +1319,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         message="No credentials configured yet"
         style={{ marginBottom: 16 }}
       />
-    ) : (
-      <Typography.Paragraph
-        type="secondary"
-        style={{ fontSize: token.fontSizeSM, marginBottom: 16 }}
-      >
-        Effective source: {effectiveSource}. {personalPolicyDescription}
-      </Typography.Paragraph>
-    );
+    ) : null;
+
+    const effectiveSourceCaption =
+      !managedByWorkspace && effectiveSource !== 'Unavailable' ? (
+        <Typography.Paragraph
+          type="secondary"
+          style={{ fontSize: token.fontSizeSM, marginTop: 20, marginBottom: 0 }}
+        >
+          Effective source: {effectiveSource}. {personalPolicyDescription}
+        </Typography.Paragraph>
+      ) : null;
 
     const authPane = (
       <>
-        {authNote}
+        {aboveNote}
         {managedByWorkspace ? (
           personalConfigured && (
             <Space direction="vertical">
@@ -1395,6 +1417,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             />
           </Form>
         )}
+        {effectiveSourceCaption}
       </>
     );
 
@@ -1412,7 +1435,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             // unconnected form and Ant logs a "not connected" warning.
             {
               key: 'defaults',
-              label: 'Session Defaults',
+              label: 'Session defaults',
               children: defaultsPane,
               forceRender: true,
             },
@@ -1462,7 +1485,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const footer = isInlineSavePanel
     ? [
-        <Typography.Text key="hint" type="secondary" style={{ marginRight: token.marginXS }}>
+        <Typography.Text
+          key="hint"
+          type="secondary"
+          style={{ fontSize: token.fontSizeSM, marginRight: token.marginSM }}
+        >
           Changes save automatically
         </Typography.Text>,
         <Button key="done" type="primary" onClick={handleModalSave} loading={savingModal}>
@@ -1490,7 +1517,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         body: {
           padding: 0,
           height: 'calc(100vh - 280px)',
-          minHeight: 450,
           maxHeight: 650,
         },
       }}
@@ -1509,33 +1535,35 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           )
         )}
       </div>
-      <Layout style={{ height: '100%', background: 'transparent' }}>
-        <Sider width={232} style={{ background: 'transparent', overflow: 'auto' }}>
-          <div style={{ padding: '4px 16px 12px' }}>
-            <Input
-              allowClear
-              placeholder="Search settings"
-              prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
-          {filteredGroups.length === 0 ? (
-            <div style={{ padding: '8px 16px' }}>
-              <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+      <ConfigProvider theme={scopedTheme}>
+        <Layout style={{ height: '100%', background: 'transparent' }}>
+          <Sider width={232} style={{ background: 'transparent', overflow: 'auto' }}>
+            <div style={{ padding: '4px 16px 12px' }}>
+              <Input
+                allowClear
+                placeholder="Search settings"
+                prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
             </div>
-          ) : (
-            <Menu
-              mode="inline"
-              selectedKeys={activeVisible ? [activeKey] : []}
-              onClick={({ key }) => setActiveKey(key)}
-              items={menuItems}
-              style={{ borderInlineEnd: 'none', background: 'transparent' }}
-            />
-          )}
-        </Sider>
-        <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
-      </Layout>
+            {filteredGroups.length === 0 ? (
+              <div style={{ padding: '8px 16px' }}>
+                <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+              </div>
+            ) : (
+              <Menu
+                mode="inline"
+                selectedKeys={activeVisible ? [activeKey] : []}
+                onClick={({ key }) => setActiveKey(key)}
+                items={menuItems}
+                style={{ borderInlineEnd: 'none' }}
+              />
+            )}
+          </Sider>
+          <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+        </Layout>
+      </ConfigProvider>
     </Modal>
   );
 };

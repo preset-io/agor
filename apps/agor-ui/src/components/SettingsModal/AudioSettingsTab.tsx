@@ -3,10 +3,11 @@
  */
 
 import type { User } from '@agor-live/client';
-import { InfoCircleOutlined, PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
+  Card,
   Form,
   InputNumber,
   Select,
@@ -91,7 +92,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
     <div>
       <div style={{ marginBottom: 16 }}>
         <Text strong style={{ fontSize: token.fontSizeLG }}>
-          <SoundOutlined /> Task completion chimes
+          🔊 Task Completion Chimes
         </Text>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
           Play a sound when agent tasks finish executing. Perfect for long-running tasks!
@@ -163,7 +164,6 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
                   min={0}
                   max={1}
                   step={0.1}
-                  marks={{ 0: '0%', 0.5: '50%', 1: '100%' }}
                   disabled={!form.getFieldValue('enabled')}
                   tooltip={{ formatter: (value) => `${Math.round((value || 0) * 100)}%` }}
                   style={{ maxWidth: 360 }}
@@ -177,7 +177,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
           {() => {
             const enabled = form.getFieldValue('enabled');
             return (
-              <FieldRow label="Chime sound" help="Choose your preferred notification sound.">
+              <FieldRow label="Chime sound">
                 <Space.Compact style={{ width: '100%', maxWidth: 360 }}>
                   <Form.Item name="chime" noStyle>
                     <Select
@@ -226,11 +226,13 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
         </Form.Item>
       </Form>
 
-      <Text type="secondary" style={{ display: 'block', fontSize: token.fontSizeSM }}>
-        <strong>Note:</strong> chimes only play for tasks that complete naturally (finished or
-        failed), not for tasks you manually stop. Click Preview to confirm your browser allows audio
-        playback.
-      </Text>
+      <Card type="inner" size="small">
+        <Text type="secondary">
+          <strong>Note:</strong> chimes only play for tasks that complete naturally (finished or
+          failed), not for tasks you manually stop. Click Preview to confirm your browser allows
+          audio playback.
+        </Text>
+      </Card>
     </div>
   );
 };

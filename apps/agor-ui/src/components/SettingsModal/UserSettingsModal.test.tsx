@@ -131,7 +131,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
-    fireEvent.click(screen.getByText('Session Defaults'));
+    fireEvent.click(screen.getByText('Session defaults'));
     fireEvent.click(screen.getByLabelText('codex allow-all'));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
