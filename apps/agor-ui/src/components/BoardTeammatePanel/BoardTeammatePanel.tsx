@@ -334,7 +334,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               onForkSession={onForkSession}
               onSpawnSession={onSpawnSession}
               onOpenSessionSettings={onOpenSessionSettings}
-              defaultExpanded={true}
               mode="panel"
               client={client}
             />

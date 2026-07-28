@@ -12,9 +12,9 @@ import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { readLocalStorageJson } from '../../hooks/localStorageJson';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
+import { readCollapsedBranchNode } from '../../utils/collapsedBranchNodes';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -27,10 +27,7 @@ import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
-import {
-  BranchSessionSections,
-  OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX,
-} from './BranchSessionSections';
+import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
@@ -68,7 +65,6 @@ interface BranchCardProps {
   isPinned?: boolean;
   zoneName?: string;
   zoneColor?: string;
-  defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   progressiveMountKey?: string | number | null;
@@ -104,7 +100,6 @@ const BranchCardComponent = ({
   isPinned = false,
   zoneName,
   zoneColor,
-  defaultExpanded = true,
   inPopover = false,
   panelMode = false,
   progressiveMountKey,
@@ -126,15 +121,12 @@ const BranchCardComponent = ({
   });
   const sessionShellMinHeight = useMemo(() => {
     // The shell should reserve the height the sections will actually take,
-    // which depends on the persisted per-branch collapse state.
-    const openSections = readLocalStorageJson<(string | number)[]>(
-      `${OPEN_SESSION_SECTIONS_STORAGE_KEY_PREFIX}${branch.branch_id}`,
-      defaultExpanded ? ['sessions'] : []
-    );
+    // which depends on the persisted per-branch collapse exceptions.
+    const collapsedNode = readCollapsedBranchNode(branch.branch_id);
     return estimateBranchSessionSectionsHeight(sessions, {
-      defaultExpanded: openSections.includes('sessions'),
+      sessionsExpanded: !collapsedNode.sections?.includes('sessions'),
     });
-  }, [branch.branch_id, defaultExpanded, sessions]);
+  }, [branch.branch_id, sessions]);
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -605,7 +597,6 @@ const BranchCardComponent = ({
             onOpenSessionSettings={onOpenSessionSettings}
             peekedSessionIds={peekedSessionIdSet}
             onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
-            defaultExpanded={defaultExpanded}
             mode="card"
             client={client}
           />

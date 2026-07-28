@@ -232,7 +232,6 @@ interface BranchNodeData {
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   onUnpin?: (branchId: string) => void;
-  compact?: boolean;
   isPinned?: boolean;
   parentZoneId?: string;
   zoneName?: string;
@@ -313,7 +312,6 @@ const BranchNode = React.memo(
           zoneName={data.zoneName}
           client={data.client}
           zoneColor={data.zoneColor}
-          defaultExpanded={!data.compact}
         />
       </div>
     );
@@ -335,7 +333,6 @@ const BranchNode = React.memo(
       p.isPinned === n.isPinned &&
       p.zoneName === n.zoneName &&
       p.zoneColor === n.zoneColor &&
-      p.compact === n.compact &&
       p.client === n.client &&
       p.onTaskClick === n.onTaskClick &&
       p.onSessionClick === n.onSessionClick &&
@@ -839,7 +836,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onNukeEnvironment,
             onExecuteScheduleNow,
             onUnpin: handleUnpinBranch,
-            compact: false,
             isPinned: !!validZoneParentId,
             zoneName,
             zoneColor,
