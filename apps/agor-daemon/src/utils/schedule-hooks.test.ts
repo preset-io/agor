@@ -125,6 +125,14 @@ describe('ensureCurrentScheduleLoaded', () => {
 });
 
 describe('validateScheduleConfig', () => {
+  it('rejects create data that omits timezone mode and would otherwise default to invalid local', async () => {
+    const ctx = makeContext({
+      method: 'create',
+      data: { cron_expression: '0 9 * * *', prompt: 'Run' },
+    });
+    await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/timezone_mode is required/);
+  });
+
   it('validates cron against merged tz on patch', async () => {
     // Current schedule has tz='America/Los_Angeles'; patch only sends a
     // new cron. Validator must compose merged tz from the current row.

@@ -145,6 +145,7 @@ describe('ScheduleModal agentic configuration payload', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('branch_id');
     expect(patch.mock.calls[0][1].agentic_tool_config).toEqual({
       agentic_tool: 'codex',
       configuration_reference: reference,

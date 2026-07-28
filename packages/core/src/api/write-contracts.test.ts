@@ -19,6 +19,7 @@ function assertClientWriteBoundaries(client: AgorClient): void {
     branch_id: 'branch-id',
     name: 'Nightly',
     cron_expression: '0 0 * * *',
+    timezone_mode: 'utc',
     prompt: 'Run',
     agentic_tool_config: { agentic_tool: 'codex' },
   });
@@ -35,6 +36,7 @@ function assertClientWriteBoundaries(client: AgorClient): void {
     branch_id: 'branch-id',
     name: 'Nightly',
     cron_expression: '0 0 * * *',
+    timezone_mode: 'utc',
     prompt: 'Run',
     // @ts-expect-error claude-code-cli is preserved only on stored Schedule rows.
     agentic_tool_config: { agentic_tool: 'claude-code-cli' },
@@ -43,6 +45,7 @@ function assertClientWriteBoundaries(client: AgorClient): void {
     branch_id: 'branch-id',
     name: 'Nightly',
     cron_expression: '0 0 * * *',
+    timezone_mode: 'utc',
     prompt: 'Run',
     agentic_tool_config: { agentic_tool: 'codex' },
     // @ts-expect-error created_at is owned by the schedule runtime.
@@ -67,6 +70,19 @@ function assertClientWriteBoundaries(client: AgorClient): void {
 
   // @ts-expect-error required create fields cannot be omitted.
   void client.service('schedules').create({ agentic_tool_config: { agentic_tool: 'codex' } });
+  // @ts-expect-error local schedule creates require an IANA timezone.
+  void client.service('schedules').create({
+    branch_id: 'branch-id',
+    name: 'Nightly',
+    cron_expression: '0 0 * * *',
+    timezone_mode: 'local',
+    prompt: 'Run',
+    agentic_tool_config: { agentic_tool: 'codex' },
+  });
+  void client.service('schedules').patch('schedule-id', {
+    // @ts-expect-error schedules cannot be reparented by patch.
+    branch_id: 'other-branch',
+  });
   // @ts-expect-error required create fields cannot be omitted.
   void client.service('gateway-channels').create({ agentic_config: { agent: 'codex' } });
 }

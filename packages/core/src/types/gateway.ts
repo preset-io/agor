@@ -327,8 +327,10 @@ export interface GatewayChannelCreateData {
 /** Public partial-update DTO. PUT-style replacement is intentionally unsupported. */
 export type GatewayChannelPatchData = Partial<GatewayChannelCreateData>;
 
-/** Canonical runtime allowlist for public gateway-channel create/patch payloads. */
-export const GATEWAY_CHANNEL_WRITE_FIELDS = [
+type ExhaustiveWriteFields<T, Fields extends readonly (keyof T)[]> =
+  Exclude<keyof T, Fields[number]> extends never ? Fields : never;
+
+const GATEWAY_CHANNEL_WRITE_FIELD_VALUES = [
   'name',
   'channel_type',
   'target_branch_id',
@@ -337,7 +339,13 @@ export const GATEWAY_CHANNEL_WRITE_FIELDS = [
   'agentic_config',
   'mcp_server_ids',
   'enabled',
-] as const satisfies readonly (keyof GatewayChannelCreateData)[];
+] as const;
+
+/** Canonical, compile-time-exhaustive allowlist for gateway creates and patches. */
+export const GATEWAY_CHANNEL_WRITE_FIELDS: ExhaustiveWriteFields<
+  GatewayChannelCreateData & GatewayChannelPatchData,
+  typeof GATEWAY_CHANNEL_WRITE_FIELD_VALUES
+> = GATEWAY_CHANNEL_WRITE_FIELD_VALUES;
 
 /**
  * Thread-Session Mapping - Links a platform thread to an Agor session

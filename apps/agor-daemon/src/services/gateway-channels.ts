@@ -27,11 +27,7 @@ import {
 import { DrizzleService } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
-import {
-  assertServiceWriteFields,
-  isWriteDataPrepared,
-  pickWriteFields,
-} from '../utils/write-data-boundary.js';
+import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
@@ -98,9 +94,13 @@ export class GatewayChannelsService extends DrizzleService<
 
   async create(data: GatewayChannelCreateData, params?: Params) {
     const rawData = data as unknown as Record<string, unknown>;
-    assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params, [
-      'created_by',
-    ]);
+    const prepared = assertServiceWriteFields(
+      'Gateway channel',
+      rawData,
+      GATEWAY_CHANNEL_WRITE_FIELDS,
+      params,
+      ['created_by']
+    );
     data = pickWriteFields<GatewayChannelCreateData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
     await this.validateConfig(data.agentic_config ?? null);
@@ -108,8 +108,7 @@ export class GatewayChannelsService extends DrizzleService<
     data = { ...data, agentic_config: agenticConfig };
     const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     const trustedCreatedBy =
-      creatorId ??
-      (isWriteDataPrepared(params) ? (rawData.created_by as string | undefined) : undefined);
+      creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
     return super.create(
       {
         ...data,

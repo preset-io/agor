@@ -4,6 +4,7 @@
  * design doc.
  */
 
+import { BadRequest } from '@agor/core/feathers';
 import {
   AGENTIC_TOOL_NAMES,
   type Schedule,
@@ -154,49 +155,68 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     {
       description:
         "Create a new schedule on a branch. A branch can hold multiple schedules (e.g. 'hourly heartbeat' + 'daily summary'). Cron + prompt + agentic_tool_config are required.",
-      inputSchema: z.strictObject({
-        branchId: mcpRequiredId('branchId', 'Branch', 'Branch this schedule belongs to'),
-        name: mcpRequiredString('name', "Display name, e.g. 'Hourly heartbeat'"),
-        description: mcpOptionalString('description', 'Freeform description'),
-        cron_expression: mcpRequiredString(
-          'cron_expression',
-          "Cron expression (5/6 fields), e.g. '0 9 * * 1-5'"
-        ),
-        timezone_mode: z
-          .enum(['local', 'utc'])
-          .describe("'local' uses `timezone`; 'utc' fires in UTC."),
-        timezone: mcpOptionalString(
-          'timezone',
-          "IANA timezone (required when timezone_mode='local'), e.g. 'America/Los_Angeles'"
-        ),
-        prompt: mcpRequiredString('prompt', 'Handlebars prompt template'),
-        agentic_tool_config: agenticToolConfigSchema,
-        mcp_server_ids: z
-          .array(mcpRequiredId('mcp_server_ids[]', 'MCP server'))
-          .optional()
-          .describe('MCP servers to attach to spawned sessions.'),
-        enabled: z.boolean().optional().describe('Whether to fire (default: true)'),
-        allow_concurrent_runs: z
-          .boolean()
-          .optional()
-          .describe(
-            'Allow overlapping runs from this schedule (default: false). Sibling schedules on the same branch are independent.'
+      inputSchema: z
+        .strictObject({
+          branchId: mcpRequiredId('branchId', 'Branch', 'Branch this schedule belongs to'),
+          name: mcpRequiredString('name', "Display name, e.g. 'Hourly heartbeat'"),
+          description: mcpOptionalString('description', 'Freeform description'),
+          cron_expression: mcpRequiredString(
+            'cron_expression',
+            "Cron expression (5/6 fields), e.g. '0 9 * * 1-5'"
           ),
-        retention: mcpOptionalNonNegativeInt(
-          'retention',
-          'Number of sessions to keep; 0 = keep all (default: 5)'
-        ),
-      }),
+          timezone_mode: z
+            .enum(['local', 'utc'])
+            .describe("'local' uses `timezone`; 'utc' fires in UTC."),
+          timezone: mcpOptionalString(
+            'timezone',
+            "IANA timezone (required when timezone_mode='local'), e.g. 'America/Los_Angeles'"
+          ),
+          prompt: mcpRequiredString('prompt', 'Handlebars prompt template'),
+          agentic_tool_config: agenticToolConfigSchema,
+          mcp_server_ids: z
+            .array(mcpRequiredId('mcp_server_ids[]', 'MCP server'))
+            .optional()
+            .describe('MCP servers to attach to spawned sessions.'),
+          enabled: z.boolean().optional().describe('Whether to fire (default: true)'),
+          allow_concurrent_runs: z
+            .boolean()
+            .optional()
+            .describe(
+              'Allow overlapping runs from this schedule (default: false). Sibling schedules on the same branch are independent.'
+            ),
+          retention: mcpOptionalNonNegativeInt(
+            'retention',
+            'Number of sessions to keep; 0 = keep all (default: 5)'
+          ),
+        })
+        .superRefine((value, refinementContext) => {
+          if (value.timezone_mode === 'local' && !value.timezone) {
+            refinementContext.addIssue({
+              code: 'custom',
+              path: ['timezone'],
+              message: "timezone is required when timezone_mode='local'",
+            });
+          }
+        }),
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, args.branchId);
+      let timezoneConfig: { timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc' };
+      if (args.timezone_mode === 'local') {
+        if (!args.timezone) {
+          // Defense-in-depth for direct handler consumers that bypass schema parsing.
+          throw new BadRequest("timezone is required when timezone_mode='local'");
+        }
+        timezoneConfig = { timezone_mode: 'local', timezone: args.timezone };
+      } else {
+        timezoneConfig = { timezone_mode: 'utc' };
+      }
       const payload: ScheduleCreateData = {
         branch_id: branchId,
         name: args.name,
         description: args.description,
         cron_expression: args.cron_expression,
-        timezone_mode: args.timezone_mode,
-        timezone: args.timezone,
+        ...timezoneConfig,
         prompt: args.prompt,
         // The zod schema narrows permission_mode/model_config.mode to plain
         // strings; the validator + service hooks coerce them to the

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { markWriteDataPrepared } from '../utils/write-data-boundary.js';
 import { GatewayChannelsService } from './gateway-channels.js';
 import { SchedulesService } from './schedules.js';
 
@@ -17,6 +18,7 @@ describe('runtime write-data boundaries', () => {
         branch_id: '00000000-0000-7000-8000-000000000001',
         name: 'Nightly',
         cron_expression: '0 0 * * *',
+        timezone_mode: 'utc',
         prompt: 'Run',
         agentic_tool_config: { agentic_tool: 'codex' },
         [field]: value,
@@ -29,6 +31,28 @@ describe('runtime write-data boundaries', () => {
     await expect(service.patch('schedule-id', { next_run_at: 456 } as never)).rejects.toThrow(
       'Schedule contains unsupported write fields: next_run_at'
     );
+  });
+
+  it('does not grant prepared-field trust to a second payload that reuses params', async () => {
+    const service = new SchedulesService(null as never);
+    const params = {};
+    const firstPayload = { name: 'first payload' };
+    markWriteDataPrepared()({ data: firstPayload, params } as never);
+
+    await expect(
+      service.create(
+        {
+          branch_id: '00000000-0000-7000-8000-000000000001',
+          name: 'Nightly',
+          cron_expression: '0 0 * * *',
+          timezone_mode: 'utc',
+          prompt: 'Run',
+          agentic_tool_config: { agentic_tool: 'codex' },
+          next_run_at: 456,
+        } as never,
+        params as never
+      )
+    ).rejects.toThrow('Schedule contains unsupported write fields: next_run_at');
   });
 
   it.each([

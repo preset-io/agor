@@ -37,13 +37,9 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { SCHEDULE_WRITE_FIELDS } from '@agor/core/types';
+import { SCHEDULE_CREATE_WRITE_FIELDS, SCHEDULE_PATCH_WRITE_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import {
-  assertServiceWriteFields,
-  isWriteDataPrepared,
-  pickWriteFields,
-} from '../utils/write-data-boundary.js';
+import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export type ScheduleParams = QueryParams<{
   branch_id?: BranchID;
@@ -113,11 +109,14 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
 
   async create(data: ScheduleCreateData, params?: ScheduleParams) {
     const rawData = data as unknown as Record<string, unknown>;
-    assertServiceWriteFields('Schedule', rawData, SCHEDULE_WRITE_FIELDS, params, [
-      'created_by',
-      'next_run_at',
-    ]);
-    data = pickWriteFields<ScheduleCreateData>(rawData, SCHEDULE_WRITE_FIELDS);
+    const prepared = assertServiceWriteFields(
+      'Schedule',
+      rawData,
+      SCHEDULE_CREATE_WRITE_FIELDS,
+      params,
+      ['created_by', 'next_run_at']
+    );
+    data = pickWriteFields<ScheduleCreateData>(rawData, SCHEDULE_CREATE_WRITE_FIELDS);
 
     const creatorId = params?.user?.user_id as UserID | undefined;
     if (data.agentic_tool_config) {
@@ -128,7 +127,6 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
         agentic_tool_config: agenticToolConfig,
       };
     }
-    const prepared = isWriteDataPrepared(params);
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
     const trustedData = {
@@ -143,8 +141,14 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
 
   async patch(id: string | null, data: SchedulePatchData, params?: ScheduleParams) {
     const rawData = data as Record<string, unknown>;
-    assertServiceWriteFields('Schedule', rawData, SCHEDULE_WRITE_FIELDS, params, ['next_run_at']);
-    data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_WRITE_FIELDS);
+    const prepared = assertServiceWriteFields(
+      'Schedule',
+      rawData,
+      SCHEDULE_PATCH_WRITE_FIELDS,
+      params,
+      ['next_run_at']
+    );
+    data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_PATCH_WRITE_FIELDS);
 
     if (data.agentic_tool_config) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
@@ -161,7 +165,7 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
     }
     const trustedData = {
       ...data,
-      ...(isWriteDataPrepared(params) && typeof rawData.next_run_at === 'number'
+      ...(prepared && typeof rawData.next_run_at === 'number'
         ? { next_run_at: rawData.next_run_at }
         : {}),
     };

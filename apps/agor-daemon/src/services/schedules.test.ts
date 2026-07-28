@@ -91,6 +91,7 @@ describe('SchedulesService default configuration references', () => {
         branch_id: '00000000-0000-7000-8000-000000000010' as BranchID,
         name: 'Unavailable preset',
         cron_expression: '0 * * * *',
+        timezone_mode: 'utc',
         prompt: 'Run',
         agentic_tool_config: {
           agentic_tool: 'codex',

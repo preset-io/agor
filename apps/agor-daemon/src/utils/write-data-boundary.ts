@@ -33,35 +33,43 @@ export function enforcePublicWriteFields(resource: string, allowedFields: readon
 /**
  * Mark data after trusted hooks finish adding runtime-owned values. Symbols
  * cannot be supplied through REST/socket JSON and are scoped to this process.
+ * The exact payload object is recorded so reusable params cannot confer trust
+ * on a later payload.
  */
 export function markWriteDataPrepared() {
   return (context: HookContext): HookContext => {
-    (context.params as PreparedParams)[PREPARED_WRITE_DATA] = true;
+    (context.params as PreparedParams)[PREPARED_WRITE_DATA] = context.data;
     return context;
   };
 }
 
-export function isWriteDataPrepared(params: unknown): boolean {
-  return Boolean((params as PreparedParams | undefined)?.[PREPARED_WRITE_DATA]);
+function consumeWriteDataPrepared(params: unknown, data: unknown): boolean {
+  const preparedParams = params as PreparedParams | undefined;
+  if (!preparedParams || preparedParams[PREPARED_WRITE_DATA] !== data) return false;
+  delete preparedParams[PREPARED_WRITE_DATA];
+  return true;
 }
 
-/** Defense-in-depth for direct service consumers that bypass Feathers hooks. */
+/**
+ * Defense-in-depth for direct service consumers that bypass Feathers hooks.
+ * Prepared trust is bound to this payload and consumed exactly once.
+ */
 export function assertServiceWriteFields(
   resource: string,
   data: unknown,
   allowedFields: readonly string[],
   params?: unknown,
   preparedFields: readonly string[] = []
-): void {
-  const effectiveFields = isWriteDataPrepared(params)
-    ? [...allowedFields, ...preparedFields]
-    : allowedFields;
+): boolean {
+  const prepared = consumeWriteDataPrepared(params, data);
+  const effectiveFields = prepared ? [...allowedFields, ...preparedFields] : allowedFields;
   const unsupported = unsupportedFields(data, effectiveFields);
   if (unsupported.length > 0) {
     throw new BadRequest(
       `${resource} contains unsupported write fields: ${unsupported.sort().join(', ')}`
     );
   }
+  return prepared;
 }
 
 /** Pick a DTO-shaped payload so runtime-owned values never reach a repository by accident. */

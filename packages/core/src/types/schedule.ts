@@ -252,13 +252,11 @@ export interface Schedule {
  * repository are required here as well so clients cannot advertise incomplete
  * creates as valid.
  */
-export interface ScheduleCreateData {
+interface ScheduleCreateBaseData {
   branch_id: BranchID;
   name: string;
   description?: string;
   cron_expression: string;
-  timezone_mode?: TimezoneMode;
-  timezone?: string;
   prompt: string;
   agentic_tool_config: ScheduleAgenticToolConfig;
   mcp_server_ids?: string[];
@@ -267,11 +265,36 @@ export interface ScheduleCreateData {
   allow_concurrent_runs?: boolean;
 }
 
-/** Public partial-update DTO. PUT-style replacement is intentionally unsupported. */
-export type SchedulePatchData = Partial<ScheduleCreateData>;
+/**
+ * A new schedule must state how its cron is interpreted. Local schedules also
+ * require an IANA timezone; UTC schedules cannot accidentally persist a
+ * meaningless local-timezone value.
+ */
+export type ScheduleCreateData = ScheduleCreateBaseData &
+  ({ timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc'; timezone?: never });
 
-/** Canonical runtime allowlist for public schedule create/patch payloads. */
-export const SCHEDULE_WRITE_FIELDS = [
+/**
+ * Public partial-update DTO. Branch reparenting and PUT-style replacement are
+ * intentionally unsupported.
+ */
+export interface SchedulePatchData {
+  name?: string;
+  description?: string;
+  cron_expression?: string;
+  timezone_mode?: TimezoneMode;
+  timezone?: string;
+  prompt?: string;
+  agentic_tool_config?: ScheduleAgenticToolConfig;
+  mcp_server_ids?: string[];
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}
+
+type ExhaustiveWriteFields<T, Fields extends readonly (keyof T)[]> =
+  Exclude<keyof T, Fields[number]> extends never ? Fields : never;
+
+const SCHEDULE_CREATE_WRITE_FIELD_VALUES = [
   'branch_id',
   'name',
   'description',
@@ -284,4 +307,30 @@ export const SCHEDULE_WRITE_FIELDS = [
   'enabled',
   'retention',
   'allow_concurrent_runs',
-] as const satisfies readonly (keyof ScheduleCreateData)[];
+] as const;
+
+/** Canonical, compile-time-exhaustive allowlist for public schedule creates. */
+export const SCHEDULE_CREATE_WRITE_FIELDS: ExhaustiveWriteFields<
+  ScheduleCreateData,
+  typeof SCHEDULE_CREATE_WRITE_FIELD_VALUES
+> = SCHEDULE_CREATE_WRITE_FIELD_VALUES;
+
+const SCHEDULE_PATCH_WRITE_FIELD_VALUES = [
+  'name',
+  'description',
+  'cron_expression',
+  'timezone_mode',
+  'timezone',
+  'prompt',
+  'agentic_tool_config',
+  'mcp_server_ids',
+  'enabled',
+  'retention',
+  'allow_concurrent_runs',
+] as const;
+
+/** Canonical, compile-time-exhaustive allowlist for public schedule patches. */
+export const SCHEDULE_PATCH_WRITE_FIELDS: ExhaustiveWriteFields<
+  SchedulePatchData,
+  typeof SCHEDULE_PATCH_WRITE_FIELD_VALUES
+> = SCHEDULE_PATCH_WRITE_FIELD_VALUES;

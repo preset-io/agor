@@ -75,7 +75,8 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
-  SCHEDULE_WRITE_FIELDS,
+  SCHEDULE_CREATE_WRITE_FIELDS,
+  SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
 import {
@@ -2884,7 +2885,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
-        enforcePublicWriteFields('Schedule', SCHEDULE_WRITE_FIELDS),
+        enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
         injectCreatedBy(),
         validateScheduleConfig(),
         recomputeNextRunAt(),
@@ -2898,7 +2899,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanModifySchedule(superadminOpts),
             ]
           : []),
-        enforcePublicWriteFields('Schedule', SCHEDULE_WRITE_FIELDS),
+        enforcePublicWriteFields('Schedule', SCHEDULE_PATCH_WRITE_FIELDS),
         // Lazy-load the current schedule when RBAC didn't cache it for
         // us. `validateScheduleConfig` and `recomputeNextRunAt` both
         // need the merged current+patch shape to do their work

@@ -67,6 +67,10 @@ export function validateScheduleConfig() {
       context.method === 'patch' ? (context.params.schedule as Schedule | undefined) : undefined;
     const merged = { ...(current ?? {}), ...data } as Partial<Schedule>;
 
+    if (context.method === 'create' && data.timezone_mode === undefined) {
+      throw new BadRequest('Schedule timezone_mode is required.');
+    }
+
     // Use the dialect-agnostic cron helper. We pass the schedule's
     // effective tz so DST-sensitive crons get validated against the
     // right timezone (cron-parser rejects e.g. tz='not_a_zone').

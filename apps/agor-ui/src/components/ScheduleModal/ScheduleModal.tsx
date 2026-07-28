@@ -32,6 +32,7 @@ import type {
   Schedule,
   ScheduleAgenticToolConfig,
   ScheduleCreateData,
+  SchedulePatchData,
 } from '@agor-live/client';
 import {
   humanizeCron,
@@ -259,6 +260,20 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     // `getFieldsValue(true)` includes fields rendered inside collapsed
     // panels (which validateFields can skip).
     const all = { ...form.getFieldsValue(true), ...values } as ScheduleFormValues;
+    const timezoneMode = all.timezone_mode ?? 'local';
+    const timezone = all.timezone?.trim();
+    if (timezoneMode === 'local' && !timezone) {
+      showError("Timezone is required when mode is 'local'");
+      return;
+    }
+    let timezoneConfig: { timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc' };
+    if (timezoneMode === 'local') {
+      // Guarded above; keep the discriminated create DTO honest without a cast.
+      if (!timezone) return;
+      timezoneConfig = { timezone_mode: 'local', timezone };
+    } else {
+      timezoneConfig = { timezone_mode: 'utc' };
+    }
 
     setSaving(true);
     try {
@@ -268,8 +283,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         description: all.description?.trim() || undefined,
         prompt: (all.prompt ?? '').trim(),
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
-        timezone_mode: all.timezone_mode ?? 'local',
-        timezone: all.timezone_mode === 'local' ? all.timezone : undefined,
+        ...timezoneConfig,
         agentic_tool_config:
           all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
             ? {
@@ -304,7 +318,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
       let saved: Schedule;
       if (isEditing && schedule?.schedule_id) {
-        saved = await client.service('schedules').patch(schedule.schedule_id, payload);
+        const { branch_id: _branchId, ...patchPayload } = payload;
+        saved = await client
+          .service('schedules')
+          .patch(schedule.schedule_id, patchPayload satisfies SchedulePatchData);
       } else {
         saved = await client.service('schedules').create(payload);
       }
