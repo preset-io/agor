@@ -20,7 +20,8 @@ import type {
   CreateAgenticToolPreset,
   CreateSessionInput,
   GatewayChannel,
-  GatewayChannelData,
+  GatewayChannelCreateData,
+  GatewayChannelPatchData,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -39,7 +40,8 @@ import type {
   Repo,
   RuntimeTelemetryInput,
   Schedule,
-  ScheduleData,
+  ScheduleCreateData,
+  SchedulePatchData,
   SdkHealthFailureInput,
   Session,
   Task,
@@ -259,18 +261,18 @@ export interface AgorService<
 export interface SchedulesService
   extends AgorService<
     Schedule,
-    ClientInput<ScheduleData>,
-    ClientInput<ScheduleData>,
-    ClientInput<ScheduleData> | null
+    ClientInput<ScheduleCreateData>,
+    never,
+    ClientInput<SchedulePatchData> | null
   > {}
 
 /** Gateway channels return storage-facing rows but accept active-only public write data. */
 export interface GatewayChannelsService
   extends AgorService<
     GatewayChannel,
-    ClientInput<GatewayChannelData>,
-    ClientInput<GatewayChannelData>,
-    ClientInput<GatewayChannelData> | null
+    ClientInput<GatewayChannelCreateData>,
+    never,
+    ClientInput<GatewayChannelPatchData> | null
   > {}
 
 export type AgenticToolSettingsService = AgorService<

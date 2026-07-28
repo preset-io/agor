@@ -32,11 +32,18 @@ import type {
   QueryParams,
   Schedule,
   ScheduleAgenticToolConfig,
-  ScheduleData,
+  ScheduleCreateData,
+  SchedulePatchData,
   UserID,
   UUID,
 } from '@agor/core/types';
+import { SCHEDULE_WRITE_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  assertServiceWriteFields,
+  isWriteDataPrepared,
+  pickWriteFields,
+} from '../utils/write-data-boundary.js';
 
 export type ScheduleParams = QueryParams<{
   branch_id?: BranchID;
@@ -45,7 +52,7 @@ export type ScheduleParams = QueryParams<{
 }> &
   AuthenticatedParams & { schedule?: Schedule };
 
-export class SchedulesService extends DrizzleService<Schedule, ScheduleData, ScheduleParams> {
+export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData, ScheduleParams> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -104,7 +111,14 @@ export class SchedulesService extends DrizzleService<Schedule, ScheduleData, Sch
     }
   }
 
-  async create(data: ScheduleData, params?: ScheduleParams) {
+  async create(data: ScheduleCreateData, params?: ScheduleParams) {
+    const rawData = data as unknown as Record<string, unknown>;
+    assertServiceWriteFields('Schedule', rawData, SCHEDULE_WRITE_FIELDS, params, [
+      'created_by',
+      'next_run_at',
+    ]);
+    data = pickWriteFields<ScheduleCreateData>(rawData, SCHEDULE_WRITE_FIELDS);
+
     const creatorId = params?.user?.user_id as UserID | undefined;
     if (data.agentic_tool_config) {
       let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
@@ -114,14 +128,24 @@ export class SchedulesService extends DrizzleService<Schedule, ScheduleData, Sch
         agentic_tool_config: agenticToolConfig,
       };
     }
-    // External Feathers calls are stamped by injectCreatedBy(). Direct service
-    // consumers still receive the same trusted attribution from params rather
-    // than exposing created_by in the public write DTO.
-    const trustedData = creatorId ? { ...data, created_by: creatorId } : data;
+    const prepared = isWriteDataPrepared(params);
+    const trustedCreatedBy =
+      creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
+    const trustedData = {
+      ...data,
+      ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+      ...(prepared && typeof rawData.next_run_at === 'number'
+        ? { next_run_at: rawData.next_run_at }
+        : {}),
+    };
     return super.create(trustedData, params);
   }
 
-  async patch(id: string | null, data: ScheduleData, params?: ScheduleParams) {
+  async patch(id: string | null, data: SchedulePatchData, params?: ScheduleParams) {
+    const rawData = data as Record<string, unknown>;
+    assertServiceWriteFields('Schedule', rawData, SCHEDULE_WRITE_FIELDS, params, ['next_run_at']);
+    data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_WRITE_FIELDS);
+
     if (data.agentic_tool_config) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
       const current = params?.schedule ?? (await this.get(id, params));
@@ -135,11 +159,13 @@ export class SchedulesService extends DrizzleService<Schedule, ScheduleData, Sch
         agentic_tool_config: agenticToolConfig,
       };
     }
-    return super.patch(id, data, params);
-  }
-
-  async update(id: string, data: ScheduleData, params?: ScheduleParams) {
-    return this.patch(id, data, params) as Promise<Schedule>;
+    const trustedData = {
+      ...data,
+      ...(isWriteDataPrepared(params) && typeof rawData.next_run_at === 'number'
+        ? { next_run_at: rawData.next_run_at }
+        : {}),
+    };
+    return super.patch(id, trustedData, params);
   }
 }
 

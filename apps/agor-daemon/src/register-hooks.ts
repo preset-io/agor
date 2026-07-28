@@ -70,10 +70,12 @@ import type {
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_DISPLAY_NAMES,
+  GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  SCHEDULE_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
 import {
@@ -165,6 +167,7 @@ import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
+import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -1758,6 +1761,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       create: [
         requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
+        enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
         injectCreatedBy(),
         // Encrypt env var values at rest (same pattern as user env vars / API keys)
         async (context: HookContext) => {
@@ -1773,9 +1777,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
+        markWriteDataPrepared(),
       ],
       patch: [
         requireMinimumRole(ROLES.ADMIN, 'update gateway channels'),
+        enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
         // Resolve redacted env var sentinel values ('••••••••') back to real
         // values from the database. Uses the repository directly to bypass
         // the after-hook redaction that the service layer applies.
@@ -1861,6 +1867,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           return context;
         },
+        markWriteDataPrepared(),
       ],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete gateway channels')],
     },
@@ -2877,9 +2884,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
+        enforcePublicWriteFields('Schedule', SCHEDULE_WRITE_FIELDS),
         injectCreatedBy(),
         validateScheduleConfig(),
         recomputeNextRunAt(),
+        markWriteDataPrepared(),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
@@ -2889,6 +2898,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanModifySchedule(superadminOpts),
             ]
           : []),
+        enforcePublicWriteFields('Schedule', SCHEDULE_WRITE_FIELDS),
         // Lazy-load the current schedule when RBAC didn't cache it for
         // us. `validateScheduleConfig` and `recomputeNextRunAt` both
         // need the merged current+patch shape to do their work
@@ -2897,6 +2907,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ensureScheduleRunsAsCaller(superadminOpts),
         validateScheduleConfig(),
         recomputeNextRunAt(),
+        markWriteDataPrepared(),
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),

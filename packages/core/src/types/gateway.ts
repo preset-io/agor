@@ -307,21 +307,37 @@ export interface GatewayChannel {
 }
 
 /**
- * Public create/update DTO.
+ * Public create DTO.
  *
  * Runtime-owned identity, audit, secret, and activity fields are deliberately
- * omitted, and persisted legacy tools remain read-only.
+ * omitted, and persisted legacy tools remain read-only. The minimum channel
+ * definition is required instead of relying on repository placeholder values.
  */
-export interface GatewayChannelData {
-  name?: string;
-  channel_type?: ChannelType;
-  target_branch_id?: BranchID;
+export interface GatewayChannelCreateData {
+  name: string;
+  channel_type: ChannelType;
+  target_branch_id: BranchID;
   agor_user_id?: UserID;
-  config?: Record<string, unknown>;
+  config: Record<string, unknown>;
   agentic_config?: GatewayAgenticConfig | null;
   mcp_server_ids?: string[];
   enabled?: boolean;
 }
+
+/** Public partial-update DTO. PUT-style replacement is intentionally unsupported. */
+export type GatewayChannelPatchData = Partial<GatewayChannelCreateData>;
+
+/** Canonical runtime allowlist for public gateway-channel create/patch payloads. */
+export const GATEWAY_CHANNEL_WRITE_FIELDS = [
+  'name',
+  'channel_type',
+  'target_branch_id',
+  'agor_user_id',
+  'config',
+  'agentic_config',
+  'mcp_server_ids',
+  'enabled',
+] as const satisfies readonly (keyof GatewayChannelCreateData)[];
 
 /**
  * Thread-Session Mapping - Links a platform thread to an Agor session

@@ -1,4 +1,8 @@
-import { AGENTIC_TOOL_NAMES, type ScheduleData } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_NAMES,
+  type ScheduleCreateData,
+  type SchedulePatchData,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import { registerScheduleTools } from './schedules.js';
@@ -153,11 +157,11 @@ describe('schedule MCP input schemas', () => {
         handlers.set(name, cb);
       },
     } as unknown as McpServer;
-    const create = vi.fn(async (payload: ScheduleData) => ({
+    const create = vi.fn(async (payload: ScheduleCreateData) => ({
       schedule_id: 'schedule-1',
       ...payload,
     }));
-    const patch = vi.fn(async (_id: string, payload: ScheduleData) => ({
+    const patch = vi.fn(async (_id: string, payload: SchedulePatchData) => ({
       schedule_id: 'schedule-1',
       ...payload,
     }));

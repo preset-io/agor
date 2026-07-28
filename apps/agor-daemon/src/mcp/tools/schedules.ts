@@ -8,7 +8,8 @@ import {
   AGENTIC_TOOL_NAMES,
   type Schedule,
   type ScheduleAgenticToolConfig,
-  type ScheduleData,
+  type ScheduleCreateData,
+  type SchedulePatchData,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
@@ -189,7 +190,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, args.branchId);
-      const payload: ScheduleData = {
+      const payload: ScheduleCreateData = {
         branch_id: branchId,
         name: args.name,
         description: args.description,
@@ -239,7 +240,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       const { scheduleId: rawId, ...updates } = args;
       const scheduleId = await resolveScheduleId(ctx, rawId);
       const { agentic_tool_config: agenticToolConfig, ...scheduleUpdates } = updates;
-      const payload: ScheduleData = {
+      const payload: SchedulePatchData = {
         ...scheduleUpdates,
         ...(agenticToolConfig
           ? {

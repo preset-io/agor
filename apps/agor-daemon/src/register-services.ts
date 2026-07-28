@@ -431,7 +431,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
-  app.use('/schedules', createSchedulesService(db));
+  app.use('/schedules', createSchedulesService(db), {
+    methods: ['find', 'get', 'create', 'patch', 'remove'],
+  });
 
   // ============================================================================
   // Knowledge (backend/data foundations)
@@ -499,7 +501,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'uploadFileFromExecutor'],
+      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileFromExecutor'],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit

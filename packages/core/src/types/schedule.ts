@@ -245,22 +245,43 @@ export interface Schedule {
 }
 
 /**
- * Public create/update DTO.
+ * Public create DTO.
  *
  * Runtime-owned identity, audit, and cursor fields are deliberately omitted,
- * and removed tools are never accepted for new writes.
+ * and removed tools are never accepted for new writes. Fields required by the
+ * repository are required here as well so clients cannot advertise incomplete
+ * creates as valid.
  */
-export interface ScheduleData {
-  branch_id?: BranchID;
-  name?: string;
+export interface ScheduleCreateData {
+  branch_id: BranchID;
+  name: string;
   description?: string;
-  cron_expression?: string;
+  cron_expression: string;
   timezone_mode?: TimezoneMode;
   timezone?: string;
-  prompt?: string;
-  agentic_tool_config?: ScheduleAgenticToolConfig;
+  prompt: string;
+  agentic_tool_config: ScheduleAgenticToolConfig;
   mcp_server_ids?: string[];
   enabled?: boolean;
   retention?: number;
   allow_concurrent_runs?: boolean;
 }
+
+/** Public partial-update DTO. PUT-style replacement is intentionally unsupported. */
+export type SchedulePatchData = Partial<ScheduleCreateData>;
+
+/** Canonical runtime allowlist for public schedule create/patch payloads. */
+export const SCHEDULE_WRITE_FIELDS = [
+  'branch_id',
+  'name',
+  'description',
+  'cron_expression',
+  'timezone_mode',
+  'timezone',
+  'prompt',
+  'agentic_tool_config',
+  'mcp_server_ids',
+  'enabled',
+  'retention',
+  'allow_concurrent_runs',
+] as const satisfies readonly (keyof ScheduleCreateData)[];

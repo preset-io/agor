@@ -31,7 +31,7 @@ import type {
   MCPServer,
   Schedule,
   ScheduleAgenticToolConfig,
-  ScheduleData,
+  ScheduleCreateData,
 } from '@agor-live/client';
 import {
   humanizeCron,
@@ -262,7 +262,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
     setSaving(true);
     try {
-      const payload: ScheduleData = {
+      const payload: ScheduleCreateData = {
         branch_id: branchId,
         name: (all.name ?? '').trim(),
         description: all.description?.trim() || undefined,

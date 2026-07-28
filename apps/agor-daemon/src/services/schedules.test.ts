@@ -11,7 +11,7 @@ import type {
   BranchID,
   Schedule,
   ScheduleAgenticToolConfig,
-  ScheduleData,
+  ScheduleCreateData,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -61,14 +61,9 @@ async function setupContext(db: ConstructorParameters<typeof SchedulesService>[0
   return { creator, caller, branch };
 }
 
-function scheduleData(
-  branchId: BranchID,
-  creatorId: UserID,
-  config: ScheduleAgenticToolConfig
-): ScheduleData & Pick<Schedule, 'created_by'> {
+function scheduleData(branchId: BranchID, config: ScheduleAgenticToolConfig): ScheduleCreateData {
   return {
     branch_id: branchId,
-    created_by: creatorId,
     name: 'Default config schedule',
     cron_expression: '0 * * * *',
     timezone_mode: 'utc',
@@ -93,6 +88,10 @@ describe('SchedulesService default configuration references', () => {
 
     await expect(
       service.create({
+        branch_id: '00000000-0000-7000-8000-000000000010' as BranchID,
+        name: 'Unavailable preset',
+        cron_expression: '0 * * * *',
+        prompt: 'Run',
         agentic_tool_config: {
           agentic_tool: 'codex',
           preset_id:
@@ -112,7 +111,7 @@ describe('SchedulesService default configuration references', () => {
       const service = new SchedulesService(db);
 
       const created = await service.create(
-        scheduleData(branch.branch_id, creator.user_id as UserID, {
+        scheduleData(branch.branch_id, {
           agentic_tool: 'codex',
           preset_id: input as Schedule['agentic_tool_config']['preset_id'],
         }),
@@ -129,11 +128,12 @@ describe('SchedulesService default configuration references', () => {
   dbTest('validates a patched user default as the schedule creator', async ({ db }) => {
     const { creator, caller, branch } = await setupContext(db);
     const scheduleRepo = new ScheduleRepository(db);
-    const existing = await scheduleRepo.create(
-      scheduleData(branch.branch_id, creator.user_id as UserID, {
+    const existing = await scheduleRepo.create({
+      ...scheduleData(branch.branch_id, {
         agentic_tool: 'codex',
-      })
-    );
+      }),
+      created_by: creator.user_id,
+    });
     const service = new SchedulesService(db);
     const missingCaller = { ...caller, user_id: generateId() };
 
@@ -162,7 +162,7 @@ describe('SchedulesService default configuration references', () => {
     const service = new SchedulesService(db);
 
     const created = await service.create(
-      scheduleData(branch.branch_id, creator.user_id as UserID, {
+      scheduleData(branch.branch_id, {
         agentic_tool: 'codex',
         preset_id: preset.preset_id,
       }),
@@ -178,7 +178,7 @@ describe('SchedulesService default configuration references', () => {
 
     await expect(
       service.create(
-        scheduleData(branch.branch_id, creator.user_id as UserID, {
+        scheduleData(branch.branch_id, {
           agentic_tool: 'codex',
           configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
           model_config: { mode: 'exact', model: 'gpt-5.4' },

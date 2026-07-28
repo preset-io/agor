@@ -29,7 +29,8 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
-  type GatewayChannelData,
+  type GatewayChannelCreateData,
+  type GatewayChannelPatchData,
   type GatewaySource,
   getGatewaySource,
   getRequiredSecretFields,
@@ -731,12 +732,14 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
   };
 }
 
-function toServiceCreateData(args: z.infer<typeof gatewayChannelCreateSchema>): GatewayChannelData {
+function toServiceCreateData(
+  args: z.infer<typeof gatewayChannelCreateSchema>
+): GatewayChannelCreateData {
   return {
     name: args.name,
     channel_type: args.channelType,
-    target_branch_id: args.targetBranchId as GatewayChannelData['target_branch_id'],
-    agor_user_id: (args.agorUserId ?? '') as GatewayChannelData['agor_user_id'],
+    target_branch_id: args.targetBranchId as GatewayChannelCreateData['target_branch_id'],
+    agor_user_id: (args.agorUserId ?? '') as GatewayChannelCreateData['agor_user_id'],
     enabled: args.enabled ?? true,
     config: args.config,
     mcp_server_ids: args.mcpServerIds,
@@ -752,15 +755,17 @@ function toServiceCreateData(args: z.infer<typeof gatewayChannelCreateSchema>): 
   };
 }
 
-function toServiceUpdateData(args: z.infer<typeof gatewayChannelUpdateSchema>): GatewayChannelData {
-  const updates: GatewayChannelData = {};
+function toServiceUpdateData(
+  args: z.infer<typeof gatewayChannelUpdateSchema>
+): GatewayChannelPatchData {
+  const updates: GatewayChannelPatchData = {};
   if (args.name !== undefined) updates.name = args.name;
   if (args.channelType !== undefined) updates.channel_type = args.channelType;
   if (args.targetBranchId !== undefined) {
-    updates.target_branch_id = args.targetBranchId as GatewayChannelData['target_branch_id'];
+    updates.target_branch_id = args.targetBranchId as GatewayChannelPatchData['target_branch_id'];
   }
   if (args.agorUserId !== undefined) {
-    updates.agor_user_id = args.agorUserId as GatewayChannelData['agor_user_id'];
+    updates.agor_user_id = args.agorUserId as GatewayChannelPatchData['agor_user_id'];
   }
   if (args.enabled !== undefined) updates.enabled = args.enabled;
   if (args.config !== undefined) updates.config = args.config;

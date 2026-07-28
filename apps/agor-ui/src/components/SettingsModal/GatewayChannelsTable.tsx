@@ -18,7 +18,8 @@ import type {
   EffortLevel,
   GatewayAgenticConfig,
   GatewayChannel,
-  GatewayChannelData,
+  GatewayChannelCreateData,
+  GatewayChannelPatchData,
   GatewayConnectionTestResult,
   GatewayEnvVar,
   MCPServer,
@@ -102,8 +103,8 @@ interface GatewayChannelsTableProps {
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
-  onCreate?: (data: GatewayChannelData) => void;
-  onUpdate?: (channelId: string, updates: GatewayChannelData) => void;
+  onCreate?: (data: GatewayChannelCreateData) => void;
+  onUpdate?: (channelId: string, updates: GatewayChannelPatchData) => void;
   onDelete?: (channelId: string) => void;
 }
 
@@ -3209,7 +3210,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     values: Record<string, unknown>,
     existingConfig?: Record<string, unknown>,
     agent?: AgenticToolName
-  ): GatewayChannelData => {
+  ): GatewayChannelCreateData => {
     // Strip redacted sentinel values from existingConfig so they're never sent
     // back to the server. The API redacts tokens to '••••••••' — if we spread
     // that into the config object, the backend would save the sentinel as the
