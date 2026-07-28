@@ -242,7 +242,7 @@ export function CodexAuthSettings({
   })();
 
   return (
-    <Form component={false} layout="vertical" requiredMark={false}>
+    <Form component={false} layout="vertical">
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">
           Personal credentials are encrypted at rest and injected only into the agent runtime.

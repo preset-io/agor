@@ -494,4 +494,31 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await screen.findByRole('heading', { name: 'Preferences' });
     expect(screen.getByPlaceholderText('Search settings')).toHaveValue('');
   });
+
+  it('ranks a matching tab above a keyword-only setting hit', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // 'sec' matches the Security tab (label) and 'Minimum task duration' (only
+    // via its 'seconds' keyword). The tab must rank above the keyword-only hit.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'sec' },
+    });
+
+    const texts = (await screen.findAllByRole('menuitem')).map((el) => el.textContent ?? '');
+    const securityIdx = texts.findIndex((t) => /^Security/.test(t));
+    const minDurationIdx = texts.findIndex((t) => /Minimum task duration/.test(t));
+
+    expect(securityIdx).toBeGreaterThanOrEqual(0);
+    expect(minDurationIdx).toBeGreaterThan(securityIdx);
+  });
 });

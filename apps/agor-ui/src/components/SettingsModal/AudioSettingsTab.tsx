@@ -144,7 +144,6 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
       <Form
         form={form}
         layout="vertical"
-        requiredMark={false}
         initialValues={{
           enabled: audioPrefs.enabled,
           chime: audioPrefs.chime,

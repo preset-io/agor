@@ -52,7 +52,7 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
-import { filterBySettingsSearch } from '../../utils/settingsSearch';
+import { matchesSettingsSearch } from '../../utils/settingsSearch';
 import {
   buildConfigFromFormValues,
   getClearedFormValues,
@@ -871,9 +871,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [token.colorSuccess, token.colorTextQuaternary, token.colorPrimary]
   );
 
-  // Scoped theme for the modal body: a muted selected-pill so the nav rail reads
-  // like the mockup (v6's default selected bg is too bright), plus the mockup's
-  // tighter 6px vertical label padding for every form.
+  // Scoped theme for the modal nav: a muted selected-pill so the rail reads like
+  // the rest of the app (v6's default selected bg is too bright here).
   const scopedTheme = useMemo(
     () => ({
       components: {
@@ -881,7 +880,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           itemSelectedBg: token.colorFillTertiary,
           itemSelectedColor: token.colorPrimary,
         },
-        Form: { verticalLabelPadding: '0 0 6px' },
       },
     }),
     [token.colorFillTertiary, token.colorPrimary]
@@ -1047,13 +1045,41 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const searchActive = search.trim().length > 0;
 
-  const searchResults = useMemo(
-    () =>
-      searchActive
-        ? filterBySettingsSearch(settingsIndex, search, [(e) => e.label, (e) => e.keywords])
-        : [],
-    [settingsIndex, search, searchActive]
-  );
+  // Relevance ranking: a matched tab name first (prefix over substring), then
+  // its own matching settings, then label matches in other tabs (prefix over
+  // substring), and finally keyword-only hits (the visible label doesn't
+  // contain the query). Ties fall back to index order for stable output.
+  const searchResults = useMemo(() => {
+    if (!searchActive) return [];
+    const query = search.trim().toLowerCase();
+    return settingsIndex
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) =>
+        matchesSettingsSearch(entry, search, [(e) => e.label, (e) => e.keywords])
+      )
+      .map(({ entry, index }) => {
+        const labelLc = entry.label.toLowerCase();
+        const tabTitleLc = panelTitleForKey(entry.panelKey).toLowerCase();
+        const labelHasQuery = labelLc.includes(query);
+        const labelPrefix = labelLc.startsWith(query);
+        const isTabEntry = labelLc === tabTitleLc;
+        const tabHasQuery = tabTitleLc.includes(query);
+        const rank = !labelHasQuery
+          ? 5
+          : isTabEntry
+            ? labelPrefix
+              ? 0
+              : 1
+            : tabHasQuery
+              ? 2
+              : labelPrefix
+                ? 3
+                : 4;
+        return { entry, index, rank };
+      })
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map(({ entry }) => entry);
+  }, [settingsIndex, search, searchActive]);
 
   const searchMenuItems: MenuProps['items'] = useMemo(
     () =>
@@ -1136,11 +1162,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderProfilePanel = () => (
     <>
-      <PanelHeader
-        title="Profile"
-        description="Your identity across Agor — how teammates and agents see you."
-      />
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <PanelHeader title="Profile" />
+      <Form form={form} layout="vertical">
         <FieldRow label="Name">
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="emoji" noStyle>
@@ -1178,7 +1201,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
-          tooltip={isAdmin ? undefined : 'Maintained by administrators.'}
+          help={isAdmin ? undefined : 'Maintained by administrators'}
         >
           <Select
             disabled={!isAdmin}
@@ -1223,26 +1246,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderSecurityPanel = () => (
     <>
-      <PanelHeader
-        title="Security"
-        description="Password and platform-level identity for this account."
-      />
-      <Form form={form} layout="vertical" requiredMark={false}>
-        <FieldRow
-          label="Password"
-          name="password"
-          help="Leave blank to keep your current password."
-        >
+      <PanelHeader title="Security" />
+      <Form form={form} layout="vertical">
+        <FieldRow label="Password" name="password" help="Leave blank to keep current password">
           <Input.Password placeholder="••••••••" />
         </FieldRow>
 
         <FieldRow
           label="Unix username"
           name="unix_username"
-          tooltip={
+          help={
             isAdmin
-              ? 'Unix user for process impersonation (lowercase letters, numbers, hyphens, underscores).'
-              : 'Maintained by administrators.'
+              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+              : 'Maintained by administrators'
           }
           rules={[
             {
@@ -1260,13 +1276,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderPreferencesPanel = () => (
     <>
-      <PanelHeader
-        title="Preferences"
-        description="How Agor sounds and looks for you day to day."
-      />
+      <PanelHeader title="Preferences" />
       <AudioSettingsTab user={user} form={audioForm} />
       <SectionDivider label="Interface" />
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <Form form={form} layout="vertical">
         <FieldRow
           label="Live event stream"
           badge={
@@ -1286,14 +1299,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderEnvVarsPanel = () => (
     <>
-      <PanelHeader
-        title="Environment variables"
-        description="Environment variables are encrypted at rest and available to all sessions for this user."
-      />
+      <PanelHeader title="Environment variables" />
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+        Environment variables are encrypted at rest and available to all sessions for this user.
+      </Typography.Paragraph>
       <Alert
         type="info"
         showIcon
-        style={{ marginBottom: 20 }}
+        style={{ marginBottom: 16 }}
         message={
           <span>
             Looking for SDK credentials? API keys and per-tool config live under{' '}
@@ -1314,15 +1327,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderAccessPanel = () => (
     <>
-      <PanelHeader
-        title="Groups & access"
-        description="Add or remove this user from admin-managed groups."
-      />
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <PanelHeader title="Groups & access" />
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+        Add or remove this user from admin-managed groups.
+      </Typography.Paragraph>
+      <Form form={form} layout="vertical">
         <FieldRow
           label="Groups"
           name="groupIds"
-          tooltip="Group memberships affect group-aware branch permissions."
+          help="Group memberships affect group-aware branch permissions."
         >
           <Select
             mode="multiple"
@@ -1399,7 +1412,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           key={tool}
           form={currentForm}
           layout="vertical"
-          requiredMark={false}
           onValuesChange={(_, allValues) => {
             setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: allValues }));
             markAgenticConfigDirty(tool);
@@ -1510,7 +1522,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             }
           />
         ) : (
-          <Form component={false} layout="vertical" requiredMark={false}>
+          <Form component={false} layout="vertical">
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Personal credentials are encrypted at rest and injected only into the agent runtime.
             </Typography.Paragraph>
@@ -1589,10 +1601,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'tokens':
         return (
           <>
-            <PanelHeader
-              title="API tokens"
-              description="Agor API tokens allow you to authenticate with the Agor API from scripts, CI pipelines, and external tools. Tokens have the same permissions as your user account."
-            />
+            <PanelHeader title="API tokens" />
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+              Agor API tokens allow you to authenticate with the Agor API from scripts, CI
+              pipelines, and external tools. Tokens have the same permissions as your user account.
+            </Typography.Paragraph>
             <PersonalApiKeysTab client={client} />
           </>
         );

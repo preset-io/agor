@@ -1,60 +1,43 @@
-import { InfoCircleOutlined } from '@ant-design/icons';
 import type { FormItemProps } from 'antd';
 import { Divider, Flex, Form, Space, Typography, theme } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
 
-const { Title, Paragraph, Text } = Typography;
+const { Title } = Typography;
 
 /**
- * Shared presentational primitives for the settings panels. Every panel routes
- * its heading, labelled fields, and section breaks through these so the whole
- * modal keeps one vertical rhythm. All spacing/typography is token-driven.
+ * Shared presentational primitives for the settings panels. Output mirrors the
+ * app-standard (master) form styling; the panels only rely on these so the
+ * heading and section breaks stay consistent.
  */
 
 export interface PanelHeaderProps {
   title: ReactNode;
-  description?: ReactNode;
   /** Leading brand/tool icon (provider panels). Renders inline with the title. */
   icon?: ReactNode;
   /** Trailing node (e.g. a status Tag on provider panels). */
   extra?: ReactNode;
 }
 
-/** One heading shape for every panel; the provider variant is just icon + extra. */
-export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, description, icon, extra }) => {
-  const { token } = theme.useToken();
-  return (
-    <div style={{ paddingTop: token.marginLG, marginBottom: 28 }}>
-      <Flex align="center" gap={12}>
-        {icon}
-        <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
-          {title}
-        </Title>
-        {extra}
-      </Flex>
-      {description && (
-        <Paragraph type="secondary" style={{ margin: '4px 0 0', maxWidth: 560 }}>
-          {description}
-        </Paragraph>
-      )}
-    </div>
-  );
-};
+/** Section title; the provider variant adds a leading icon and a trailing tag. */
+export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, icon, extra }) => (
+  <Flex align="center" gap={12} style={{ marginBottom: 20 }}>
+    {icon}
+    <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
+      {title}
+    </Title>
+    {extra}
+  </Flex>
+);
 
 export interface FieldRowProps {
   label: ReactNode;
-  /**
-   * Always-visible caption below the control (never a hover-only tooltip).
-   * Rendered via Form.Item `extra` (not `help`) so it never triggers Ant's
-   * explain margin-offset — which would eat the row's bottom spacing — and so
-   * it coexists with, rather than suppresses, validation messages.
-   */
+  /** Persistent note under the field (Ant `help`). Use for essential notes only. */
   help?: ReactNode;
-  /** Renders a red asterisk after the label. Pair with a `required` rule. */
+  /** Marks the field required (shows Ant's asterisk). */
   required?: boolean;
   /** Inline node after the label (e.g. a BETA tag). */
   badge?: ReactNode;
-  /** On-hover detail behind an info icon next to the label (keeps panels clean). */
+  /** On-hover detail behind the label's info icon (Ant `tooltip`). */
   tooltip?: ReactNode;
   name?: FormItemProps['name'];
   rules?: FormItemProps['rules'];
@@ -63,10 +46,7 @@ export interface FieldRowProps {
   children: ReactNode;
 }
 
-/**
- * A thin `Form.Item` wrapper that standardises label weight, the always-visible
- * help caption, and row rhythm. The one label system for the whole modal.
- */
+/** A thin `Form.Item` wrapper; renders identically to a plain app form field. */
 export const FieldRow: React.FC<FieldRowProps> = ({
   label,
   help,
@@ -78,36 +58,29 @@ export const FieldRow: React.FC<FieldRowProps> = ({
   valuePropName,
   style,
   children,
-}) => {
-  const { token } = theme.useToken();
-  return (
-    <Form.Item
-      name={name}
-      rules={rules}
-      valuePropName={valuePropName}
-      tooltip={tooltip != null ? { title: tooltip, icon: <InfoCircleOutlined /> } : undefined}
-      style={{ marginBottom: 22, ...style }}
-      label={
-        <Space size={4} align="center">
-          <Text strong style={{ fontSize: token.fontSize }}>
-            {label}
-          </Text>
+}) => (
+  <Form.Item
+    name={name}
+    rules={rules}
+    required={required}
+    valuePropName={valuePropName}
+    tooltip={tooltip}
+    help={help}
+    style={style}
+    label={
+      badge != null ? (
+        <Space size={4}>
+          {label}
           {badge}
-          {required && <Text type="danger">*</Text>}
         </Space>
-      }
-      extra={
-        help != null ? (
-          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            {help}
-          </Text>
-        ) : undefined
-      }
-    >
-      {children}
-    </Form.Item>
-  );
-};
+      ) : (
+        label
+      )
+    }
+  >
+    {children}
+  </Form.Item>
+);
 
 export interface SectionDividerProps {
   label: ReactNode;
