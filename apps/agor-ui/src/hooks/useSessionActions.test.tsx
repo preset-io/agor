@@ -56,6 +56,75 @@ describe('useSessionActions archive helpers', () => {
 });
 
 describe('useSessionActions OpenCode model config', () => {
+  it('serializes a live reference without inline model or permission fields', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        agenticToolPresetId: '__user_default__',
+        modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-5' },
+        permissionMode: 'yolo',
+      });
+    });
+
+    expect(create.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        agentic_tool_preset_id: '__user_default__',
+      })
+    );
+    expect(create.mock.calls[0][0]).not.toHaveProperty('model_config');
+    expect(create.mock.calls[0][0]).not.toHaveProperty('permission_config');
+  });
+
+  it('preserves an omitted permission override for daemon-side inheritance', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        modelConfig: undefined,
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentic_tool: 'opencode',
+      })
+    );
+    expect(create.mock.calls[0][0]).not.toHaveProperty('permission_config');
+  });
+
+  it.each([
+    'autoEdit',
+    'yolo',
+  ] as const)('serializes an explicit %s permission override', async (permissionMode) => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'opencode',
+        modelConfig: undefined,
+        permissionMode,
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permission_config: { mode: permissionMode },
+      })
+    );
+  });
+
   it('does not create a detached effort-only model config when selection is omitted', async () => {
     const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
     const client = makeClient({ sessions: { create } });
@@ -73,12 +142,12 @@ describe('useSessionActions OpenCode model config', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         agentic_tool: 'opencode',
-        model_config: undefined,
       })
     );
+    expect(create.mock.calls[0][0]).not.toHaveProperty('model_config');
   });
 
-  it('carries a deliberate clear as model_config null without detached effort', async () => {
+  it('omits an absent OpenCode override without detached effort', async () => {
     const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
     const client = makeClient({ sessions: { create } });
     const { result } = renderHook(() => useSessionActions(client));
@@ -87,7 +156,7 @@ describe('useSessionActions OpenCode model config', () => {
       await result.current.createSession({
         branch_id: 'branch-1',
         agent: 'opencode',
-        modelConfig: null,
+        modelConfig: undefined,
         effort: 'high',
       });
     });
@@ -95,9 +164,9 @@ describe('useSessionActions OpenCode model config', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         agentic_tool: 'opencode',
-        model_config: null,
       })
     );
+    expect(create.mock.calls[0][0]).not.toHaveProperty('model_config');
   });
 
   it('keeps a complete exact OpenCode provider/model pair', async () => {
@@ -120,6 +189,38 @@ describe('useSessionActions OpenCode model config', () => {
           provider: 'openai',
           model: 'gpt-5',
         }),
+      })
+    );
+  });
+});
+
+describe('useSessionActions Codex permission config', () => {
+  it('preserves explicit mode, sandbox, approval, and network choices', async () => {
+    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await result.current.createSession({
+        branch_id: 'branch-1',
+        agent: 'codex',
+        permissionMode: 'ask',
+        codexSandboxMode: 'danger-full-access',
+        codexApprovalPolicy: 'on-request',
+        codexNetworkAccess: true,
+      });
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permission_config: {
+          mode: 'ask',
+          codex: {
+            sandboxMode: 'danger-full-access',
+            approvalPolicy: 'on-request',
+            networkAccess: true,
+          },
+        },
       })
     );
   });

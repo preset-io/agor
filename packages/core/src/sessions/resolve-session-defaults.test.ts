@@ -36,13 +36,59 @@ describe('resolveSessionDefaults', () => {
       expect(r.permission_config.mode).toBe('bypassPermissions');
     });
 
-    it('explicit override wins over user default', () => {
+    it('the selected source wins over the owner default', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { permissionMode: 'bypassPermissions' } }),
-        overrides: { permissionMode: 'plan' },
+        source: { permissionMode: 'plan' },
       });
       expect(r.permission_config.mode).toBe('plan');
+    });
+
+    it('layers the selected source ahead of personal defaults', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'opencode',
+        user: makeUser({
+          opencode: {
+            permissionMode: 'yolo',
+            modelConfig: {
+              mode: 'exact',
+              provider: 'personal-provider',
+              model: 'personal-model',
+            },
+          },
+        }),
+        source: {
+          permissionMode: 'autoEdit',
+          modelConfig: {
+            mode: 'exact',
+            provider: 'preset-provider',
+            model: 'preset-model',
+          },
+        },
+      });
+
+      expect(r.permission_config.mode).toBe('autoEdit');
+    });
+
+    it('layers selected Codex fields ahead of system defaults', () => {
+      const inherited = resolveSessionDefaults({
+        agenticTool: 'codex',
+        source: {
+          permissionMode: 'ask',
+          codexSandboxMode: 'read-only',
+          codexApprovalPolicy: 'untrusted',
+          codexNetworkAccess: false,
+        },
+      });
+      expect(inherited.permission_config).toEqual({
+        mode: 'ask',
+        codex: {
+          sandboxMode: 'read-only',
+          approvalPolicy: 'untrusted',
+          networkAccess: false,
+        },
+      });
     });
 
     it('maps cross-agent modes through mapPermissionMode', () => {
@@ -132,7 +178,7 @@ describe('resolveSessionDefaults', () => {
             codexApprovalPolicy: 'on-request',
           },
         }),
-        overrides: {
+        source: {
           codexSandboxMode: 'read-only',
           codexApprovalPolicy: 'untrusted',
           codexNetworkAccess: true,
@@ -148,7 +194,7 @@ describe('resolveSessionDefaults', () => {
     it('omits codex sub-config for non-codex tools', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        overrides: { codexSandboxMode: 'read-only', codexApprovalPolicy: 'untrusted' },
+        source: { codexSandboxMode: 'read-only', codexApprovalPolicy: 'untrusted' },
       });
       expect(r.permission_config.codex).toBeUndefined();
     });
@@ -198,7 +244,7 @@ describe('resolveSessionDefaults', () => {
     it('merges an effort-only override onto the tool default model', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        overrides: { modelConfig: { effort: 'max' } },
+        source: { modelConfig: { effort: 'max' } },
         now,
       });
       expect(r.model_config).toEqual({
@@ -213,7 +259,7 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({ 'claude-code': { modelConfig: { model: 'claude-opus-4-6' } } }),
-        overrides: { modelConfig: { effort: 'max' } },
+        source: { modelConfig: { effort: 'max' } },
         now,
       });
       expect(r.model_config).toEqual({
@@ -230,7 +276,7 @@ describe('resolveSessionDefaults', () => {
         user: makeUser({
           'claude-code': { modelConfig: { model: 'claude-opus-4-6', effort: 'high' } },
         }),
-        overrides: { modelConfig: { advisorModel: 'sonnet' } },
+        source: { modelConfig: { advisorModel: 'sonnet' } },
         now,
       });
       expect(r.model_config).toEqual({
@@ -248,7 +294,7 @@ describe('resolveSessionDefaults', () => {
         user: makeUser({
           'claude-code': { modelConfig: { model: 'claude-sonnet-5', effort: 'high' } },
         }),
-        overrides: { modelConfig: { model: 'claude-opus-4-6' } },
+        source: { modelConfig: { model: 'claude-opus-4-6' } },
         now,
       });
       expect(r.model_config?.model).toBe('claude-opus-4-6');
@@ -281,6 +327,61 @@ describe('resolveSessionDefaults', () => {
       });
     });
 
+    it('resolves OpenCode in source → personal default order', () => {
+      const user = makeUser({
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'personal-provider',
+            model: 'personal-model',
+          },
+        },
+      });
+      const source = {
+        modelConfig: {
+          mode: 'exact' as const,
+          provider: 'workspace-provider',
+          model: 'workspace-model',
+        },
+      };
+
+      expect(
+        resolveSessionDefaults({
+          agenticTool: 'opencode',
+          user,
+          source,
+          now,
+        }).model_config
+      ).toMatchObject({
+        mode: 'exact',
+        provider: 'workspace-provider',
+        model: 'workspace-model',
+      });
+      expect(
+        resolveSessionDefaults({
+          agenticTool: 'opencode',
+          user,
+          source: {},
+          now,
+        }).model_config
+      ).toMatchObject({
+        mode: 'exact',
+        provider: 'personal-provider',
+        model: 'personal-model',
+      });
+    });
+
+    it('rejects OpenCode when no exact pair resolves from any Agor source', () => {
+      expect(() =>
+        resolveSessionDefaults({
+          agenticTool: 'opencode',
+          user: makeUser(),
+          source: {},
+          now,
+        })
+      ).toThrow(/select.*provider.*model/i);
+    });
+
     it('rejects an incomplete OpenCode user default at the shared resolution boundary', () => {
       expect(() =>
         resolveSessionDefaults({
@@ -300,7 +401,7 @@ describe('resolveSessionDefaults', () => {
         agenticTool: 'claude-code',
         user: makeUser({}, ['user-1', 'user-2']),
         branch: { mcp_server_ids: ['wt-1'] },
-        overrides: { mcpServerIds: [] },
+        mcpServerIds: [],
       });
       expect(r.mcp_server_ids).toEqual([]);
     });
@@ -392,14 +493,14 @@ describe('resolveSessionDefaults', () => {
             codexApprovalPolicy: 'on-request',
           },
         }),
-        overrides: {
+        source: {
           // Simulates GatewayAgenticConfig fully populated by a Slack channel.
           permissionMode: 'auto',
           codexSandboxMode: 'danger-full-access',
           codexApprovalPolicy: 'never',
           codexNetworkAccess: true,
-          mcpServerIds: ['gateway-mcp-1', 'gateway-mcp-2'],
         },
+        mcpServerIds: ['gateway-mcp-1', 'gateway-mcp-2'],
       });
       expect(r.permission_config.mode).toBe('auto');
       expect(r.permission_config.codex).toEqual({

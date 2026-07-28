@@ -71,6 +71,7 @@ import {
   buildTeammateOnboardingSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -879,9 +880,10 @@ export const App: React.FC<AppProps> = ({
       // AppActions consumer on a live board.
       const branch = agorStore.getState().branchById.get(branchId as Branch['branch_id']);
       const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
+      const agenticToolPresetId = getUserDefaultConfigurationSource(user, tool);
 
       const sessionId = await onCreateSession?.(
-        { branch_id: branchId, agent: tool, mcpServerIds },
+        { branch_id: branchId, agent: tool, agenticToolPresetId, mcpServerIds },
         currentBoardId
       );
       if (!sessionId) return null;

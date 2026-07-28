@@ -49,7 +49,13 @@ export function summarizeAgenticConfiguration(
 ): string {
   if (!config) return '';
   const parts: string[] = [];
-  if (config.modelConfig?.model) parts.push(getModelDisplayName(tool, config.modelConfig.model));
+  if (config.modelConfig?.model) {
+    parts.push(
+      tool === 'opencode' && config.modelConfig.provider
+        ? `${config.modelConfig.provider}/${config.modelConfig.model}`
+        : getModelDisplayName(tool, config.modelConfig.model)
+    );
+  }
   if (config.permissionMode) parts.push(getPermissionModeLabel(tool, config.permissionMode));
   return parts.join(' · ');
 }
@@ -141,7 +147,7 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     currentUser,
     tool
   );
-  const hasConfiguredUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
+  const hasConfiguredUserDefault = Boolean(currentUser && (userSelection ?? userConfigBlob));
   const userDefaultUsesInline = Boolean(
     currentUser &&
       hasConfiguredUserDefault &&
@@ -158,12 +164,11 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
   const hasUserDefault =
     hasConfiguredUserDefault &&
     isSourceAllowedByPolicy(USER_DEFAULT_AGENTIC_CONFIGURATION) &&
-    (!currentUser ||
-      (userSelection?.source === 'preset'
-        ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
-        : userSelection?.source === 'workspace_default'
-          ? inlineAllowed || Boolean(workspacePreset)
-          : true));
+    (userSelection?.source === 'preset'
+      ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
+      : userSelection?.source === 'workspace_default'
+        ? inlineAllowed || Boolean(workspacePreset)
+        : true);
 
   const resolveConfiguration = useCallback(
     (source: string | undefined, inlineConfig: DefaultAgenticToolConfig = {}) => {

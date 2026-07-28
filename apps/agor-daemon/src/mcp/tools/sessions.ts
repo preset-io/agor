@@ -16,7 +16,6 @@ import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
 } from '@agor/core/models';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   type AgenticToolName,
@@ -992,31 +991,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         serviceTokenScope: serviceTokenScopeForParams(ctx.baseServiceParams),
       });
 
-      // Resolve permission_config / model_config / inherited mcp_server_ids
-      // from the explicit MCP args (highest priority) > user defaults > system
-      // fallback. Single source of truth for this dance lives in
-      // `@agor/core/sessions` so MCP tools, the gateway, and the
-      // `before:create` hook can't drift apart.
-      //
-      // For the explicit MCP args we resolve short IDs first; branch/user
-      // defaults are already full UUIDs, so the helper passes them through.
+      // Resolve explicit short MCP IDs here; SessionsService owns model and
+      // permission materialization, while MCP attachment remains transport
+      // state rather than agentic configuration intent.
       const explicitMcpServerIds =
         args.mcpServerIds !== undefined
           ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
           : undefined;
-      const resolvedDefaults = resolveSessionDefaults({
-        agenticTool,
-        user,
-        branch,
-        overrides: {
-          modelConfig: coerceModelConfig(args.modelConfig),
-          mcpServerIds: explicitMcpServerIds,
-        },
-      });
-      const permissionConfig = resolvedDefaults.permission_config;
-      const modelConfig = resolvedDefaults.model_config;
-      const mcpServerIds = resolvedDefaults.mcp_server_ids;
-      const permissionMode = permissionConfig.mode;
+      const mcpServerIds =
+        explicitMcpServerIds ??
+        (branch.mcp_server_ids?.length
+          ? branch.mcp_server_ids
+          : (user.default_mcp_server_ids ?? []));
       // Track whether the caller explicitly requested these servers. When they
       // did, we surface attach failures in the response instead of silently
       // dropping them (the "mcpServerId doesn't stick" bug). For inherited
@@ -1125,8 +1111,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         description: args.description,
         created_by: ctx.userId,
         unix_username: user.unix_username,
-        permission_config: permissionConfig,
-        ...(modelConfig && { model_config: modelConfig }),
+        ...(args.modelConfig !== undefined && {
+          model_config: coerceModelConfig(args.modelConfig),
+        }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         git_state: {
@@ -1142,6 +1129,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
+      const permissionMode = session.permission_config?.mode ?? 'acceptEdits';
 
       const remoteRelationship = remoteRelationshipSourceSessionId
         ? await runWithMcpTenantDatabaseScope(ctx, (db) =>

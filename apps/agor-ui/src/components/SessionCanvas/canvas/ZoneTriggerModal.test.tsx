@@ -48,6 +48,7 @@ vi.mock('../../AgenticToolConfigurationPicker', () => {
         <Form.Item name="agenticToolPresetId">
           <select aria-label="Zone configuration source">
             <option value="">Inherit</option>
+            <option value="__user_default__">My default</option>
             <option value="__inline__">Inline</option>
           </select>
         </Form.Item>
@@ -145,7 +146,7 @@ function renderNewSessionModal(currentUser?: User) {
 }
 
 describe('ZoneTriggerModal OpenCode new-session configuration', () => {
-  it('turns an inline clear into null instead of restoring a stale stored default', async () => {
+  it('omits an inline clear so the daemon resolves the personal exact pair', async () => {
     const onExecute = renderNewSessionModal(staleOpenCodeDefault);
     await waitFor(() => expect(screen.getByTestId('zone-model')).toHaveTextContent('openai/gpt-5'));
 
@@ -156,7 +157,7 @@ describe('ZoneTriggerModal OpenCode new-session configuration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
 
     await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
-    expect(onExecute.mock.calls[0][0].modelConfig).toBeNull();
+    expect(onExecute.mock.calls[0][0].modelConfig).toBeUndefined();
   });
 
   it('keeps an omitted override omitted so defaults can be inherited', async () => {
@@ -165,6 +166,21 @@ describe('ZoneTriggerModal OpenCode new-session configuration', () => {
 
     await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
     expect(onExecute.mock.calls[0][0].modelConfig).toBeUndefined();
+  });
+
+  it('serializes a reference without the prefilled inline model', async () => {
+    const onExecute = renderNewSessionModal(staleOpenCodeDefault);
+    await waitFor(() => expect(screen.getByTestId('zone-model')).toHaveTextContent('openai/gpt-5'));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Zone configuration source' }), {
+      target: { value: '__user_default__' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+
+    await waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+    expect(onExecute.mock.calls[0][0].agenticToolPresetId).toBe('__user_default__');
+    expect(onExecute.mock.calls[0][0].modelConfig).toBeUndefined();
+    expect(onExecute.mock.calls[0][0].permissionMode).toBeUndefined();
   });
 
   it('keeps a complete inline provider/model pair exact', async () => {

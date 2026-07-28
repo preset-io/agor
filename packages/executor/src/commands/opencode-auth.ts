@@ -1,4 +1,7 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type {
+  OpenCodeModelCatalog,
   OpenCodeOAuthAuthorization,
   OpenCodeProviderAuthMethod,
   OpenCodeProviderConnection,
@@ -54,12 +57,17 @@ function safeMethods(
 async function withFreshClient<T>(
   dataHome: string,
   secrets: readonly unknown[],
-  work: (client: V2Client) => Promise<T>
+  work: (client: V2Client) => Promise<T>,
+  directory = dataHome
 ): Promise<T> {
-  const server = await startManagedOpenCodeServer({ directory: dataHome, dataHome, secrets });
+  const server = await startManagedOpenCodeServer({
+    directory,
+    dataHome,
+    secrets: [...secrets, directory],
+  });
   const client = createOpencodeClient({
     baseUrl: server.baseUrl,
-    directory: dataHome,
+    directory,
     headers: { Authorization: server.authorization },
   });
   let result: T | undefined;
@@ -70,7 +78,7 @@ async function withFreshClient<T>(
     failures.push({ phase: 'operation', error });
   }
   try {
-    await client.instance.dispose({ directory: dataHome });
+    await client.instance.dispose({ directory });
   } catch (error) {
     failures.push({ phase: 'instance disposal', error });
   } finally {
@@ -93,11 +101,86 @@ async function withFreshClient<T>(
   return result as T;
 }
 
+function configuredPair(model: string | undefined): OpenCodeModelCatalog['projectConfigured'] {
+  if (!model) return undefined;
+  const separator = model.indexOf('/');
+  if (separator <= 0 || separator === model.length - 1) return undefined;
+  return {
+    providerId: model.slice(0, separator),
+    modelId: model.slice(separator + 1),
+  };
+}
+
+async function savedCredentialProviderIds(dataHome: string): Promise<Set<string> | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(join(dataHome, 'opencode', 'auth.json'), 'utf8')
+    ) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return new Set(Object.keys(parsed));
+  } catch {
+    return null;
+  }
+}
+
+async function discoverModels(
+  dataHome: string,
+  directory = dataHome
+): Promise<OpenCodeModelCatalog> {
+  return withFreshClient(
+    dataHome,
+    [],
+    async (client) => {
+      const [providersResponse, configResponse, runtimeProvidersResponse] = await Promise.all([
+        client.config.providers({ directory }),
+        client.config.get({ directory }),
+        client.provider.list({ directory }),
+      ]);
+      if (
+        providersResponse.error ||
+        !providersResponse.data ||
+        configResponse.error ||
+        !configResponse.data ||
+        runtimeProvidersResponse.error ||
+        !runtimeProvidersResponse.data
+      ) {
+        throw new Error('OpenCode configured model discovery failed');
+      }
+      const runtimeAvailable = new Set(runtimeProvidersResponse.data.connected);
+      const providers = providersResponse.data.providers
+        .map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          runtimeAvailable: runtimeAvailable.has(provider.id),
+          ...(providersResponse.data.default[provider.id]
+            ? { suggestedModel: providersResponse.data.default[provider.id] }
+            : {}),
+          models: Object.values(provider.models)
+            .map((model) => ({
+              id: model.id,
+              name: model.name,
+              status: model.status,
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id)),
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const projectConfigured = configuredPair(configResponse.data.model);
+      return {
+        runtimeVersion: OPENCODE_VERSION,
+        ...(projectConfigured ? { projectConfigured } : {}),
+        providers,
+      };
+    },
+    directory
+  );
+}
+
 async function discover(dataHome: string): Promise<OpenCodeProviderDiscovery> {
   return withFreshClient(dataHome, [], async (client) => {
-    const [providerResponse, authResponse] = await Promise.all([
+    const [providerResponse, authResponse, credentialProviderIds] = await Promise.all([
       client.provider.list({ directory: dataHome }),
       client.provider.auth({ directory: dataHome }),
+      savedCredentialProviderIds(dataHome),
     ]);
     if (providerResponse.error || !providerResponse.data || authResponse.error) {
       throw new Error('OpenCode provider discovery failed');
@@ -107,8 +190,13 @@ async function discover(dataHome: string): Promise<OpenCodeProviderDiscovery> {
       (provider): OpenCodeProviderConnection => ({
         id: provider.id,
         name: provider.name,
-        configured: connected.has(provider.id),
-        status: connected.has(provider.id) ? 'configured' : 'disconnected',
+        runtimeAvailable: connected.has(provider.id),
+        credentialPresence:
+          credentialProviderIds === null
+            ? 'unknown'
+            : credentialProviderIds.has(provider.id)
+              ? 'present'
+              : 'absent',
         authMethods: safeMethods(authResponse.data, provider.id),
       })
     );
@@ -125,6 +213,13 @@ export async function handleOpenCodeAuth(payload: OpenCodeAuthPayload, options: 
   }
 
   try {
+    if (payload.params.operation === 'discover-models') {
+      return {
+        success: true,
+        data: await discoverModels(payload.dataHome, payload.params.directory),
+      };
+    }
+
     if (payload.params.operation === 'discover') {
       return { success: true, data: await discover(payload.dataHome) };
     }

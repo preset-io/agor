@@ -109,6 +109,21 @@ describe('AgenticToolConfigurationPicker', () => {
     expect(screen.getByText(/Save as my default/)).toBeInTheDocument();
   });
 
+  it('does not offer "My default" without a stable execution owner', async () => {
+    render(
+      <Form>
+        <AgenticToolConfigurationPicker
+          tool="claude-code"
+          client={makeClient()}
+          mcpServerById={new Map()}
+        />
+      </Form>
+    );
+
+    await waitFor(() => expect(screen.getByTestId('inline-config-form')).toBeInTheDocument());
+    expect(screen.queryByText('My default')).not.toBeInTheDocument();
+  });
+
   it('keeps a preset-backed default reachable as "My default" with the preset summary', async () => {
     // Selection points at a preset (no inline config blob) — must not be hidden
     // or force-switched to inline.

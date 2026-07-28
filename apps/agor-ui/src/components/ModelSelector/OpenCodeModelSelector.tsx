@@ -1,6 +1,23 @@
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Space, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import type { AgorClient, OpenCodeModelCatalog } from '@agor-live/client';
+import {
+  InfoCircleOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Flex,
+  Input,
+  Popover,
+  Select,
+  Space,
+  Spin,
+  Tooltip,
+  Typography,
+} from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const { Text } = Typography;
 
@@ -12,39 +29,141 @@ export interface OpenCodeModelConfig {
 export interface OpenCodeModelSelectorProps {
   value?: OpenCodeModelConfig;
   onChange?: (config: OpenCodeModelConfig | undefined) => void;
+  client?: AgorClient | null;
+  branchId?: string;
+  /**
+   * False for a collaborative session owned by somebody else. Its immutable
+   * owner executes the task, so the caller's catalog would be misleading.
+   */
+  catalogEnabled?: boolean;
+  /** Single bounded control for footer/popover surfaces. */
+  compact?: boolean;
+  /** Keep nested Ant Design overlays inside a parent-controlled popover. */
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }
 
+type ScopedCatalog = {
+  catalog: OpenCodeModelCatalog;
+  client: AgorClient;
+  branchId?: string;
+  catalogEnabled: boolean;
+};
+
 /**
- * OpenCode provider/model override.
- *
- * OpenCode discovers provider models only inside its task-scoped runtime, so
- * Agor intentionally does not call a daemon discovery service. Empty fields
- * omit the override and let OpenCode apply its configured defaults.
+ * Configured OpenCode model selection. Discovery is a disposable, protected
+ * read; manual exact entry remains usable when it is unavailable.
  */
 export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
   onChange,
+  client,
+  branchId,
+  catalogEnabled = true,
+  compact = false,
+  getPopupContainer,
 }) => {
   const [provider, setProvider] = useState(value?.provider ?? '');
   const [model, setModel] = useState(value?.model ?? '');
+  const [catalogState, setCatalogState] = useState<ScopedCatalog | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
+  const [compactManualOpen, setCompactManualOpen] = useState(false);
+  const requestSequence = useRef(0);
+  const catalog =
+    catalogState &&
+    catalogState.client === client &&
+    catalogState.branchId === branchId &&
+    catalogState.catalogEnabled === catalogEnabled
+      ? catalogState.catalog
+      : null;
 
   useEffect(() => {
     setProvider(value?.provider ?? '');
     setModel(value?.model ?? '');
   }, [value?.provider, value?.model]);
 
-  const publish = (nextProvider: string, nextModel: string) => {
-    if (nextProvider && nextModel) {
-      onChange?.({ provider: nextProvider, model: nextModel });
+  const refresh = useCallback(async () => {
+    if (!client || !catalogEnabled) return;
+    const sequence = ++requestSequence.current;
+    setLoading(true);
+    setRefreshFailed(false);
+    try {
+      const next = await client
+        .service('opencode-models')
+        .find(branchId ? { query: { branch_id: branchId } } : undefined);
+      if (requestSequence.current !== sequence) return;
+      setCatalogState({ catalog: next, client, branchId, catalogEnabled });
+    } catch {
+      if (requestSequence.current !== sequence) return;
+      setRefreshFailed(true);
+    } finally {
+      if (requestSequence.current === sequence) setLoading(false);
+    }
+  }, [branchId, catalogEnabled, client]);
+
+  useEffect(() => {
+    if (!catalogEnabled) {
+      requestSequence.current += 1;
+      setCatalogState(null);
+      setRefreshFailed(false);
+      setLoading(false);
+      setManualOpen(!compact);
       return;
     }
-    // A partial pair is not executable. Publish root absence while the user
-    // finishes editing so stale provider/model values are never retained.
-    onChange?.(undefined);
+    // A catalog is valid only for the client/branch/enabled tuple that produced it.
+    // Dependency-driven scope changes must not retain a prior branch result;
+    // the explicit Refresh action can preserve the current scoped result.
+    setCatalogState(null);
+    setRefreshFailed(false);
+    void refresh();
+    return () => {
+      requestSequence.current += 1;
+    };
+  }, [catalogEnabled, compact, refresh]);
+
+  const storedAvailable = useMemo(() => {
+    if (!value || !catalog) return true;
+    return catalog.providers.some(
+      (entry) =>
+        entry.id === value.provider &&
+        entry.runtimeAvailable &&
+        entry.models.some((candidate) => candidate.id === value.model)
+    );
+  }, [catalog, value]);
+
+  useEffect(() => {
+    if (!compact && catalog && !storedAvailable) setManualOpen(true);
+  }, [catalog, compact, storedAvailable]);
+
+  const selectPair = (nextProvider: string, nextModel: string) => {
+    setProvider(nextProvider);
+    setModel(nextModel);
+    setManualOpen(false);
+    setCompactManualOpen(false);
+    onChange?.({ provider: nextProvider, model: nextModel });
   };
 
-  return (
-    <Space orientation="vertical" style={{ width: '100%' }}>
+  const selectedCatalogProvider = catalog?.providers.find((entry) => entry.id === provider);
+  const providerOptions =
+    catalog?.providers.map((entry) => ({
+      value: entry.id,
+      label: entry.runtimeAvailable ? entry.name : `${entry.name} · unavailable`,
+      disabled: !entry.runtimeAvailable,
+      searchText:
+        `${entry.name} ${entry.id}${entry.runtimeAvailable ? '' : ' unavailable'}`.toLowerCase(),
+    })) ?? [];
+  const modelOptions =
+    selectedCatalogProvider?.models.map((candidate) => ({
+      value: candidate.id,
+      label:
+        candidate.status === 'active' ? candidate.name : `${candidate.name} · ${candidate.status}`,
+      searchText:
+        `${candidate.name} ${candidate.id} ${candidate.status} ${selectedCatalogProvider.name} ${selectedCatalogProvider.id}`.toLowerCase(),
+    })) ?? [];
+
+  const manualFields = (
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <div>
         <Text strong style={{ display: 'block', marginBottom: 8 }}>
           Provider ID
@@ -53,12 +172,8 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           aria-label="OpenCode provider ID"
           value={provider}
           maxLength={128}
-          placeholder="Optional, e.g. openai"
-          onChange={(event) => {
-            const next = event.target.value.trim();
-            setProvider(next);
-            publish(next, model);
-          }}
+          placeholder="e.g. openai"
+          onChange={(event) => setProvider(event.target.value.trim())}
         />
       </div>
       <div>
@@ -69,18 +184,232 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           aria-label="OpenCode model ID"
           value={model}
           maxLength={128}
-          placeholder="Optional, e.g. gpt-5"
-          onChange={(event) => {
-            const next = event.target.value.trim();
-            setModel(next);
-            publish(provider, next);
-          }}
+          placeholder="e.g. gpt-5"
+          onChange={(event) => setModel(event.target.value.trim())}
         />
       </div>
+      <Button
+        type="primary"
+        disabled={!provider || !model}
+        onClick={() => selectPair(provider, model)}
+      >
+        Use exact IDs
+      </Button>
       <Text type="secondary" style={{ fontSize: 12 }}>
-        <InfoCircleOutlined /> Enter an exact provider/model pair, or leave both empty to use
-        OpenCode defaults.
+        <InfoCircleOutlined /> Manual entry is an exact fallback. Availability is enforced on the
+        same task runtime before a session or prompt is created.
       </Text>
+    </Space>
+  );
+
+  if (compact) {
+    const pairValue = (providerId: string, modelId: string) =>
+      JSON.stringify([providerId, modelId]);
+    const compactOptions = [
+      ...(catalog?.providers.map((entry) => ({
+        label: entry.runtimeAvailable ? entry.name : `${entry.name} · unavailable`,
+        options: entry.models.map((candidate) => ({
+          value: pairValue(entry.id, candidate.id),
+          label: entry.runtimeAvailable
+            ? candidate.name
+            : `${candidate.name} · provider unavailable`,
+          disabled: !entry.runtimeAvailable,
+          searchText:
+            `${entry.name} ${entry.id} ${candidate.name} ${candidate.id} ${candidate.status}`.toLowerCase(),
+        })),
+      })) ?? []),
+    ];
+    const selectedValue = value ? pairValue(value.provider, value.model) : undefined;
+    const storedConfirmedUnavailable = Boolean(value && catalog && !storedAvailable);
+    if (
+      value &&
+      !compactOptions.some((group) =>
+        group.options.some((option) => option.value === selectedValue)
+      )
+    ) {
+      compactOptions.splice(1, 0, {
+        label: 'Stored selection',
+        options: [
+          {
+            value: pairValue(value.provider, value.model),
+            label: `${value.provider}/${value.model}${
+              storedConfirmedUnavailable ? ' (unavailable)' : ''
+            }`,
+            disabled: false,
+            searchText:
+              `${value.provider} ${value.model}${storedConfirmedUnavailable ? ' unavailable' : ''}`.toLowerCase(),
+          },
+        ],
+      });
+    }
+
+    return (
+      <Flex align="center" gap={2} style={{ width: '100%', minWidth: 0 }}>
+        <Select
+          aria-label="OpenCode model"
+          showSearch
+          value={selectedValue}
+          placeholder="Select provider/model"
+          options={compactOptions}
+          optionFilterProp="searchText"
+          popupMatchSelectWidth={false}
+          getPopupContainer={getPopupContainer}
+          listHeight={256}
+          size="small"
+          loading={loading}
+          onChange={(next) => {
+            const [nextProvider, nextModel] = JSON.parse(next) as [string, string];
+            selectPair(nextProvider, nextModel);
+          }}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        {catalogEnabled && client && (
+          <Tooltip title="Refresh configured models">
+            <Button
+              aria-label="Refresh configured models"
+              type="text"
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={loading}
+              onClick={() => void refresh()}
+            />
+          </Tooltip>
+        )}
+        <Popover
+          open={compactManualOpen}
+          onOpenChange={setCompactManualOpen}
+          trigger="click"
+          placement="topRight"
+          getPopupContainer={getPopupContainer}
+          title="Exact OpenCode model"
+          content={<div style={{ width: 260 }}>{manualFields}</div>}
+        >
+          <Tooltip title="Enter exact provider and model IDs">
+            <Button
+              aria-label="Enter exact OpenCode IDs"
+              type="text"
+              size="small"
+              icon={<SettingOutlined />}
+            />
+          </Tooltip>
+        </Popover>
+        {(refreshFailed || (value && catalog && !storedAvailable) || !catalogEnabled) && (
+          <Tooltip
+            title={
+              !catalogEnabled
+                ? 'Configured models are private to the session owner. Their stored exact pair remains usable.'
+                : refreshFailed
+                  ? 'Configured models could not be refreshed. The stored selection was not changed.'
+                  : 'The stored pair is not in the current configured catalog.'
+            }
+          >
+            <WarningOutlined aria-label="OpenCode model warning" />
+          </Tooltip>
+        )}
+      </Flex>
+    );
+  }
+
+  return (
+    <Space orientation="vertical" size={10} style={{ width: '100%' }}>
+      <Flex gap={8} wrap="wrap">
+        {catalogEnabled && client && (
+          <Button
+            aria-label="Refresh configured models"
+            icon={<ReloadOutlined />}
+            loading={loading}
+            onClick={() => void refresh()}
+          >
+            Refresh
+          </Button>
+        )}
+      </Flex>
+
+      {!catalogEnabled && (
+        <Alert
+          type="info"
+          showIcon
+          title="Configured models are private to the session owner"
+          description="Execution uses the immutable session owner's OpenCode credentials. Their catalog is not shown to collaborators; keep the stored exact pair or enter exact IDs manually."
+        />
+      )}
+
+      {refreshFailed && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Could not refresh the configured model catalog"
+          description="The stored selection was not changed. Enter an exact provider/model pair manually if needed."
+        />
+      )}
+
+      {loading && !catalog && (
+        <Flex gap={8} align="center">
+          <Spin size="small" />
+          <Text type="secondary">Loading configured OpenCode models…</Text>
+        </Flex>
+      )}
+
+      {catalog?.projectConfigured && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <SettingOutlined /> Project configuration currently names{' '}
+          <Text code>
+            {catalog.projectConfigured.providerId}/{catalog.projectConfigured.modelId}
+          </Text>
+          . Select and store the exact pair in Agor before running the session.
+        </Text>
+      )}
+
+      {catalog && (
+        <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+          <Select
+            aria-label="OpenCode provider"
+            showSearch
+            value={provider || undefined}
+            placeholder="Select a configured provider"
+            options={providerOptions}
+            optionFilterProp="searchText"
+            getPopupContainer={getPopupContainer}
+            onChange={(nextProvider) => {
+              setProvider(nextProvider);
+              setModel('');
+              setManualOpen(false);
+            }}
+            style={{ width: '100%' }}
+          />
+          <Select
+            aria-label="OpenCode model"
+            showSearch
+            disabled={!selectedCatalogProvider?.runtimeAvailable}
+            value={selectedCatalogProvider && model ? model : undefined}
+            placeholder={selectedCatalogProvider ? 'Select a model' : 'Select a provider first'}
+            options={modelOptions}
+            optionFilterProp="searchText"
+            getPopupContainer={getPopupContainer}
+            listHeight={320}
+            onChange={(nextModel) => selectPair(provider, nextModel)}
+            style={{ width: '100%' }}
+          />
+        </Space>
+      )}
+
+      {value && catalog && !storedAvailable && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<WarningOutlined />}
+          title={`${value.provider}/${value.model} is not in the current configured catalog`}
+          description="The stored pair is preserved. Refresh, choose an available configured model, or edit the exact IDs below."
+        />
+      )}
+
+      {!manualOpen && (
+        <Button type="link" icon={<SettingOutlined />} onClick={() => setManualOpen(true)}>
+          Enter exact IDs manually
+        </Button>
+      )}
+
+      {(manualOpen || !catalogEnabled) && manualFields}
     </Space>
   );
 };

@@ -72,22 +72,24 @@ export function buildConfigFromFormValues(
     values.modelConfig && 'provider' in values.modelConfig
       ? values.modelConfig.provider
       : undefined;
-  const hasCompleteOpenCodeModel =
-    tool !== 'opencode' ||
-    Boolean(
-      typeof openCodeProvider === 'string' &&
-        openCodeProvider.trim() &&
-        values.modelConfig?.model?.trim()
-    );
+  const hasCompleteOpenCodeModel = Boolean(
+    typeof openCodeProvider === 'string' &&
+      openCodeProvider.trim() &&
+      values.modelConfig?.model?.trim()
+  );
+  if (tool === 'opencode' && !hasCompleteOpenCodeModel) {
+    throw new Error('Select an exact OpenCode provider and model before saving');
+  }
 
   // Merge effort back into modelConfig
-  const modelConfig = hasCompleteOpenCodeModel
-    ? values.modelConfig
-      ? { ...values.modelConfig, effort: values.effort }
-      : values.effort
-        ? { effort: values.effort }
-        : undefined
-    : undefined;
+  const modelConfig =
+    tool !== 'opencode' || hasCompleteOpenCodeModel
+      ? values.modelConfig
+        ? { ...values.modelConfig, effort: values.effort }
+        : values.effort
+          ? { effort: values.effort }
+          : undefined
+      : undefined;
 
   return {
     modelConfig,

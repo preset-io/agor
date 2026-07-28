@@ -1,4 +1,4 @@
-import type { AgorClient, BranchID, Schedule } from '@agor-live/client';
+import type { AgorClient, BranchID, Schedule, User } from '@agor-live/client';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -21,10 +21,20 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   const { Form: AntForm } = await import('antd');
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
-    AgenticToolConfigurationPicker: ({ defaultResolution }: { defaultResolution?: string }) => {
+    AgenticToolConfigurationPicker: ({
+      defaultResolution,
+      currentUser,
+    }: {
+      defaultResolution?: string;
+      currentUser?: User | null;
+    }) => {
       const form = AntForm.useFormInstance();
       return (
-        <div data-testid="configuration-picker" data-default-resolution={defaultResolution}>
+        <div
+          data-testid="configuration-picker"
+          data-default-resolution={defaultResolution}
+          data-execution-owner-id={currentUser?.user_id}
+        >
           <AntForm.Item noStyle shouldUpdate>
             {({ getFieldValue }) => (
               <span data-testid="configuration-selection">
@@ -79,6 +89,7 @@ function makeSchedule(): Schedule {
 
 function renderModal(patch: ReturnType<typeof vi.fn>, onClose = vi.fn()) {
   const schedule = makeSchedule();
+  const executionOwner = { user_id: schedule.created_by } as User;
   const client = {
     service: () => ({
       patch,
@@ -94,6 +105,7 @@ function renderModal(patch: ReturnType<typeof vi.fn>, onClose = vi.fn()) {
       schedule={schedule}
       mcpServerById={new Map()}
       client={client}
+      executionOwner={executionOwner}
     />
   );
   return { schedule, onClose };
@@ -109,6 +121,14 @@ describe('ScheduleModal agentic configuration payload', () => {
     expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
       'data-default-resolution',
       'schedule-run'
+    );
+  });
+
+  it('offers defaults from the schedule execution owner', async () => {
+    renderModal(vi.fn());
+    expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
+      'data-execution-owner-id',
+      makeSchedule().created_by
     );
   });
 

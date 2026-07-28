@@ -12,7 +12,6 @@
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
 import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
@@ -82,11 +81,9 @@ export async function fireAlwaysNewZoneTrigger(
     );
   }
 
-  const {
-    permission_config: permissionConfig,
-    model_config: modelConfig,
-    mcp_server_ids: inheritedMcpIds,
-  } = resolveSessionDefaults({ agenticTool, user, branch });
+  const inheritedMcpIds = branch.mcp_server_ids?.length
+    ? branch.mcp_server_ids
+    : (user.default_mcp_server_ids ?? []);
 
   const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   const asUser = db ? await resolveExecutorReadAsUser(db, user) : undefined;
@@ -105,8 +102,6 @@ export async function fireAlwaysNewZoneTrigger(
       description: `Session from zone "${zone.label ?? ''}"`,
       created_by: userId,
       unix_username: user.unix_username,
-      permission_config: permissionConfig,
-      ...(modelConfig && { model_config: modelConfig }),
       git_state: {
         ref: currentRef,
         base_sha: currentSha,

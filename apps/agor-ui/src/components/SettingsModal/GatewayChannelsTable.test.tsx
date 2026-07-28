@@ -52,7 +52,19 @@ vi.mock('../AgenticToolConfigForm', () => ({
 }));
 vi.mock('../AgenticToolConfigurationPicker', () => ({
   INLINE_AGENTIC_CONFIGURATION: '__inline__',
-  AgenticToolConfigurationPicker: () => <div data-testid="agent-config" />,
+  AgenticToolConfigurationPicker: ({
+    branchId,
+    currentUser,
+  }: {
+    branchId?: string;
+    currentUser?: User | null;
+  }) => (
+    <div
+      data-testid="agent-config"
+      data-branch-id={branchId}
+      data-execution-owner-id={currentUser?.user_id}
+    />
+  ),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -399,6 +411,39 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
+  });
+
+  it('routes the target branch into gateway OpenCode model discovery', () => {
+    renderEditTable(null, {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'opencode', presetId: '__inline__' },
+    } as GatewayChannel);
+
+    expandPanel('Agent Configuration');
+
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-branch-id', 'branch-1');
+  });
+
+  it('offers execution-owner defaults when the channel has a stable run-as user', () => {
+    renderEditTable(null, {
+      ...makeSlackChannel(),
+      config: { bot_token: '••••••••', align_slack_users: false },
+    });
+
+    expandPanel('Agent Configuration');
+
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-execution-owner-id', 'user-1');
+  });
+
+  it('does not offer execution-owner defaults when platform alignment makes the owner unstable', () => {
+    renderEditTable(null, {
+      ...makeSlackChannel(),
+      config: { bot_token: '••••••••', align_slack_users: true },
+    });
+
+    expandPanel('Agent Configuration');
+
+    expect(screen.getByTestId('agent-config')).not.toHaveAttribute('data-execution-owner-id');
   });
 
   it('copies the recommended manifest derived from the channel options', async () => {

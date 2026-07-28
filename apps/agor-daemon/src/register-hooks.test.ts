@@ -548,6 +548,7 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     'codex-auth/device',
     'codex-auth/import',
     'codex-auth/logout',
+    'opencode-models',
   ])('grants ambient tenant identity to %s', (path) => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
   });

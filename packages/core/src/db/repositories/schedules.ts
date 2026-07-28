@@ -6,6 +6,7 @@
  */
 
 import type {
+  AgenticToolPresetID,
   BranchID,
   Schedule,
   ScheduleAgenticToolConfig,
@@ -63,11 +64,16 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       typeof row.agentic_tool_config === 'string'
         ? (JSON.parse(row.agentic_tool_config) as ScheduleAgenticToolConfig)
         : (row.agentic_tool_config as ScheduleAgenticToolConfig);
-    const config: ScheduleAgenticToolConfig = {
-      ...storedConfig,
-      preset_id:
-        (row.agentic_tool_preset_id as ScheduleAgenticToolConfig['preset_id']) ?? undefined,
-    };
+    const storedPresetId = row.agentic_tool_preset_id as AgenticToolPresetID | null;
+    const config: ScheduleAgenticToolConfig = storedPresetId
+      ? {
+          agentic_tool: storedConfig.agentic_tool,
+          preset_id: storedPresetId,
+          ...(storedConfig.context_files !== undefined
+            ? { context_files: storedConfig.context_files }
+            : {}),
+        }
+      : storedConfig;
 
     return attachHiddenTenant(
       {

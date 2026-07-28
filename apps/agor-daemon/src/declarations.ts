@@ -118,7 +118,7 @@ export interface SessionsServiceImpl
     status: string;
     streaming: boolean;
   }>;
-  materializeAgenticToolPreset(session: Session, params?: FeathersParams): Promise<Session>;
+  materializeAgenticToolConfiguration(session: Session, params?: FeathersParams): Promise<Session>;
   // Event emitter methods (FeathersJS EventEmitter interface - any[] for event args flexibility)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event handlers accept variable arguments
   on(event: string, handler: (...args: any[]) => void): this;

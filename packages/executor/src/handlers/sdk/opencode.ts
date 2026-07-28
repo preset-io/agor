@@ -5,6 +5,7 @@
  */
 
 import { generateId, shortId } from '@agor/core';
+import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/core/models';
 import type {
   ExecutorPulseKind,
   MessageID,
@@ -53,6 +54,9 @@ export async function executeOpenCodeTask(params: {
       model: session.model_config?.model,
       provider: session.model_config?.provider,
     });
+    if (!session.model_config?.provider?.trim() || !session.model_config.model?.trim()) {
+      throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+    }
 
     const repos = createFeathersBackedRepositories(client);
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;

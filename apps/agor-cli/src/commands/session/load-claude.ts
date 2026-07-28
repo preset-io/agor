@@ -16,9 +16,9 @@ import { generateId, shortId } from '@agor/core/db';
 import type {
   Branch,
   BranchID,
+  CreateSessionInput,
   MessageID,
   Repo,
-  Session,
   SessionID,
   TaskID,
   UUID,
@@ -125,7 +125,10 @@ export default class SessionLoadClaude extends BaseCommand {
       this.log(`${chalk.green('✓')} Created branch: ${chalk.cyan(branchName)}`);
 
       // Create Agor session
-      const agorSession: Partial<Session> & { session_id: SessionID; created_by: string } = {
+      const agorSession: CreateSessionInput & {
+        session_id: SessionID;
+        created_by: string;
+      } = {
         session_id: generateId() as SessionID,
         agentic_tool: 'claude-code',
         status: TaskStatus.COMPLETED,

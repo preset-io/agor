@@ -35,7 +35,7 @@ function createSessionsService() {
       });
       return session;
     }),
-    materializeAgenticToolPreset: vi.fn(async (loaded: Session) => {
+    materializeAgenticToolConfiguration: vi.fn(async (loaded: Session) => {
       expect(getCurrentTenantDatabaseScope()).toMatchObject({
         kind: 'tenant',
         tenantId: 'tenant-x',
@@ -70,7 +70,7 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
     ).resolves.toBe(session);
 
     expect(sessionsService.get).toHaveBeenCalledOnce();
-    expect(sessionsService.materializeAgenticToolPreset).toHaveBeenCalledOnce();
+    expect(sessionsService.materializeAgenticToolConfiguration).toHaveBeenCalledOnce();
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();
   });
 

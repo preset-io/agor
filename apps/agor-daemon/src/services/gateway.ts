@@ -7,10 +7,9 @@
  */
 
 import {
-  assertInlineAgenticConfigurationAllowed,
+  materializeAgenticToolConfiguration,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
-  resolveAgenticToolPreset,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -53,8 +52,8 @@ import {
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
+  AgenticToolConfigurationSource,
   AgenticToolName,
   BranchPermissionLevel,
   ChannelType,
@@ -1828,12 +1827,9 @@ export class GatewayService {
       get: (id: string) => Promise<User>;
     };
     const channelConfig = channel.config as Record<string, unknown>;
-    const alignSlackUsers =
-      channelConfig.align_slack_users === true || data.metadata?.align_slack_users === true;
-    const alignGitHubUsers =
-      channelConfig.align_github_users === true || data.metadata?.align_github_users === true;
-    const alignShortcutUsers =
-      channelConfig.align_shortcut_users === true || data.metadata?.align_shortcut_users === true;
+    const alignSlackUsers = channelConfig.align_slack_users === true;
+    const alignGitHubUsers = channelConfig.align_github_users === true;
+    const alignShortcutUsers = channelConfig.align_shortcut_users === true;
 
     // Only fetch and use channel owner when NO alignment is active.
     // When alignment is ON, agor_user_id may be empty (the "Post messages as"
@@ -1999,57 +1995,65 @@ export class GatewayService {
     let created = false;
     let mcpAuthWarning: string | undefined;
     let mappingForCursor: ThreadSessionMap | null = existingMapping ?? null;
+    const executionOwnerId = existingMapping
+      ? (await this.sessionRepo.findById(existingMapping.session_id))?.created_by
+      : user.user_id;
+    if (!executionOwnerId) {
+      throw new Error(`Mapped gateway session not found: ${existingMapping?.session_id}`);
+    }
 
-    // Resolve agentic config: channel config > user defaults > system defaults.
-    // Channel-level agentic_config maps to the helper's `overrides` (it's the
-    // gateway's analogue of an MCP tool's explicit args). Codex sub-config is
-    // first-class on `GatewayAgenticConfig`, so thread it through the helper —
-    // otherwise the executor's per-tool
-    // settings (which Codex reads from `permission_config.codex`, not `mode`)
-    // get silently dropped.
+    // Resolve the channel's one source against the actual execution owner.
     const agenticConfig = channel.agentic_config;
     const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const inlineAgenticConfiguration = {
+      modelConfig: agenticConfig?.modelConfig,
+      permissionMode: agenticConfig?.permissionMode,
+      codexSandboxMode: agenticConfig?.codexSandboxMode,
+      codexApprovalPolicy: agenticConfig?.codexApprovalPolicy,
+      codexNetworkAccess: agenticConfig?.codexNetworkAccess,
+    };
+    const hasInlineAgenticIntent = Boolean(
+      agenticConfig &&
+        Object.entries(agenticConfig).some(
+          ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
+        )
+    );
+    // Repository rows are untrusted at this boundary. Forward a corrupt mixed
+    // shape intact so the canonical materializer rejects it instead of silently
+    // discarding the inline half in favor of the reference.
+    const agenticConfigurationSource = (agenticConfig?.presetId
+      ? {
+          reference: agenticConfig.presetId,
+          ...(hasInlineAgenticIntent ? { configuration: inlineAgenticConfiguration } : {}),
+        }
+      : { configuration: inlineAgenticConfiguration }) as unknown as AgenticToolConfigurationSource;
     // HTTP-originated requests carry an ambient tenant DB scope; socket-mode
     // listener messages only carry tenant identity (runWithTenantContext).
     // Open a short tenant unit of work from that identity — same pattern as
     // bindRepositoryToTenantUnitOfWork — instead of assuming an ambient scope
     // or falling back to the unscoped base connection.
-    const preset = await runWithTenantDatabaseScope(
+    const materializedAgenticConfig = await runWithTenantDatabaseScope(
       this.db,
       getCurrentTenantId(),
-      async (tenantDb) => {
-        const resolved = agenticConfig?.presetId
-          ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
-          : null;
-        if (!resolved) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
-        return resolved;
-      }
+      (tenantDb) =>
+        materializeAgenticToolConfiguration(tenantDb, {
+          tool: agenticTool,
+          source: agenticConfigurationSource,
+          executionOwnerId: executionOwnerId as UserID,
+          mcpServerIds: channel.mcp_server_ids,
+        })
     );
-    const runtimeConfig = preset?.configuration ?? agenticConfig;
-    const {
-      permission_config: gatewayPermissionConfig,
-      model_config: gatewayModelConfig,
-      mcp_server_ids: defaultMcpServerIds,
-    } = resolveSessionDefaults({
-      agenticTool,
-      user,
-      overrides: {
-        permissionMode: runtimeConfig?.permissionMode,
-        modelConfig: runtimeConfig?.modelConfig,
-        codexSandboxMode: runtimeConfig?.codexSandboxMode,
-        codexApprovalPolicy: runtimeConfig?.codexApprovalPolicy,
-        codexNetworkAccess: runtimeConfig?.codexNetworkAccess,
-      },
-    });
-    const gatewayMcpServerIds = channel.mcp_server_ids ?? defaultMcpServerIds;
+    const gatewayPermissionConfig = materializedAgenticConfig.permission_config;
+    const gatewayModelConfig = materializedAgenticConfig.model_config;
+    const gatewayMcpServerIds = materializedAgenticConfig.mcp_server_ids;
     const permissionMode = gatewayPermissionConfig.mode;
 
     if (existingMapping) {
       // Existing thread → existing session
       sessionId = existingMapping.session_id;
-      if (agenticConfig?.presetId) {
+      if (materializedAgenticConfig.agentic_tool_preset_id) {
         await this.app.service('sessions').patch(sessionId, {
-          agentic_tool_preset_id: agenticConfig.presetId,
+          agentic_tool_preset_id: materializedAgenticConfig.agentic_tool_preset_id,
         });
       } else if (agenticConfig) {
         await this.app.service('sessions').patch(sessionId, {
@@ -2110,7 +2114,7 @@ export class GatewayService {
     } else {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as unknown as {
-        create: (data: Partial<Session>) => Promise<Session>;
+        create: (data: Partial<Session>, params?: Record<string, never>) => Promise<Session>;
         setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
 
@@ -2184,36 +2188,43 @@ export class GatewayService {
         gatewaySource.last_message_only = true;
       }
 
-      const session = await sessionsService.create({
-        title: data.text.substring(0, 100),
-        description: data.text,
-        branch_id: channel.target_branch_id,
-        created_by: user.user_id,
-        // Stamp session with creator's unix_username for executor impersonation.
-        // Normally set by the setSessionUnixUsername hook, but that hook skips
-        // internal calls (no provider). Gateway sessions are internal, so we
-        // must set it explicitly. When user alignment is active, this uses the
-        // aligned user's unix_username; otherwise the channel owner's.
-        unix_username: user.unix_username ?? null,
-        status: SessionStatus.IDLE,
-        agentic_tool: agenticTool,
-        agentic_tool_preset_id: agenticConfig?.presetId,
-        permission_config: gatewayPermissionConfig,
-        model_config: gatewayModelConfig,
-        tasks: [],
-        // Denormalized gateway metadata (immutable snapshot at creation time)
-        // Avoids N+1 lookups when rendering board cards
-        custom_context: {
-          gateway_source: gatewaySource,
+      const session = await sessionsService.create(
+        {
+          title: data.text.substring(0, 100),
+          description: data.text,
+          branch_id: channel.target_branch_id,
+          created_by: user.user_id,
+          // Stamp session with creator's unix_username for executor impersonation.
+          // Normally set by the setSessionUnixUsername hook, but that hook skips
+          // internal calls (no provider). Gateway sessions are internal, so we
+          // must set it explicitly. When user alignment is active, this uses the
+          // aligned user's unix_username; otherwise the channel owner's.
+          unix_username: user.unix_username ?? null,
+          status: SessionStatus.IDLE,
+          agentic_tool: agenticTool,
+          ...(materializedAgenticConfig.agentic_tool_preset_id
+            ? {
+                agentic_tool_preset_id: materializedAgenticConfig.agentic_tool_preset_id,
+              }
+            : {
+                permission_config: gatewayPermissionConfig,
+                model_config: gatewayModelConfig,
+              }),
+          tasks: [],
+          // Denormalized gateway metadata (immutable snapshot at creation time)
+          // Avoids N+1 lookups when rendering board cards
+          custom_context: {
+            gateway_source: gatewaySource,
+          },
         },
-      });
+        {}
+      );
 
       sessionId = session.session_id;
       created = true;
 
       // Attach MCP servers from channel agentic config (reuses sessions service logic)
-      // gatewayMcpServerIds came out of resolveSessionDefaults, so user-default
-      // inheritance is already applied (channel config > user defaults > []).
+      // The canonical materializer already applied channel > owner > [].
       if (gatewayMcpServerIds.length > 0) {
         await sessionsService.setMCPServers(
           session.session_id as SessionID,

@@ -19,6 +19,7 @@ export * from './knowledge';
 export * from './mcp';
 export * from './message';
 export * from './opencode-auth';
+export * from './opencode-models';
 export * from './presence';
 export * from './repo';
 export * from './report';

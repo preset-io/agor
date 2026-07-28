@@ -85,7 +85,7 @@ describe('resolveChildSessionConfig', () => {
         parent,
         effectiveTool: 'codex',
         user: makeUser({ codex: { modelConfig: { model: 'gpt-5.4' } } }),
-        overrides: { modelConfig: { model: 'gpt-5.4-mini' } },
+        source: { modelConfig: { model: 'gpt-5.4-mini' } },
         now,
       });
       expect(r.model_config?.model).toBe('gpt-5.4-mini');
@@ -135,7 +135,7 @@ describe('resolveChildSessionConfig', () => {
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'claude-code',
-        overrides: {
+        source: {
           modelConfig: { model: 'claude-haiku-4-5' },
           permissionMode: 'plan',
         },
@@ -149,7 +149,7 @@ describe('resolveChildSessionConfig', () => {
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'claude-code',
-        overrides: {
+        source: {
           modelConfig: { advisorModel: 'sonnet' },
         },
         now,
@@ -319,7 +319,7 @@ describe('resolveChildSessionConfig', () => {
       const r = resolveChildSessionConfig({
         parent,
         effectiveTool: 'codex',
-        overrides: {
+        source: {
           codexSandboxMode: 'read-only',
           codexApprovalPolicy: 'untrusted',
           codexNetworkAccess: false,

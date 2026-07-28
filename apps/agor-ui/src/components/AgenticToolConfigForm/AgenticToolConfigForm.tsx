@@ -45,6 +45,8 @@ export interface AgenticToolConfigFormProps {
    * dynamic discovery (e.g., default-settings preview, schedule editor).
    */
   client?: AgorClient | null;
+  /** Optional authorized branch scope for OpenCode model discovery. */
+  branchId?: string;
   /**
    * Render the Claude advisor model inline with the model selector. Surfaces
    * that relocate it into their own "Advanced" area pass `false`.
@@ -65,6 +67,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
   client,
+  branchId,
   showAdvisor = true,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
@@ -75,13 +78,30 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       <Form.Item
         name="modelConfig"
         label={modelLabel}
+        rules={
+          agenticTool === 'opencode'
+            ? [
+                {
+                  validator: (_, value) =>
+                    value?.provider?.trim() && value?.model?.trim()
+                      ? Promise.resolve()
+                      : Promise.reject(new Error('Select an exact OpenCode provider and model')),
+                },
+              ]
+            : undefined
+        }
         help={
           showHelpText && agenticTool === 'claude-code'
             ? `Choose which Claude model to use (defaults to ${DEFAULT_CLAUDE_MODEL})`
             : undefined
         }
       >
-        <ModelSelector agentic_tool={agenticTool} client={client} showAdvisor={showAdvisor} />
+        <ModelSelector
+          agentic_tool={agenticTool}
+          client={client}
+          branchId={branchId}
+          showAdvisor={showAdvisor}
+        />
       </Form.Item>
 
       <Form.Item

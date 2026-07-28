@@ -5,17 +5,20 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { SessionFooter } from './SessionFooter';
-
-// ModelSelector makes async network calls — replace with a stub
-vi.mock('../ModelSelector', () => ({
-  ModelSelector: () => <div data-testid="model-selector-stub" />,
-}));
 
 // TimerPill uses complex internal state not needed for footer layout tests
 vi.mock('../Pill', () => ({
@@ -216,6 +219,69 @@ describe('SessionFooter', () => {
     expect(overflowButtons[overflowButtons.length - 1]).toBe(settingsButton);
     fireEvent.click(settingsButton);
     expect(onOpenSessionSettings).toHaveBeenCalledWith('test-session-123');
+  });
+
+  it('contains the real compact selector overlays and remains reopenable after interaction', async () => {
+    const onModelConfigChange = vi.fn();
+    const find = vi.fn().mockResolvedValue({
+      runtimeVersion: '1.14.33',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          runtimeAvailable: true,
+          models: [{ id: 'gpt-5', name: 'GPT-5', status: 'active' }],
+        },
+      ],
+    });
+    const client = { service: vi.fn(() => ({ find })) };
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={
+          {
+            ...baseSession,
+            agentic_tool: 'opencode',
+            branch_id: 'branch-1',
+            created_by: 'user-1',
+          } as unknown as Session
+        }
+        currentUserId="user-1"
+        client={client as never}
+        onModelConfigChange={onModelConfigChange}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const more = screen.getByRole('button', { name: 'More options' });
+    fireEvent.click(more);
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    const selector = await within(overflowOptions).findByLabelText('OpenCode model');
+    expect(find).toHaveBeenCalledWith({ query: { branch_id: 'branch-1' } });
+
+    fireEvent.mouseDown(selector);
+    const modelOption = await screen.findByText('GPT-5');
+    expect(overflowOptions).toContainElement(modelOption);
+    fireEvent.click(modelOption);
+    expect(onModelConfigChange).toHaveBeenCalledWith({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-5',
+    });
+    expect(overflowOptions).toBeVisible();
+
+    fireEvent.click(
+      within(overflowOptions).getByRole('button', { name: 'Enter exact OpenCode IDs' })
+    );
+    const manualProvider = await within(overflowOptions).findByLabelText('OpenCode provider ID');
+    await waitFor(() => expect(manualProvider).toBeVisible());
+    expect(overflowOptions).toContainElement(manualProvider);
+
+    fireEvent.click(more);
+    await waitFor(() => expect(overflowOptions).not.toBeVisible());
+    fireEvent.click(more);
+    await waitFor(() => expect(screen.getByRole('group', { name: 'More options' })).toBeVisible());
+    expect(screen.getByLabelText('OpenCode model')).toBeVisible();
   });
 
   it('does not expose session settings from the MCP control', async () => {

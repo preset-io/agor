@@ -170,6 +170,43 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
 const getIdentitySubtitle = (alignUsers: boolean): string =>
   alignUsers ? 'align users' : 'run as selected user';
 
+const GatewayAgenticConfigurationPicker: React.FC<{
+  form: FormInstance;
+  tool: AgenticToolName;
+  client: AgorClient | null;
+  userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+}> = ({ form, tool, client, userById, mcpServerById }) => {
+  const branchId = Form.useWatch('target_branch_id', form) as string | undefined;
+  const watchedChannelType = Form.useWatch('channel_type', form) as ChannelType | undefined;
+  const watchedExecutionOwnerId = Form.useWatch('agor_user_id', form) as string | undefined;
+  const alignSlackUsers = Form.useWatch('align_slack_users', form) as boolean | undefined;
+  const alignGithubUsers = Form.useWatch('github_align_users', form) as boolean | undefined;
+  const alignShortcutUsers = Form.useWatch('shortcut_align_users', form) as boolean | undefined;
+  const channelType =
+    watchedChannelType ?? (form.getFieldValue('channel_type') as ChannelType | undefined);
+  const executionOwnerId =
+    watchedExecutionOwnerId ?? (form.getFieldValue('agor_user_id') as string | undefined);
+  const usesAlignedExecutionOwner =
+    (alignSlackUsers ?? form.getFieldValue('align_slack_users')) === true ||
+    (alignGithubUsers ?? form.getFieldValue('github_align_users')) === true ||
+    (alignShortcutUsers ?? form.getFieldValue('shortcut_align_users')) === true;
+  const executionOwner =
+    channelType && !usesAlignedExecutionOwner && executionOwnerId
+      ? userById.get(executionOwnerId)
+      : undefined;
+  return (
+    <AgenticToolConfigurationPicker
+      tool={tool}
+      mcpServerById={mcpServerById}
+      showHelpText={false}
+      client={client}
+      branchId={branchId}
+      currentUser={executionOwner}
+    />
+  );
+};
+
 const PlatformIdentityFields: React.FC<{
   alignFieldName: string;
   alignLabel: string;
@@ -1280,10 +1317,11 @@ const SlackSetupWizard: React.FC<{
                     showHelperText={false}
                     showComparisonLink={false}
                   />
-                  <AgenticToolConfigurationPicker
+                  <GatewayAgenticConfigurationPicker
+                    form={form}
                     tool={selectedAgent as AgenticToolName}
+                    userById={userById}
                     mcpServerById={mcpServerById}
-                    showHelpText={false}
                     client={client}
                   />
                 </Space>
@@ -1930,10 +1968,11 @@ const ChannelFormFields: React.FC<{
                           showHelperText={false}
                           showComparisonLink={false}
                         />
-                        <AgenticToolConfigurationPicker
+                        <GatewayAgenticConfigurationPicker
+                          form={form}
                           tool={selectedAgent as AgenticToolName}
+                          userById={userById}
                           mcpServerById={mcpServerById}
-                          showHelpText={false}
                           client={client}
                         />
                       </Space>
@@ -2155,10 +2194,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigurationPicker
+                    <GatewayAgenticConfigurationPicker
+                      form={form}
                       tool={selectedAgent as AgenticToolName}
+                      userById={userById}
                       mcpServerById={mcpServerById}
-                      showHelpText={false}
                       client={client}
                     />
                   </Space>
@@ -2397,10 +2437,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigurationPicker
+                    <GatewayAgenticConfigurationPicker
+                      form={form}
                       tool={selectedAgent as AgenticToolName}
+                      userById={userById}
                       mcpServerById={mcpServerById}
-                      showHelpText={false}
                       client={client}
                     />
                   </Space>
@@ -2867,10 +2908,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigurationPicker
+                    <GatewayAgenticConfigurationPicker
+                      form={form}
                       tool={selectedAgent as AgenticToolName}
+                      userById={userById}
                       mcpServerById={mcpServerById}
-                      showHelpText={false}
                       client={client}
                     />
                   </Space>
@@ -2948,13 +2990,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
-  // One-shot flag consumed by the "pre-populate agentic config" effect below —
-  // set whenever handleEdit hydrates the edit form from a channel's persisted
-  // config, so that hydration is never immediately overwritten by the user's
-  // global defaults. Value-based guards (e.g. comparing selectedAgent to the
-  // channel's persisted agent) can't distinguish "just opened" from "switched
-  // away and back", so a one-shot ref is used instead.
-  const skipAgentDefaultsAfterEditHydrationRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -3197,32 +3232,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     await runConnectionProbe('slack', {}, editingChannel.id);
   }, [editingChannel, runConnectionProbe]);
 
-  // Pre-populate agentic config form with user defaults when agent changes.
-  // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
-  // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
-  // otherwise applying the user's *global* defaults would stomp the channel's own
-  // saved config (including the independently hydrated MCP selection). Every subsequent
-  // agent change — including switching
-  // back to the channel's original agent — legitimately re-applies that agent's
-  // defaults, so the form never holds a silent mix of stale fields.
-  useEffect(() => {
-    if (skipAgentDefaultsAfterEditHydrationRef.current) {
-      skipAgentDefaultsAfterEditHydrationRef.current = false;
-      return;
-    }
-    const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
-    if (agentDefaults) {
-      const activeForm = editModalOpen ? editForm : createForm;
-      activeForm.setFieldsValue({
-        permissionMode: agentDefaults.permissionMode,
-        modelConfig: agentDefaults.modelConfig,
-        codexSandboxMode: agentDefaults.codexSandboxMode,
-        codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
-        codexNetworkAccess: agentDefaults.codexNetworkAccess,
-      });
-    }
-  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
-
   const extractFormData = (
     values: Record<string, unknown>,
     existingConfig?: Record<string, unknown>,
@@ -3335,29 +3344,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // Build agentic config from form values
     const presetId =
       values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
-        ? (values.agenticToolPresetId as GatewayAgenticConfig['presetId'])
+        ? (values.agenticToolPresetId as NonNullable<GatewayAgenticConfig['presetId']>)
         : undefined;
-    const agenticConfig: GatewayAgenticConfig = {
+    const commonAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
-      ...(presetId ? { presetId } : {}),
-      ...(!presetId && values.permissionMode
-        ? { permissionMode: values.permissionMode as PermissionMode }
-        : {}),
-      ...(!presetId && values.modelConfig
-        ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
-        : {}),
-      ...(!presetId && values.codexSandboxMode
-        ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
-        : {}),
-      ...(!presetId && values.codexApprovalPolicy
-        ? {
-            codexApprovalPolicy:
-              values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
-          }
-        : {}),
-      ...(!presetId && values.codexNetworkAccess !== undefined
-        ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
-        : {}),
       // Include env vars — filter out empty-key entries only.
       // Sentinel values ('••••••••') are sent through so the backend can
       // substitute real values from the database. Empty array = delete all.
@@ -3367,6 +3357,32 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           }
         : {}),
     };
+    const agenticConfig: GatewayAgenticConfig = presetId
+      ? { ...commonAgenticConfig, presetId }
+      : {
+          ...commonAgenticConfig,
+          ...(values.permissionMode
+            ? { permissionMode: values.permissionMode as PermissionMode }
+            : {}),
+          ...(values.modelConfig
+            ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
+            : {}),
+          ...(values.codexSandboxMode
+            ? {
+                codexSandboxMode:
+                  values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'],
+              }
+            : {}),
+          ...(values.codexApprovalPolicy
+            ? {
+                codexApprovalPolicy:
+                  values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
+              }
+            : {}),
+          ...(values.codexNetworkAccess !== undefined
+            ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
+            : {}),
+        };
 
     // Existing aligned channels may still carry a preserved agor_user_id from a
     // previous run-as configuration, but newly-created aligned channels can omit it.
@@ -3461,7 +3477,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const agent = channel.agentic_config?.agent || 'claude-code';
-    skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
     resetConnectionTest();
     // Resolve the Slack app id behind the stored bot token (best-effort; the

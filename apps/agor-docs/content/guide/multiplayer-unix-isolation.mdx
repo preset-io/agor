@@ -414,8 +414,13 @@ prompt.
   `0700`/`0600` permissions enforce the filesystem boundary.
 - In `simple` and `insulated` modes, namespaces remain logically separate, but
   users sharing the same Unix identity must trust one another.
-- A “Configured in OpenCode” status means the native runtime reports a saved
-  credential. It does not verify a request with the provider.
+- “Available in runtime” and “Saved credential” are separate states. Runtime
+  availability includes built-in providers such as Zen and does not imply that
+  a removable credential exists.
+- Saved-credential presence is `present`, `absent`, or `unknown`. Agor offers
+  removal only for `present`; missing or unreadable credential evidence is
+  `unknown`, not `absent`.
+- Neither state verifies a request with the remote provider.
 - Agor does not silently copy credentials from another CLI. Native OAuth uses
   the method and instructions reported by the packaged OpenCode runtime,
   including one bounded authorization-code submission when requested.

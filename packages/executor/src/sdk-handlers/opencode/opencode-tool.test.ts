@@ -60,6 +60,8 @@ function createClient(overrides?: {
   messages?: ReturnType<typeof vi.fn>;
   subscribe?: ReturnType<typeof vi.fn>;
   abort?: ReturnType<typeof vi.fn>;
+  configProviders?: ReturnType<typeof vi.fn>;
+  providerList?: ReturnType<typeof vi.fn>;
   sessionId?: string;
 }) {
   const sessionId = overrides?.sessionId ?? 'oc-new';
@@ -90,6 +92,32 @@ function createClient(overrides?: {
         ],
       });
   return {
+    config: {
+      providers:
+        overrides?.configProviders ??
+        vi.fn().mockResolvedValue({
+          data: {
+            providers: [
+              {
+                id: 'test-provider',
+                models: { 'test-model': { id: 'test-model' } },
+              },
+            ],
+            default: {},
+          },
+        }),
+    },
+    provider: {
+      list:
+        overrides?.providerList ??
+        vi.fn().mockResolvedValue({
+          data: {
+            all: [{ id: 'test-provider', name: 'Test Provider' }],
+            connected: ['test-provider'],
+            default: {},
+          },
+        }),
+    },
     session: {
       create: overrides?.create ?? vi.fn().mockResolvedValue({ data: { id: 'oc-new' } }),
       get: overrides?.get ?? vi.fn().mockResolvedValue({ data: { id: 'oc-existing' } }),
@@ -188,6 +216,8 @@ function input(overrides: Record<string, unknown> = {}) {
     agorAssistantMessageId: '00000000-0000-7000-8000-000000000004',
     title: 'Managed turn',
     directory: '/worktree',
+    provider: 'test-provider',
+    model: 'test-model',
     mcpToken: 'mcp-secret',
     signal: new AbortController().signal,
     persistOpenCodeSessionId: vi.fn().mockResolvedValue(undefined),
@@ -597,6 +627,34 @@ describe('OpenCodeTool managed turn', () => {
     expect(permissionService.waitForDecision).not.toHaveBeenCalled();
     expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
       expect.objectContaining({ body: { response: 'once' } })
+    );
+  });
+
+  it('handles a read permission in yolo mode without waiting for a decision', async () => {
+    const scenario = makePermissionTurn({
+      permissionMode: 'yolo',
+      requests: [
+        {
+          type: 'permission.asked',
+          properties: {
+            id: 'oc-read-permission',
+            sessionID: 'oc-new',
+            permission: 'read',
+            patterns: ['src/index.ts'],
+            metadata: { path: 'src/index.ts' },
+          },
+        },
+      ],
+    });
+
+    await scenario.tool.runTurn(scenario.turnInput);
+
+    expect(scenario.permissionService.waitForDecision).not.toHaveBeenCalled();
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: expect.objectContaining({ permissionID: 'oc-read-permission' }),
+        body: { response: 'once' },
+      })
     );
   });
 
@@ -1351,6 +1409,145 @@ describe('OpenCodeTool managed turn', () => {
     expect(order).toEqual(['create', 'persist', 'prompt']);
     expect(persistOpenCodeSessionId).toHaveBeenCalledWith('oc-created');
     expect(result).toMatchObject({ openCodeSessionId: 'oc-created', sessionWasCreated: true });
+  });
+
+  it('admits an available explicit pair on the same server before session creation and prompt', async () => {
+    const order: string[] = [];
+    const client = createClient({
+      sessionId: 'oc-created',
+      configProviders: vi.fn(async () => {
+        order.push('admit');
+        return {
+          data: {
+            providers: [
+              {
+                id: 'openai',
+                models: { 'gpt-5': { id: 'gpt-5' } },
+              },
+            ],
+            default: { openai: 'gpt-5' },
+          },
+        };
+      }),
+      providerList: vi.fn(async () => ({
+        data: {
+          all: [{ id: 'openai', name: 'OpenAI' }],
+          connected: ['openai'],
+          default: {},
+        },
+      })),
+      create: vi.fn(async () => {
+        order.push('create');
+        return { data: { id: 'oc-created' } };
+      }),
+      prompt: vi.fn(async () => {
+        order.push('prompt');
+        return { data: { info: {}, parts: [{ type: 'text', text: 'done' }] } };
+      }),
+    });
+    const persistOpenCodeSessionId = vi.fn(async () => order.push('persist'));
+    const { tool, createClientSpy } = makeTool({ client });
+
+    await tool.runTurn(
+      input({
+        provider: 'openai',
+        model: 'gpt-5',
+        persistOpenCodeSessionId,
+      })
+    );
+
+    expect(order).toEqual(['admit', 'create', 'persist', 'prompt']);
+    expect(client.config.providers).toHaveBeenCalledWith({
+      query: { directory: '/worktree' },
+    });
+    expect(client.provider.list).toHaveBeenCalledWith({
+      query: { directory: '/worktree' },
+    });
+    expect(createClientSpy).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a catalog-only provider before session or prompt traffic', async () => {
+    const configProviders = vi.fn().mockResolvedValue({
+      data: {
+        providers: [{ id: 'openai', models: { 'gpt-5': { id: 'gpt-5' } } }],
+        default: { openai: 'gpt-5' },
+      },
+    });
+    const providerList = vi.fn().mockResolvedValue({
+      data: {
+        all: [{ id: 'openai', name: 'OpenAI' }],
+        connected: [],
+        default: {},
+      },
+    });
+    const client = createClient({ configProviders, providerList });
+    const { tool, child } = makeTool({ client });
+
+    const persistOpenCodeSessionId = vi.fn();
+    await expect(
+      tool.runTurn(
+        input({
+          provider: 'openai',
+          model: 'gpt-5',
+          persistOpenCodeSessionId,
+        })
+      )
+    ).rejects.toThrow(
+      'The selected OpenCode provider/model is not available for this session owner and branch configuration'
+    );
+
+    expect(configProviders).toHaveBeenCalledOnce();
+    expect(providerList).toHaveBeenCalledOnce();
+    expect(client.session.get).not.toHaveBeenCalled();
+    expect(client.session.create).not.toHaveBeenCalled();
+    expect(client.session.messages).not.toHaveBeenCalled();
+    expect(client.event.subscribe).not.toHaveBeenCalled();
+    expect(client.session.prompt).not.toHaveBeenCalled();
+    expect(persistOpenCodeSessionId).not.toHaveBeenCalled();
+    expect(child.kills).toEqual(['SIGTERM']);
+  });
+
+  it('names the safe pair and recovery action when prompt authentication fails', async () => {
+    const secret = 'provider-secret-at-/private/auth/path';
+    const client = createClient({
+      prompt: vi.fn().mockResolvedValue({
+        error: { message: `Unauthorized ${secret}` },
+      }),
+    });
+    const { tool } = makeTool({ client });
+
+    let failure: unknown;
+    try {
+      await tool.runTurn(input());
+    } catch (error) {
+      failure = error;
+    }
+
+    const formatted = inspect(failure);
+    expect(formatted).toContain('OpenCode prompt failed for test-provider/test-model');
+    expect(formatted).toContain(
+      'Reconnect test-provider in OpenCode settings or choose another provider/model'
+    );
+    expect(formatted).not.toContain(secret);
+    expect(formatted).not.toContain('/private/auth/path');
+  });
+
+  it('rejects a missing pair before config, child process, session, subscription, or prompt work', async () => {
+    const client = createClient();
+    const spawn = vi.fn();
+    const resolveInvocationConfig = vi.fn();
+    const { tool } = makeTool({ client, spawn, resolveInvocationConfig });
+
+    await expect(tool.runTurn(input({ provider: undefined, model: undefined }))).rejects.toThrow(
+      /select.*provider.*model/i
+    );
+
+    expect(resolveInvocationConfig).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.config.providers).not.toHaveBeenCalled();
+    expect(client.session.create).not.toHaveBeenCalled();
+    expect(client.event.subscribe).not.toHaveBeenCalled();
+    expect(client.session.prompt).not.toHaveBeenCalled();
   });
 
   it('validates a stored session and fails without replacement when it cannot resume', async () => {

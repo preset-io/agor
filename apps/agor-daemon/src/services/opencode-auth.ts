@@ -1,12 +1,5 @@
-import { homedir } from 'node:os';
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import {
-  getCurrentTenantId,
-  runWithTenantDatabaseScope,
-  type TenantScopeAwareDatabase,
-  UsersRepository,
-} from '@agor/core/db';
-import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   OpenCodeOAuthAttempt,
@@ -14,17 +7,10 @@ import type {
   OpenCodeOAuthConnectRequest,
   OpenCodeProviderDiscovery,
   OpenCodeProviderSettings,
-  UserID,
 } from '@agor/core/types';
 import {
-  getHomedirFromUsername,
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
-import {
-  assertOpenCodeNativeAuthSupported,
-  resolveOpenCodeCredentialNamespace,
+  type AuthenticatedOpenCodeSubjectContext,
+  resolveAuthenticatedOpenCodeSubjectContext,
 } from '../utils/opencode-credential-namespace.js';
 import {
   type OpenCodeOAuthExecutorHandle,
@@ -36,21 +22,6 @@ const mutationSlots = new Map<string, Promise<void>>();
 // An unverified OAuth process keeps the same namespace coordinator closed.
 // The stored verifier delegates recovery to the existing tracked-process owner.
 const blockedNamespaces = new Map<string, () => Promise<boolean>>();
-const AUTH_EXECUTOR_ENV_KEYS = [
-  'PATH',
-  'HOME',
-  'USER',
-  'LOGNAME',
-  'SHELL',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'NODE_ENV',
-  'LOG_LEVEL',
-] as const;
 
 async function inMutationSlot<T>(key: string, work: () => Promise<T>): Promise<T> {
   const previous = mutationSlots.get(key) ?? Promise.resolve();
@@ -86,13 +57,6 @@ async function inMutationSlot<T>(key: string, work: () => Promise<T>): Promise<T
   }
 }
 
-type CredentialContext = {
-  namespaceKey: string;
-  dataHome: string;
-  asUser: string | null;
-  mode: UnixUserMode;
-};
-
 type StoredOAuthAttempt = OpenCodeOAuthAttempt & {
   namespaceKey: string;
   handle?: OpenCodeOAuthExecutorHandle;
@@ -117,47 +81,14 @@ function scheduleAttemptPrune(attempt: StoredOAuthAttempt): void {
 export class OpenCodeAuthService {
   constructor(private readonly db: TenantScopeAwareDatabase) {}
 
-  private async credentialContext(params?: AuthenticatedParams): Promise<CredentialContext> {
-    const callerId = params?.user?.user_id as UserID | undefined;
-    if (!callerId) throw new NotAuthenticated('Sign in before managing OpenCode providers.');
-
-    const config = loadConfigSync();
-    assertOpenCodeNativeAuthSupported(config);
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new NotAuthenticated('Missing tenant context for OpenCode providers.');
-
-    const user = await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
-      if (!(await isTenantAgenticToolEnabled('opencode', tenantDb))) {
-        throw new BadRequest('OpenCode is disabled for this workspace.');
-      }
-      return new UsersRepository(tenantDb).findById(callerId);
-    });
-    if (!user) throw new NotAuthenticated('Authenticated OpenCode user no longer exists.');
-
-    const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const { unixUser } = resolveUnixUserForImpersonation({
-      mode,
-      userUnixUsername: user.unix_username,
-      executorUnixUser: config.execution?.executor_unix_user,
-    });
-    validateResolvedUnixUser(mode, unixUser);
-    const homeDir = unixUser ? getHomedirFromUsername(unixUser) : homedir();
-    if (!homeDir) {
-      throw new BadRequest('Could not resolve the Unix home used by OpenCode execution.');
-    }
-    return {
-      ...resolveOpenCodeCredentialNamespace({
-        tenantId,
-        subjectUserId: callerId,
-        homeDir,
-      }),
-      asUser: unixUser,
-      mode,
-    };
+  private credentialContext(
+    params?: AuthenticatedParams
+  ): Promise<AuthenticatedOpenCodeSubjectContext> {
+    return resolveAuthenticatedOpenCodeSubjectContext(this.db, params);
   }
 
   private async execute(
-    context: CredentialContext,
+    context: AuthenticatedOpenCodeSubjectContext,
     params:
       | { operation: 'discover' }
       | {
@@ -176,11 +107,7 @@ export class OpenCodeAuthService {
       },
       {
         asUser: context.asUser,
-        env: Object.fromEntries(
-          AUTH_EXECUTOR_ENV_KEYS.flatMap((key) =>
-            process.env[key] === undefined ? [] : [[key, process.env[key]]]
-          )
-        ) as Record<string, string>,
+        env: context.executorEnv,
         logPrefix: '[OpenCode Auth]',
         templateVariables: { unix_user: context.asUser ?? undefined },
       }
@@ -192,7 +119,7 @@ export class OpenCodeAuthService {
   }
 
   private settings(
-    context: CredentialContext,
+    context: AuthenticatedOpenCodeSubjectContext,
     discovery: OpenCodeProviderDiscovery
   ): OpenCodeProviderSettings {
     return {
@@ -261,14 +188,15 @@ export class OpenCodeAuthService {
   private settleAttempt(
     attempt: StoredOAuthAttempt,
     result: Awaited<OpenCodeOAuthExecutorHandle['result']>,
-    context: CredentialContext
+    context: AuthenticatedOpenCodeSubjectContext
   ): void {
     if (result.success && result.data) {
       const discovery = result.data as OpenCodeProviderDiscovery;
-      const configured = discovery.providers.some(
-        (provider) => provider.id === attempt.providerId && provider.configured
+      const savedCredentialPresent = discovery.providers.some(
+        (provider) =>
+          provider.id === attempt.providerId && provider.credentialPresence === 'present'
       );
-      if (configured) {
+      if (savedCredentialPresent) {
         attempt.settings = this.settings(context, discovery);
         attempt.phase = 'configured';
       } else {
@@ -356,11 +284,7 @@ export class OpenCodeAuthService {
         },
         {
           asUser: context.asUser,
-          env: Object.fromEntries(
-            AUTH_EXECUTOR_ENV_KEYS.flatMap((key) =>
-              process.env[key] === undefined ? [] : [[key, process.env[key]]]
-            )
-          ) as Record<string, string>,
+          env: context.executorEnv,
           logPrefix: '[OpenCode Auth]',
           templateVariables: { unix_user: context.asUser ?? undefined },
           timeoutMs: OAUTH_TIMEOUT_MS,
@@ -456,9 +380,16 @@ export class OpenCodeAuthService {
     const providerId = id?.trim();
     if (!providerId) throw new BadRequest('Provider is required.');
     const context = await this.credentialContext(params);
-    const result = await inMutationSlot(context.namespaceKey, () =>
-      this.execute(context, { operation: 'disconnect', providerId })
-    );
+    const result = await inMutationSlot(context.namespaceKey, async () => {
+      const discovery = await this.execute(context, { operation: 'discover' });
+      const provider = discovery.providers.find((candidate) => candidate.id === providerId);
+      if (provider?.credentialPresence !== 'present') {
+        throw new BadRequest(
+          'Saved credential presence is not known for this provider; nothing was removed.'
+        );
+      }
+      return this.execute(context, { operation: 'disconnect', providerId });
+    });
     return this.settings(context, result);
   }
 }

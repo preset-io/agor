@@ -2,14 +2,11 @@
  * Shared permission_config resolver used by `resolveSessionDefaults` (no
  * parent) and `resolveChildSessionConfig` (with parent).
  *
- * Both helpers walk the same precedence: request → (parent — only when the
- * caller passes one) → user default → mapped system default. The only
- * difference is whether a "parent layer" is interposed between the explicit
- * override and the user default. This module collapses that walk so the two
- * public resolvers don't drift on the codex sub-config edge cases.
+ * Both helpers walk the same precedence: selected source → same-tool parent
+ * → execution owner → mapped system default. This module collapses that walk
+ * so the public resolvers don't drift on Codex sub-config edge cases.
  */
 
-import type { ModelConfigInput } from '../models/resolve-config.js';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -23,21 +20,8 @@ import { getDefaultPermissionMode } from '../types/session.js';
 import { mapPermissionMode, mapToCodexPermissionConfig } from '../utils/permission-mode-mapper.js';
 
 /**
- * Common runtime overrides shared by every session-creation flow. Per-flow
- * extensions (e.g. `SessionDefaultsOverrides` adds `mcpServerIds`) extend
- * this base.
- */
-export interface SessionRuntimeOverrides {
-  permissionMode?: PermissionMode;
-  modelConfig?: ModelConfigInput;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: CodexNetworkAccess;
-}
-
-/**
- * Optional "parent layer" interposed between explicit overrides and user
- * defaults. Only the fields a parent can carry forward are present. The
+ * Optional same-tool parent layer between the source and execution owner.
+ * Only the fields a parent can carry forward are present. The
  * caller (the child-session resolver) is responsible for gating this on
  * tool match — passing `undefined` means "no parent layer applies."
  */
@@ -50,9 +34,9 @@ export interface ParentPermissionLayer {
 
 export interface ResolvePermissionConfigArgs {
   effectiveTool: AgenticToolName;
-  overrides?: SessionRuntimeOverrides;
+  source?: DefaultAgenticToolConfig | null;
   userToolDefaults?: DefaultAgenticToolConfig;
-  /** When present, layered between explicit override and user default. */
+  /** When present, layered after the selected source and before the owner default. */
   parentLayer?: ParentPermissionLayer;
 }
 
@@ -64,19 +48,19 @@ export interface ResolvePermissionConfigArgs {
  *
  * For `codex` sessions, the sub-config (`sandboxMode` + `approvalPolicy` +
  * `networkAccess`) is ALWAYS emitted. Any field not provided by the
- * override / parent / user layers is filled from `mapToCodexPermissionConfig`
- * keyed off the resolved permission mode. This prevents partial user
- * overrides (e.g. just `codexApprovalPolicy: 'untrusted'`) from being
- * silently dropped and then escalated to the relaxed system default by the
- * executor's last-line fallback.
+ * source / parent / owner layers is filled from
+ * `mapToCodexPermissionConfig` keyed off the resolved permission mode. This
+ * prevents partial user overrides (e.g. just `codexApprovalPolicy:
+ * 'untrusted'`) from being silently dropped and then escalated to the relaxed
+ * system default by the executor's last-line fallback.
  */
 export function resolvePermissionConfig(
   args: ResolvePermissionConfigArgs
 ): NonNullable<Session['permission_config']> {
-  const { effectiveTool, overrides, userToolDefaults, parentLayer } = args;
+  const { effectiveTool, source, userToolDefaults, parentLayer } = args;
 
   const requestedMode: PermissionMode =
-    overrides?.permissionMode ??
+    source?.permissionMode ??
     parentLayer?.permissionMode ??
     userToolDefaults?.permissionMode ??
     getDefaultPermissionMode(effectiveTool);
@@ -86,16 +70,16 @@ export function resolvePermissionConfig(
 
   if (effectiveTool === 'codex') {
     const sandboxMode =
-      overrides?.codexSandboxMode ??
+      source?.codexSandboxMode ??
       parentLayer?.codexSandboxMode ??
       userToolDefaults?.codexSandboxMode;
     const approvalPolicy =
-      overrides?.codexApprovalPolicy ??
+      source?.codexApprovalPolicy ??
       parentLayer?.codexApprovalPolicy ??
       userToolDefaults?.codexApprovalPolicy;
     const networkAccess =
-      overrides?.codexNetworkAccess !== undefined
-        ? overrides.codexNetworkAccess
+      source?.codexNetworkAccess !== undefined
+        ? source.codexNetworkAccess
         : parentLayer?.codexNetworkAccess !== undefined
           ? parentLayer.codexNetworkAccess
           : userToolDefaults?.codexNetworkAccess;

@@ -118,6 +118,7 @@ import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createOpenCodeAuthService } from './services/opencode-auth.js';
+import { createOpenCodeModelsService } from './services/opencode-models.js';
 import { createReposService } from './services/repos.js';
 import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
@@ -571,6 +572,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/opencode-auth', createOpenCodeAuthService(db));
   app.service('/opencode-auth').hooks({ before: { all: [ctx.requireAuth] } });
   app.service('/opencode-auth').publish(() => []);
+
+  app.use('/opencode-models', createOpenCodeModelsService(db), { methods: ['find'] });
+  app.service('/opencode-models').hooks({ before: { all: [ctx.requireAuth] } });
+  app.service('/opencode-models').publish(() => []);
 
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the Unix identity that runs Codex and flips their auth

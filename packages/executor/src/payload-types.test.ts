@@ -16,6 +16,7 @@ import {
   isGitClonePayload,
   isPromptPayload,
   isZellijAttachPayload,
+  OpenCodeAuthPayloadSchema,
   PromptPayloadSchema,
   parseExecutorPayload,
   ZellijAttachPayloadSchema,
@@ -93,6 +94,30 @@ describe('PromptPayloadSchema', () => {
     };
 
     expect(() => PromptPayloadSchema.parse(payload)).toThrow();
+  });
+});
+
+describe('OpenCodeAuthPayloadSchema', () => {
+  it('accepts private configured-model discovery with an optional runtime directory', () => {
+    expect(
+      OpenCodeAuthPayloadSchema.parse({
+        command: 'opencode.auth',
+        dataHome: '/opaque/data-home',
+        params: { operation: 'discover-models', directory: '/authorized/branch' },
+      })
+    ).toMatchObject({
+      params: { operation: 'discover-models', directory: '/authorized/branch' },
+    });
+  });
+
+  it('rejects a blank runtime directory', () => {
+    expect(() =>
+      OpenCodeAuthPayloadSchema.parse({
+        command: 'opencode.auth',
+        dataHome: '/opaque/data-home',
+        params: { operation: 'discover-models', directory: '' },
+      })
+    ).toThrow();
   });
 });
 

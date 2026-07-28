@@ -61,13 +61,13 @@ export type OpenCodeOAuthConnectRequest = {
 
 export type OpenCodeOAuthAttemptPatch = { cancel: true } | { code: string };
 
-export type OpenCodeProviderConnectionStatus = 'configured' | 'disconnected' | 'unknown';
+export type OpenCodeCredentialPresence = 'present' | 'absent' | 'unknown';
 
 export interface OpenCodeProviderConnection {
   id: string;
   name: string;
-  configured: boolean;
-  status: OpenCodeProviderConnectionStatus;
+  runtimeAvailable: boolean;
+  credentialPresence: OpenCodeCredentialPresence;
   authMethods: OpenCodeProviderAuthMethod[];
 }
 

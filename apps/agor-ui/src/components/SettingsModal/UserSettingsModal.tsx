@@ -390,7 +390,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const values: AgenticConfigFormValues =
         agenticConfigDraftByTool[tool] ??
         (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
-      if (values.defaultSelectionSource === 'inline') {
+      if (tool === 'opencode' && !values.modelConfig) {
+        // Clearing removes the personal source entirely; never persist an
+        // incomplete OpenCode configuration blob.
+        delete nextConfig[tool];
+      } else if (values.defaultSelectionSource === 'inline') {
         nextConfig[tool] = buildConfigFromFormValues(tool, values);
       }
       nextSelections[tool] =
@@ -637,7 +641,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Handle agentic tool config clear
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
-    const clearedValues = getClearedFormValues(tool);
+    const clearedValues: AgenticConfigFormValues = {
+      ...getClearedFormValues(tool),
+      ...(tool === 'opencode' && {
+        defaultSelectionSource: 'workspace_default',
+        defaultPresetId: undefined,
+      }),
+    };
     agenticFormByTool[tool].setFieldsValue(clearedValues);
     setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: clearedValues }));
     markAgenticConfigDirty(tool);

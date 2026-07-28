@@ -18,6 +18,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
+  isAgenticToolDefaultConfigurationReference,
   prefixToLikePattern,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
@@ -207,8 +208,11 @@ export class GatewayChannelRepository
         agentic_config: agenticConfig
           ? ({
               ...(agenticConfig as unknown as GatewayAgenticConfig),
-              presetId:
-                (row.agentic_tool_preset_id as GatewayAgenticConfig['presetId']) ?? undefined,
+              ...(row.agentic_tool_preset_id
+                ? {
+                    presetId: row.agentic_tool_preset_id as GatewayAgenticConfig['presetId'],
+                  }
+                : {}),
             } as GatewayAgenticConfig)
           : null,
         mcp_server_ids: row.mcp_server_ids ?? undefined,
@@ -231,7 +235,10 @@ export class GatewayChannelRepository
       throw new RepositoryError('GatewayChannel must have a created_by');
     }
 
-    const { presetId: _presetId, ...storedAgenticConfig } = data.agentic_config ?? {};
+    const { presetId, ...agenticConfig } = data.agentic_config ?? {};
+    const isDefaultReference =
+      presetId !== undefined && isAgenticToolDefaultConfigurationReference(presetId);
+    const storedAgenticConfig = isDefaultReference ? { ...agenticConfig, presetId } : agenticConfig;
     const encryptedAgenticConfig = encryptAgenticConfig(
       Object.keys(storedAgenticConfig).length > 0
         ? (storedAgenticConfig as unknown as Record<string, unknown>)
@@ -252,7 +259,7 @@ export class GatewayChannelRepository
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
       agentic_config: encryptedAgenticConfig,
-      agentic_tool_preset_id: data.agentic_config?.presetId ?? null,
+      agentic_tool_preset_id: isDefaultReference ? null : (presetId ?? null),
       mcp_server_ids: data.mcp_server_ids ?? null,
     };
   }

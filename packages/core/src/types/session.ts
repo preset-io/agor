@@ -20,6 +20,7 @@ import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
+import type { DefaultAgenticToolConfig } from './user';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -515,11 +516,20 @@ export interface Session {
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<
   Partial<Session>,
-  'agentic_tool_preset_id' | 'model_config'
-> & {
-  agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
-  model_config?: Partial<NonNullable<Session['model_config']>> | null;
-};
+  'agentic_tool_preset_id' | 'model_config' | 'permission_config'
+> &
+  (
+    | {
+        agentic_tool_preset_id: AgenticToolConfigurationReference;
+        model_config?: never;
+        permission_config?: never;
+      }
+    | {
+        agentic_tool_preset_id?: null;
+        model_config?: Partial<NonNullable<Session['model_config']>> | null;
+        permission_config?: Session['permission_config'];
+      }
+  );
 
 /**
  * Minimal persisted session state needed to decide whether a new task can
@@ -709,7 +719,7 @@ export interface ScheduledRunMetadata {
  * Provides fine-grained control over spawned session settings,
  * overriding defaults from parent session or user preferences.
  */
-export interface SpawnConfig {
+interface SpawnConfigBase {
   /** Prompt for the spawned session (required) */
   prompt: string;
 
@@ -718,35 +728,6 @@ export interface SpawnConfig {
 
   /** Agentic tool to use (defaults to parent's tool) */
   agent?: AgenticToolName;
-
-  /** Configuration source. Same-tool children inherit the parent's preset by default. */
-  presetId?: AgenticToolConfigurationReference;
-
-  /** Permission mode override (defaults based on config preset) */
-  permissionMode?: PermissionMode;
-
-  /** Model configuration override */
-  modelConfig?: {
-    mode?: 'alias' | 'exact';
-    model?: string;
-    effort?: EffortLevel;
-    /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); ignored for non-Claude tools. */
-    advisorModel?: string;
-    /**
-     * Provider ID (OpenCode only, e.g. 'anthropic', 'openai', 'opencode').
-     * Persisted on session.model_config.provider. Ignored for non-OpenCode tools.
-     */
-    provider?: string;
-  };
-
-  /** Codex sandbox mode (codex only) */
-  codexSandboxMode?: CodexSandboxMode;
-
-  /** Codex approval policy (codex only) */
-  codexApprovalPolicy?: CodexApprovalPolicy;
-
-  /** Codex network access (codex only) */
-  codexNetworkAccess?: boolean;
 
   /** MCP server IDs to attach to spawned session */
   mcpServerIds?: string[];
@@ -776,3 +757,30 @@ export interface SpawnConfig {
    */
   envVarNames?: string[];
 }
+
+type SpawnInlineAgenticConfiguration = {
+  presetId?: never;
+  /** Permission mode selected as part of the inline source. */
+  permissionMode?: PermissionMode;
+  /** Model selected as part of the inline source. */
+  modelConfig?: DefaultAgenticToolConfig['modelConfig'];
+  /** Codex sandbox mode (codex only). */
+  codexSandboxMode?: CodexSandboxMode;
+  /** Codex approval policy (codex only). */
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  /** Codex network access (codex only). */
+  codexNetworkAccess?: boolean;
+};
+
+type SpawnReferencedAgenticConfiguration = {
+  /** Configuration source. Same-tool children inherit the parent's preset by default. */
+  presetId: AgenticToolConfigurationReference;
+  permissionMode?: never;
+  modelConfig?: never;
+  codexSandboxMode?: never;
+  codexApprovalPolicy?: never;
+  codexNetworkAccess?: never;
+};
+
+export type SpawnConfig = SpawnConfigBase &
+  (SpawnInlineAgenticConfiguration | SpawnReferencedAgenticConfiguration);

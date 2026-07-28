@@ -402,8 +402,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         {
           id: 'old-provider',
           name: 'Old User Provider',
-          configured: false,
-          status: 'disconnected' as const,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
           authMethods: [
             { index: 0, type: 'api' as const, label: 'API key' },
             { index: 1, type: 'oauth' as const, label: 'Browser flow' },
@@ -417,8 +417,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         {
           id: 'new-provider',
           name: 'New User Provider',
-          configured: true,
-          status: 'configured' as const,
+          runtimeAvailable: true,
+          credentialPresence: 'present' as const,
           authMethods: [],
         },
       ],
@@ -466,15 +466,19 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.change(await screen.findByLabelText('Old User Provider API key'), {
       target: { value: 'old-user-secret' },
     });
+    fireEvent.mouseDown(
+      screen.getByRole('combobox', { name: 'Old User Provider authentication method' })
+    );
+    fireEvent.click(await screen.findByText('Browser flow'));
     fireEvent.click(screen.getByRole('button', { name: 'Connect with Browser flow' }));
     expect(await screen.findByText('Old user authorization.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Old User Provider API key')).toHaveValue('old-user-secret');
     expect(screen.getByRole('button', { name: 'Cancel authorization' })).toBeInTheDocument();
 
     rerender(renderModal(newUser));
 
     expect(await screen.findByText('New User Provider')).toBeInTheDocument();
-    expect(screen.getByText('Configured in OpenCode')).toBeInTheDocument();
+    expect(screen.getByText('Available in runtime')).toBeInTheDocument();
+    expect(screen.getByText('Saved credential')).toBeInTheDocument();
     expect(screen.queryByLabelText('Old User Provider API key')).not.toBeInTheDocument();
     expect(screen.queryByText('Old user authorization.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel authorization' })).not.toBeInTheDocument();
@@ -495,8 +499,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         {
           id: 'new-provider',
           name: 'New User Provider',
-          configured: true,
-          status: 'configured' as const,
+          runtimeAvailable: true,
+          credentialPresence: 'present' as const,
           authMethods: [],
         },
       ],
@@ -507,8 +511,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         {
           id: 'old-provider',
           name: 'Delayed Old Provider',
-          configured: true,
-          status: 'configured' as const,
+          runtimeAvailable: true,
+          credentialPresence: 'present' as const,
           authMethods: [],
         },
       ],

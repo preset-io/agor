@@ -8,6 +8,10 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import {
+  hasCompleteOpenCodeModelConfig,
+  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
+} from '@agor/core/models';
 import type {
   AgenticToolPreset,
   CreateAgenticToolPreset,
@@ -50,6 +54,16 @@ function validateConfiguration(
     throw new BadRequest(`Unknown preset configuration fields: ${unknown.join(', ')}`);
 }
 
+function validateToolConfiguration(
+  tool: TenantAgenticToolName,
+  configuration: AgenticToolPreset['configuration']
+): void {
+  const modelConfig = configuration.modelConfig;
+  if (tool === 'opencode' && modelConfig != null && !hasCompleteOpenCodeModelConfig(modelConfig)) {
+    throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+  }
+}
+
 function isForeignKeyRestriction(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; current && depth < 4; depth++) {
@@ -89,6 +103,7 @@ export class AgenticToolPresetsService {
     const tool = parseTool(data.tool);
     if (!tool) throw new BadRequest('tool is required');
     validateConfiguration(data.configuration);
+    validateToolConfiguration(tool, data.configuration);
     return this.repository.create({ ...data, tool }, actor(params));
   }
 
@@ -97,7 +112,11 @@ export class AgenticToolPresetsService {
     data: PatchAgenticToolPreset,
     params?: Params
   ): Promise<AgenticToolPreset> {
-    if (data.configuration !== undefined) validateConfiguration(data.configuration);
+    if (data.configuration !== undefined) {
+      validateConfiguration(data.configuration);
+      const current = await this.get(id);
+      validateToolConfiguration(current.tool, data.configuration);
+    }
     if (data.name !== undefined && !data.name.trim()) throw new BadRequest('name is required');
     if (data.is_default === false) {
       const current = await this.get(id);

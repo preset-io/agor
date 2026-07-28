@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ScheduleAgenticToolConfig } from '../types';
+import type {
+  AgenticToolDefaultConfigurationReference,
+  AgenticToolPresetID,
+  ScheduleAgenticToolConfig,
+} from '../types';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -20,7 +24,7 @@ describe('normalizeScheduleAgenticToolConfig', () => {
     expect(
       normalizeScheduleAgenticToolConfig({
         agentic_tool: 'codex',
-        preset_id: input as ScheduleAgenticToolConfig['preset_id'],
+        preset_id: input as AgenticToolPresetID,
       })
     ).toEqual({
       agentic_tool: 'codex',
@@ -34,7 +38,7 @@ describe('normalizeScheduleAgenticToolConfig', () => {
         agentic_tool: 'codex',
         configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
         model_config: { mode: 'exact', model: 'gpt-5.4' },
-      })
+      } as unknown as ScheduleAgenticToolConfig)
     ).toThrow(InvalidScheduleAgenticToolConfigError);
   });
 
@@ -65,17 +69,16 @@ describe('normalizeScheduleAgenticToolConfig', () => {
       },
     ],
   ])('rejects %s sources', (_label, config) => {
-    expect(() => normalizeScheduleAgenticToolConfig(config as ScheduleAgenticToolConfig)).toThrow(
-      InvalidScheduleAgenticToolConfigError
-    );
+    expect(() =>
+      normalizeScheduleAgenticToolConfig(config as unknown as ScheduleAgenticToolConfig)
+    ).toThrow(InvalidScheduleAgenticToolConfigError);
   });
 
   it('rejects an unknown configuration reference', () => {
     expect(() =>
       normalizeScheduleAgenticToolConfig({
         agentic_tool: 'codex',
-        configuration_reference:
-          '__not_a_default__' as ScheduleAgenticToolConfig['configuration_reference'],
+        configuration_reference: '__not_a_default__' as AgenticToolDefaultConfigurationReference,
       })
     ).toThrow(/invalid default configuration reference/i);
   });
@@ -84,10 +87,10 @@ describe('normalizeScheduleAgenticToolConfig', () => {
     expect(
       normalizeScheduleAgenticToolConfig({
         agentic_tool: 'codex',
-        preset_id: '00000000-0000-7000-8000-000000000001' as ScheduleAgenticToolConfig['preset_id'],
+        preset_id: '00000000-0000-7000-8000-000000000001' as AgenticToolPresetID,
         model_config: undefined,
         codex_network_access: undefined,
-      })
+      } as unknown as ScheduleAgenticToolConfig)
     ).toEqual({
       agentic_tool: 'codex',
       preset_id: '00000000-0000-7000-8000-000000000001',

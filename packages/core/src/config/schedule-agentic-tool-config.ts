@@ -5,7 +5,12 @@ import {
 } from '../types';
 
 const LEGACY_WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION = '___workspace_default___';
-const SOURCE_FIELDS = new Set(['agentic_tool', 'preset_id', 'configuration_reference']);
+const SOURCE_FIELDS = new Set([
+  'agentic_tool',
+  'preset_id',
+  'configuration_reference',
+  'context_files',
+]);
 
 export class InvalidScheduleAgenticToolConfigError extends Error {
   constructor(message: string) {
@@ -49,7 +54,11 @@ export function normalizeScheduleAgenticToolConfig(
         `Invalid default configuration reference: ${String(config.configuration_reference)}`
       );
     }
-    return { agentic_tool: config.agentic_tool, configuration_reference: reference };
+    return {
+      agentic_tool: config.agentic_tool,
+      configuration_reference: reference,
+      ...(config.context_files !== undefined ? { context_files: config.context_files } : {}),
+    };
   }
 
   if (!hasPreset) return config;
@@ -60,5 +69,9 @@ export function normalizeScheduleAgenticToolConfig(
   }
   const reference = normalizeDefaultReference(config.preset_id as string);
   if (!reference) return config;
-  return { agentic_tool: config.agentic_tool, configuration_reference: reference };
+  return {
+    agentic_tool: config.agentic_tool,
+    configuration_reference: reference,
+    ...(config.context_files !== undefined ? { context_files: config.context_files } : {}),
+  };
 }

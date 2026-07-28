@@ -132,3 +132,52 @@ describe('UsersService — avatar source metadata', () => {
     }
   );
 });
+
+describe('UsersService — inline OpenCode defaults', () => {
+  dbTest(
+    'rejects an absent provider/model pair before personal-default persistence',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const id = await makeUser(service);
+
+      for (const opencode of [
+        { permissionMode: 'yolo' as const },
+        { modelConfig: { mode: 'exact' as const, provider: 'partial-provider' } },
+      ]) {
+        await expect(
+          service.patch(id, {
+            default_agentic_selection: { opencode: { source: 'inline' } },
+            default_agentic_config: { opencode },
+          })
+        ).rejects.toThrow(/select.*provider.*model/i);
+      }
+
+      const persisted = await service.get(id);
+      expect(persisted.default_agentic_selection?.opencode).toBeUndefined();
+      expect(persisted.default_agentic_config?.opencode).toBeUndefined();
+    }
+  );
+
+  dbTest('persists a complete inline OpenCode personal default', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    const updated = await service.patch(id, {
+      default_agentic_selection: { opencode: { source: 'inline' } },
+      default_agentic_config: {
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'personal-provider',
+            model: 'personal-model',
+          },
+        },
+      },
+    });
+
+    expect(updated.default_agentic_config?.opencode?.modelConfig).toMatchObject({
+      provider: 'personal-provider',
+      model: 'personal-model',
+    });
+  });
+});

@@ -39,6 +39,17 @@ export type AgenticToolConfigurationReference =
   | AgenticToolPresetID
   | AgenticToolDefaultConfigurationReference;
 
+/** Runtime intent is exactly one live reference or one inline configuration. */
+export type AgenticToolConfigurationSource =
+  | {
+      reference: AgenticToolConfigurationReference;
+      configuration?: never;
+    }
+  | {
+      reference?: null;
+      configuration?: DefaultAgenticToolConfig;
+    };
+
 export function normalizeAgenticToolDefaultConfigurationReference(
   reference: string
 ): AgenticToolDefaultConfigurationReference | undefined {

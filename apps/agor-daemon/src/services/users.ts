@@ -11,6 +11,7 @@ import {
   assertV05Scope,
   getEnvVarBlockReason,
   isEnvVarAllowed,
+  materializeAgenticToolConfiguration,
   normalizeStoredEnvMap,
   resolveAgenticToolPreset,
   resolveUserEnvironment,
@@ -31,8 +32,9 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git/pure';
+import { InvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
@@ -502,6 +504,25 @@ export class UsersService {
         default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
         default_mcp_server_ids?: string[];
       };
+      const nextDefaultAgenticConfig =
+        data.default_agentic_config ?? current.default_agentic_config;
+      const nextDefaultAgenticSelection =
+        data.default_agentic_selection ?? current.default_agentic_selection;
+      const openCodeSelection = nextDefaultAgenticSelection?.opencode;
+      const usesInlineOpenCodeDefault =
+        openCodeSelection?.source === 'inline' ||
+        (openCodeSelection === undefined && nextDefaultAgenticConfig?.opencode !== undefined);
+      if (usesInlineOpenCodeDefault) {
+        try {
+          await materializeAgenticToolConfiguration(this.db, {
+            tool: 'opencode',
+            source: { configuration: nextDefaultAgenticConfig?.opencode ?? {} },
+          });
+        } catch (error) {
+          if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+          throw error;
+        }
+      }
 
       // Handle per-tool credential patches (encrypt-on-write, drop-on-null).
       const nextAgenticTools: StoredAgenticTools = data.agentic_tools
@@ -630,9 +651,8 @@ export class UsersService {
             ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
             : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
-        default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
-        default_agentic_selection:
-          data.default_agentic_selection ?? current.default_agentic_selection,
+        default_agentic_config: nextDefaultAgenticConfig,
+        default_agentic_selection: nextDefaultAgenticSelection,
         default_mcp_server_ids: data.default_mcp_server_ids ?? current.default_mcp_server_ids,
       };
     }

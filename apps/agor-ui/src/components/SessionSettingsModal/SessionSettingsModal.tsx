@@ -137,8 +137,8 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
       ...(values.effort ? { effort: values.effort } : {}),
       updated_at: new Date().toISOString(),
     };
-  } else if (!presetId && session.model_config) {
-    (updates as { model_config?: Session['model_config'] | null }).model_config = null;
+  } else if (!presetId && session.model_config && session.agentic_tool !== 'opencode') {
+    updates.model_config = null;
   }
 
   if (!presetId && values.permissionMode) {
@@ -433,6 +433,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client ?? null}
+          branchId={session.branch_id}
+          openCodeCatalogEnabled={session.created_by === currentUser?.user_id}
           enableSaveAsDefault
         />
 

@@ -268,6 +268,59 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(screen.getByTestId('drawer-panel')).toBeInTheDocument();
   });
 
+  it.each([
+    ['preset', { source: 'preset', preset_id: 'preset-1' }],
+    ['workspace default', { source: 'workspace_default' }],
+  ] as const)('passes the canonical user-default reference when quick-start has a saved %s selection', async (_label, selection) => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    const userWithSavedSelection = {
+      ...USER,
+      default_agentic_selection: {
+        'claude-code': selection,
+      },
+    } as unknown as User;
+    renderShell(userWithSavedSelection, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'claude-code',
+        agenticToolPresetId: '__user_default__',
+      }),
+      BOARD_ID
+    );
+  });
+
+  it('passes the canonical user-default reference for an inline personal default', async () => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    const userWithInlineDefault = {
+      ...USER,
+      default_agentic_config: {
+        'claude-code': { permissionMode: 'bypassPermissions' },
+      },
+    } as unknown as User;
+    renderShell(userWithInlineDefault, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'claude-code',
+        agenticToolPresetId: '__user_default__',
+      }),
+      BOARD_ID
+    );
+  });
+
   it('does not resurrect the picker on Back after the session is shown', async () => {
     const onCreateSession = optimisticCreate(SESSION_A);
     renderShell(USER, onCreateSession);

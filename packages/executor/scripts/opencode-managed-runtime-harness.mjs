@@ -421,6 +421,7 @@ async function run() {
     return directory;
   };
   const invocationConfig = (providerKey, includeMcp, askForBash) => ({
+    model: 'agor-proof/proof-model',
     mcp: includeMcp
       ? {
           proof: {
@@ -555,8 +556,12 @@ async function run() {
       prompt: options.prompt ?? label,
       title: label,
       directory: options.directory,
-      provider: 'agor-proof',
-      model: 'proof-model',
+      ...(options.missingPair
+        ? {}
+        : {
+            provider: options.provider ?? 'agor-proof',
+            model: options.model ?? 'proof-model',
+          }),
       existingOpenCodeSessionId: options.existingOpenCodeSessionId,
       mcpToken: mcpSecret,
       permissionMode:
@@ -616,6 +621,17 @@ async function run() {
     ['text-tool-text-transcript', 'pass'],
     ['mcp-before-prompt', 'pass']
   );
+
+  const missingPair = await execute('missing-pair', {
+    prompt: 'missing-pair',
+    directory: await project('missing-pair'),
+    missingPair: true,
+  });
+  await assert.rejects(missingPair.promise, /Select an exact OpenCode provider and model/);
+  assert.equal(missingPair.record.executable, undefined);
+  assert.equal(missingPair.persisted.length, 0);
+  assert(!provider.requests.some((request) => request.label === 'missing-pair'));
+  rows.push(['missing-exact-pair-before-start', 'pass']);
 
   const permissiveDirectory = await project('permissive-project');
   const permissiveProviderKey = 'provider-managed-secret-production-config';
@@ -842,6 +858,19 @@ async function run() {
   assert.equal(invalid.persisted.length, 0);
   assert.equal(provider.requests.length, invalidProviderCount);
   rows.push(['invalid-session-no-replacement', 'pass']);
+
+  const invalidPairProviderCount = provider.requests.length;
+  const invalidPair = await execute('invalid-explicit-pair', {
+    prompt: 'invalid-explicit-pair',
+    directory: await project('invalid-explicit-pair'),
+    provider: 'agor-missing',
+    model: 'missing-model',
+  });
+  await assert.rejects(invalidPair.promise, /selected OpenCode provider\/model is not available/);
+  assert.equal(invalidPair.persisted.length, 0);
+  assert.equal(provider.requests.length, invalidPairProviderCount);
+  assert(invalidPair.record.pid && (await waitAbsent(invalidPair.record.pid)));
+  rows.push(['invalid-explicit-pair-before-provider', 'pass']);
 
   const broadcastEvents = [];
   const loggerEvents = [];

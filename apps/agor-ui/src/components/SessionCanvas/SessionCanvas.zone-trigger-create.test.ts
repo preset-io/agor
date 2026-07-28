@@ -11,25 +11,7 @@ function makeClient() {
 }
 
 describe('createZoneTriggerSession OpenCode model config', () => {
-  it('submits a deliberate clear as model_config null', async () => {
-    const { client, create } = makeClient();
-
-    await createZoneTriggerSession(client, {
-      branchId: 'branch-1' as BranchID,
-      zoneName: 'Review',
-      agent: 'opencode',
-      modelConfig: null,
-    });
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentic_tool: 'opencode',
-        model_config: null,
-      })
-    );
-  });
-
-  it('keeps omission distinct so the daemon can inherit defaults', async () => {
+  it('submits an absent override as omission for daemon fallback resolution', async () => {
     const { client, create } = makeClient();
 
     await createZoneTriggerSession(client, {
@@ -42,9 +24,9 @@ describe('createZoneTriggerSession OpenCode model config', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         agentic_tool: 'opencode',
-        model_config: undefined,
       })
     );
+    expect(create.mock.calls[0][0]).not.toHaveProperty('model_config');
   });
 
   it('submits a complete exact pair without changing it', async () => {

@@ -49,8 +49,8 @@ const discovery = {
     {
       id: 'kimi-for-coding',
       name: 'Kimi for Coding',
-      configured: false,
-      status: 'disconnected',
+      runtimeAvailable: false,
+      credentialPresence: 'absent',
       authMethods: [],
     },
   ],
@@ -173,12 +173,26 @@ describe('OpenCode provider auth service', () => {
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    runCommand
-      .mockImplementationOnce(async () => {
+    const present = {
+      ...discovery,
+      providers: [
+        {
+          ...discovery.providers[0],
+          credentialPresence: 'present' as const,
+        },
+      ],
+    };
+    let firstMutation = true;
+    runCommand.mockImplementation(async (payload) => {
+      if (payload.params.operation === 'connect-api-key' && firstMutation) {
+        firstMutation = false;
         await firstGate;
-        return { success: true, data: discovery };
-      })
-      .mockResolvedValue({ success: true, data: discovery });
+      }
+      return {
+        success: true,
+        data: payload.params.operation === 'discover' ? present : discovery,
+      };
+    });
 
     const first = runWithTenantContext('tenant-a', () =>
       service().create({ providerId: 'kimi-for-coding', apiKey: 'key-1' }, params)
@@ -191,10 +205,79 @@ describe('OpenCode provider auth service', () => {
       service().remove('kimi-for-coding', params)
     );
 
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
     releaseFirst();
     await Promise.all([first, second, independent]);
-    expect(runCommand).toHaveBeenCalledTimes(3);
+    expect(runCommand).toHaveBeenCalledTimes(5);
+  });
+
+  it('refuses removal unless discovery proves a saved credential is present', async () => {
+    runCommand.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...discovery,
+        providers: [
+          {
+            ...discovery.providers[0],
+            runtimeAvailable: true,
+            credentialPresence: 'unknown',
+          },
+        ],
+      },
+    });
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().remove('kimi-for-coding', params)).rejects.toThrow(
+        /saved credential.*not known/i
+      );
+    });
+
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { operation: 'discover' } }),
+      expect.any(Object)
+    );
+  });
+
+  it('removes a known saved Zen credential even when Zen remains runtime-available', async () => {
+    const present = {
+      ...discovery,
+      providers: [
+        {
+          ...discovery.providers[0],
+          id: 'opencode',
+          name: 'OpenCode Zen',
+          runtimeAvailable: true,
+          credentialPresence: 'present' as const,
+        },
+      ],
+    };
+    const removed = {
+      ...present,
+      providers: [
+        {
+          ...present.providers[0],
+          credentialPresence: 'absent' as const,
+        },
+      ],
+    };
+    runCommand
+      .mockResolvedValueOnce({ success: true, data: present })
+      .mockResolvedValueOnce({ success: true, data: removed });
+
+    const result = await runWithTenantContext('tenant-a', () =>
+      service().remove('opencode', params)
+    );
+
+    expect(runCommand.mock.calls.map(([payload]) => payload.params)).toEqual([
+      { operation: 'discover' },
+      { operation: 'disconnect', providerId: 'opencode' },
+    ]);
+    expect(result.providers[0]).toMatchObject({
+      id: 'opencode',
+      runtimeAvailable: true,
+      credentialPresence: 'absent',
+    });
   });
 
   it('keeps one OAuth attempt on one executor through authorize and callback states', async () => {
@@ -257,8 +340,8 @@ describe('OpenCode provider auth service', () => {
           {
             id: 'openai',
             name: 'OpenAI',
-            configured: true,
-            status: 'configured',
+            runtimeAvailable: true,
+            credentialPresence: 'present',
             authMethods: [],
           },
         ],
@@ -297,6 +380,21 @@ describe('OpenCode provider auth service', () => {
         submitCode: vi.fn(),
       };
     });
+    runCommand.mockImplementation(async (payload) => ({
+      success: true,
+      data:
+        payload.params.operation === 'discover'
+          ? {
+              ...discovery,
+              providers: [
+                {
+                  ...discovery.providers[0],
+                  credentialPresence: 'present' as const,
+                },
+              ],
+            }
+          : discovery,
+    }));
     const authService = service();
     const oauth = runWithTenantContext('tenant-a', () =>
       authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
@@ -318,17 +416,18 @@ describe('OpenCode provider auth service', () => {
     const independent = runWithTenantContext('tenant-b', () =>
       authService.remove('kimi-for-coding', params)
     );
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledOnce());
-    expect(runCommand.mock.calls[0]?.[0]).toMatchObject({
-      params: { operation: 'disconnect' },
-    });
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
+    expect(runCommand.mock.calls.map(([payload]) => payload.params)).toEqual([
+      { operation: 'discover' },
+      { operation: 'disconnect', providerId: 'kimi-for-coding' },
+    ]);
 
     finish({
       success: false,
       error: { code: 'OPENCODE_AUTH_FAILED', message: 'safe' },
     });
     await Promise.all([blocked, independent]);
-    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
   it('isolates attempts by tenant and subject and cancels the full executor handle', async () => {

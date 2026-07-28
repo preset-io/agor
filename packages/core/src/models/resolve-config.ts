@@ -46,7 +46,7 @@ export type ModelConfigInput = {
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
 export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =
-  'OpenCode model_config requires nonblank provider and model values';
+  'Select an exact OpenCode provider and model in Agor before running this session';
 
 export class InvalidModelConfigError extends Error {
   constructor(message: string) {

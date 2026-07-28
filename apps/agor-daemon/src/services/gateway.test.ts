@@ -1,3 +1,4 @@
+import { materializeAgenticToolConfiguration } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
@@ -10,7 +11,7 @@ import {
 } from '@agor/core/db';
 import { getConnector } from '@agor/core/gateway';
 import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SessionStatus, USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
@@ -28,6 +29,24 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   return {
     ...actual,
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
+    materializeAgenticToolConfiguration: vi.fn(async (_db, args) => {
+      if (args.source.reference && args.source.configuration !== undefined) {
+        throw new Error(
+          'Agentic configuration must contain a reference or inline values, never both'
+        );
+      }
+      return {
+        agentic_tool_preset_id:
+          args.source.reference && !String(args.source.reference).startsWith('__')
+            ? args.source.reference
+            : null,
+        permission_config: {
+          mode: args.source.configuration?.permissionMode ?? 'auto',
+        },
+        model_config: null,
+        mcp_server_ids: args.mcpServerIds ?? [],
+      };
+    }),
   };
 });
 
@@ -92,9 +111,15 @@ function makeGatewayHarness(args: {
   existingMapping?: ThreadSessionMap | null;
   connector?: Record<string, unknown>;
   db?: TenantScopeAwareDatabase;
+  executionSession?: { session_id: string; created_by: string } | null;
+  alignedUsersByEmail?: Record<string, User>;
 }) {
   const channel = args.channel ?? slackChannel;
   let mapping = args.existingMapping ?? null;
+  const alignedUsersByEmail = args.alignedUsersByEmail ?? {};
+  const usersById = new Map(
+    [user, ...Object.values(alignedUsersByEmail)].map((candidate) => [candidate.user_id, candidate])
+  );
   const promptCreate = vi.fn(async () => ({
     task_id: 'task-1',
     session_id: mapping?.session_id ?? 'sess-new',
@@ -105,11 +130,20 @@ function makeGatewayHarness(args: {
     branch_id: channel.target_branch_id,
     status: SessionStatus.IDLE,
   }));
+  const sessionsPatch = vi.fn(async () => undefined);
   const app = {
     service: (name: string) => {
-      if (name === 'users') return { get: vi.fn(async () => user) };
+      if (name === 'users') {
+        return {
+          get: vi.fn(async (id: string) => usersById.get(id as UserID) ?? user),
+        };
+      }
       if (name === 'sessions') {
-        return { create: sessionsCreate, setMCPServers: vi.fn(async () => undefined) };
+        return {
+          create: sessionsCreate,
+          patch: sessionsPatch,
+          setMCPServers: vi.fn(async () => undefined),
+        };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
       throw new Error(`Unexpected service: ${name}`);
@@ -159,6 +193,18 @@ function makeGatewayHarness(args: {
   };
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
+  (service as unknown as { sessionRepo: { findById: unknown } }).sessionRepo = {
+    findById: vi.fn(async () =>
+      args.executionSession === undefined
+        ? { session_id: mapping?.session_id ?? 'sess-1', created_by: user.user_id }
+        : args.executionSession
+    ),
+  };
+  (service as unknown as { usersRepo: { findByEmailForAlignment: unknown } }).usersRepo = {
+    findByEmailForAlignment: vi.fn(
+      async (email: string) => alignedUsersByEmail[email.toLowerCase()] ?? null
+    ),
+  };
   (
     service as unknown as { outboundRepo: { findUnconsumedByChannelAndThread: unknown } }
   ).outboundRepo = {
@@ -184,6 +230,7 @@ function makeGatewayHarness(args: {
 afterEach(() => {
   vi.mocked(getConnector).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
+  vi.mocked(materializeAgenticToolConfiguration).mockClear();
 });
 
 describe('gateway tenant metadata helpers', () => {
@@ -365,6 +412,162 @@ describe('GatewayService multi-tenant process state', () => {
 });
 
 describe('GatewayService Slack thread catch-up', () => {
+  it('materializes a mapped aligned thread against its immutable session owner', async () => {
+    const alignedSender = {
+      ...user,
+      user_id: 'aligned-sender' as UserID,
+      email: 'aligned@example.com',
+    } as User;
+    const channel = {
+      ...slackChannel,
+      config: { bot_token: 'xoxb-test', align_slack_users: true },
+    } as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping(),
+      executionSession: { session_id: 'sess-1', created_by: 'original-owner' },
+      alignedUsersByEmail: { 'aligned@example.com': alignedSender },
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: 'follow up',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_user_email: 'aligned@example.com',
+      },
+    });
+
+    expect(vi.mocked(materializeAgenticToolConfiguration).mock.calls[0][1]).toMatchObject({
+      executionOwnerId: 'original-owner',
+    });
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({
+      user: expect.objectContaining({ user_id: 'aligned-sender' }),
+    });
+  });
+
+  it('keeps per-message My default resolution pinned to the mapped session owner', async () => {
+    const senderA = {
+      ...user,
+      user_id: 'sender-a' as UserID,
+      email: 'sender-a@example.com',
+    } as User;
+    const senderB = {
+      ...user,
+      user_id: 'sender-b' as UserID,
+      email: 'sender-b@example.com',
+    } as User;
+    const channel = {
+      ...slackChannel,
+      agentic_config: {
+        agent: 'opencode',
+        presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      },
+    } as GatewayChannel;
+    const { service } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping(),
+      executionSession: { session_id: 'sess-1', created_by: 'original-owner' },
+      alignedUsersByEmail: {
+        'sender-a@example.com': senderA,
+        'sender-b@example.com': senderB,
+      },
+    });
+
+    for (const email of ['sender-a@example.com', 'sender-b@example.com']) {
+      await service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: `follow up from ${email}`,
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          align_slack_users: true,
+          slack_user_email: email,
+        },
+      });
+    }
+
+    expect(
+      vi
+        .mocked(materializeAgenticToolConfiguration)
+        .mock.calls.map(([, callArgs]) => callArgs.executionOwnerId)
+    ).toEqual(['original-owner', 'original-owner']);
+  });
+
+  it('does not let message metadata override a stable run-as owner for My default', async () => {
+    const alignedSender = {
+      ...user,
+      user_id: 'new-session-sender' as UserID,
+      email: 'new-session@example.com',
+    } as User;
+    const channel = {
+      ...slackChannel,
+      agentic_config: {
+        agent: 'opencode',
+        presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      },
+    } as GatewayChannel;
+    const { service, sessionsCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: null,
+      alignedUsersByEmail: { 'new-session@example.com': alignedSender },
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'D123-200.000000',
+      text: 'start a session',
+      metadata: {
+        channel: 'D123',
+        channel_type: 'im',
+        align_slack_users: true,
+        slack_user_email: 'new-session@example.com',
+      },
+    });
+
+    expect(vi.mocked(materializeAgenticToolConfiguration).mock.calls[0][1]).toMatchObject({
+      executionOwnerId: 'user-1',
+    });
+    expect(sessionsCreate.mock.calls[0][0]).toMatchObject({
+      created_by: 'user-1',
+    });
+  });
+
+  it('rejects a persisted reference mixed with inline values at runtime', async () => {
+    const channel = {
+      ...slackChannel,
+      agentic_config: {
+        agent: 'claude-code',
+        presetId: 'preset-1',
+        permissionMode: 'ask',
+      },
+    } as unknown as GatewayChannel;
+    const { service } = makeGatewayHarness({
+      channel,
+      existingMapping: null,
+      connector: {},
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'D123-100.000000',
+        text: 'please answer',
+        metadata: {
+          channel: 'D123',
+          channel_type: 'im',
+        },
+      })
+    ).rejects.toThrow(
+      'Agentic configuration must contain a reference or inline values, never both'
+    );
+  });
+
   it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {
     const seenTenants: Array<string | undefined> = [];
     const app = {
@@ -607,6 +810,7 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(result).toMatchObject({ success: true, sessionId: 'sess-new', created: true });
     expect(threadMapRepo.findByThread).not.toHaveBeenCalled();
     expect(sessionsCreate).toHaveBeenCalled();
+    expect(sessionsCreate.mock.calls[0][1]).toEqual({});
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: 'C123-100.000000',

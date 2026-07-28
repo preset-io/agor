@@ -1,5 +1,9 @@
 // src/types/schedule.ts
 import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
+import type {
+  AgenticToolDefaultConfigurationReference,
+  AgenticToolPresetID,
+} from './agentic-tool-preset';
 import type { BranchID, SessionID, UUID } from './id';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
@@ -38,14 +42,35 @@ export type TimezoneMode = 'local' | 'utc';
  * etc. — they're treated as a unit in the modal and stored as one
  * jsonb blob.
  */
-export interface ScheduleAgenticToolConfig {
+interface ScheduleAgenticToolConfigBase {
   /** Agent to spawn for this schedule's runs. */
   agentic_tool: AgenticToolName;
-  /** Live preset reference. Inline runtime fields cannot coexist with this source. */
-  preset_id?: import('./agentic-tool-preset').AgenticToolPresetID;
-  /** User/workspace default reference, deliberately resolved for every run. */
-  configuration_reference?: import('./agentic-tool-preset').AgenticToolDefaultConfigurationReference;
+  /** Additional context files to load into the spawned session. */
+  context_files?: string[];
+}
 
+type ReferencedScheduleAgenticToolConfig = (
+  | {
+      /** Live preset reference. */
+      preset_id: AgenticToolPresetID;
+      configuration_reference?: never;
+    }
+  | {
+      /** User/workspace default reference, deliberately resolved for every run. */
+      configuration_reference: AgenticToolDefaultConfigurationReference;
+      preset_id?: never;
+    }
+) & {
+  permission_mode?: never;
+  model_config?: never;
+  codex_sandbox_mode?: never;
+  codex_approval_policy?: never;
+  codex_network_access?: never;
+};
+
+type InlineScheduleAgenticToolConfig = {
+  preset_id?: never;
+  configuration_reference?: never;
   /** Permission mode for spawned sessions (e.g., 'auto', 'ask', 'default'). */
   permission_mode?: PermissionMode;
 
@@ -60,9 +85,6 @@ export interface ScheduleAgenticToolConfig {
    */
   model_config?: DefaultModelConfig;
 
-  /** Additional context files to load into the spawned session. */
-  context_files?: string[];
-
   /** Codex-specific: sandbox mode (where Codex can write). */
   codex_sandbox_mode?: CodexSandboxMode;
 
@@ -71,7 +93,10 @@ export interface ScheduleAgenticToolConfig {
 
   /** Codex-specific: network access (outbound HTTP/HTTPS). */
   codex_network_access?: boolean;
-}
+};
+
+export type ScheduleAgenticToolConfig = ScheduleAgenticToolConfigBase &
+  (ReferencedScheduleAgenticToolConfig | InlineScheduleAgenticToolConfig);
 
 /**
  * First-class schedule entity.

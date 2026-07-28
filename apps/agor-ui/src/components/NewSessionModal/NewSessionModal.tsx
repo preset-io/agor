@@ -51,7 +51,7 @@ export interface NewSessionConfig {
   initialPrompt?: string;
 
   // Advanced configuration
-  modelConfig?: ModelConfig | null;
+  modelConfig?: ModelConfig;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -210,12 +210,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = isInline
-        ? values.modelConfig
-        : (values.modelConfig ?? agentDefaults?.modelConfig);
-      const hasCompleteOpenCodeModel =
-        selectedAgent !== 'opencode' ||
-        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
+      const selectedModelConfig = isInline ? values.modelConfig : undefined;
 
       // Promote the inline config to the user's default when requested. Fire and
       // forget — session creation shouldn't block on the profile patch.
@@ -242,27 +237,24 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
         title: values.title,
         initialPrompt: values.initialPrompt,
-        // OpenCode's provider/model selection is atomic. An inline clear must
-        // remain distinct from omission so the daemon does not restore a stale
-        // user default in its create hook.
-        modelConfig:
-          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
-            ? null
-            : hasCompleteOpenCodeModel
-              ? selectedModelConfig
-              : undefined,
+        // Preset/workspace sources resolve on the daemon. Sending their
+        // currently displayed model here would incorrectly promote it to a
+        // session override ahead of the selected source.
+        modelConfig: selectedModelConfig,
         effort:
-          selectedAgent === 'opencode' && !hasCompleteOpenCodeModel
-            ? undefined
-            : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
+          isInline &&
+          (selectedAgent !== 'opencode' ||
+            Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim()))
+            ? ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort)
+            : undefined,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
-        permissionMode,
+        permissionMode: isInline ? permissionMode : undefined,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
         attachmentFiles:
           attachments.length > 0 ? attachments.map((attachment) => attachment.file) : undefined,
       };
 
-      if (selectedAgent === 'codex') {
+      if (selectedAgent === 'codex' && isInline) {
         const codexDefaults = mapToCodexPermissionConfig(permissionMode);
         config.codexSandboxMode =
           (values.codexSandboxMode as CodexSandboxMode | undefined) ??
@@ -358,6 +350,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client}
+          branchId={branchId}
           enableSaveAsDefault
           onConfigValidityChange={handleConfigValidity}
         />

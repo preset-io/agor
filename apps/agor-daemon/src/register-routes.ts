@@ -1134,7 +1134,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
-    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
+    const session = await sessionsService.materializeAgenticToolConfiguration(
+      loadedSession,
+      params
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1482,7 +1485,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             `${session.agentic_tool ?? 'claude-code'} is disabled for this workspace`
           );
         }
-        session = await sessionsService.materializeAgenticToolPreset(session, params);
+        session = await sessionsService.materializeAgenticToolConfiguration(session, params);
         if (
           session.agentic_tool_preset_id &&
           data.permissionMode !== undefined &&

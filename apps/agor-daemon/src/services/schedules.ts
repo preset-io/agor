@@ -16,16 +16,16 @@
 
 import {
   AgenticConfigurationResolutionError,
-  assertInlineAgenticConfigurationAllowed,
   InvalidScheduleAgenticToolConfigError,
+  materializeAgenticToolConfiguration,
   normalizeScheduleAgenticToolConfig,
   PAGINATION,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
 } from '@agor/core/config';
 import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
+import { InvalidModelConfigError } from '@agor/core/models';
 import type {
+  AgenticToolConfigurationSource,
   AuthenticatedParams,
   BranchID,
   QueryParams,
@@ -63,29 +63,34 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     userId?: UserID
   ): Promise<Schedule['agentic_tool_config']> {
     try {
-      if (config.configuration_reference !== undefined) {
-        await resolveAgenticConfigurationReference(
-          this.db,
-          config.agentic_tool,
-          config.configuration_reference,
-          userId
-        );
-        return config;
-      } else if (config.preset_id !== undefined) {
-        const preset = await resolveAgenticToolPreset(
-          this.db,
-          config.agentic_tool,
-          config.preset_id
-        );
-        return { ...config, preset_id: preset.preset_id };
-      } else {
-        await assertInlineAgenticConfigurationAllowed(this.db, config.agentic_tool);
-        return config;
-      }
+      const source = (
+        config.configuration_reference !== undefined
+          ? { reference: config.configuration_reference }
+          : config.preset_id !== undefined
+            ? { reference: config.preset_id }
+            : {
+                configuration: {
+                  modelConfig: config.model_config,
+                  permissionMode: config.permission_mode,
+                  codexSandboxMode: config.codex_sandbox_mode,
+                  codexApprovalPolicy: config.codex_approval_policy,
+                  codexNetworkAccess: config.codex_network_access,
+                },
+              }
+      ) as AgenticToolConfigurationSource;
+      const materialized = await materializeAgenticToolConfiguration(this.db, {
+        tool: config.agentic_tool,
+        source,
+        executionOwnerId: userId,
+      });
+      return config.preset_id !== undefined && materialized.agentic_tool_preset_id
+        ? { ...config, preset_id: materialized.agentic_tool_preset_id }
+        : config;
     } catch (error) {
       if (error instanceof AgenticConfigurationResolutionError) {
         throw new BadRequest('Selected agentic configuration is not available');
       }
+      if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
       throw error;
     }
   }

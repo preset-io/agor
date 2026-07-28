@@ -77,8 +77,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       const values = getFormForTool(tool).getFieldsValue();
       const newConfig: DefaultAgenticConfig = {
         ...defaultConfig,
-        [tool]: buildConfigFromFormValues(tool, values),
       };
+      if (tool === 'opencode' && !values.modelConfig) {
+        delete newConfig[tool];
+      } else {
+        newConfig[tool] = buildConfigFromFormValues(tool, values);
+      }
 
       await onSave(newConfig);
       showSuccess(`Default ${tool} settings saved`);

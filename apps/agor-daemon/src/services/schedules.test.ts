@@ -181,6 +181,69 @@ describe('SchedulesService default configuration references', () => {
     ).rejects.toBeInstanceOf(BadRequest);
   });
 
+  dbTest('rejects a partial inline OpenCode pair before schedule persistence', async ({ db }) => {
+    const { creator, branch } = await setupContext(db);
+    const service = new SchedulesService(db);
+    const schedules = new ScheduleRepository(db);
+
+    await expect(
+      service.create(
+        scheduleData(branch.branch_id, creator.user_id as UserID, {
+          agentic_tool: 'opencode',
+          model_config: { mode: 'exact', provider: 'openai', model: '' },
+        }),
+        params(creator)
+      )
+    ).rejects.toThrow(/select.*provider.*model/i);
+    expect(await schedules.findAll()).toHaveLength(0);
+  });
+
+  dbTest('rejects an absent OpenCode pair after creator-default resolution', async ({ db }) => {
+    const { caller, branch } = await setupContext(db);
+    const service = new SchedulesService(db);
+    const schedules = new ScheduleRepository(db);
+
+    await expect(
+      service.create(
+        scheduleData(branch.branch_id, caller.user_id as UserID, {
+          agentic_tool: 'opencode',
+        }),
+        params(caller)
+      )
+    ).rejects.toThrow(/select.*provider.*model/i);
+    expect(await schedules.findAll()).toHaveLength(0);
+  });
+
+  dbTest(
+    'accepts an absent inline OpenCode pair resolved from the schedule creator',
+    async ({ db }) => {
+      const { branch } = await setupContext(db);
+      const creator = await new UsersRepository(db).create({
+        email: `opencode-schedule-${generateId()}@example.com`,
+        name: 'OpenCode schedule creator',
+        default_agentic_config: {
+          opencode: {
+            modelConfig: {
+              mode: 'exact',
+              provider: 'creator-provider',
+              model: 'creator-model',
+            },
+          },
+        },
+      });
+      const service = new SchedulesService(db);
+
+      const created = await service.create(
+        scheduleData(branch.branch_id, creator.user_id as UserID, {
+          agentic_tool: 'opencode',
+        }),
+        params(creator)
+      );
+
+      expect(created.agentic_tool_config).toEqual({ agentic_tool: 'opencode' });
+    }
+  );
+
   dbTest('rejects multi-patch of a configuration source', async ({ db }) => {
     const { creator } = await setupContext(db);
     const service = new SchedulesService(db);

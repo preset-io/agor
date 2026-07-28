@@ -65,7 +65,46 @@ async function seedPresetSession(db: Database) {
   return session;
 }
 
-describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
+describe('SessionsService.materializeAgenticToolConfiguration tenant scope', () => {
+  dbTest('keeps a selected preset live at task start', async ({ db }) => {
+    const presetRepo = new AgenticToolPresetRepository(db);
+    const preset = await presetRepo.create(
+      {
+        tool: 'codex',
+        name: 'Live Codex preset',
+        configuration: {
+          permissionMode: 'allow-all',
+          modelConfig: { mode: 'exact', model: 'gpt-5.4' },
+        },
+      },
+      ACTOR_ID
+    );
+    const service = new SessionsService(db, STUB_APP);
+    const created = (await service.create({
+      ...(await seedPresetSession(db)),
+      session_id: generateId(),
+      agentic_tool_preset_id: preset.preset_id,
+    })) as Session;
+
+    await presetRepo.patch(
+      preset.preset_id,
+      {
+        configuration: {
+          permissionMode: 'ask',
+          modelConfig: { mode: 'exact', model: 'gpt-5.5' },
+        },
+      },
+      ACTOR_ID
+    );
+
+    const materialized = await runWithTenantContext('tenant-codex', () =>
+      service.materializeAgenticToolConfiguration(created)
+    );
+    expect(materialized.agentic_tool_preset_id).toBe(preset.preset_id);
+    expect(materialized.permission_config?.mode).toBe('ask');
+    expect(materialized.model_config?.model).toBe('gpt-5.5');
+  });
+
   dbTest('opens a tenant unit of work from identity-only context', async ({ db }) => {
     const session = await seedPresetSession(db);
     const guardedDb = createTenantScopedDatabaseProxy(db, {
@@ -82,7 +121,7 @@ describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
     });
 
     const materialized = await runWithTenantContext('tenant-x', () =>
-      service.materializeAgenticToolPreset(session)
+      service.materializeAgenticToolConfiguration(session)
     );
 
     expect(materialized.model_config?.model).toBe('gpt-5.4');
@@ -106,7 +145,7 @@ describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
     await runWithTenantContext('tenant-x', () =>
       runWithTenantDatabaseScope(guardedDb, 'tenant-x', async () => {
         const outerScope = getCurrentTenantDatabaseScope();
-        await service.materializeAgenticToolPreset(session);
+        await service.materializeAgenticToolConfiguration(session);
         expect(updateScope).toBe(outerScope);
       })
     );
@@ -122,8 +161,14 @@ describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
     const service = new SessionsService(guardedDb, STUB_APP);
 
     await expect(
-      runWithTenantContext('tenant-x', () => service.materializeAgenticToolPreset(inlineSession))
-    ).resolves.toBe(inlineSession);
+      runWithTenantContext('tenant-x', () =>
+        service.materializeAgenticToolConfiguration(inlineSession)
+      )
+    ).resolves.toMatchObject({
+      session_id: inlineSession.session_id,
+      agentic_tool_preset_id: null,
+      permission_config: expect.any(Object),
+    });
   });
 
   dbTest('fails fast for missing or mismatched tenant identity', async ({ db }) => {
@@ -131,19 +176,19 @@ describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
     const guardedDb = createTenantScopedDatabaseProxy(db, { requireScope: true });
     const service = new SessionsService(guardedDb, STUB_APP);
 
-    await expect(service.materializeAgenticToolPreset(session)).rejects.toThrow(
+    await expect(service.materializeAgenticToolConfiguration(session)).rejects.toThrow(
       'Missing active tenant context for agentic tool preset materialization'
     );
 
     await runWithTenantDatabaseScope(guardedDb, 'tenant-b', async () => {
       await expect(
-        runWithTenantContext('tenant-a', () => service.materializeAgenticToolPreset(session))
+        runWithTenantContext('tenant-a', () => service.materializeAgenticToolConfiguration(session))
       ).rejects.toThrow('Cannot enter tenant scope tenant-a from active tenant scope tenant-b');
     });
 
     await runWithSystemDatabaseScope(guardedDb, 'materialization system test', async () => {
       await expect(
-        runWithTenantContext('tenant-a', () => service.materializeAgenticToolPreset(session))
+        runWithTenantContext('tenant-a', () => service.materializeAgenticToolConfiguration(session))
       ).rejects.toThrow('Cannot enter tenant scope tenant-a from active system database scope');
     });
   });

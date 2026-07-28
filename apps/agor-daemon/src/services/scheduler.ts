@@ -38,11 +38,8 @@
  */
 
 import {
-  assertInlineAgenticConfigurationAllowed,
+  materializeAgenticToolConfiguration,
   normalizeScheduleAgenticToolConfig,
-  presetConfigurationToScheduleConfig,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
 } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
@@ -58,11 +55,9 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   Branch,
   MCPServerID,
-  PermissionMode,
   Schedule,
   ScheduleAgenticToolConfig,
   ScheduleID,
@@ -70,6 +65,7 @@ import type {
   SessionID,
   TenantID,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
@@ -169,40 +165,41 @@ export function renderSchedulePrompt(
 export async function materializeScheduleAgenticToolConfig(
   db: TenantScopeAwareDatabase,
   schedule: Pick<Schedule, 'agentic_tool_config' | 'created_by'>
-): Promise<ScheduleAgenticToolConfig> {
+): Promise<
+  Omit<ScheduleAgenticToolConfig, 'model_config'> & {
+    model_config?: Session['model_config'];
+  }
+> {
   const cfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
-  if (cfg.configuration_reference) {
-    const resolved = await resolveAgenticConfigurationReference(
-      db,
-      cfg.agentic_tool,
-      cfg.configuration_reference,
-      schedule.created_by as import('@agor/core/types').UserID
-    );
-    if (resolved.preset) {
-      return presetConfigurationToScheduleConfig(
-        cfg.agentic_tool,
-        resolved.preset.preset_id,
-        resolved.preset.configuration
-      );
-    }
-    const materialized = presetConfigurationToScheduleConfig(
-      cfg.agentic_tool,
-      cfg.configuration_reference,
-      resolved.configuration ?? {}
-    );
-    const { preset_id: _presetId, ...inline } = materialized;
-    return inline;
-  }
-  if (cfg.preset_id) {
-    const preset = await resolveAgenticToolPreset(db, cfg.agentic_tool, cfg.preset_id);
-    return presetConfigurationToScheduleConfig(
-      cfg.agentic_tool,
-      preset.preset_id,
-      preset.configuration
-    );
-  }
-  await assertInlineAgenticConfigurationAllowed(db, cfg.agentic_tool);
-  return cfg;
+  const materialized = await materializeAgenticToolConfiguration(db, {
+    tool: cfg.agentic_tool,
+    source: cfg.configuration_reference
+      ? { reference: cfg.configuration_reference }
+      : cfg.preset_id
+        ? { reference: cfg.preset_id }
+        : {
+            configuration: {
+              modelConfig: cfg.model_config,
+              permissionMode: cfg.permission_mode,
+              codexSandboxMode: cfg.codex_sandbox_mode,
+              codexApprovalPolicy: cfg.codex_approval_policy,
+              codexNetworkAccess: cfg.codex_network_access,
+            },
+          },
+    executionOwnerId: schedule.created_by as UserID,
+  });
+  return {
+    agentic_tool: cfg.agentic_tool,
+    ...(materialized.agentic_tool_preset_id
+      ? { preset_id: materialized.agentic_tool_preset_id }
+      : {}),
+    ...(materialized.model_config ? { model_config: materialized.model_config } : {}),
+    permission_mode: materialized.permission_config.mode,
+    codex_sandbox_mode: materialized.permission_config.codex?.sandboxMode,
+    codex_approval_policy: materialized.permission_config.codex?.approvalPolicy,
+    codex_network_access: materialized.permission_config.codex?.networkAccess,
+    ...(cfg.context_files !== undefined ? { context_files: cfg.context_files } : {}),
+  };
 }
 
 /**
@@ -673,30 +670,31 @@ export class SchedulerService {
       // 5. Resolve unix_username (schedule's creator is the execution identity).
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
-      const persistedCfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
       const cfg = await this.withTenantDatabase(() =>
         materializeScheduleAgenticToolConfig(this.db, schedule)
       );
-      const inheritsCreatorDefaults =
-        persistedCfg.configuration_reference === undefined && persistedCfg.preset_id === undefined;
-      const runtimeDefaults = resolveSessionDefaults({
-        agenticTool: cfg.agentic_tool,
-        user: inheritsCreatorDefaults ? creator : null,
-        overrides: {
-          permissionMode: cfg.permission_mode as PermissionMode | undefined,
-          modelConfig: cfg.model_config,
-          codexSandboxMode: cfg.codex_sandbox_mode,
-          codexApprovalPolicy: cfg.codex_approval_policy,
-          codexNetworkAccess: cfg.codex_network_access,
-        },
-        now: new Date(now),
-      });
 
       // 6. Create session with schedule metadata + FK back to schedule.
       const session: Partial<Session> = {
         branch_id: branch.branch_id,
         agentic_tool: cfg.agentic_tool,
-        agentic_tool_preset_id: cfg.preset_id,
+        ...(cfg.preset_id
+          ? { agentic_tool_preset_id: cfg.preset_id }
+          : {
+              permission_config: {
+                mode: cfg.permission_mode,
+                ...(cfg.agentic_tool === 'codex'
+                  ? {
+                      codex: {
+                        sandboxMode: cfg.codex_sandbox_mode,
+                        approvalPolicy: cfg.codex_approval_policy,
+                        networkAccess: cfg.codex_network_access,
+                      },
+                    }
+                  : {}),
+              } as Session['permission_config'],
+              model_config: cfg.model_config ?? null,
+            }),
         status: SessionStatus.IDLE,
         created_by: schedule.created_by,
         unix_username: unixUsername,
@@ -710,11 +708,6 @@ export class SchedulerService {
           ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
           : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
         contextFiles: cfg.context_files ?? [],
-        permission_config: runtimeDefaults.permission_config,
-        // DefaultModelConfig → Session.model_config. If the schedule
-        // only sets ancillary fields (e.g. Claude effort), resolve them
-        // against the same model defaults used by fresh sessions.
-        model_config: runtimeDefaults.model_config,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,
@@ -737,7 +730,7 @@ export class SchedulerService {
       // catches any concurrent path that raced past the dedup check —
       // we surface that as a normal dedup hit rather than an error.
       const sessionsService = this.app.service('sessions');
-      const sessionCreateParams: SessionParams = { _agenticConfigResolved: true };
+      const sessionCreateParams: SessionParams = {};
       let createdSession: Session;
       try {
         createdSession = await sessionsService.create(session, sessionCreateParams);

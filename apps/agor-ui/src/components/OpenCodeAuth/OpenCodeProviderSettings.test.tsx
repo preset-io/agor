@@ -12,8 +12,8 @@ const initial: Settings = {
     {
       id: 'moonshotai',
       name: 'Kimi',
-      configured: false,
-      status: 'disconnected',
+      runtimeAvailable: false,
+      credentialPresence: 'absent',
       authMethods: [
         {
           index: 0,
@@ -39,8 +39,8 @@ const initial: Settings = {
     {
       id: 'zhipuai',
       name: 'GLM',
-      configured: true,
-      status: 'configured',
+      runtimeAvailable: true,
+      credentialPresence: 'present',
       authMethods: [],
     },
   ],
@@ -61,13 +61,456 @@ function renderSettings(service: {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+function singleProviderSettings(
+  id: string,
+  name: string,
+  authMethods: Settings['providers'][number]['authMethods'] = []
+): Settings {
+  return {
+    ...initial,
+    providers: [
+      {
+        id,
+        name,
+        runtimeAvailable: false,
+        credentialPresence: 'absent',
+        authMethods,
+      },
+    ],
+  };
+}
+
 describe('OpenCodeProviderSettings', () => {
+  it('keeps a native-scale catalog progressive and renders only configured plus selected providers', async () => {
+    const nativeScale: Settings = {
+      ...initial,
+      providers: [
+        ...Array.from({ length: 170 }, (_, index) => ({
+          id: `provider-${index}`,
+          name: `Provider ${index}`,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
+          authMethods: [],
+        })),
+        ...initial.providers,
+      ],
+    };
+    const service = {
+      find: vi.fn().mockResolvedValue(nativeScale),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    expect(await screen.findByText('GLM')).toBeInTheDocument();
+    expect(screen.queryByText('Provider 169')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Kimi API key')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider to connect' }), {
+      target: { value: 'Kimi' },
+    });
+    fireEvent.click(await screen.findByText('Kimi'));
+
+    const kimiKey = await screen.findByLabelText('Kimi API key');
+    expect(screen.queryByText('Provider 169')).not.toBeInTheDocument();
+
+    fireEvent.change(kimiKey, { target: { value: 'must-not-survive-provider-switch' } });
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider to connect' }), {
+      target: { value: 'Provider 169' },
+    });
+    fireEvent.click(await screen.findByText('Provider 169'));
+    expect(screen.queryByLabelText('Kimi API key')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider to connect' }), {
+      target: { value: 'Kimi' },
+    });
+    fireEvent.click(await screen.findByText('Kimi'));
+    expect(await screen.findByLabelText('Kimi API key')).toHaveValue('');
+  });
+
+  it('clears provider form secrets when the authenticated client scope changes', async () => {
+    const scoped = (id: string, name: string): Settings => ({
+      ...initial,
+      providers: [
+        {
+          id,
+          name,
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: [],
+        },
+      ],
+    });
+    const serviceA = {
+      find: vi.fn().mockResolvedValue(scoped('provider-a', 'Provider A')),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const serviceB = {
+      find: vi.fn().mockResolvedValue(scoped('provider-b', 'Provider B')),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const clientA = { service: vi.fn(() => serviceA) } as unknown as AgorClient;
+    const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
+    const { rerender } = render(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientA} />
+      </AntApp>
+    );
+
+    fireEvent.change(await screen.findByLabelText('Provider A API key'), {
+      target: { value: 'must-not-survive-subject-switch' },
+    });
+    rerender(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientB} />
+      </AntApp>
+    );
+
+    expect(document.body.textContent).not.toContain('must-not-survive-subject-switch');
+    expect(await screen.findByLabelText('Provider B API key')).toHaveValue('');
+    expect(screen.queryByLabelText('Provider A API key')).not.toBeInTheDocument();
+  });
+
+  it('discards a deferred API connect result after the authenticated client scope changes', async () => {
+    const providerId = 'shared-provider';
+    const scopeA = singleProviderSettings(providerId, 'Provider A');
+    const scopeB = singleProviderSettings(providerId, 'Provider B');
+    const configuredA: Settings = {
+      ...scopeA,
+      providers: [
+        {
+          ...scopeA.providers[0],
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+        },
+      ],
+    };
+    const configuredB: Settings = {
+      ...scopeB,
+      providers: [
+        {
+          ...scopeB.providers[0],
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+        },
+      ],
+    };
+    const connectA = deferred<Settings>();
+    const connectB = deferred<Settings>();
+    const serviceA = {
+      find: vi.fn().mockResolvedValue(scopeA),
+      get: vi.fn(),
+      create: vi.fn().mockReturnValue(connectA.promise),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const serviceB = {
+      find: vi.fn().mockResolvedValue(scopeB),
+      get: vi.fn(),
+      create: vi.fn().mockReturnValue(connectB.promise),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const clientA = { service: vi.fn(() => serviceA) } as unknown as AgorClient;
+    const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
+    const { rerender } = render(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientA} />
+      </AntApp>
+    );
+
+    fireEvent.change(await screen.findByLabelText('Provider A API key'), {
+      target: { value: 'scope-a-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(serviceA.create).toHaveBeenCalledOnce());
+
+    rerender(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientB} />
+      </AntApp>
+    );
+    fireEvent.change(await screen.findByLabelText('Provider B API key'), {
+      target: { value: 'scope-b-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(serviceB.create).toHaveBeenCalledOnce());
+
+    connectA.resolve(configuredA);
+    await act(async () => {
+      await connectA.promise;
+    });
+
+    expect(screen.getByLabelText('Provider B API key')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider A API key')).not.toBeInTheDocument();
+
+    connectB.resolve(configuredB);
+    expect(await screen.findByText('Saved credential')).toBeInTheDocument();
+    expect(screen.getAllByText('Provider B')).not.toHaveLength(0);
+  });
+
+  it('does not store a deferred OAuth attempt from a previous authenticated client scope', async () => {
+    const providerId = 'oauth-provider';
+    const oauthMethods = [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }];
+    const scopeA = singleProviderSettings(providerId, 'OAuth Provider A', oauthMethods);
+    const scopeB = singleProviderSettings(providerId, 'OAuth Provider B', oauthMethods);
+    const attemptA = {
+      attemptId: 'attempt-a',
+      providerId,
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/a',
+        method: 'auto' as const,
+        instructions: 'Scope A authorization.',
+      },
+    };
+    const attemptB = {
+      ...attemptA,
+      attemptId: 'attempt-b',
+      authorization: {
+        ...attemptA.authorization,
+        url: 'http://127.0.0.1:9898/b',
+        instructions: 'Scope B authorization.',
+      },
+    };
+    const oauthA = deferred<typeof attemptA>();
+    const serviceA = {
+      find: vi.fn().mockResolvedValue(scopeA),
+      get: vi.fn(),
+      create: vi.fn().mockReturnValue(oauthA.promise),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const serviceB = {
+      find: vi.fn().mockResolvedValue(scopeB),
+      get: vi.fn().mockResolvedValue(attemptB),
+      create: vi.fn().mockResolvedValue(attemptB),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    const clientA = { service: vi.fn(() => serviceA) } as unknown as AgorClient;
+    const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
+    const { rerender } = render(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientA} />
+      </AntApp>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect with Browser flow' }));
+    await waitFor(() => expect(serviceA.create).toHaveBeenCalledOnce());
+
+    rerender(
+      <AntApp>
+        <OpenCodeProviderSettings client={clientB} />
+      </AntApp>
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect with Browser flow' }));
+    expect(await screen.findByText('Scope B authorization.')).toBeInTheDocument();
+
+    oauthA.resolve(attemptA);
+    await act(async () => {
+      await oauthA.promise;
+    });
+
+    expect(screen.getByText('Scope B authorization.')).toBeInTheDocument();
+    expect(screen.queryByText('Scope A authorization.')).not.toBeInTheDocument();
+  });
+
+  it('discards a deferred API connect after switching providers without clearing the newer busy state', async () => {
+    const providers: Settings = {
+      ...initial,
+      providers: [
+        {
+          id: 'provider-a',
+          name: 'Provider A',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: [],
+        },
+        {
+          id: 'provider-b',
+          name: 'Provider B',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: [],
+        },
+      ],
+    };
+    const configuredA: Settings = {
+      ...providers,
+      providers: providers.providers.map((provider) =>
+        provider.id === 'provider-a'
+          ? { ...provider, credentialPresence: 'present' as const }
+          : provider
+      ),
+    };
+    const configuredB: Settings = {
+      ...providers,
+      providers: providers.providers.map((provider) =>
+        provider.id === 'provider-b'
+          ? { ...provider, credentialPresence: 'present' as const }
+          : provider
+      ),
+    };
+    const connectA = deferred<Settings>();
+    const connectB = deferred<Settings>();
+    const service = {
+      find: vi.fn().mockResolvedValue(providers),
+      get: vi.fn(),
+      create: vi.fn((data: { providerId: string }) =>
+        data.providerId === 'provider-a' ? connectA.promise : connectB.promise
+      ),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    fireEvent.mouseDown(await screen.findByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('Provider A'));
+    fireEvent.change(await screen.findByLabelText('Provider A API key'), {
+      target: { value: 'provider-a-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(service.create).toHaveBeenCalledTimes(1));
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('Provider B'));
+    fireEvent.change(await screen.findByLabelText('Provider B API key'), {
+      target: { value: 'provider-b-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(service.create).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      connectA.resolve(configuredA);
+      await connectA.promise;
+    });
+
+    expect(screen.queryByText('Saved credential')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Provider B API key')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Connect$/ })).toHaveClass('ant-btn-loading');
+
+    await act(async () => {
+      connectB.resolve(configuredB);
+      await connectB.promise;
+    });
+    expect(await screen.findByText('Saved credential')).toBeInTheDocument();
+  });
+
+  it('discards a deferred OAuth action after switching providers and never restores its attempt', async () => {
+    const oauthMethods = [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }];
+    const providers: Settings = {
+      ...initial,
+      providers: [
+        {
+          id: 'oauth-a',
+          name: 'OAuth A',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: oauthMethods,
+        },
+        {
+          id: 'oauth-b',
+          name: 'OAuth B',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: oauthMethods,
+        },
+      ],
+    };
+    const attemptA = {
+      attemptId: 'attempt-a',
+      providerId: 'oauth-a',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/a',
+        method: 'auto' as const,
+        instructions: 'Authorize OAuth A.',
+      },
+    };
+    const attemptB = {
+      ...attemptA,
+      attemptId: 'attempt-b',
+      providerId: 'oauth-b',
+      authorization: {
+        ...attemptA.authorization,
+        url: 'http://127.0.0.1:9898/b',
+        instructions: 'Authorize OAuth B.',
+      },
+    };
+    const oauthA = deferred<typeof attemptA>();
+    const oauthB = deferred<typeof attemptB>();
+    const service = {
+      find: vi.fn().mockResolvedValue(providers),
+      get: vi.fn(),
+      create: vi.fn((data: { providerId: string }) =>
+        data.providerId === 'oauth-a' ? oauthA.promise : oauthB.promise
+      ),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    fireEvent.mouseDown(await screen.findByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('OAuth A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with Browser flow' }));
+    await waitFor(() => expect(service.create).toHaveBeenCalledTimes(1));
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('OAuth B'));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with Browser flow' }));
+    await waitFor(() => expect(service.create).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      oauthA.resolve(attemptA);
+      await oauthA.promise;
+    });
+
+    expect(screen.queryByText('Authorize OAuth A.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Connect with Browser flow$/ })).toHaveClass(
+      'ant-btn-loading'
+    );
+
+    oauthB.resolve(attemptB);
+    expect(await screen.findByText('Authorize OAuth B.')).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('OAuth A'));
+    expect(screen.queryByText('Authorize OAuth A.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect with Browser flow' })).toBeInTheDocument();
+  });
+
   it('renders a native API method with conditional prompts and connects it', async () => {
     const configured = {
       ...initial,
       providers: initial.providers.map((provider) =>
         provider.id === 'moonshotai'
-          ? { ...provider, configured: true, status: 'configured' as const }
+          ? {
+              ...provider,
+              runtimeAvailable: true,
+              credentialPresence: 'present' as const,
+            }
           : provider
       ),
     };
@@ -81,9 +524,6 @@ describe('OpenCodeProviderSettings', () => {
     renderSettings(service);
 
     expect(await screen.findByText(/separate logical namespaces/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('Search OpenCode providers'), {
-      target: { value: 'Kimi' },
-    });
     expect(screen.queryByLabelText('Account ID')).not.toBeInTheDocument();
     fireEvent.mouseDown(screen.getByLabelText('Region'));
     fireEvent.click(await screen.findByText('US'));
@@ -102,8 +542,8 @@ describe('OpenCodeProviderSettings', () => {
         metadata: { region: 'us', accountId: 'synthetic-account' },
       })
     );
-    expect(await screen.findByText('Configured in OpenCode')).toBeInTheDocument();
-    expect(screen.getByText(/provider access is not verified/i)).toBeInTheDocument();
+    expect(await screen.findAllByText('Saved credential')).toHaveLength(2);
+    expect(screen.getAllByText(/provider access is not verified/i)).toHaveLength(2);
   });
 
   it('keeps the generic API-key fallback for a provider with no declared methods', async () => {
@@ -113,15 +553,21 @@ describe('OpenCodeProviderSettings', () => {
         {
           id: 'zhipuai',
           name: 'GLM',
-          configured: false,
-          status: 'disconnected' as const,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
           authMethods: [],
         },
       ],
     };
     const configured = {
       ...available,
-      providers: [{ ...available.providers[0], configured: true, status: 'configured' as const }],
+      providers: [
+        {
+          ...available.providers[0],
+          runtimeAvailable: true,
+          credentialPresence: 'present' as const,
+        },
+      ],
     };
     const service = {
       find: vi.fn().mockResolvedValue(available),
@@ -145,6 +591,92 @@ describe('OpenCodeProviderSettings', () => {
     );
   });
 
+  it('keeps configured providers visible and disconnects through the existing service', async () => {
+    const disconnected = {
+      ...initial,
+      providers: initial.providers.map((provider) =>
+        provider.id === 'zhipuai'
+          ? {
+              ...provider,
+              runtimeAvailable: false,
+              credentialPresence: 'absent' as const,
+            }
+          : provider
+      ),
+    };
+    const service = {
+      find: vi.fn().mockResolvedValue(initial),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn().mockResolvedValue(disconnected),
+    };
+    renderSettings(service);
+
+    expect(await screen.findByText('GLM')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove saved credential' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+
+    await waitFor(() => expect(service.remove).toHaveBeenCalledWith('zhipuai'));
+  });
+
+  it('shows Zen as runtime-available without offering removal when no saved credential is known', async () => {
+    const zen = {
+      ...initial,
+      providers: [
+        {
+          id: 'opencode',
+          name: 'OpenCode Zen',
+          runtimeAvailable: true,
+          credentialPresence: 'absent' as const,
+          authMethods: [],
+        },
+      ],
+    };
+    const service = {
+      find: vi.fn().mockResolvedValue(zen),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    expect(await screen.findByText(/available in the OpenCode runtime/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('OpenCode Zen API key')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove saved credential/i })).toBeNull();
+    expect(service.remove).not.toHaveBeenCalled();
+  });
+
+  it('does not offer destructive removal when saved credential presence is unknown', async () => {
+    const unknown = {
+      ...initial,
+      providers: [
+        {
+          id: 'unknown-provider',
+          name: 'Unknown Provider',
+          runtimeAvailable: true,
+          credentialPresence: 'unknown' as const,
+          authMethods: [],
+        },
+      ],
+    };
+    const service = {
+      find: vi.fn().mockResolvedValue(unknown),
+      get: vi.fn(),
+      create: vi.fn(),
+      patch: vi.fn(),
+      remove: vi.fn(),
+    };
+    renderSettings(service);
+
+    expect(
+      await screen.findByText(/saved credential presence could not be determined/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove saved credential/i })).toBeNull();
+  });
+
   it('starts and cancels a bounded native OAuth attempt with dynamic inputs', async () => {
     const oauthOnly = {
       ...initial,
@@ -152,8 +684,8 @@ describe('OpenCodeProviderSettings', () => {
         {
           id: 'oauth-provider',
           name: 'OAuth Provider',
-          configured: false,
-          status: 'disconnected' as const,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
           authMethods: [
             {
               index: 0,
@@ -235,8 +767,8 @@ describe('OpenCodeProviderSettings', () => {
         {
           id: 'oauth-provider',
           name: 'OAuth Provider',
-          configured: false,
-          status: 'disconnected' as const,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
           authMethods: [
             {
               index: 0,
@@ -293,6 +825,177 @@ describe('OpenCodeProviderSettings', () => {
     expect(document.body.textContent).not.toContain('synthetic-secret-code');
   });
 
+  it('does not let a deferred poll regress a newer code submission or enable a duplicate', async () => {
+    const providerId = 'oauth-provider';
+    const oauthOnly = singleProviderSettings(providerId, 'OAuth Provider', [
+      { index: 0, type: 'oauth' as const, label: 'Code flow' },
+    ]);
+    const attempt = {
+      attemptId: 'attempt-code-race',
+      providerId,
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'code' as const,
+        instructions: 'Paste the one-time code.',
+      },
+    };
+    const completing = { ...attempt, phase: 'completing' as const };
+    const poll = deferred<typeof attempt>();
+    const submission = deferred<typeof completing>();
+    const service = {
+      find: vi.fn().mockResolvedValue(oauthOnly),
+      get: vi.fn().mockReturnValue(poll.promise),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn().mockReturnValue(submission.promise),
+      remove: vi.fn(),
+    };
+
+    try {
+      renderSettings(service);
+      const connect = await screen.findByRole('button', { name: 'Connect with Code flow' });
+      vi.useFakeTimers();
+      fireEvent.click(connect);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const input = screen.getByLabelText('OAuth Provider authorization code');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(service.get).toHaveBeenCalledOnce();
+
+      fireEvent.change(input, { target: { value: 'synthetic-secret-code' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Submit authorization code' }));
+      expect(service.patch).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        submission.resolve(completing);
+        poll.resolve(attempt);
+        await Promise.all([submission.promise, poll.promise]);
+      });
+
+      expect(screen.queryByLabelText('OAuth Provider authorization code')).not.toBeInTheDocument();
+      expect(service.patch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a deferred poll replace settings or attempt state from a newer disconnect', async () => {
+    const providerId = 'oauth-provider';
+    const configuredProviderId = 'configured-provider';
+    const oauthSettings: Settings = {
+      ...initial,
+      providers: [
+        {
+          id: providerId,
+          name: 'OAuth Provider',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }],
+        },
+        {
+          id: configuredProviderId,
+          name: 'Configured Provider',
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+          authMethods: [],
+        },
+      ],
+    };
+    const disconnectedSettings: Settings = {
+      ...oauthSettings,
+      providers: oauthSettings.providers.map((provider) =>
+        provider.id === configuredProviderId
+          ? {
+              ...provider,
+              runtimeAvailable: false,
+              credentialPresence: 'absent' as const,
+            }
+          : provider
+      ),
+    };
+    const staleSettings: Settings = {
+      ...oauthSettings,
+      providers: oauthSettings.providers.map((provider) =>
+        provider.id === providerId
+          ? {
+              ...provider,
+              runtimeAvailable: true,
+              credentialPresence: 'present' as const,
+            }
+          : provider
+      ),
+    };
+    const attempt = {
+      attemptId: 'attempt-disconnect-race',
+      providerId,
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-07-24T00:00:00.000Z',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto' as const,
+        instructions: 'Keep this newer attempt visible.',
+      },
+    };
+    const stalePoll = {
+      ...attempt,
+      phase: 'configured' as const,
+      settings: staleSettings,
+    };
+    const poll = deferred<typeof stalePoll>();
+    const disconnect = deferred<Settings>();
+    const service = {
+      find: vi.fn().mockResolvedValue(oauthSettings),
+      get: vi.fn().mockReturnValueOnce(poll.promise).mockResolvedValue(attempt),
+      create: vi.fn().mockResolvedValue(attempt),
+      patch: vi.fn(),
+      remove: vi.fn().mockReturnValue(disconnect.promise),
+    };
+
+    try {
+      renderSettings(service);
+      const connect = await screen.findByRole('button', { name: 'Connect with Browser flow' });
+      vi.useFakeTimers();
+      fireEvent.click(connect);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Keep this newer attempt visible.')).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(service.get).toHaveBeenCalledOnce();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove saved credential' }));
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+      expect(service.remove).toHaveBeenCalledWith(configuredProviderId);
+
+      await act(async () => {
+        disconnect.resolve(disconnectedSettings);
+        poll.resolve(stalePoll);
+        await Promise.all([disconnect.promise, poll.promise]);
+      });
+
+      expect(screen.getByText('Keep this newer attempt visible.')).toBeInTheDocument();
+      expect(screen.queryByText('Saved credential')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Remove saved credential' })
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(service.get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not overlap polls or let a stale configured response reverse cancellation', async () => {
     const oauthOnly = {
       ...initial,
@@ -300,8 +1003,8 @@ describe('OpenCodeProviderSettings', () => {
         {
           id: 'oauth-provider',
           name: 'OAuth Provider',
-          configured: false,
-          status: 'disconnected' as const,
+          runtimeAvailable: false,
+          credentialPresence: 'absent' as const,
           authMethods: [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }],
         },
       ],
@@ -355,7 +1058,7 @@ describe('OpenCodeProviderSettings', () => {
         await Promise.resolve();
       });
       expect(screen.getByText('Authorization cancelled.')).toBeInTheDocument();
-      expect(screen.queryByText('Configured in OpenCode')).not.toBeInTheDocument();
+      expect(screen.queryByText('Saved credential')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

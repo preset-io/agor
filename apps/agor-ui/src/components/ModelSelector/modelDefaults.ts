@@ -135,9 +135,9 @@ export interface ModelSelectorFallbackOptions {
  * Return the model the selector should render when the form has no value.
  *
  * This intentionally follows the same canonical defaults as the daemon's
- * resolveSessionDefaults/applySessionConfigDefaults path. The model list is
- * only an availability/display list; its first item may be newest/flashiest,
- * but it is not the runtime default.
+ * agentic-tool configuration materializer. The model list is only an
+ * availability/display list; its first item may be newest/flashiest, but it is
+ * not the runtime default.
  */
 export function getModelSelectorFallbackModel(
   tool: AgenticToolName,

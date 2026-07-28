@@ -6,14 +6,21 @@
  */
 
 import {
-  assertInlineAgenticConfigurationAllowed,
+  AgenticConfigurationResolutionError,
+  materializeAgenticToolConfiguration,
   PAGINATION,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
 } from '@agor/core/config';
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { GatewayChannel, NullableId, Params } from '@agor/core/types';
+import { InvalidModelConfigError } from '@agor/core/models';
+import type {
+  AgenticToolConfigurationSource,
+  GatewayChannel,
+  NullableId,
+  Params,
+  UserID,
+} from '@agor/core/types';
+import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
 export class GatewayChannelsService extends DrizzleService<
@@ -35,60 +42,96 @@ export class GatewayChannelsService extends DrizzleService<
     this.db = db;
   }
 
-  private async validateConfig(config: GatewayChannel['agentic_config']): Promise<void> {
-    if (!config) {
-      await assertInlineAgenticConfigurationAllowed(this.db, 'claude-code');
-      return;
-    }
-    if (config.presetId) {
-      await resolveAgenticToolPreset(this.db, config.agent, config.presetId);
-      const hasOverrides = Object.entries(config).some(
-        ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
-      );
-      if (hasOverrides) {
-        throw new BadRequest('Preset-backed gateway channels cannot contain inline overrides');
-      }
-    } else await assertInlineAgenticConfigurationAllowed(this.db, config.agent);
+  private hasStableExecutionOwner(
+    channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>
+  ): boolean {
+    const config = channel.config as Record<string, unknown>;
+    return Boolean(
+      channel.agor_user_id &&
+        config.align_slack_users !== true &&
+        config.align_github_users !== true &&
+        config.align_shortcut_users !== true
+    );
   }
 
-  private async normalizeConfig(
+  private async validateConfig(
     config: GatewayChannel['agentic_config'],
-    params?: Params
-  ): Promise<GatewayChannel['agentic_config']> {
-    if (!config?.presetId) return config;
-    const resolved = await resolveAgenticConfigurationReference(
-      this.db,
-      config.agent,
-      config.presetId,
-      (params as { user?: { user_id?: import('@agor/core/types').UserID } } | undefined)?.user
-        ?.user_id
+    channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>
+  ): Promise<void> {
+    const tool = config?.agent ?? 'claude-code';
+    const hasInline = Object.entries(config ?? {}).some(
+      ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
     );
-    const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
-    if (resolved.preset) {
-      return {
-        agent: config.agent,
-        presetId: resolved.preset.preset_id,
-        ...(config.envVars ? { envVars: config.envVars } : {}),
-      };
+    if (config?.presetId && hasInline) {
+      throw new BadRequest('Referenced gateway channels cannot contain inline values');
     }
-    return {
-      agent: config.agent,
-      ...configuration,
-      ...(config.envVars ? { envVars: config.envVars } : {}),
-    };
+    if (
+      config?.presetId === USER_DEFAULT_AGENTIC_CONFIGURATION &&
+      !this.hasStableExecutionOwner(channel)
+    ) {
+      throw new BadRequest(
+        'Gateway channels without a stable execution owner cannot use My default'
+      );
+    }
+
+    const source = (
+      config?.presetId
+        ? { reference: config.presetId }
+        : {
+            configuration: {
+              modelConfig: config?.modelConfig,
+              permissionMode: config?.permissionMode,
+              codexSandboxMode: config?.codexSandboxMode,
+              codexApprovalPolicy: config?.codexApprovalPolicy,
+              codexNetworkAccess: config?.codexNetworkAccess,
+            },
+          }
+    ) as AgenticToolConfigurationSource;
+
+    try {
+      await materializeAgenticToolConfiguration(this.db, {
+        tool,
+        source,
+        executionOwnerId: this.hasStableExecutionOwner(channel)
+          ? (channel.agor_user_id as UserID)
+          : undefined,
+      });
+    } catch (error) {
+      if (
+        error instanceof InvalidModelConfigError ||
+        error instanceof AgenticConfigurationResolutionError
+      ) {
+        throw new BadRequest(error.message);
+      }
+      throw error;
+    }
   }
 
   async create(data: Partial<GatewayChannel>, params?: Params) {
-    await this.validateConfig(data.agentic_config ?? null);
-    const agenticConfig = await this.normalizeConfig(data.agentic_config ?? null, params);
-    data = { ...data, agentic_config: agenticConfig };
+    await this.validateConfig(data.agentic_config ?? null, {
+      agor_user_id: data.agor_user_id as GatewayChannel['agor_user_id'],
+      config: data.config ?? {},
+    });
     return super.create(data, params);
   }
 
   async patch(id: NullableId, data: Partial<GatewayChannel>, params?: Params) {
-    if (data.agentic_config !== undefined) {
-      await this.validateConfig(data.agentic_config);
-      data = { ...data, agentic_config: await this.normalizeConfig(data.agentic_config, params) };
+    if (
+      data.agentic_config !== undefined ||
+      data.agor_user_id !== undefined ||
+      data.config !== undefined
+    ) {
+      if (id === null || Array.isArray(id)) {
+        throw new BadRequest('Gateway agentic configuration cannot be multi-patched');
+      }
+      const current = await this.get(String(id), params);
+      await this.validateConfig(
+        data.agentic_config === undefined ? current.agentic_config : data.agentic_config,
+        {
+          agor_user_id: data.agor_user_id ?? current.agor_user_id,
+          config: { ...current.config, ...data.config },
+        }
+      );
     }
     return super.patch(id, data, params);
   }

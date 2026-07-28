@@ -5,8 +5,8 @@
  * tool-gated parent layer interposed between explicit overrides and user
  * defaults.
  *
- *   model_config:      request → parent (same tool only) → user default → tool default
- *   permission_config: request → parent (same tool only) → user default → mapped system default
+ *   model_config: request → referenced config → parent (same tool only) → user → tool default
+ *   permission:   request → referenced config → parent (same tool only) → user → system default
  *
  * The "same tool only" gate is the bug fix: a Claude model cannot run on
  * Codex, and Claude's `acceptEdits` mode does not exist for Codex. Without
@@ -18,16 +18,8 @@
  * regardless of tool match.
  */
 
-import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
-import type { AgenticToolName, Session, User } from '../types/index.js';
-import {
-  type ParentPermissionLayer,
-  resolvePermissionConfig,
-  type SessionRuntimeOverrides,
-} from './resolve-permission-config.js';
-
-/** Explicit overrides from the spawn/fork request. */
-export type ChildSessionOverrides = SessionRuntimeOverrides;
+import type { AgenticToolName, DefaultAgenticToolConfig, Session, User } from '../types/index.js';
+import { resolveSessionDefaults } from './resolve-session-defaults.js';
 
 /** Minimal parent shape this resolver reads — keeps tests free of full Session fixtures. */
 export type ChildResolverParent = Pick<
@@ -42,7 +34,8 @@ export interface ResolveChildSessionConfigArgs {
   effectiveTool?: AgenticToolName;
   /** User whose per-tool defaults apply when the parent layer is gated off. */
   user?: Pick<User, 'default_agentic_config'> | null;
-  overrides?: ChildSessionOverrides;
+  /** The one selected inline or referenced source ahead of the parent fallback. */
+  source?: DefaultAgenticToolConfig | null;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
 }
@@ -61,38 +54,18 @@ export interface ResolvedChildSessionConfig {
 export function resolveChildSessionConfig(
   args: ResolveChildSessionConfigArgs
 ): ResolvedChildSessionConfig {
-  const { parent, user, overrides, now } = args;
+  const { parent, user, source, now } = args;
   const effectiveTool: AgenticToolName = args.effectiveTool ?? parent.agentic_tool;
-  const sameTool = effectiveTool === parent.agentic_tool;
-  const userToolDefaults = user?.default_agentic_config?.[effectiveTool];
-
-  // Build the parent layer only when same-tool — the cross-tool gate.
-  const parentLayer: ParentPermissionLayer | undefined = sameTool
-    ? {
-        permissionMode: parent.permission_config?.mode,
-        codexSandboxMode: parent.permission_config?.codex?.sandboxMode,
-        codexApprovalPolicy: parent.permission_config?.codex?.approvalPolicy,
-        codexNetworkAccess: parent.permission_config?.codex?.networkAccess,
-      }
-    : undefined;
-
-  const permission_config = resolvePermissionConfig({
-    effectiveTool,
-    overrides,
-    userToolDefaults,
-    parentLayer,
+  const resolved = resolveSessionDefaults({
+    agenticTool: effectiveTool,
+    user,
+    source,
+    parent,
+    now,
   });
 
-  // model_config: explicit > parent (same tool only) > user default > tool default.
-  const model_config = resolveModelConfigWithFallback(
-    effectiveTool,
-    [
-      overrides?.modelConfig,
-      sameTool ? parent.model_config : undefined,
-      userToolDefaults?.modelConfig,
-    ],
-    { now }
-  );
-
-  return { permission_config, model_config };
+  return {
+    permission_config: resolved.permission_config,
+    model_config: resolved.model_config,
+  };
 }

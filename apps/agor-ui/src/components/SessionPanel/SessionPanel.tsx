@@ -1291,10 +1291,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleModelConfigChange = (newConfig: ModelConfig | undefined) => {
     if (session && onUpdateSession) {
-      if (!newConfig) {
-        onUpdateSession(session.session_id, {
-          model_config: null,
-        } as unknown as Partial<Session>);
+      if (
+        !newConfig ||
+        (session.agentic_tool === 'opencode' &&
+          (!newConfig.provider?.trim() || !newConfig.model?.trim()))
+      ) {
+        // OpenCode provider changes clear the staged model until a new exact
+        // pair is selected. Keep the last runnable persisted pair meanwhile.
         return;
       }
       const nextConfig: NonNullable<Session['model_config']> = {
@@ -1352,6 +1355,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const sessionFooter = (
     <SessionFooter
       session={session}
+      currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}

@@ -95,6 +95,7 @@ const codexSession = {
   ...claudeSession,
   session_id: 's-codex',
   agentic_tool: 'codex',
+  model_config: { mode: 'exact', model: 'gpt-5.4' },
 } as unknown as Session;
 
 const openCodeSession = {
@@ -167,7 +168,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
   });
 
-  it('clears an existing OpenCode provider/model override with null', async () => {
+  it('does not persist an incomplete OpenCode provider/model clear', async () => {
     const onUpdate = vi.fn();
     render(
       <SessionSettingsModal
@@ -183,9 +184,35 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByTestId('clear-model'));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate).not.toHaveBeenCalledWith(
+      's-opencode',
+      expect.objectContaining({ model_config: null })
+    );
+  });
+
+  it.each([
+    ['Claude', { ...claudeSession, model_config: { mode: 'alias', model: 'sonnet' } }],
+    ['Codex', codexSession],
+  ])('persists %s model clearing as null', async (_label, session) => {
+    const onUpdate = vi.fn();
+    render(
+      <SessionSettingsModal
+        open
+        onClose={vi.fn()}
+        session={session as Session}
+        client={null}
+        currentUser={null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('clear-model'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
     await waitFor(() =>
       expect(onUpdate).toHaveBeenCalledWith(
-        's-opencode',
+        session.session_id,
         expect.objectContaining({ model_config: null })
       )
     );

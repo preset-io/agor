@@ -21,6 +21,7 @@ const synthetic = {
   kimi: 'agor-synthetic-kimi-not-a-real-key',
   glm: 'agor-synthetic-glm-not-a-real-key',
   oauth: 'agor-synthetic-oauth-not-a-real-key',
+  catalog: 'agor-synthetic-catalog-not-a-real-key',
   code: 'agor-synthetic-one-time-code',
   oauthCode: 'agor-synthetic-code-oauth-not-a-real-key',
 };
@@ -146,6 +147,26 @@ export async function SyntheticOAuthPlugin() {
   process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
     plugin: [pathToFileURL(pluginPath).href],
   });
+  await writeFile(
+    join(branchDirectory, 'opencode.json'),
+    JSON.stringify({
+      model: 'agor-catalog/proof-model',
+      provider: {
+        'agor-catalog': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Agor Catalog',
+          options: {
+            baseURL: `${loopbackOrigin}/models`,
+            apiKey: synthetic.catalog,
+          },
+          models: {
+            'proof-model': { name: 'Proof Model' },
+          },
+        },
+      },
+    }),
+    { mode: 0o600 }
+  );
 
   const { handleOpenCodeAuth, handleOpenCodeOAuth } = await import(
     '../src/commands/opencode-auth.ts'
@@ -154,6 +175,47 @@ export async function SyntheticOAuthPlugin() {
     '../src/sdk-handlers/opencode/managed-server.ts'
   );
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2');
+  const modelCatalog = await expectSuccess(
+    await handleOpenCodeAuth(
+      payload({ operation: 'discover-models', directory: branchDirectory }),
+      {}
+    )
+  );
+  const catalogProvider = modelCatalog.providers.find((provider) => provider.id === 'agor-catalog');
+  assert(catalogProvider, 'The branch-scoped configured provider was not discovered');
+  assert.deepEqual(modelCatalog.projectConfigured, {
+    providerId: 'agor-catalog',
+    modelId: 'proof-model',
+  });
+  assert(catalogProvider.models.some((model) => model.id === 'proof-model'));
+  assert(
+    modelCatalog.providers.every((provider) =>
+      Object.keys(provider).every((key) =>
+        ['id', 'name', 'runtimeAvailable', 'suggestedModel', 'models'].includes(key)
+      )
+    )
+  );
+  assert(
+    modelCatalog.providers.every((provider) =>
+      provider.models.every((model) =>
+        Object.keys(model).every((key) => ['id', 'name', 'status'].includes(key))
+      )
+    )
+  );
+  const serializedCatalog = JSON.stringify(modelCatalog);
+  assert(!serializedCatalog.includes(root));
+  assert(!serializedCatalog.includes(synthetic.catalog));
+  assert(!serializedCatalog.includes('baseURL'));
+  assert(!serializedCatalog.includes('apiKey'));
+  const unscopedCatalog = await expectSuccess(
+    await handleOpenCodeAuth(payload({ operation: 'discover-models' }), {})
+  );
+  assert.equal(
+    unscopedCatalog.providers.some((provider) => provider.id === 'agor-catalog'),
+    false
+  );
+  assert.notDeepEqual(unscopedCatalog.projectConfigured, modelCatalog.projectConfigured);
+
   const discovered = await expectSuccess(
     await handleOpenCodeAuth(payload({ operation: 'discover' }), {})
   );
@@ -165,6 +227,10 @@ export async function SyntheticOAuthPlugin() {
   assert(kimi, 'The packaged OpenCode catalog did not expose a Kimi/Moonshot provider');
   assert(glm, 'The packaged OpenCode catalog did not expose a GLM/Zhipu provider');
   assert(oauth, 'The OpenAI provider was not loaded by pinned OpenCode');
+  assert(
+    discovered.providers.every((provider) => provider.credentialPresence === 'unknown'),
+    'missing auth evidence must not be reported as absent'
+  );
   assert.deepEqual(oauth.authMethods, [
     {
       index: 0,
@@ -215,8 +281,8 @@ export async function SyntheticOAuthPlugin() {
     ['authorized', 'callback-started']
   );
   assert.equal(
-    oauthConnected.providers.find((provider) => provider.id === oauth.id)?.configured,
-    true
+    oauthConnected.providers.find((provider) => provider.id === oauth.id)?.credentialPresence,
+    'present'
   );
   assert.deepEqual(
     loopbackCalls.map((call) => call.path),
@@ -238,8 +304,8 @@ export async function SyntheticOAuthPlugin() {
     await handleOpenCodeAuth(payload({ operation: 'discover' }), {})
   );
   assert.equal(
-    afterDenial.providers.find((provider) => provider.id === oauth.id)?.configured,
-    true,
+    afterDenial.providers.find((provider) => provider.id === oauth.id)?.credentialPresence,
+    'present',
     'native failed callback must preserve the prior configured connection'
   );
 
@@ -261,8 +327,8 @@ export async function SyntheticOAuthPlugin() {
     ['authorized', 'callback-started']
   );
   assert.equal(
-    codeConnected.providers.find((provider) => provider.id === oauth.id)?.configured,
-    true
+    codeConnected.providers.find((provider) => provider.id === oauth.id)?.credentialPresence,
+    'present'
   );
   assert.equal(loopbackCalls.at(-1)?.path, '/code-callback');
   assert.equal(loopbackCalls.at(-1)?.body, synthetic.code);
@@ -278,8 +344,8 @@ export async function SyntheticOAuthPlugin() {
     )
   );
   assert.equal(
-    kimiConnected.providers.find((provider) => provider.id === kimi.id)?.configured,
-    true
+    kimiConnected.providers.find((provider) => provider.id === kimi.id)?.credentialPresence,
+    'present'
   );
 
   const glmConnected = await expectSuccess(
@@ -292,7 +358,10 @@ export async function SyntheticOAuthPlugin() {
       {}
     )
   );
-  assert.equal(glmConnected.providers.find((provider) => provider.id === glm.id)?.configured, true);
+  assert.equal(
+    glmConnected.providers.find((provider) => provider.id === glm.id)?.credentialPresence,
+    'present'
+  );
   assert.equal((await stat(join(dataHome, 'opencode', 'auth.json'))).mode & 0o777, 0o600);
 
   const taskServer = await startManagedOpenCodeServer({
@@ -322,8 +391,9 @@ export async function SyntheticOAuthPlugin() {
         await handleOpenCodeAuth(payload({ operation: 'disconnect', providerId: provider.id }), {})
       );
       assert.equal(
-        disconnected.providers.find((candidate) => candidate.id === provider.id)?.configured,
-        false
+        disconnected.providers.find((candidate) => candidate.id === provider.id)
+          ?.credentialPresence,
+        'absent'
       );
     }
   }
@@ -338,7 +408,10 @@ export async function SyntheticOAuthPlugin() {
     boundedCodeCallback: true,
     oauthFreshDisconnect: !strictQaDataHome,
     freshStatusAfterMutation: true,
+    credentialPresenceIsEvidenceBased: true,
     freshTaskShapedRead: true,
+    branchScopedSafeModelCatalog: true,
+    projectConfiguredPairIsContextOnly: true,
     authMode: '0600',
     syntheticOnly: true,
     strictQaFixtureRetained: Boolean(strictQaDataHome),

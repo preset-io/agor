@@ -67,11 +67,13 @@ vi.mock('../../AgenticToolConfigurationPicker', () => {
 
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
-    AgenticToolConfigurationPicker: () => (
+    AgenticToolConfigurationPicker: ({ currentUser }: { currentUser?: User | null }) => (
       <>
+        <output data-testid="teammate-execution-owner">{currentUser?.user_id}</output>
         <Form.Item name="agenticToolPresetId">
           <select aria-label="Configuration source">
             <option value="">Inherit</option>
+            <option value="__user_default__">My default</option>
             <option value="__inline__">Inline</option>
           </select>
         </Form.Item>
@@ -125,7 +127,13 @@ async function submit(formRef: React.RefObject<() => Promise<TeammateTabResult |
 }
 
 describe('TeammateTab OpenCode first-session configuration', () => {
-  it('turns an inline clear into null instead of restoring a stale stored default', async () => {
+  it('offers defaults from the teammate session execution owner', () => {
+    renderTab(staleOpenCodeDefault);
+
+    expect(screen.getByTestId('teammate-execution-owner')).toHaveTextContent('user-1');
+  });
+
+  it('omits an inline clear so the daemon resolves the personal exact pair', async () => {
     const formRef = renderTab(staleOpenCodeDefault);
     await waitFor(() =>
       expect(screen.getByTestId('teammate-model')).toHaveTextContent('openai/gpt-5')
@@ -137,7 +145,7 @@ describe('TeammateTab OpenCode first-session configuration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear model' }));
 
     const result = await submit(formRef);
-    expect(result?.modelConfig).toBeNull();
+    expect(result?.modelConfig).toBeUndefined();
     expect(result?.effort).toBeUndefined();
   });
 
@@ -146,6 +154,22 @@ describe('TeammateTab OpenCode first-session configuration', () => {
 
     const result = await submit(formRef);
     expect(result?.modelConfig).toBeUndefined();
+  });
+
+  it('serializes a reference without the prefilled inline model', async () => {
+    const formRef = renderTab(staleOpenCodeDefault);
+    await waitFor(() =>
+      expect(screen.getByTestId('teammate-model')).toHaveTextContent('openai/gpt-5')
+    );
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Configuration source' }), {
+      target: { value: '__user_default__' },
+    });
+
+    const result = await submit(formRef);
+    expect(result?.agenticToolPresetId).toBe('__user_default__');
+    expect(result?.modelConfig).toBeUndefined();
+    expect(result?.permissionMode).toBeUndefined();
   });
 
   it('keeps a complete inline provider/model pair exact', async () => {

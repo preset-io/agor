@@ -9,6 +9,7 @@
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { shortId } from '@agor/core';
+import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/core/models';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
@@ -234,6 +235,9 @@ export class OpenCodeTool {
     input: RunOpenCodeTurnInput,
     streamingCallbacks?: StreamingCallbacks
   ): Promise<OpenCodeTurnResult> {
+    if (!input.provider?.trim() || !input.model?.trim()) {
+      throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+    }
     const preliminarySanitizer = createOpenCodeSanitizer([
       input.mcpToken ?? '',
       input.dataHome ?? '',
@@ -336,6 +340,7 @@ export class OpenCodeTool {
         directory: input.directory,
         headers: { Authorization: authorization },
       });
+      await this.assertExplicitModelAvailable(input);
 
       let openCodeSessionId = input.existingOpenCodeSessionId;
       let sessionWasCreated = false;
@@ -488,6 +493,40 @@ export class OpenCodeTool {
     return this.client;
   }
 
+  /**
+   * Admit the required exact pair against the configured catalog on this
+   * task's already-running server.
+   */
+  private async assertExplicitModelAvailable(input: RunOpenCodeTurnInput): Promise<void> {
+    const client = this.getClientForDirectory(input.directory);
+    let available = false;
+    try {
+      const query = { directory: input.directory };
+      const [catalogResponse, runtimeResponse] = await Promise.all([
+        client.config.providers({ query }),
+        client.provider.list({ query }),
+      ]);
+      const provider = catalogResponse.data?.providers.find((entry) => entry.id === input.provider);
+      available =
+        !catalogResponse.error &&
+        !runtimeResponse.error &&
+        Boolean(runtimeResponse.data?.connected.includes(input.provider as string)) &&
+        Boolean(
+          provider &&
+            Object.entries(provider.models).some(
+              ([modelId, model]) => modelId === input.model || model.id === input.model
+            )
+        );
+    } catch {
+      // Public failure stays independent of raw provider objects and SDK details.
+    }
+    if (!available) {
+      throw new Error(
+        'The selected OpenCode provider/model is not available for this session owner and branch configuration; refresh configured models or enter an available exact pair'
+      );
+    }
+  }
+
   private async buildInvocationConfig(
     sessionId: string,
     mcpToken?: string,
@@ -585,6 +624,10 @@ export class OpenCodeTool {
     sanitizer: OpenCodeSanitizer
   ): Promise<OpenCodeTurnResult['finalMessage']> {
     const client = this.getClientForDirectory(context.branchPath);
+    const promptFailure = (): Error =>
+      new Error(
+        `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
+      );
     const request = {
       path: { id: context.opencodeSessionId },
       signal: input.signal,
@@ -745,7 +788,7 @@ export class OpenCodeTool {
             settle();
             break;
           case 'error':
-            protocolError = new Error(`OpenCode session failed: ${sanitizer.text(effect.message)}`);
+            protocolError = promptFailure();
             settle(protocolError);
             break;
         }
@@ -785,7 +828,7 @@ export class OpenCodeTool {
       })();
 
       const promptResponse = await client.session.prompt(request);
-      if (promptResponse.error) throw new Error('OpenCode prompt failed');
+      if (promptResponse.error) throw promptFailure();
 
       const terminalResult = await terminal;
       if (terminalResult.error) throw terminalResult.error;

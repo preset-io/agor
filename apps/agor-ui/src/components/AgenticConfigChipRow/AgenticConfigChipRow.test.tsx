@@ -220,6 +220,52 @@ describe('AgenticConfigChipRow', () => {
     expect(state.perm).toBe('acceptEdits');
   });
 
+  it('ignores a stale personal OpenCode snapshot after My default resolves to a preset', async () => {
+    const client = {
+      service: () => ({
+        find: async () => ({
+          data: [
+            {
+              preset_id: 'permission-only',
+              name: 'Permission only',
+              tool: 'opencode',
+              configuration: { permissionMode: 'autoEdit' },
+            },
+          ],
+        }),
+        on: () => {},
+        off: () => {},
+      }),
+    } as unknown as AgorClient;
+    const user = {
+      user_id: 'opencode-user',
+      default_agentic_selection: {
+        opencode: { source: 'preset', preset_id: 'permission-only' },
+      },
+      default_agentic_config: {
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'personal-provider',
+            model: 'personal-model',
+          },
+        },
+      },
+    } as unknown as User;
+
+    render(
+      <Harness
+        tool="opencode"
+        user={user}
+        client={client}
+        initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION}
+      />
+    );
+
+    expect(await screen.findByTestId('model-chip')).toHaveTextContent('Select provider/model');
+    expect(screen.getByTestId('model-chip')).not.toHaveTextContent('personal-provider');
+  });
+
   it('owns the advisor control from the empty inline state', async () => {
     render(<Harness user={{ user_id: 'u2' } as User} initialSource="__inline__" />);
 
@@ -230,10 +276,10 @@ describe('AgenticConfigChipRow', () => {
     await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
   });
 
-  it('renders the OpenCode default model chip and keeps its existing exact-pair editor', async () => {
+  it('marks an empty OpenCode configuration invalid and keeps the exact-pair editor', async () => {
     render(<Harness tool="opencode" user={{ user_id: 'u4' } as User} initialSource="__inline__" />);
 
-    const chip = await screen.findByRole('button', { name: 'Model: OpenCode default' });
+    const chip = await screen.findByRole('button', { name: 'Model: Select provider/model' });
     fireEvent.click(chip);
     fireEvent.click(await screen.findByTestId('model-change'));
 

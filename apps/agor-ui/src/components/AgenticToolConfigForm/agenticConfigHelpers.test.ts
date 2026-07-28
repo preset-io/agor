@@ -47,24 +47,24 @@ describe('buildScheduleConfigFromFormValues', () => {
 });
 
 describe('buildConfigFromFormValues', () => {
-  it('omits a cleared OpenCode provider/model override from user defaults', () => {
-    const result = buildConfigFromFormValues('opencode', {
-      modelConfig: undefined,
-      effort: 'high',
-      permissionMode: 'default',
-    });
-
-    expect(result.modelConfig).toBeUndefined();
+  it('rejects a cleared OpenCode provider/model pair before persistence', () => {
+    expect(() =>
+      buildConfigFromFormValues('opencode', {
+        modelConfig: undefined,
+        effort: 'high',
+        permissionMode: 'default',
+      })
+    ).toThrow(/select.*provider.*model/i);
   });
 
-  it('omits a partial OpenCode provider/model override even with detached effort', () => {
-    const result = buildConfigFromFormValues('opencode', {
-      modelConfig: { mode: 'exact', provider: 'openai', model: '' },
-      effort: 'high',
-      permissionMode: 'default',
-    });
-
-    expect(result.modelConfig).toBeUndefined();
+  it('rejects a partial OpenCode provider/model pair before persistence', () => {
+    expect(() =>
+      buildConfigFromFormValues('opencode', {
+        modelConfig: { mode: 'exact', provider: 'openai', model: '' },
+        effort: 'high',
+        permissionMode: 'default',
+      })
+    ).toThrow(/select.*provider.*model/i);
   });
 
   it('preserves a complete exact OpenCode provider/model pair', () => {

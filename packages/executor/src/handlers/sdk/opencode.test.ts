@@ -96,6 +96,31 @@ describe('executeOpenCodeTask', () => {
     mocks.messagesFindBySession.mockResolvedValue([{}, {}]);
   });
 
+  it('rejects a legacy missing pair before branch, message, or runtime side effects', async () => {
+    const { client, services } = createClient([]);
+    services.sessions.get.mockResolvedValueOnce({
+      session_id: '00000000-0000-7000-8000-000000000001',
+      branch_id: '00000000-0000-7000-8000-000000000003',
+      title: 'Legacy OpenCode session',
+      model_config: null,
+    } as never);
+
+    await expect(
+      executeOpenCodeTask({
+        client: client as never,
+        sessionId: '00000000-0000-7000-8000-000000000001' as never,
+        taskId: '00000000-0000-7000-8000-000000000002' as never,
+        prompt: 'Do not run',
+        abortController: new AbortController(),
+      })
+    ).rejects.toThrow(/select.*provider.*model/i);
+
+    expect(mocks.branchFind).not.toHaveBeenCalled();
+    expect(mocks.messagesFindBySession).not.toHaveBeenCalled();
+    expect(mocks.messagesCreate).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+  });
+
   it('uses runTurn as the single module boundary and persists a new provider session on request', async () => {
     const order: string[] = [];
     const { client, services } = createClient(order);
@@ -260,6 +285,7 @@ describe('executeOpenCodeTask', () => {
       branch_id: '00000000-0000-7000-8000-000000000003',
       title: 'Existing',
       sdk_session_id: 'oc-existing',
+      model_config: { provider: 'openai', model: 'gpt-test' },
     } as never);
     mocks.runTurn.mockResolvedValue({
       openCodeSessionId: 'oc-existing',

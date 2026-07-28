@@ -280,13 +280,14 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     expect(onCreate.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         agent: 'claude-code-cli',
-        modelConfig: expect.objectContaining({ model: 'canon-model' }),
-        permissionMode: 'plan',
+        agenticToolPresetId: '__user_default__',
+        modelConfig: undefined,
+        permissionMode: undefined,
       })
     );
   });
 
-  it('carries a cleared OpenCode provider/model override as atomic absence', async () => {
+  it('omits a cleared OpenCode override so the personal exact pair can resolve', async () => {
     const currentUser = {
       user_id: 'u1',
       default_agentic_config: {
@@ -319,7 +320,7 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Session' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0][0].modelConfig).toBeNull();
+    expect(onCreate.mock.calls[0][0].modelConfig).toBeUndefined();
     expect(onCreate.mock.calls[0][0].effort).toBeUndefined();
   });
 });

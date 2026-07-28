@@ -14,7 +14,7 @@ import {
 import {
   AgenticConfigurationResolutionError,
   assertInlineAgenticConfigurationAllowed,
-  presetConfigurationToSessionPatch,
+  materializeAgenticToolConfiguration,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
 } from './agentic-tool-preset-resolver';
@@ -121,23 +121,121 @@ describe('agentic tool preset resolution', () => {
     ).rejects.toThrow(/requires an administrator-managed preset/);
   });
 
-  it('materializes a complete replacement when preset fields are removed', () => {
-    const configured = presetConfigurationToSessionPatch('codex', {
-      modelConfig: { mode: 'exact', model: 'gpt-5.4' },
-      codexSandboxMode: 'danger-full-access',
-      codexApprovalPolicy: 'never',
-    });
-    expect(configured).toMatchObject({
-      model_config: { model: 'gpt-5.4' },
-      permission_config: {
-        codex: { sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+  dbTest(
+    'materializes source → same-tool parent → execution owner → system without overlays',
+    async ({ db }) => {
+      const owner = await new UsersRepository(db).create({
+        email: `materializer-owner-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Execution owner',
+        default_agentic_config: {
+          codex: {
+            modelConfig: { mode: 'exact', model: 'owner-model' },
+            codexNetworkAccess: true,
+          },
+        },
+      });
+
+      const result = await materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: {
+          configuration: {
+            permissionMode: 'ask',
+            codexSandboxMode: 'workspace-write',
+          },
+        },
+        parent: {
+          agentic_tool: 'codex',
+          model_config: {
+            mode: 'exact',
+            model: 'parent-model',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+          permission_config: {
+            mode: 'auto',
+            codex: {
+              sandboxMode: 'danger-full-access',
+              approvalPolicy: 'never',
+              networkAccess: false,
+            },
+          },
+        },
+        executionOwnerId: owner.user_id as UserID,
+        now: new Date('2026-01-02T00:00:00.000Z'),
+      });
+
+      expect(result).toMatchObject({
+        agentic_tool_preset_id: null,
+        model_config: { model: 'parent-model' },
+        permission_config: {
+          mode: 'ask',
+          codex: {
+            sandboxMode: 'workspace-write',
+            approvalPolicy: 'never',
+            networkAccess: false,
+          },
+        },
+      });
+    }
+  );
+
+  dbTest('blocks cross-tool parent inheritance', async ({ db }) => {
+    const owner = await new UsersRepository(db).create({
+      email: `materializer-cross-tool-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Execution owner',
+      default_agentic_config: {
+        codex: { modelConfig: { mode: 'exact', model: 'owner-codex-model' } },
       },
     });
 
-    const cleared = presetConfigurationToSessionPatch('cursor', {});
-    expect(cleared).toEqual({
-      model_config: null,
-      permission_config: expect.any(Object),
+    const result = await materializeAgenticToolConfiguration(db, {
+      tool: 'codex',
+      source: { configuration: {} },
+      parent: {
+        agentic_tool: 'claude-code',
+        model_config: {
+          mode: 'alias',
+          model: 'claude-parent-model',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+        permission_config: { mode: 'bypassPermissions' },
+      },
+      executionOwnerId: owner.user_id as UserID,
     });
+
+    expect(result.model_config?.model).toBe('owner-codex-model');
+    expect(result.permission_config.mode).toBe('allow-all');
+  });
+
+  dbTest('keeps a selected preset as a live reference', async ({ db }) => {
+    const preset = await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'codex',
+        name: 'Live preset',
+        configuration: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+      },
+      '00000000-0000-7000-8000-000000000001' as UserID
+    );
+
+    await expect(
+      materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: { reference: preset.preset_id },
+      })
+    ).resolves.toMatchObject({
+      agentic_tool_preset_id: preset.preset_id,
+      model_config: { model: 'gpt-5.4' },
+    });
+  });
+
+  dbTest('rejects mixed reference and inline intent', async ({ db }) => {
+    await expect(
+      materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: {
+          reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+          configuration: { permissionMode: 'ask' },
+        },
+      } as never)
+    ).rejects.toThrow(/reference.*inline/i);
   });
 });

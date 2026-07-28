@@ -9,7 +9,7 @@ import type { SessionsServiceImpl } from '../declarations.js';
 
 type ExecutorStartupSessionsService = Pick<
   SessionsServiceImpl,
-  'get' | 'materializeAgenticToolPreset'
+  'get' | 'materializeAgenticToolConfiguration'
 >;
 
 /** Load and validate the session state needed before any executor/process work begins. */
@@ -28,6 +28,6 @@ export async function prepareSessionForExecutorStart(
     if (!(await isTenantAgenticToolEnabled(session.agentic_tool, tenantDb))) {
       throw new Error(`${session.agentic_tool} is disabled for this workspace`);
     }
-    return sessionsService.materializeAgenticToolPreset(session, params);
+    return sessionsService.materializeAgenticToolConfiguration(session, params);
   });
 }

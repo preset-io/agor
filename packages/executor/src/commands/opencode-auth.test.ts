@@ -4,11 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const runtime = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
   close: vi.fn(async () => undefined),
+  readAuthFile: vi.fn(),
   start: vi.fn(),
   sanitizeError: vi.fn((value: unknown) =>
     value instanceof Error ? value : new Error(String(value))
   ),
 }));
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return { ...actual, readFile: runtime.readAuthFile };
+});
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencodeClient: vi.fn(() => runtime.clients.shift()),
@@ -32,6 +38,7 @@ const providerList = (connected: string[]) => ({
     all: [
       { id: 'kimi-for-coding', name: 'Kimi for Coding' },
       { id: 'zhipuai-coding-plan', name: 'GLM Coding Plan' },
+      { id: 'opencode', name: 'OpenCode Zen' },
     ],
     connected,
     default: {},
@@ -43,6 +50,7 @@ function client(
   authMethods: Record<string, unknown[]> = {
     'kimi-for-coding': [],
     'zhipuai-coding-plan': [],
+    opencode: [],
   }
 ) {
   return {
@@ -62,9 +70,58 @@ function client(
   };
 }
 
+function modelCatalogClient() {
+  return {
+    provider: {
+      list: vi.fn(async () => providerList(['openai'])),
+    },
+    config: {
+      providers: vi.fn(async () => ({
+        data: {
+          providers: [
+            {
+              id: 'openai',
+              name: 'OpenAI',
+              source: 'config',
+              env: ['OPENAI_API_KEY'],
+              key: 'must-not-cross',
+              options: { apiKey: 'must-not-cross', baseURL: 'https://example.invalid' },
+              models: {
+                'gpt-5': {
+                  id: 'gpt-5',
+                  providerID: 'openai',
+                  name: 'GPT-5',
+                  status: 'active',
+                  headers: { Authorization: 'Bearer must-not-cross' },
+                  options: { secret: 'must-not-cross' },
+                },
+                'gpt-4-deprecated': {
+                  id: 'gpt-4-deprecated',
+                  providerID: 'openai',
+                  name: 'GPT-4 (deprecated)',
+                  status: 'deprecated',
+                },
+              },
+            },
+          ],
+          default: { openai: 'gpt-5' },
+        },
+      })),
+      get: vi.fn(async () => ({
+        data: {
+          model: 'openai/gpt-5',
+          provider: { openai: { options: { apiKey: 'must-not-cross' } } },
+        },
+      })),
+    },
+    instance: { dispose: vi.fn(async () => ({ data: true })) },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.clients = [];
+  runtime.readAuthFile.mockResolvedValue('{}');
   runtime.start.mockImplementation(async () => ({
     baseUrl: 'http://127.0.0.1:1234',
     authorization: 'Basic synthetic',
@@ -77,7 +134,159 @@ beforeEach(() => {
 });
 
 describe('opencode.auth executor command', () => {
+  it('discovers a branch-scoped safe model catalog from pinned config APIs', async () => {
+    const discoveryClient = modelCatalogClient();
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: {
+        operation: 'discover-models',
+        directory: '/worktrees/authorized-branch',
+      },
+    } as never);
+
+    expect(discoveryClient.config.providers).toHaveBeenCalledWith({
+      directory: '/worktrees/authorized-branch',
+    });
+    expect(discoveryClient.config.get).toHaveBeenCalledWith({
+      directory: '/worktrees/authorized-branch',
+    });
+    expect(discoveryClient.provider.list).toHaveBeenCalledWith({
+      directory: '/worktrees/authorized-branch',
+    });
+    expect(runtime.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directory: '/worktrees/authorized-branch',
+        dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      })
+    );
+    expect(result).toEqual({
+      success: true,
+      data: {
+        runtimeVersion: '1.14.33',
+        projectConfigured: { providerId: 'openai', modelId: 'gpt-5' },
+        providers: [
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            runtimeAvailable: true,
+            suggestedModel: 'gpt-5',
+            models: [
+              { id: 'gpt-4-deprecated', name: 'GPT-4 (deprecated)', status: 'deprecated' },
+              { id: 'gpt-5', name: 'GPT-5', status: 'active' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up failed model discovery and returns no secret or path detail', async () => {
+    const discoveryClient = modelCatalogClient();
+    discoveryClient.config.providers.mockRejectedValue(
+      new Error('must-not-cross at /worktrees/authorized-branch')
+    );
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: {
+        operation: 'discover-models',
+        directory: '/worktrees/authorized-branch',
+      },
+    } as never);
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: 'OPENCODE_AUTH_FAILED',
+        message: 'OpenCode provider operation failed without exposing credential details.',
+      },
+    });
+    expect(discoveryClient.instance.dispose).toHaveBeenCalledWith({
+      directory: '/worktrees/authorized-branch',
+    });
+    expect(runtime.close).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toMatch(/must-not-cross|authorized-branch/);
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
+  });
+
+  it('separates runtime availability from saved credential presence, including Zen', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({
+        'kimi-for-coding': { type: 'api', key: 'must-not-cross' },
+      })
+    );
+    runtime.clients.push(client(['kimi-for-coding', 'opencode']));
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'kimi-for-coding',
+            runtimeAvailable: true,
+            credentialPresence: 'present',
+          }),
+          expect.objectContaining({
+            id: 'zhipuai-coding-plan',
+            runtimeAvailable: false,
+            credentialPresence: 'absent',
+          }),
+          expect.objectContaining({
+            id: 'opencode',
+            runtimeAvailable: true,
+            credentialPresence: 'absent',
+          }),
+        ]),
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
+  it('reports unknown credential presence when native auth evidence is missing', async () => {
+    runtime.readAuthFile.mockRejectedValue(
+      Object.assign(new Error('missing private path'), { code: 'ENOENT' })
+    );
+    runtime.clients.push(client(['opencode']));
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'opencode',
+            runtimeAvailable: true,
+            credentialPresence: 'unknown',
+          }),
+        ]),
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain('private path');
+  });
+
   it('connects Kimi through generic native API auth and verifies status on a fresh server', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ 'kimi-for-coding': { type: 'api', key: 'must-not-cross' } })
+    );
     const mutationClient = client();
     const verificationClient = client(['kimi-for-coding']);
     runtime.clients.push(mutationClient, verificationClient);
@@ -99,8 +308,8 @@ describe('opencode.auth executor command', () => {
         providers: expect.arrayContaining([
           expect.objectContaining({
             id: 'kimi-for-coding',
-            configured: true,
-            status: 'configured',
+            runtimeAvailable: true,
+            credentialPresence: 'present',
           }),
         ]),
       }),
@@ -186,6 +395,9 @@ describe('opencode.auth executor command', () => {
   });
 
   it('keeps the native method index and completes auto OAuth on one server before fresh verification', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ openai: { type: 'oauth', refresh: 'must-not-cross' } })
+    );
     const authClient = client([], {
       openai: [
         { type: 'oauth', label: 'ChatGPT browser' },
@@ -270,7 +482,11 @@ describe('opencode.auth executor command', () => {
       success: true,
       data: expect.objectContaining({
         providers: expect.arrayContaining([
-          expect.objectContaining({ id: 'openai', configured: true }),
+          expect.objectContaining({
+            id: 'openai',
+            runtimeAvailable: true,
+            credentialPresence: 'present',
+          }),
         ]),
       }),
     });
@@ -317,6 +533,9 @@ describe('opencode.auth executor command', () => {
     expect(JSON.stringify(result)).not.toContain('/home/alice');
 
     const preservedClient = client(['openai']);
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ openai: { type: 'oauth', refresh: 'must-not-cross' } })
+    );
     preservedClient.provider.list.mockResolvedValue({
       data: {
         all: [{ id: 'openai', name: 'OpenAI' }],
@@ -334,13 +553,20 @@ describe('opencode.auth executor command', () => {
       success: true,
       data: expect.objectContaining({
         providers: expect.arrayContaining([
-          expect.objectContaining({ id: 'openai', configured: true }),
+          expect.objectContaining({
+            id: 'openai',
+            runtimeAvailable: true,
+            credentialPresence: 'present',
+          }),
         ]),
       }),
     });
   });
 
   it('delivers one bounded code callback to the same native auth client without exposing it', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ openai: { type: 'oauth', refresh: 'must-not-cross' } })
+    );
     const authClient = client();
     authClient.provider.oauth.authorize.mockResolvedValue({
       data: {
@@ -425,8 +651,8 @@ describe('opencode.auth executor command', () => {
         providers: expect.arrayContaining([
           expect.objectContaining({
             id: 'zhipuai-coding-plan',
-            configured: false,
-            status: 'disconnected',
+            runtimeAvailable: false,
+            credentialPresence: 'absent',
           }),
         ]),
       }),

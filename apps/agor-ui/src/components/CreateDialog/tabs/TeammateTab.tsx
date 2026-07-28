@@ -36,7 +36,7 @@ export interface TeammateTabResult {
   sourceBranch?: string;
   agent: AgenticToolName;
   agenticToolPresetId?: string;
-  modelConfig?: ModelConfig | null;
+  modelConfig?: ModelConfig;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -111,12 +111,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = isInline
-        ? values.modelConfig
-        : (values.modelConfig ?? agentDefaults?.modelConfig);
-      const hasCompleteOpenCodeModel =
-        selectedAgent !== 'opencode' ||
-        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
+      const selectedModelConfig = isInline ? values.modelConfig : undefined;
 
       const result: TeammateTabResult = {
         displayName: values.displayName.trim(),
@@ -127,23 +122,18 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         sourceBranch: values.sourceBranch || 'main',
         agent: selectedAgent,
         agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
-        // Match NewSessionModal's three-state contract: an inline OpenCode
-        // clear is explicit null, while omission continues to inherit.
-        modelConfig:
-          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
-            ? null
-            : hasCompleteOpenCodeModel
-              ? selectedModelConfig
-              : undefined,
+        modelConfig: selectedModelConfig,
         effort:
-          selectedAgent === 'opencode' && !hasCompleteOpenCodeModel
-            ? undefined
-            : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
+          isInline &&
+          (selectedAgent !== 'opencode' ||
+            Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim()))
+            ? ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort)
+            : undefined,
         mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
-        permissionMode,
+        permissionMode: isInline ? permissionMode : undefined,
       };
 
-      if (selectedAgent === 'codex') {
+      if (selectedAgent === 'codex' && isInline) {
         const codexDefaults = mapToCodexPermissionConfig(permissionMode);
         result.codexSandboxMode =
           (values.codexSandboxMode as CodexSandboxMode | undefined) ??
@@ -222,6 +212,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                               mcpServerById={mcpServerById}
                               showHelpText={false}
                               client={client ?? null}
+                              currentUser={currentUser}
                             />
                           ),
                         },

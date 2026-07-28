@@ -59,7 +59,7 @@ interface ZoneTriggerModalProps {
     // New session config (only when sessionId === 'new')
     agent?: string;
     agenticToolPresetId?: string;
-    modelConfig?: ModelConfig | null;
+    modelConfig?: ModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
   }) => Promise<void>;
@@ -103,14 +103,6 @@ export const ZoneTriggerModal = ({
   // before the daemon's rendered content arrives.
   const [isRendering, setIsRendering] = useState<boolean>(true);
 
-  // Explicit state for session config (survives form mount/unmount cycles)
-  const [sessionConfig, setSessionConfig] = useState<{
-    agenticToolPresetId?: string;
-    modelConfig?: ModelConfig | null;
-    permissionMode?: PermissionMode;
-    mcpServerIds?: string[];
-  }>({});
-
   // Filter sessions for this branch using O(1) Map lookup
   const branchSessions = useMemo(() => {
     return sessionsByBranch.get(branchId) || [];
@@ -152,11 +144,10 @@ export const ZoneTriggerModal = ({
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
       form.resetFields();
-      setSessionConfig({}); // Clear session config state
     }
   }, [open, smartDefaultSession, form, branchSessions.length]);
 
-  // Pre-populate form AND state when creating new session
+  // Pre-populate the form when creating a new session.
   // Priority: Most recent session > User defaults > System defaults
   useEffect(() => {
     if (mode === 'create_new' && selectedAgent) {
@@ -188,9 +179,7 @@ export const ZoneTriggerModal = ({
         mcpServerIds: form.getFieldValue('mcpServerIds') ?? effectiveMcpServerIds,
       };
 
-      // Store in both form (for UI) AND component state (for execution)
       form.setFieldsValue(configValues);
-      setSessionConfig(configValues);
     }
   }, [mode, selectedAgent, currentUser, branchSessions, form, branch?.mcp_server_ids]);
 
@@ -264,34 +253,25 @@ export const ZoneTriggerModal = ({
   ]);
 
   const handleExecute = async () => {
+    try {
+      await form.validateFields();
+    } catch {
+      return;
+    }
     if (mode === 'create_new') {
-      const isInline = sessionConfig.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = sessionConfig.modelConfig;
-      const hasCompleteOpenCodeModel =
-        selectedAgent !== 'opencode' ||
-        Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim());
+      const formValues = form.getFieldsValue(true);
+      const isInline = formValues.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const selectedModelConfig = isInline ? formValues.modelConfig : undefined;
 
-      // Use component state which is guaranteed to have the correct values
-      // regardless of whether the form fields are mounted/visible
       await onExecute({
         sessionId: 'new',
         action: 'prompt',
         renderedTemplate: editableTemplate,
         agent: selectedAgent,
-        agenticToolPresetId:
-          sessionConfig.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
-            ? undefined
-            : sessionConfig.agenticToolPresetId,
-        // Match NewSessionModal's three-state contract: an inline OpenCode
-        // clear is explicit null, while omission continues to inherit.
-        modelConfig:
-          selectedAgent === 'opencode' && isInline && !hasCompleteOpenCodeModel
-            ? null
-            : hasCompleteOpenCodeModel
-              ? selectedModelConfig
-              : undefined,
-        permissionMode: sessionConfig.permissionMode,
-        mcpServerIds: sessionConfig.mcpServerIds,
+        agenticToolPresetId: isInline ? undefined : formValues.agenticToolPresetId,
+        modelConfig: selectedModelConfig,
+        permissionMode: isInline ? formValues.permissionMode : undefined,
+        mcpServerIds: formValues.mcpServerIds,
       });
     } else {
       // Reuse existing session
@@ -401,27 +381,7 @@ export const ZoneTriggerModal = ({
         )}
 
         {/* Agent Configuration - Always shown (collapsed for reuse, expanded for create_new) */}
-        <Form
-          form={form}
-          layout="vertical"
-          onValuesChange={(changedValues) => {
-            // Sync form changes to component state (only in create_new mode)
-            if (mode === 'create_new') {
-              setSessionConfig((prev) => {
-                const next = { ...prev, ...changedValues };
-                if (
-                  selectedAgent === 'opencode' &&
-                  next.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION &&
-                  Object.hasOwn(changedValues, 'modelConfig') &&
-                  !(next.modelConfig?.provider?.trim() && next.modelConfig?.model?.trim())
-                ) {
-                  next.modelConfig = null;
-                }
-                return next;
-              });
-            }
-          }}
-        >
+        <Form form={form} layout="vertical">
           {mode === 'create_new' && (
             <div>
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
@@ -468,6 +428,8 @@ export const ZoneTriggerModal = ({
                         mcpServerById={mcpServerById}
                         showHelpText={true}
                         client={client}
+                        branchId={branchId}
+                        currentUser={currentUser}
                       />
                     ) : (
                       <AgenticToolConfigForm

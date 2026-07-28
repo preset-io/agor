@@ -7,16 +7,11 @@
 import type {
   AgenticToolName,
   AgorClient,
-  PermissionMode,
   Session,
   SessionID,
   SpawnConfig,
 } from '@agor-live/client';
-import {
-  getDefaultPermissionMode,
-  mapToCodexPermissionConfig,
-  SessionStatus,
-} from '@agor-live/client';
+import { mapToCodexPermissionConfig, SessionStatus } from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 
@@ -63,14 +58,13 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Create session with branch_id
       const agenticTool = config.agent as AgenticToolName;
-      const permissionMode: PermissionMode =
-        config.permissionMode || getDefaultPermissionMode(agenticTool);
+      const usesReference = Boolean(config.agenticToolPresetId);
+      const permissionMode = config.permissionMode;
+      const permissionConfig: Session['permission_config'] = permissionMode
+        ? { mode: permissionMode }
+        : undefined;
 
-      const permissionConfig: NonNullable<Session['permission_config']> = {
-        mode: permissionMode,
-      };
-
-      if (agenticTool === 'codex') {
+      if (agenticTool === 'codex' && permissionMode && permissionConfig) {
         // Fill any missing field from the mode-derived defaults so the UI
         // doesn't silently restore the old `on-request` / network-off
         // behavior when advanced fields aren't expanded.
@@ -82,41 +76,53 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         };
       }
 
-      const hasCompleteOpenCodeModel =
-        agenticTool !== 'opencode' ||
-        Boolean(config.modelConfig?.provider?.trim() && config.modelConfig?.model?.trim());
-      const modelConfig =
-        agenticTool === 'opencode' && config.modelConfig === null
-          ? null
-          : hasCompleteOpenCodeModel
-            ? config.modelConfig
-            : undefined;
+      const openCodeCarriesPair =
+        !usesReference &&
+        agenticTool === 'opencode' &&
+        Boolean(
+          config.modelConfig?.provider !== undefined || config.modelConfig?.model !== undefined
+        );
+      const hasCompleteOpenCodeModel = Boolean(
+        config.modelConfig?.provider?.trim() && config.modelConfig?.model?.trim()
+      );
+      if (openCodeCarriesPair && !hasCompleteOpenCodeModel) {
+        throw new Error('Select an exact OpenCode provider and model');
+      }
+      const modelConfig = usesReference ? undefined : config.modelConfig;
       const effort =
-        agenticTool === 'opencode' && (modelConfig === null || !hasCompleteOpenCodeModel)
+        usesReference || (agenticTool === 'opencode' && !hasCompleteOpenCodeModel)
           ? undefined
           : config.effort;
 
-      const newSession = await client.service('sessions').create({
+      const basePayload = {
         agentic_tool: agenticTool,
-        agentic_tool_preset_id: config.agenticToolPresetId,
         status: SessionStatus.IDLE,
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
         branch_id: config.branch_id,
-        model_config:
-          modelConfig === null
-            ? null
-            : modelConfig
-              ? {
-                  ...modelConfig,
-                  ...(effort && { effort }),
-                  updated_at: new Date().toISOString(),
-                }
-              : effort
-                ? { effort, updated_at: new Date().toISOString() }
-                : undefined,
-        permission_config: permissionConfig,
-      });
+      };
+      const newSession = await client.service('sessions').create(
+        config.agenticToolPresetId
+          ? {
+              ...basePayload,
+              agentic_tool_preset_id: config.agenticToolPresetId,
+            }
+          : {
+              ...basePayload,
+              ...(modelConfig
+                ? {
+                    model_config: {
+                      ...modelConfig,
+                      ...(effort && { effort }),
+                      updated_at: new Date().toISOString(),
+                    },
+                  }
+                : effort
+                  ? { model_config: { effort, updated_at: new Date().toISOString() } }
+                  : {}),
+              ...(permissionConfig ? { permission_config: permissionConfig } : {}),
+            }
+      );
 
       return newSession;
     } catch (err) {

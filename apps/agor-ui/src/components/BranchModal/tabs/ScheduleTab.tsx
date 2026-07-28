@@ -458,6 +458,12 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         schedule={editingSchedule}
         mcpServerById={mcpServerById}
         client={client}
+        executionOwner={
+          editingSchedule
+            ? (userById.get(editingSchedule.created_by) ??
+              (currentUser?.user_id === editingSchedule.created_by ? currentUser : null))
+            : currentUser
+        }
         onSaved={() => fetchSchedules()}
       />
 

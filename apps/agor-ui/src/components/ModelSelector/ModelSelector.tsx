@@ -58,8 +58,14 @@ export interface ModelSelectorProps {
    * client, the picker only shows static models.
    */
   client?: AgorClient | null;
+  /** Optional authorized branch scope for OpenCode model discovery. */
+  branchId?: string;
+  /** False when an existing OpenCode session belongs to another user. */
+  openCodeCatalogEnabled?: boolean;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
+  /** Optional container for nested selector/popover overlays. */
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
   /**
    * Render the Claude Code advisor model select inline. Surfaces that relocate
    * the advisor into an "Advanced" area (e.g. NewSessionModal) pass `false`.
@@ -143,7 +149,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agent,
   agentic_tool,
   client,
+  branchId,
+  openCodeCatalogEnabled = true,
   compact = false,
+  getPopupContainer,
   showAdvisor = true,
 }) => {
   const { token } = theme.useToken();
@@ -283,10 +292,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
 
-  // OpenCode uses bounded exact provider/model entry; empty values use runtime defaults.
+  // OpenCode uses bounded exact provider/model entry.
   if (effectiveTool === 'opencode') {
     return (
       <OpenCodeModelSelector
+        client={client}
+        branchId={branchId}
+        catalogEnabled={openCodeCatalogEnabled}
+        compact={compact}
+        getPopupContainer={getPopupContainer}
         value={
           value?.provider || value?.model
             ? {

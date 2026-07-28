@@ -293,7 +293,18 @@ describe('materializeScheduleAgenticToolConfig', () => {
 
     await expect(
       materializeScheduleAgenticToolConfig(db, makeSchedule({ agentic_tool_config: config }))
-    ).resolves.toEqual(config);
+    ).resolves.toMatchObject({
+      agentic_tool: 'codex',
+      permission_mode: 'ask',
+      model_config: {
+        mode: 'exact',
+        model: 'gpt-5.4',
+        updated_at: expect.any(String),
+      },
+      codex_sandbox_mode: 'read-only',
+      codex_approval_policy: 'untrusted',
+      codex_network_access: false,
+    });
   });
 
   dbTest('materializes before the shared spawn path creates a session', async ({ db }) => {
@@ -323,10 +334,10 @@ describe('materializeScheduleAgenticToolConfig', () => {
     expect(createSession.mock.calls[0][0]).toMatchObject({
       created_by: creator.user_id,
       agentic_tool: 'codex',
-      agentic_tool_preset_id: undefined,
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
-    expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('agentic_tool_preset_id');
+    expect(createSession.mock.calls[0][1]).toEqual({});
     expect(prompt).toHaveBeenCalledOnce();
   });
 

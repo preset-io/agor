@@ -379,14 +379,14 @@ interface CreateZoneTriggerSessionInput {
   zoneName: string;
   agent?: string;
   agenticToolPresetId?: string;
-  modelConfig?: ModelConfig | null;
+  modelConfig?: ModelConfig;
   permissionMode?: PermissionMode;
 }
 
 /**
  * Direct action owner for the interactive zone trigger's new-session path.
- * The three model_config states are intentional: null clears a stale default,
- * undefined inherits it, and a complete pair is timestamped for persistence.
+ * An omitted pair resolves from the selected configuration/personal default
+ * on the daemon; a supplied pair is timestamped as an exact session override.
  */
 export function createZoneTriggerSession(
   client: AgorClient,
@@ -399,27 +399,38 @@ export function createZoneTriggerSession(
     permissionMode,
   }: CreateZoneTriggerSessionInput
 ): Promise<Session> {
-  return client.service('sessions').create({
+  const basePayload = {
     branch_id: branchId,
     agentic_tool: (agent || 'claude-code') as AgenticToolName,
-    agentic_tool_preset_id: agenticToolPresetId,
     description: `Session from zone "${zoneName}"`,
-    status: 'idle',
-    model_config:
-      modelConfig === null
-        ? null
-        : modelConfig
-          ? {
-              ...modelConfig,
-              updated_at: new Date().toISOString(),
-            }
-          : undefined,
-    permission_config: permissionMode
+    status: 'idle' as const,
+  };
+
+  return client.service('sessions').create(
+    agenticToolPresetId
       ? {
-          mode: permissionMode,
+          ...basePayload,
+          agentic_tool_preset_id: agenticToolPresetId,
         }
-      : undefined,
-  });
+      : {
+          ...basePayload,
+          ...(modelConfig
+            ? {
+                model_config: {
+                  ...modelConfig,
+                  updated_at: new Date().toISOString(),
+                },
+              }
+            : {}),
+          ...(permissionMode
+            ? {
+                permission_config: {
+                  mode: permissionMode,
+                },
+              }
+            : {}),
+        }
+  );
 }
 
 interface BranchZoneTriggerModalProps {

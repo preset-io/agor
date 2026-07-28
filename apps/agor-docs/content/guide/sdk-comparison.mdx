@@ -858,12 +858,38 @@ Agor's per-task Basic credential authenticates only the private SDK-to-server co
 OpenCode provider settings discover native API-key and OAuth methods using a
 disposable managed server. A native OAuth attempt keeps authorize and callback
 on the same auth server, stops the complete auth process path on completion or
-cancellation, and verifies saved state with a fresh server. “Configured” means
-that fresh OpenCode instance reports saved state; it does not make a paid or
-provider-validation request. Failed or cancelled callbacks leave credential
-contents under OpenCode's native ownership rather than using an Agor rollback.
+cancellation, and verifies saved-credential presence with a fresh discovery.
+The settings surface reports runtime availability separately from credential
+presence (`present`, `absent`, or `unknown`). Built-in availability, including
+Zen, is not proof of a removable credential; removal is offered only when
+presence is `present`. Neither state makes a paid or provider-validation
+request. Failed or cancelled callbacks leave credential contents under
+OpenCode's native ownership rather than using an Agor rollback.
 
-The model override UI does not call a daemon model-discovery endpoint because no persistent OpenCode server exists between tasks. Enter an exact provider/model pair, or leave both fields empty to use OpenCode's configured defaults.
+The model selector uses a protected read-only adapter. Each discovery starts a
+fresh managed OpenCode `1.14.33` server in the authenticated caller's credential
+namespace, optionally scopes it to a server-authorized branch directory, reads
+`config.providers()`, `config.get()`, and native runtime availability, returns
+only provider/model display metadata and availability, then stops the server.
+Agor keeps no provider registry, model cache, server pool, or persistent
+OpenCode server.
+
+Every runnable OpenCode session stores one exact Agor provider/model pair.
+Resolution is session override, then preset or workspace default, then the
+session owner's personal Agor default. If none supplies a complete pair, Agor
+returns an actionable error instead of delegating to an OpenCode default. A
+provider's suggested model and a project-configured pair are selection context,
+not an automatic default. If a stored pair later disappears, a refresh marks it
+unavailable without replacing it; it remains stored and visible until the user
+replaces or edits it. The same task-scoped server rejects an unavailable exact
+pair before OpenCode session creation, prompt submission, or model-provider
+traffic. A configured catalog is not proof that a remote provider will accept a
+request.
+
+Collaborators configuring a session owned by somebody else do not receive that
+owner's private catalog. They can preserve the stored pair or enter exact IDs
+manually; task execution still uses the immutable session owner's OpenCode
+credentials.
 
 ### Session Continuity
 

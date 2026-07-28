@@ -42,6 +42,8 @@ export interface AgenticConfigChipRowProps {
   client: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
+  branchId?: string;
+  openCodeCatalogEnabled?: boolean;
   /** Form field holding the configuration source. */
   fieldName?: string;
   /** Offer "Save as my default" under the chips while Custom is active. */
@@ -92,6 +94,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   client,
   mcpServerById,
   currentUser,
+  branchId,
+  openCodeCatalogEnabled = true,
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
   onConfigValidityChange,
@@ -120,13 +124,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
-  const configError = getSourceError(source);
-  const configResolvable = !configError;
-
-  useEffect(() => {
-    onConfigValidityChange?.(configResolvable, configError);
-  }, [configError, configResolvable, onConfigValidityChange]);
-
   // Normalize only after a successful load. A transient service failure must
   // never rewrite a stored preset/default while an unrelated setting is saved.
   useEffect(() => {
@@ -142,6 +139,20 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   };
 
   const resolved = configForSource(source);
+  const resolvedOpenCodePair =
+    tool !== 'opencode' ||
+    Boolean(resolved.modelConfig?.provider?.trim() && resolved.modelConfig.model?.trim());
+  const configError =
+    getSourceError(source) ??
+    (!resolvedOpenCodePair
+      ? 'Select an exact OpenCode provider and model before running this session'
+      : undefined);
+  const configResolvable = !configError;
+
+  useEffect(() => {
+    onConfigValidityChange?.(configResolvable, configError);
+  }, [configError, configResolvable, onConfigValidityChange]);
+
   const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
   const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
   const resolvedEffort = (isInline ? formEffort : resolved.modelConfig?.effort) ?? DEFAULT_EFFORT;
@@ -150,18 +161,17 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   // Seed inline fields from the currently-resolved config, then flip to Custom.
   const seedCustom = () => {
-    const current = configForSource(source);
     form.setFieldsValue({
       [fieldName]: INLINE_AGENTIC_CONFIGURATION,
-      modelConfig: current.modelConfig ?? {
+      modelConfig: resolved.modelConfig ?? {
         mode: 'alias',
         model: getDefaultModelForTool(tool) || '',
       },
-      effort: current.modelConfig?.effort,
-      permissionMode: current.permissionMode ?? getDefaultPermissionMode(tool),
-      codexSandboxMode: current.codexSandboxMode,
-      codexApprovalPolicy: current.codexApprovalPolicy,
-      codexNetworkAccess: current.codexNetworkAccess,
+      effort: resolved.modelConfig?.effort,
+      permissionMode: resolved.permissionMode ?? getDefaultPermissionMode(tool),
+      codexSandboxMode: resolved.codexSandboxMode,
+      codexApprovalPolicy: resolved.codexApprovalPolicy,
+      codexNetworkAccess: resolved.codexNetworkAccess,
     });
   };
   const ensureCustom = () => {
@@ -259,7 +269,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         {(resolvedModel || tool === 'opencode') && (
           <EditableChip
             icon={<RobotOutlined />}
-            label={resolvedModel ? shortModelName(tool, resolvedModel) : 'OpenCode default'}
+            label={
+              tool === 'opencode'
+                ? resolved.modelConfig?.provider && resolvedModel
+                  ? `${resolved.modelConfig.provider}/${resolvedModel}`
+                  : 'Select provider/model'
+                : shortModelName(tool, resolvedModel)
+            }
             title="Model"
             editable={inlineAllowed}
             managedNote={managedNote}
@@ -271,6 +287,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
                 onChange={onModelChange}
                 agentic_tool={tool}
                 client={client}
+                branchId={branchId}
+                openCodeCatalogEnabled={openCodeCatalogEnabled}
                 showAdvisor={false}
               />
             )}

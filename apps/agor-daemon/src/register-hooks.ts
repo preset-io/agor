@@ -99,7 +99,6 @@ import {
 } from './services/sessions.js';
 import { isLocalAuthenticationLookup } from './services/users.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
-import { applySessionConfigDefaults } from './utils/apply-session-config-defaults.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute,
@@ -465,6 +464,7 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'codex-auth/import',
   'codex-auth/logout',
   'opencode-auth',
+  'opencode-models',
   'claude-models',
   'copilot-models',
   'cursor-models',
@@ -2490,11 +2490,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
         injectCreatedBy(),
-        // Auto-fill permission_config / model_config from the creator's
-        // default_agentic_config[tool] when the caller omits them. Must run
-        // after injectCreatedBy() so `data.created_by` is the trusted user
-        // ID. See utils/apply-session-config-defaults.ts.
-        applySessionConfigDefaults(),
         async (context) => {
           // Populate repo field and auto-populate git_state from branch_id
           if (!Array.isArray(context.data) && context.data?.branch_id) {
