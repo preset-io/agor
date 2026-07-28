@@ -2,20 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { resolveMCPCatalogOptions } from './mcp-catalog-ingestion';
 
 describe('resolveMCPCatalogOptions', () => {
-  it('syncs the registry when the operator has expressed no preference', () => {
-    expect(resolveMCPCatalogOptions(undefined)).toEqual({ registrySyncEnabled: true });
-    expect(resolveMCPCatalogOptions({})).toEqual({ registrySyncEnabled: true });
-  });
-
-  it('lets an air-gapped install turn off the outbound registry sync', () => {
-    // Curation still seeds from the repo-shipped file; only the network half stops.
+  it('leaves the outbound registry sync off unless an operator opts in', () => {
+    // Phase 1 renders only curated entries, so mirroring ~18,000 registry rows
+    // would be outbound traffic for data nobody can see.
+    expect(resolveMCPCatalogOptions(undefined)).toEqual({ registrySyncEnabled: false });
+    expect(resolveMCPCatalogOptions({})).toEqual({ registrySyncEnabled: false });
     expect(resolveMCPCatalogOptions({ registry_sync_enabled: false })).toEqual({
       registrySyncEnabled: false,
     });
   });
 
+  it('enables the sync when the operator asks for it', () => {
+    expect(resolveMCPCatalogOptions({ registry_sync_enabled: true })).toEqual({
+      registrySyncEnabled: true,
+    });
+  });
+
   it('lets an operator disable auth probing without disabling the sync', () => {
-    expect(resolveMCPCatalogOptions({ probe_budget: 0 })).toEqual({
+    expect(resolveMCPCatalogOptions({ registry_sync_enabled: true, probe_budget: 0 })).toEqual({
       registrySyncEnabled: true,
       probeBudget: 0,
     });

@@ -4,11 +4,20 @@ import { dbTest } from '../db/test-helpers';
 import type { CuratedCatalogEntry } from './curated-loader';
 import { seedCuratedCatalog } from './seed';
 
+/**
+ * The production callers open a fresh database unit per page and per probe.
+ * Tests exercise the same signature with a pass-through, so a regression that
+ * reintroduced a run-long transaction would still be a type error here.
+ */
+function withRepository(repository: MCPCatalogRepository) {
+  return <T>(work: (repo: MCPCatalogRepository) => Promise<T>): Promise<T> => work(repository);
+}
+
 function entry(name: string, overrides: Partial<CuratedCatalogEntry> = {}): CuratedCatalogEntry {
   return {
     name,
     category: 'dev-tools',
-    capabilities: ['repos'],
+    capabilities: ['code-repos'],
     benefit: `Benefit for ${name}`,
     starter_prompt: `Prompt for ${name}`,
     permission_disclosure: `Discloses things for ${name}`,
@@ -23,7 +32,7 @@ describe('seedCuratedCatalog', () => {
     async ({ db }) => {
       const repository = new MCPCatalogRepository(db);
 
-      const result = await seedCuratedCatalog(repository, {
+      const result = await seedCuratedCatalog(withRepository(repository), {
         entries: [
           entry('io.sentry/mcp', {
             remote_url: 'https://mcp.sentry.dev/mcp',
@@ -55,7 +64,7 @@ describe('seedCuratedCatalog', () => {
       remote_url: 'https://mcp.notion.com/mcp',
     });
 
-    const result = await seedCuratedCatalog(repository, {
+    const result = await seedCuratedCatalog(withRepository(repository), {
       entries: [entry('com.notion/mcp', { category: 'productivity', benefit: 'Curated benefit' })],
     });
 
@@ -75,8 +84,8 @@ describe('seedCuratedCatalog', () => {
     const repository = new MCPCatalogRepository(db);
     const entries = [entry('a.example/one'), entry('b.example/two')];
 
-    await seedCuratedCatalog(repository, { entries });
-    const second = await seedCuratedCatalog(repository, { entries });
+    await seedCuratedCatalog(withRepository(repository), { entries });
+    const second = await seedCuratedCatalog(withRepository(repository), { entries });
 
     expect(second).toEqual({ created: 0, updated: 2, failed: 0 });
     expect(await repository.count()).toBe(2);
@@ -84,11 +93,11 @@ describe('seedCuratedCatalog', () => {
 
   dbTest('reapplies edited curation copy', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
-    await seedCuratedCatalog(repository, {
+    await seedCuratedCatalog(withRepository(repository), {
       entries: [entry('a.example/one', { benefit: 'Old benefit', popularity_rank: 9 })],
     });
 
-    await seedCuratedCatalog(repository, {
+    await seedCuratedCatalog(withRepository(repository), {
       entries: [entry('a.example/one', { benefit: 'New benefit', popularity_rank: 1 })],
     });
 
@@ -106,7 +115,7 @@ describe('seedCuratedCatalog', () => {
       return original(candidate);
     });
 
-    const result = await seedCuratedCatalog(repository, {
+    const result = await seedCuratedCatalog(withRepository(repository), {
       entries: [entry('bad.example/one'), entry('good.example/two'), entry('good.example/three')],
       log: () => {},
     });

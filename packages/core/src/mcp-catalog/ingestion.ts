@@ -6,12 +6,24 @@
  * stale. Both halves are designed to degrade rather than fail: the registry is
  * a third party, the probe targets are arbitrary internet hosts, and neither is
  * allowed to leave the catalog in a worse state than not running at all.
+ *
+ * The caller supplies a `withRepository` factory rather than a repository,
+ * because a run lasts minutes and must never hold one database transaction
+ * across it. Every HTTP call — registry pages and auth probes alike — happens
+ * outside any database scope; each database unit spans one page of upserts or
+ * one probe write. A run that dies halfway leaves the pages it already
+ * committed in place.
  */
 
 import type { MCPCatalogProbeResult } from '@agor/core/types';
 import type { MCPCatalogRepository } from '../db/repositories/mcp-catalog';
 import { probeRemoteAuthType } from './auth-probe';
 import { MCPRegistryClient } from './registry-client';
+
+/** Opens a short database unit and hands a repository to the work inside it. */
+export type WithCatalogRepository = <T>(
+  work: (repository: MCPCatalogRepository) => Promise<T>
+) => Promise<T>;
 
 export interface IngestionOptions {
   registry?: MCPRegistryClient;
@@ -50,7 +62,7 @@ export interface IngestionResult {
 }
 
 const DEFAULTS = {
-  maxPages: 100,
+  maxPages: 400,
   maxConsecutivePageFailures: 3,
   pageDelayMs: 250,
   probeBudget: 40,
@@ -70,7 +82,7 @@ const defaultSleep = (ms: number): Promise<void> =>
  * catalog rows are untouched.
  */
 export async function runCatalogIngestion(
-  repository: MCPCatalogRepository,
+  withRepository: WithCatalogRepository,
   options: IngestionOptions = {}
 ): Promise<IngestionResult> {
   const registry = options.registry ?? new MCPRegistryClient();
@@ -108,6 +120,7 @@ export async function runCatalogIngestion(
   // page could still repeat one; deduplicating within a run keeps the write
   // count honest and avoids a pointless second read of the same row.
   const seenNames = new Set<string>();
+  const seenCursors = new Set<string>();
 
   for (let page = 0; page < maxPages; page += 1) {
     if (outOfTime()) {
@@ -139,27 +152,45 @@ export async function runCatalogIngestion(
     result.pagesFetched += 1;
     result.skipped += fetched.skipped;
 
-    for (const entry of fetched.entries) {
-      if (seenNames.has(entry.name)) continue;
+    const fresh = fetched.entries.filter((entry) => {
+      if (seenNames.has(entry.name)) return false;
       seenNames.add(entry.name);
-      try {
-        const outcome = await repository.upsertRegistryEntry(entry);
-        result[outcome] += 1;
-      } catch (error) {
-        // A single poisoned entry (oversized blob, constraint violation) must
-        // not cost the other 4,000 rows their update.
-        result.skipped += 1;
-        log(
-          `Skipped registry entry ${entry.name}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
-    }
+      return true;
+    });
 
-    cursor = fetched.nextCursor;
-    if (!cursor) break;
-    if (page === maxPages - 1) result.truncated = true;
+    await withRepository(async (repository) => {
+      for (const entry of fresh) {
+        try {
+          const outcome = await repository.upsertRegistryEntry(entry);
+          result[outcome] += 1;
+        } catch (error) {
+          // A single poisoned entry (oversized blob, constraint violation) must
+          // not cost the rest of the page its update.
+          result.skipped += 1;
+          log(
+            `Skipped registry entry ${entry.name}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+    });
+
+    const nextCursor = fetched.nextCursor;
+    if (!nextCursor) break;
+    // A registry that hands back a cursor it already gave us would otherwise
+    // burn the whole page budget and report a full run.
+    if (seenCursors.has(nextCursor)) {
+      result.truncated = true;
+      log(`Registry returned a repeated cursor (${nextCursor}); stopping pagination`);
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+    if (page === maxPages - 1) {
+      result.truncated = true;
+      log(`Reached the ${maxPages}-page cap with more pages available; mirror is incomplete`);
+    }
     await sleep(pageDelayMs);
   }
 
@@ -167,7 +198,9 @@ export async function runCatalogIngestion(
     const staleBefore = new Date(now() - probeMaxAgeMs);
     let candidates: Awaited<ReturnType<MCPCatalogRepository['findEntriesNeedingProbe']>> = [];
     try {
-      candidates = await repository.findEntriesNeedingProbe(staleBefore, probeBudget);
+      candidates = await withRepository((repository) =>
+        repository.findEntriesNeedingProbe(staleBefore, probeBudget)
+      );
     } catch (error) {
       log(
         `Failed to select probe candidates: ${error instanceof Error ? error.message : String(error)}`
@@ -182,8 +215,11 @@ export async function runCatalogIngestion(
       }
       if (!candidate.remote_url) continue;
       try {
+        // Deliberately outside any database unit: this is an 8s-timeout request
+        // to an arbitrary internet host, and holding a transaction open across
+        // it would pin a connection and hold back vacuum for the whole sweep.
         const probed = await probe(candidate.remote_url);
-        await repository.recordProbeResult(candidate.name, probed);
+        await withRepository((repository) => repository.recordProbeResult(candidate.name, probed));
         result.probed += 1;
       } catch (error) {
         result.probeFailures += 1;

@@ -31,14 +31,84 @@ export const MCP_CATALOG_CATEGORIES = [
 export type MCPCatalogCategory = (typeof MCP_CATALOG_CATEGORIES)[number];
 
 /**
+ * Capability tags, also a closed set.
+ *
+ * These are facets a user filters by ("show me things that can read logs"), so
+ * the vocabulary has to be small enough that every value has several entries
+ * behind it. An open string field produced 118 tags across 50 entries, most
+ * with a single member — a filter nobody could usefully click, and one typo
+ * away from a silently empty facet.
+ */
+export const MCP_CATALOG_CAPABILITIES = [
+  // Building software
+  'code-repos',
+  'issues',
+  'pull-requests',
+  'ci-cd',
+  'deployments',
+  'code-search',
+  'docs',
+  'design',
+  'security-scan',
+  // Data
+  'databases',
+  'sql',
+  'schema',
+  'files',
+  'datasets',
+  // Getting work done
+  'tasks',
+  'projects',
+  'notes',
+  'crm',
+  'payments',
+  'content-cms',
+  'automations',
+  // Talking to people
+  'messages',
+  'channels',
+  'email',
+  // Knowing what is happening
+  'metrics',
+  'logs',
+  'traces',
+  'alerts',
+  'incidents',
+  'analytics',
+  'feature-flags',
+  // Finding things out
+  'web-search',
+  'web-scrape',
+  'network-checks',
+] as const;
+
+export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
+
+/**
  * Result of an unauthenticated `initialize` probe against a remote MCP URL.
  *
  * The registry does not declare whether a server needs auth, so the connect UI
- * would otherwise have to discover it after the user clicks. `unknown` means
- * the probe has not run or could not reach a verdict; it is not a claim that
- * the server is open.
+ * would otherwise have to discover it after the user clicks. Each value picks a
+ * different connect affordance, which is why "needs a key" and "we could not
+ * reach it" are distinct rather than both collapsing into `unknown`:
+ *
+ * - `none`        — an unauthenticated handshake succeeded; connect directly.
+ * - `oauth`       — 401 with an OAuth challenge; run the browser flow.
+ * - `credentials` — 401/403 with a non-OAuth challenge; ask for an API key.
+ * - `unreachable` — the host did not answer, or answered 5xx.
+ * - `unknown`     — never probed, or refused by the outbound-URL filter.
+ *
+ * Nothing but `none` may be read as "this server is open".
  */
-export type MCPCatalogProbedAuthType = 'none' | 'oauth' | 'unknown';
+export const MCP_CATALOG_PROBED_AUTH_TYPES = [
+  'none',
+  'oauth',
+  'credentials',
+  'unreachable',
+  'unknown',
+] as const;
+
+export type MCPCatalogProbedAuthType = (typeof MCP_CATALOG_PROBED_AUTH_TYPES)[number];
 
 /** Transport a catalog entry can be connected over. */
 export type MCPCatalogTransport = 'streamable-http' | 'sse' | 'stdio';
@@ -75,6 +145,8 @@ export interface MCPCatalogEntryData {
   capabilities?: string[];
   /** Registry `repository.source`, e.g. `github`. */
   repository_source?: string;
+  /** Challenge scheme from a `credentials` probe verdict, e.g. `Basic`. */
+  probed_auth_scheme?: string;
 }
 
 /**
@@ -116,7 +188,6 @@ export interface MCPCatalogEntry {
   verified: boolean;
   /** 1 = most popular. Null for uncurated registry entries. */
   popularity_rank?: number;
-  connect_count: number;
 
   // Auth probe
   probed_auth_type: MCPCatalogProbedAuthType;
@@ -129,15 +200,11 @@ export interface MCPCatalogEntry {
   registry_icons?: string[];
   registry_status?: string;
   repository_source?: string;
+  probed_auth_scheme?: string;
 }
 
 /** Sort keys the catalog service accepts. */
-export type MCPCatalogSort =
-  | 'popularity'
-  | 'name'
-  | 'recently_updated'
-  | 'connect_count'
-  | 'relevance';
+export type MCPCatalogSort = 'popularity' | 'name' | 'recently_updated' | 'relevance';
 
 /**
  * Filters pushed into SQL by `MCPCatalogRepository.findAll`.
@@ -183,7 +250,7 @@ export interface MCPCatalogRegistryUpsert {
 export interface MCPCatalogCurationUpsert {
   name: string;
   category: MCPCatalogCategory;
-  capabilities: string[];
+  capabilities: MCPCatalogCapability[];
   benefit: string;
   starter_prompt: string;
   permission_disclosure: string;
@@ -203,4 +270,6 @@ export interface MCPCatalogProbeResult {
   probed_auth_type: MCPCatalogProbedAuthType;
   probed_at: Date;
   auth_server_origin?: string;
+  /** Challenge scheme seen on a `credentials` verdict, e.g. `Basic`, `ApiKey`. */
+  probed_auth_scheme?: string;
 }

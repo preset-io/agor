@@ -11,7 +11,12 @@ export {
   loadCuratedCatalog,
   parseCuratedCatalog,
 } from './curated-loader';
-export { type IngestionOptions, type IngestionResult, runCatalogIngestion } from './ingestion';
+export {
+  type IngestionOptions,
+  type IngestionResult,
+  runCatalogIngestion,
+  type WithCatalogRepository,
+} from './ingestion';
 export {
   DEFAULT_MCP_REGISTRY_URL,
   MCPRegistryClient,

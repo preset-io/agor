@@ -13,17 +13,17 @@
  */
 
 import type { MCPCatalogProbedAuthType, MCPCatalogProbeResult } from '@agor/core/types';
-import {
-  fetchResourceMetadata,
-  isOAuthRequired,
-  resolveMCPOAuthDiscovery,
-} from '../tools/mcp/oauth-mcp-transport';
+import { isOAuthRequired, resolveMCPOAuthDiscovery } from '../tools/mcp/oauth-mcp-transport';
+import { isPublicHttpUrl } from '../utils/url';
 
 /** Protocol version sent in the probe handshake. */
 const PROBE_PROTOCOL_VERSION = '2025-06-18';
 
 /** Default per-probe budget. A catalog sweep must not stall on one slow host. */
 const DEFAULT_PROBE_TIMEOUT_MS = 8_000;
+
+/** Cap on a metadata document, which is a handful of JSON keys. */
+const MAX_METADATA_BYTES = 256 * 1024;
 
 export interface AuthProbeOptions {
   timeoutMs?: number;
@@ -32,59 +32,74 @@ export interface AuthProbeOptions {
 }
 
 /**
- * Hostnames the daemon must never be induced to fetch.
+ * Read RFC 9728 protected-resource metadata under probe rules.
  *
- * Remote URLs come from an open, unauthenticated public registry: anybody can
- * publish a server pointing at `http://169.254.169.254/` or at a service on the
- * daemon's private network. Probing is the one place Agor makes an outbound
- * request to a registry-supplied URL, so the SSRF filter belongs here.
+ * `oauth-mcp-transport` has its own fetch for this, used by the interactive
+ * connect flow, where the user chose the server and a redirect is benign. The
+ * probe's input is a URL an anonymous stranger published to a public registry,
+ * echoed back through a `WWW-Authenticate` header, so it refuses redirects
+ * outright rather than re-validating a `Location` the daemon never sees, and
+ * caps the body. Only the fetch differs; the discovery cascade that produced
+ * this URL is the shared one.
  */
-function isProbeableUrl(rawUrl: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-  // Credentials in a registry-published URL are never something to replay.
-  if (url.username || url.password) return false;
+async function fetchProbeResourceMetadata(
+  metadataUrl: string,
+  timeoutMs: number
+): Promise<{ authorization_servers?: string[] } | null> {
+  const response = await fetch(metadataUrl, {
+    headers: { accept: 'application/json' },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) return null;
 
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.localhost')) return false;
-  if (host === 'metadata.google.internal') return false;
+  const length = Number(response.headers.get('content-length'));
+  if (Number.isFinite(length) && length > MAX_METADATA_BYTES) return null;
+  const body = await response.text();
+  if (body.length > MAX_METADATA_BYTES) return null;
 
-  // IPv6 loopback / link-local / unique-local.
-  if (host === '::1' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd'))
-    return false;
-
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (ipv4) {
-    const [a, b] = ipv4.slice(1).map(Number);
-    if (a === 10 || a === 127 || a === 0) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-  }
-
-  return true;
+  return JSON.parse(body) as { authorization_servers?: string[] };
 }
 
-/** Origin of the first authorization server the discovery cascade found. */
+/**
+ * Name the auth scheme a non-OAuth challenge asked for, e.g. `Basic`, `ApiKey`.
+ *
+ * Bounded and character-restricted because it is stored and later rendered:
+ * an unbounded header value is attacker-controlled text.
+ */
+function parseChallengeScheme(header: string | null): string | undefined {
+  const scheme = /^\s*([A-Za-z][A-Za-z0-9._-]{0,31})\b/.exec(header ?? '')?.[1];
+  return scheme || undefined;
+}
+
+/**
+ * Origin of the first authorization server the discovery cascade found.
+ *
+ * Every URL reached here is third-party-controlled, and not only at the first
+ * hop: `resource_metadata="..."` is read verbatim out of the probed server's
+ * own `WWW-Authenticate` header, and the authorization server list comes out of
+ * whatever that URL returns. Each is re-checked against `isPublicHttpUrl`
+ * before it is fetched or persisted, so a hostile registry entry cannot walk
+ * the daemon into its private network one hop at a time.
+ */
 async function resolveAuthServerOrigin(
   wwwAuthenticate: string | null,
-  remoteUrl: string
+  remoteUrl: string,
+  timeoutMs: number
 ): Promise<string | undefined> {
   const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, remoteUrl);
   if (!discovery) return undefined;
 
   try {
     if (discovery.kind === 'authorization-server') {
-      return new URL(discovery.authServerMetadata.issuer).origin;
+      const issuer = discovery.authServerMetadata.issuer;
+      return isPublicHttpUrl(issuer) ? new URL(issuer).origin : undefined;
     }
-    const metadata = await fetchResourceMetadata(discovery.metadataUrl);
-    const [authServer] = metadata.authorization_servers ?? [];
-    return authServer ? new URL(authServer).origin : undefined;
+    if (!isPublicHttpUrl(discovery.metadataUrl)) return undefined;
+    const metadata = await fetchProbeResourceMetadata(discovery.metadataUrl, timeoutMs);
+    const [authServer] = metadata?.authorization_servers ?? [];
+    if (!authServer || !isPublicHttpUrl(authServer)) return undefined;
+    return new URL(authServer).origin;
   } catch {
     // The entry is still known to need OAuth; only the AS origin is unknown.
     return undefined;
@@ -103,12 +118,13 @@ export async function probeRemoteAuthType(
   options: AuthProbeOptions = {}
 ): Promise<MCPCatalogProbeResult> {
   const now = options.now ?? (() => new Date());
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const unresolved = (type: MCPCatalogProbedAuthType = 'unknown'): MCPCatalogProbeResult => ({
     probed_auth_type: type,
     probed_at: now(),
   });
 
-  if (!isProbeableUrl(remoteUrl)) return unresolved();
+  if (!isPublicHttpUrl(remoteUrl)) return unresolved();
 
   let response: Response;
   try {
@@ -132,16 +148,18 @@ export async function probeRemoteAuthType(
       // Never follow a redirect: the registry-supplied URL is the only host the
       // operator implicitly trusted, and a redirect could aim at a private one.
       redirect: 'manual',
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    return unresolved();
+    // Timeout, DNS failure, connection refused, TLS error.
+    return unresolved('unreachable');
   }
 
   if (isOAuthRequired(response.status, response.headers)) {
     const origin = await resolveAuthServerOrigin(
       response.headers.get('www-authenticate'),
-      remoteUrl
+      remoteUrl,
+      timeoutMs
     );
     return {
       probed_auth_type: 'oauth',
@@ -150,11 +168,18 @@ export async function probeRemoteAuthType(
     };
   }
 
-  // A 401/403 without an OAuth challenge still needs credentials, just not ones
-  // this probe can characterize — the connect flow has to ask.
-  if (response.status === 401 || response.status === 403) return unresolved();
+  // A 401/403 without an OAuth challenge needs credentials the browser flow
+  // cannot obtain. The scheme it names is what the connect form should ask for.
+  if (response.status === 401 || response.status === 403) {
+    const scheme = parseChallengeScheme(response.headers.get('www-authenticate'));
+    return {
+      probed_auth_type: 'credentials',
+      probed_at: now(),
+      ...(scheme ? { probed_auth_scheme: scheme } : {}),
+    };
+  }
 
   if (response.ok) return unresolved('none');
 
-  return unresolved();
+  return unresolved('unreachable');
 }

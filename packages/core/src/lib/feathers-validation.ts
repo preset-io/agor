@@ -9,7 +9,7 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
-import { MCP_CATALOG_CATEGORIES } from '../types/mcp-catalog';
+import { MCP_CATALOG_CATEGORIES, MCP_CATALOG_PROBED_AUTH_TYPES } from '../types/mcp-catalog';
 
 /**
  * Query validator with type coercion enabled
@@ -288,14 +288,13 @@ export const mcpCatalogQuerySchema = createQuerySchema(
     curated: Type.Optional(Type.Boolean()),
     has_remote: Type.Optional(Type.Boolean()),
     probed_auth_type: Type.Optional(
-      Type.Union([Type.Literal('none'), Type.Literal('oauth'), Type.Literal('unknown')])
+      Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
     ),
     sort: Type.Optional(
       Type.Union([
         Type.Literal('popularity'),
         Type.Literal('name'),
         Type.Literal('recently_updated'),
-        Type.Literal('connect_count'),
         Type.Literal('relevance'),
       ])
     ),

@@ -1123,7 +1123,14 @@ export interface AgorDeploymentSettings {
  * repository still seeds, so the marketplace stays usable offline.
  */
 export interface AgorMCPCatalogSettings {
-  /** Sync the public MCP registry into the catalog (default: true). */
+  /**
+   * Mirror the public MCP registry into the catalog.
+   *
+   * Off by default: nothing renders the ~18,000 uncurated registry rows yet, so
+   * every install would make hundreds of outbound requests, four times a day,
+   * for data no user can see. The ~50 curated entries seed regardless. Turn
+   * this on when a UI exists that uses the breadth.
+   */
   registry_sync_enabled?: boolean;
 
   /** Hours between registry syncs (default: 6). */

@@ -21,6 +21,17 @@ const OFFICIAL_META_KEY = 'io.modelcontextprotocol.registry/official';
 /** Registry-side cap; asking for more is silently clamped. */
 const MAX_PAGE_SIZE = 100;
 
+/**
+ * Bounds on what one public registry record may put into a row.
+ *
+ * Anyone can publish to the registry, and every field below is stored and later
+ * rendered. Without caps a single record with a 50MB `remotes` array is parsed
+ * into memory and written to the `data` blob.
+ */
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_TEXT_LENGTH = 4_096;
+const MAX_ARRAY_ITEMS = 20;
+
 interface RegistryPage {
   servers?: unknown[];
   metadata?: { nextCursor?: string; count?: number };
@@ -41,8 +52,11 @@ export interface RegistryClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+function asString(value: unknown, maxLength = MAX_TEXT_LENGTH): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
 }
 
 function asDate(value: unknown): Date | undefined {
@@ -74,7 +88,7 @@ function normalizeTransport(value: unknown): MCPCatalogTransport | undefined {
 function normalizeRemotes(value: unknown): MCPCatalogRemote[] {
   if (!Array.isArray(value)) return [];
   const remotes: MCPCatalogRemote[] = [];
-  for (const raw of value) {
+  for (const raw of value.slice(0, MAX_ARRAY_ITEMS)) {
     if (!raw || typeof raw !== 'object') continue;
     const record = raw as Record<string, unknown>;
     const url = asString(record.url);
@@ -91,7 +105,7 @@ function normalizeRemotes(value: unknown): MCPCatalogRemote[] {
 function normalizePackages(value: unknown): MCPCatalogPackage[] {
   if (!Array.isArray(value)) return [];
   const packages: MCPCatalogPackage[] = [];
-  for (const raw of value) {
+  for (const raw of value.slice(0, MAX_ARRAY_ITEMS)) {
     if (!raw || typeof raw !== 'object') continue;
     const record = raw as Record<string, unknown>;
     const registryType = asString(record.registryType);
@@ -112,6 +126,7 @@ function normalizePackages(value: unknown): MCPCatalogPackage[] {
 function normalizeIcons(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const urls = value
+    .slice(0, MAX_ARRAY_ITEMS)
     .map((raw) =>
       raw && typeof raw === 'object' ? asString((raw as Record<string, unknown>).src) : undefined
     )
@@ -120,10 +135,18 @@ function normalizeIcons(value: unknown): string[] | undefined {
 }
 
 /**
+ * Registry lifecycle states worth mirroring. The registry also publishes
+ * `deleted` and `deprecated`; those are dropped rather than stored, so a
+ * withdrawn server stops being offered instead of staying connectable forever.
+ */
+const INGESTIBLE_STATUSES = new Set(['active', undefined]);
+
+/**
  * Convert one registry record into the columns ingestion owns.
  *
- * Returns null for anything without a usable `name`, which is the catalog's
- * natural key — a record we cannot key cannot be upserted or deduplicated.
+ * Returns null for anything without a usable `name` (the catalog's natural key
+ * — a record we cannot key cannot be upserted or deduplicated) and for anything
+ * the registry has withdrawn.
  */
 export function normalizeRegistryServer(record: unknown): MCPCatalogRegistryUpsert | null {
   if (!record || typeof record !== 'object') return null;
@@ -136,6 +159,8 @@ export function normalizeRegistryServer(record: unknown): MCPCatalogRegistryUpse
 
   const meta = envelope._meta as Record<string, unknown> | undefined;
   const official = meta?.[OFFICIAL_META_KEY] as Record<string, unknown> | undefined;
+  const status = asString(official?.status, 32);
+  if (!INGESTIBLE_STATUSES.has(status)) return null;
 
   const remotes = normalizeRemotes(server.remotes);
   const packages = normalizePackages(server.packages);
@@ -158,7 +183,7 @@ export function normalizeRegistryServer(record: unknown): MCPCatalogRegistryUpse
     remotes: remotes.length > 0 ? remotes : undefined,
     packages: packages.length > 0 ? packages : undefined,
     registry_icons: normalizeIcons(server.icons),
-    registry_status: asString(official?.status),
+    registry_status: status,
   };
 }
 
@@ -195,7 +220,15 @@ export class MCPRegistryClient {
       throw new Error(`MCP registry responded ${response.status} for ${url.pathname}`);
     }
 
-    const page = (await response.json()) as RegistryPage;
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+      throw new Error(`MCP registry page exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    const body = await response.text();
+    if (body.length > MAX_RESPONSE_BYTES) {
+      throw new Error(`MCP registry page exceeded ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    const page = JSON.parse(body) as RegistryPage;
     const records = Array.isArray(page.servers) ? page.servers : [];
 
     const entries: MCPCatalogRegistryUpsert[] = [];

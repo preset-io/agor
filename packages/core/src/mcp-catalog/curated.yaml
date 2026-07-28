@@ -35,7 +35,7 @@ entries:
   # ---------------------------------------------------------------- dev tools
   - name: io.github.github/github-mcp-server
     category: dev-tools
-    capabilities: [repos, issues, pull-requests, code-search, actions]
+    capabilities: [code-repos, issues, pull-requests, code-search, automations]
     benefit: Let an agent read your repos, triage issues, and open pull requests without leaving the session.
     starter_prompt: Summarise the open pull requests on my most active repository and flag any that have been waiting on review for more than a week.
     permission_disclosure: Reads and writes repositories, issues, pull requests, and Actions runs for every organisation your GitHub account can reach.
@@ -47,7 +47,7 @@ entries:
 
   - name: app.linear/linear
     category: dev-tools
-    capabilities: [issues, projects, cycles, comments]
+    capabilities: [issues, projects, notes]
     benefit: Turn a conversation into tracked Linear issues, and let an agent pick its next task off the board.
     starter_prompt: List the issues assigned to me in the current cycle and draft a short status update for each.
     permission_disclosure: Reads and writes issues, projects, and comments in the Linear workspaces you authorise.
@@ -59,7 +59,7 @@ entries:
 
   - name: io.sentry/mcp
     category: dev-tools
-    capabilities: [errors, issues, releases, traces]
+    capabilities: [logs, issues, deployments, traces]
     benefit: Hand an agent a Sentry issue and let it read the stack trace, the release, and the surrounding events before it starts fixing.
     starter_prompt: Find the error that has affected the most users in the last 24 hours and explain what is throwing it.
     permission_disclosure: Reads issues, events, stack traces, and release metadata from the Sentry organisations you authorise.
@@ -71,7 +71,7 @@ entries:
 
   - name: com.context7/mcp
     category: dev-tools
-    capabilities: [docs, api-reference, versions]
+    capabilities: [docs]
     benefit: Pull version-correct library documentation into context so an agent stops inventing APIs that no longer exist.
     starter_prompt: Fetch the current documentation for the library I am using and check my code against its latest API.
     permission_disclosure: Reads public library documentation only. No account data is accessed.
@@ -83,7 +83,7 @@ entries:
 
   - name: com.deepwiki/mcp
     category: dev-tools
-    capabilities: [docs, code-search, repos]
+    capabilities: [docs, code-search, code-repos]
     benefit: Ask questions about any public GitHub repository and get answers grounded in its actual source.
     starter_prompt: Explain how authentication is implemented in a public repository I name, citing the files involved.
     permission_disclosure: Reads public GitHub repository content only. No account data is accessed.
@@ -95,7 +95,7 @@ entries:
 
   - name: com.atlassian/atlassian-mcp-server
     category: dev-tools
-    capabilities: [issues, pages, projects, search]
+    capabilities: [issues, notes, projects, web-search]
     benefit: Work Jira tickets and Confluence pages from the session instead of alt-tabbing to a browser tab.
     starter_prompt: Show the Jira issues assigned to me this sprint and summarise the Confluence page each one links to.
     permission_disclosure: Reads and writes Jira issues and Confluence pages across the Atlassian sites you authorise.
@@ -107,7 +107,7 @@ entries:
 
   - name: com.gitlab/mcp
     category: dev-tools
-    capabilities: [repos, issues, merge-requests, pipelines]
+    capabilities: [code-repos, issues, pull-requests, ci-cd]
     benefit: Read GitLab projects, drive merge requests, and inspect failing pipelines from the session.
     starter_prompt: List my open merge requests and tell me which ones have failing pipelines.
     permission_disclosure: Reads and writes projects, issues, merge requests, and pipelines your GitLab account can reach.
@@ -119,7 +119,7 @@ entries:
 
   - name: com.figma.mcp/mcp
     category: dev-tools
-    capabilities: [designs, components, comments]
+    capabilities: [design, notes]
     benefit: Give an agent the actual design file so generated UI matches the spec instead of approximating it.
     starter_prompt: Read the frame I link and list its components, spacing, and colour tokens.
     permission_disclosure: Reads files, components, and comments in the Figma teams you authorise.
@@ -131,7 +131,7 @@ entries:
 
   - name: com.vercel/vercel-mcp
     category: dev-tools
-    capabilities: [deployments, projects, logs, domains]
+    capabilities: [deployments, projects, logs]
     benefit: Inspect deployments and read build logs so an agent can diagnose a failed ship on its own.
     starter_prompt: Find my most recent failed deployment and explain what broke the build.
     permission_disclosure: Reads and manages projects, deployments, logs, and domains in the Vercel teams you authorise.
@@ -143,7 +143,7 @@ entries:
 
   - name: com.cloudflare/mcp
     category: dev-tools
-    capabilities: [workers, dns, kv, r2, logs]
+    capabilities: [deployments, files, logs]
     benefit: Manage Workers, DNS, and storage bindings without switching to the dashboard.
     starter_prompt: List my Workers and show which ones have thrown errors in the last day.
     permission_disclosure: Reads and manages Workers, DNS records, and storage bindings in the Cloudflare accounts you authorise.
@@ -155,7 +155,7 @@ entries:
 
   - name: com.semgrep/mcp
     category: dev-tools
-    capabilities: [static-analysis, security, code-search]
+    capabilities: [security-scan, code-search]
     benefit: Run static analysis over a change and get findings back as structured results an agent can act on.
     starter_prompt: Scan the files I changed on this branch and explain any security findings.
     permission_disclosure: Sends the code you ask it to scan to Semgrep, and reads findings from the Semgrep organisations you authorise.
@@ -167,7 +167,7 @@ entries:
 
   - name: com.buildkite/mcp
     category: dev-tools
-    capabilities: [pipelines, builds, logs, artifacts]
+    capabilities: [ci-cd, logs]
     benefit: Read build logs and job state so an agent can work out why CI is red before you do.
     starter_prompt: Show the last failed build on my main pipeline and quote the log lines that caused it.
     permission_disclosure: Reads pipelines, builds, job logs, and artifacts in the Buildkite organisations you authorise.
@@ -179,7 +179,7 @@ entries:
 
   - name: com.auth0/mcp
     category: dev-tools
-    capabilities: [tenants, applications, connections, logs]
+    capabilities: [deployments, logs]
     benefit: Inspect and configure Auth0 tenants from the session instead of clicking through the dashboard.
     starter_prompt: List the applications in my Auth0 tenant and flag any with an unusually permissive callback URL.
     permission_disclosure: Reads and writes application, connection, and tenant configuration in the Auth0 tenants you authorise.
@@ -189,7 +189,7 @@ entries:
 
   - name: com.wix/mcp
     category: dev-tools
-    capabilities: [sites, content, apps]
+    capabilities: [deployments, content-cms]
     benefit: Read and update Wix site content and app configuration from an agent session.
     starter_prompt: List my Wix sites and summarise what each one publishes.
     permission_disclosure: Reads and writes site content and app configuration for the Wix accounts you authorise.
@@ -203,7 +203,7 @@ entries:
 
   - name: com.supabase/mcp
     category: data-storage
-    capabilities: [postgres, sql, schema, auth, storage]
+    capabilities: [databases, sql, schema, deployments, files]
     benefit: Let an agent read your schema and run queries so it writes migrations against the database you actually have.
     starter_prompt: Describe my database schema and point out tables that are missing an index on a foreign key.
     permission_disclosure: Reads schema and data, and can run SQL, against the Supabase projects you authorise.
@@ -215,7 +215,7 @@ entries:
 
   - name: com.mongodb/mcp
     category: data-storage
-    capabilities: [documents, collections, indexes, aggregation]
+    capabilities: [files, databases, schema, sql]
     benefit: Explore collections and run aggregations without hand-writing shell commands.
     starter_prompt: List my collections, describe the shape of the largest one, and suggest an index for my slowest query.
     permission_disclosure: Reads and writes documents, collections, and indexes in the MongoDB clusters you authorise.
@@ -227,7 +227,7 @@ entries:
 
   - name: io.prisma/mcp
     category: data-storage
-    capabilities: [schema, migrations, postgres]
+    capabilities: [schema, databases]
     benefit: Keep an agent's migrations honest by giving it the live Prisma schema and database state.
     starter_prompt: Read my Prisma schema and draft a migration that adds the field I describe.
     permission_disclosure: Reads and modifies schema and data in the Prisma Postgres databases you authorise.
@@ -239,7 +239,7 @@ entries:
 
   - name: tech.neon/mcp
     category: data-storage
-    capabilities: [postgres, branches, sql, schema]
+    capabilities: [databases, sql, schema]
     benefit: Spin up a database branch per agent session so experiments never touch production data.
     starter_prompt: Create a database branch from main and describe the schema it starts with.
     permission_disclosure: Creates, reads, and deletes projects, branches, and data in the Neon accounts you authorise.
@@ -251,7 +251,7 @@ entries:
 
   - name: com.airtable/mcp
     category: data-storage
-    capabilities: [bases, records, schema]
+    capabilities: [databases, schema]
     benefit: Read and update Airtable bases as structured data rather than through brittle scripts.
     starter_prompt: List my bases and summarise the fields in the largest table of each.
     permission_disclosure: Reads and writes records and schema in the Airtable bases you authorise.
@@ -273,7 +273,7 @@ entries:
 
   - name: com.dropbox/mcp
     category: data-storage
-    capabilities: [files, folders, search, sharing]
+    capabilities: [files, web-search]
     benefit: Give an agent read access to project files without copying them into the repository.
     starter_prompt: Find the most recently modified documents in my Dropbox and summarise each one.
     permission_disclosure: Reads, writes, and shares files and folders in the Dropbox accounts you authorise.
@@ -285,7 +285,7 @@ entries:
 
   - name: com.box/mcp
     category: data-storage
-    capabilities: [files, folders, search, metadata]
+    capabilities: [files, web-search]
     benefit: Search and read Box content so an agent can work from the documents your team already keeps there.
     starter_prompt: Search my Box account for documents about the project I name and summarise what they cover.
     permission_disclosure: Reads and writes files, folders, and metadata in the Box accounts you authorise.
@@ -297,7 +297,7 @@ entries:
 
   - name: co.huggingface/hf-mcp-server
     category: data-storage
-    capabilities: [models, datasets, spaces, search]
+    capabilities: [datasets, web-search]
     benefit: Search models and datasets and read their cards without leaving the session.
     starter_prompt: Find recent models suited to the task I describe and compare their model cards.
     permission_disclosure: Reads public models, datasets, and Spaces. Authorising an account also exposes your private repositories.
@@ -309,7 +309,7 @@ entries:
 
   - name: io.sanity/mcp
     category: data-storage
-    capabilities: [content, schema, documents]
+    capabilities: [content-cms, schema, files]
     benefit: Read and edit structured content in Sanity so an agent can update a site's copy safely.
     starter_prompt: Describe my Sanity content schema and list the documents changed in the last week.
     permission_disclosure: Reads and writes documents and schema in the Sanity projects you authorise.
@@ -322,7 +322,7 @@ entries:
   # -------------------------------------------------------------- productivity
   - name: com.notion/mcp
     category: productivity
-    capabilities: [pages, databases, search, comments]
+    capabilities: [notes, databases, web-search]
     benefit: Let an agent read your specs and write its findings straight back into the workspace.
     starter_prompt: Find the spec page for the feature I name and summarise the open questions on it.
     permission_disclosure: Reads and writes pages, databases, and comments in the Notion workspaces you authorise.
@@ -334,7 +334,7 @@ entries:
 
   - name: com.asana/mcp
     category: productivity
-    capabilities: [tasks, projects, comments]
+    capabilities: [tasks, projects, notes]
     benefit: Keep Asana in sync with what the agents actually finished, without manual status updates.
     starter_prompt: List my tasks due this week and draft a status comment for each.
     permission_disclosure: Reads and writes tasks, projects, and comments in the Asana workspaces you authorise.
@@ -346,7 +346,7 @@ entries:
 
   - name: com.monday/monday.com
     category: productivity
-    capabilities: [boards, items, updates]
+    capabilities: [projects, tasks]
     benefit: Read and update monday.com boards so project state reflects the work that actually happened.
     starter_prompt: Summarise the items assigned to me across my boards and flag anything overdue.
     permission_disclosure: Reads and writes boards, items, and updates in the monday.com accounts you authorise.
@@ -358,7 +358,7 @@ entries:
 
   - name: com.clickup/mcp
     category: productivity
-    capabilities: [tasks, lists, docs, comments]
+    capabilities: [tasks, docs, notes]
     benefit: Create and update ClickUp tasks from the session rather than transcribing them afterwards.
     starter_prompt: List my open ClickUp tasks and group them by which ones are blocked.
     permission_disclosure: Reads and writes tasks, lists, docs, and comments in the ClickUp workspaces you authorise.
@@ -370,7 +370,7 @@ entries:
 
   - name: com.zapier/mcp
     category: productivity
-    capabilities: [automations, actions, integrations]
+    capabilities: [automations]
     benefit: Reach thousands of apps through one connection when a first-party MCP server does not exist yet.
     starter_prompt: List the Zapier actions available to me and suggest which ones fit my workflow.
     permission_disclosure: Executes the Zapier actions you enable, each with whatever access you granted that app inside Zapier.
@@ -382,7 +382,7 @@ entries:
 
   - name: com.stripe/mcp
     category: productivity
-    capabilities: [payments, customers, subscriptions, invoices]
+    capabilities: [payments, crm]
     benefit: Answer billing questions and inspect subscription state without writing throwaway API scripts.
     starter_prompt: Summarise my subscription revenue this month and list customers whose payments failed.
     permission_disclosure: Reads and writes customers, payments, subscriptions, and invoices in the Stripe accounts you authorise.
@@ -394,7 +394,7 @@ entries:
 
   - name: com.paypal.mcp/mcp
     category: productivity
-    capabilities: [payments, invoices, disputes, subscriptions]
+    capabilities: [payments]
     benefit: Look up transactions and manage invoices from the session instead of the merchant dashboard.
     starter_prompt: List my most recent invoices and flag any that are overdue.
     permission_disclosure: Reads and writes payments, invoices, subscriptions, and disputes in the PayPal accounts you authorise.
@@ -406,7 +406,7 @@ entries:
 
   - name: com.squareup/mcp
     category: productivity
-    capabilities: [payments, catalog, orders, customers]
+    capabilities: [payments, crm]
     benefit: Read Square orders and catalog data so an agent can reconcile sales without exporting CSVs.
     starter_prompt: Summarise my Square orders from the last week and identify the best-selling items.
     permission_disclosure: Reads and writes payments, catalog, orders, and customers in the Square accounts you authorise.
@@ -418,7 +418,7 @@ entries:
 
   - name: com.hubspot/mcp
     category: productivity
-    capabilities: [contacts, deals, companies, tickets]
+    capabilities: [crm]
     benefit: Query the CRM in plain language instead of building a report for every question.
     starter_prompt: Summarise the deals in my pipeline that have not moved in two weeks.
     permission_disclosure: Reads and writes contacts, companies, deals, and tickets in the HubSpot portals you authorise.
@@ -430,7 +430,7 @@ entries:
 
   - name: com.intercom/mcp
     category: productivity
-    capabilities: [conversations, contacts, articles]
+    capabilities: [crm, docs]
     benefit: Read support conversations so an agent can turn recurring complaints into concrete issues.
     starter_prompt: Find the themes in my last fifty support conversations and rank them by how often they recur.
     permission_disclosure: Reads and writes conversations, contacts, and help-centre articles in the Intercom workspaces you authorise.
@@ -442,7 +442,7 @@ entries:
 
   - name: com.canva/mcp
     category: productivity
-    capabilities: [designs, assets, exports]
+    capabilities: [design]
     benefit: Generate and export Canva designs from a session instead of switching to the editor.
     starter_prompt: List my recent Canva designs and describe what each one is for.
     permission_disclosure: Reads and writes designs and assets in the Canva accounts you authorise.
@@ -454,7 +454,7 @@ entries:
 
   - name: com.webflow/mcp
     category: productivity
-    capabilities: [sites, cms, collections, publishing]
+    capabilities: [deployments, content-cms, databases]
     benefit: Update CMS collections and publish sites without hand-editing content in the designer.
     starter_prompt: List my Webflow sites and summarise the collections in the one I name.
     permission_disclosure: Reads and writes site content, CMS collections, and publishing state for the Webflow sites you authorise.
@@ -468,7 +468,7 @@ entries:
 
   - name: com.slack/mcp
     category: messaging
-    capabilities: [messages, channels, search, threads]
+    capabilities: [messages, channels, web-search]
     benefit: Search channel history for the decision nobody wrote down, and post results where the team will see them.
     starter_prompt: Search my Slack for discussion about the feature I name and summarise what was decided.
     permission_disclosure: Reads and posts messages in the Slack channels you authorise, including their history.
@@ -480,7 +480,7 @@ entries:
 
   - name: com.resend/mcp
     category: messaging
-    capabilities: [email, domains, audiences]
+    capabilities: [email, deployments]
     benefit: Send transactional email from a session and check whether earlier sends actually landed.
     starter_prompt: Show my recent email sends and flag any that bounced.
     permission_disclosure: Sends email as your verified domains and reads delivery history for the Resend accounts you authorise.
@@ -494,7 +494,7 @@ entries:
 
   - name: com.datadoghq/mcp
     category: observability
-    capabilities: [metrics, logs, monitors, traces, incidents]
+    capabilities: [metrics, logs, alerts, traces, incidents]
     benefit: Give an agent the dashboards and logs it needs to explain an incident rather than speculate about one.
     starter_prompt: Show the monitors that alerted in the last day and correlate them with error logs from the same window.
     permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
@@ -506,7 +506,7 @@ entries:
 
   - name: io.github.grafana/mcp-grafana
     category: observability
-    capabilities: [dashboards, metrics, logs, alerts]
+    capabilities: [metrics, logs, alerts]
     benefit: Query Prometheus and Loki through Grafana so an agent reads the same panels your on-call does.
     starter_prompt: List my Grafana dashboards and summarise the alerts that fired overnight.
     permission_disclosure: Reads dashboards, metrics, logs, and alert state from the Grafana instances you authorise.
@@ -518,7 +518,7 @@ entries:
 
   - name: com.newrelic/mcp-server
     category: observability
-    capabilities: [metrics, logs, apm, alerts, nrql]
+    capabilities: [metrics, logs, alerts, sql]
     benefit: Run NRQL and read APM data so performance questions get answered with numbers.
     starter_prompt: Find my slowest endpoints over the last day and show how their latency changed.
     permission_disclosure: Reads metrics, logs, traces, and alert state from the New Relic accounts you authorise.
@@ -530,7 +530,7 @@ entries:
 
   - name: io.honeycomb/mcp
     category: observability
-    capabilities: [traces, queries, triggers, datasets]
+    capabilities: [traces, sql, alerts, datasets]
     benefit: Explore high-cardinality traces so an agent can find the one request shape that is failing.
     starter_prompt: Query my main dataset for the slowest traces in the last hour and describe what they have in common.
     permission_disclosure: Reads datasets, traces, queries, and triggers from the Honeycomb environments you authorise.
@@ -542,7 +542,7 @@ entries:
 
   - name: com.pagerduty/mcp
     category: observability
-    capabilities: [incidents, on-call, schedules, services]
+    capabilities: [incidents, deployments]
     benefit: Read incident history and on-call state so an agent knows who was paged and what changed.
     starter_prompt: Summarise the incidents from the last week and identify which service caused the most pages.
     permission_disclosure: Reads and writes incidents, schedules, and service configuration in the PagerDuty accounts you authorise.
@@ -554,7 +554,7 @@ entries:
 
   - name: io.github.PostHog/mcp
     category: observability
-    capabilities: [analytics, events, funnels, feature-flags]
+    capabilities: [analytics, feature-flags]
     benefit: Answer product-analytics questions and check feature-flag state without building a dashboard first.
     starter_prompt: Show how the funnel I name converted over the last month and where users dropped off.
     permission_disclosure: Reads events, funnels, and feature-flag configuration in the PostHog projects you authorise.
@@ -566,7 +566,7 @@ entries:
 
   - name: com.amplitude/mcp-server
     category: observability
-    capabilities: [analytics, events, cohorts, charts]
+    capabilities: [analytics]
     benefit: Pull product usage numbers into the session so decisions cite data instead of memory.
     starter_prompt: Summarise how usage of the feature I name changed over the last month.
     permission_disclosure: Reads event data, cohorts, and charts from the Amplitude projects you authorise.
@@ -578,7 +578,7 @@ entries:
 
   - name: dev.globalping/mcp
     category: observability
-    capabilities: [ping, traceroute, dns, http-checks]
+    capabilities: [network-checks, deployments]
     benefit: Run network checks from real locations worldwide to tell a regional outage from a local one.
     starter_prompt: Check whether my domain resolves and responds correctly from Europe, North America, and Asia.
     permission_disclosure: Runs network measurements against the hosts you name from a public probe network. No account data is accessed.
@@ -591,7 +591,7 @@ entries:
   # -------------------------------------------------------------------- search
   - name: ai.exa/exa
     category: search
-    capabilities: [web-search, content, research]
+    capabilities: [web-search, content-cms]
     benefit: Give an agent semantic web search with full page content, not just a list of links.
     starter_prompt: Research the topic I name and summarise the three most substantive sources you find.
     permission_disclosure: Sends your search queries to Exa and returns public web content. No account data is accessed.
@@ -603,7 +603,7 @@ entries:
 
   - name: com.firecrawl/mcp
     category: search
-    capabilities: [crawl, scrape, extract, markdown]
+    capabilities: [web-scrape]
     benefit: Turn any site into clean markdown an agent can actually read, including JavaScript-rendered pages.
     starter_prompt: Crawl the documentation site I name and summarise its structure.
     permission_disclosure: Fetches the public URLs you supply and returns their content. No account data is accessed.
@@ -615,7 +615,7 @@ entries:
 
   - name: com.apify/apify-mcp-server
     category: search
-    capabilities: [scraping, actors, datasets, extract]
+    capabilities: [web-scrape, automations, datasets]
     benefit: Run thousands of ready-made scrapers instead of writing a new extractor for every site.
     starter_prompt: Find an Apify actor that scrapes the kind of data I describe and explain what it returns.
     permission_disclosure: Runs Apify actors and reads their datasets under the Apify account you authorise, which may incur usage charges.
@@ -627,7 +627,7 @@ entries:
 
   - name: com.kagi/mcp
     category: search
-    capabilities: [web-search, summarise, news]
+    capabilities: [web-search]
     benefit: Search with an ad-free, publisher-ranked index when result quality matters more than breadth.
     starter_prompt: Search for recent authoritative coverage of the topic I name and summarise the consensus.
     permission_disclosure: Sends your search queries to Kagi under the account you authorise, which may consume search credits.

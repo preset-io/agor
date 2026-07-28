@@ -5,7 +5,7 @@ const VALID_ENTRY = `
 entries:
   - name: com.example/mcp
     category: dev-tools
-    capabilities: [repos, issues]
+    capabilities: [code-repos, issues]
     benefit: Does a useful thing.
     starter_prompt: Try the useful thing.
     permission_disclosure: Reads your repositories.
@@ -30,6 +30,16 @@ entries:
     expect(entry.capabilities).toEqual(['web-search']);
     expect(entry.verified).toBe(false);
     expect(entry.popularity_rank).toBeUndefined();
+  });
+
+  it('rejects a capability outside the curated vocabulary', () => {
+    // An open string field lets a typo create a facet with one member that no
+    // filter will ever surface.
+    expect(() =>
+      parseCuratedCatalog(
+        VALID_ENTRY.replace('capabilities: [code-repos, issues]', 'capabilities: [isues]')
+      )
+    ).toThrow(CuratedCatalogError);
   });
 
   it('rejects an unknown category', () => {

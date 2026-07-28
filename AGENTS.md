@@ -524,14 +524,15 @@ tenant list an ingestion job could enumerate. Postgres RLS keeps reads open to
 all tenants and confines writes to the `mcp_catalog_ingestion` system
 capability.
 
-Ingestion makes outbound requests — to the registry, and during the auth probe
-to arbitrary registry-published hosts. Restricted networks can turn that off;
-the curated overlay still seeds, so the marketplace stays populated offline.
+Registry sync is **off by default**: it makes outbound requests to the registry
+and, during the auth probe, to arbitrary registry-published hosts, and nothing
+renders uncurated registry rows yet. The ~50 curated entries seed on every
+daemon start regardless, so the marketplace is populated offline.
 
 ```yaml
 # ~/.agor/config.yaml
 mcp_catalog:
-  registry_sync_enabled: true # false = curation only, no outbound requests
+  registry_sync_enabled: false # true = also mirror the public registry
   sync_interval_hours: 6
   probe_budget: 40 # entries auth-probed per sync; 0 disables probing
   # registry_url: https://registry.internal  # advanced override

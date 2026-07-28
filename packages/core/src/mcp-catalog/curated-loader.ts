@@ -14,7 +14,7 @@ import type {
   MCPCatalogCurationUpsert,
   MCPCatalogTransport,
 } from '@agor/core/types';
-import { MCP_CATALOG_CATEGORIES } from '@agor/core/types';
+import { MCP_CATALOG_CAPABILITIES, MCP_CATALOG_CATEGORIES } from '@agor/core/types';
 import { z } from 'zod';
 import { load as loadYaml } from '../yaml';
 
@@ -46,7 +46,7 @@ const curatedEntrySchema = z
   .object({
     name: nonEmpty,
     category: z.enum(MCP_CATALOG_CATEGORIES),
-    capabilities: z.array(nonEmpty).min(1),
+    capabilities: z.array(z.enum(MCP_CATALOG_CAPABILITIES)).min(1).max(6),
     benefit: nonEmpty,
     starter_prompt: nonEmpty,
     permission_disclosure: nonEmpty,

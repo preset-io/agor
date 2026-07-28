@@ -27,6 +27,7 @@ import {
   MCPRegistryClient,
   runCatalogIngestion,
   seedCuratedCatalog,
+  type WithCatalogRepository,
 } from '@agor/core/mcp-catalog';
 
 /** How often a running daemon re-syncs the registry. */
@@ -49,14 +50,15 @@ export interface MCPCatalogIngestionOptions {
  * Resolve worker options from `~/.agor/config.yaml`.
  *
  * Registry sync reaches a third party and the auth probe reaches arbitrary
- * registry-published hosts, so both are operator-controllable. Turning them off
- * leaves the repo-shipped curated overlay, which still seeds offline.
+ * registry-published hosts, so both are operator-controllable — and the sync is
+ * opt-in, because Phase 1 has no UI that renders uncurated registry rows. The
+ * repo-shipped curated overlay seeds either way, including offline.
  */
 export function resolveMCPCatalogOptions(
   settings: AgorMCPCatalogSettings | undefined
 ): MCPCatalogIngestionOptions {
   const options: MCPCatalogIngestionOptions = {
-    registrySyncEnabled: settings?.registry_sync_enabled !== false,
+    registrySyncEnabled: settings?.registry_sync_enabled === true,
   };
   if (typeof settings?.sync_interval_hours === 'number' && settings.sync_interval_hours > 0) {
     options.intervalMs = settings.sync_interval_hours * 60 * 60 * 1000;
@@ -116,28 +118,24 @@ export class MCPCatalogIngestionWorker {
     if (this.running) return null;
     this.running = true;
     try {
-      await this.withSystemScope('mcp-catalog curation seed', async (repository) => {
-        const seeded = await seedCuratedCatalog(repository, {
-          log: (message) => console.warn(`[mcp-catalog] ${message}`),
-        });
-        console.log(
-          `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, failed: ${seeded.failed})`
-        );
+      const seeded = await seedCuratedCatalog(this.withSystemScope('mcp-catalog curation seed'), {
+        log: (message) => console.warn(`[mcp-catalog] ${message}`),
       });
+      console.log(
+        `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, failed: ${seeded.failed})`
+      );
 
       if (this.options.registrySyncEnabled === false) return null;
 
-      const result = await this.withSystemScope('mcp-catalog registry sync', (repository) =>
-        runCatalogIngestion(repository, {
-          ...(this.options.registryUrl
-            ? { registry: new MCPRegistryClient({ baseUrl: this.options.registryUrl }) }
-            : {}),
-          ...(this.options.probeBudget === undefined
-            ? {}
-            : { probeBudget: this.options.probeBudget }),
-          log: (message) => console.warn(`[mcp-catalog] ${message}`),
-        })
-      );
+      const result = await runCatalogIngestion(this.withSystemScope('mcp-catalog registry sync'), {
+        ...(this.options.registryUrl
+          ? { registry: new MCPRegistryClient({ baseUrl: this.options.registryUrl }) }
+          : {}),
+        ...(this.options.probeBudget === undefined
+          ? {}
+          : { probeBudget: this.options.probeBudget }),
+        log: (message) => console.warn(`[mcp-catalog] ${message}`),
+      });
       this.lastResult = result;
       this.lastError = null;
       console.log(
@@ -153,21 +151,29 @@ export class MCPCatalogIngestionWorker {
     }
   }
 
-  private withSystemScope<T>(
-    reason: string,
-    work: (repository: MCPCatalogRepository) => Promise<T>
-  ): Promise<T> {
-    // Timers inherit AsyncLocalStorage. Detach any ambient tenant identity and
-    // transaction before entering system scope, which refuses to open from one.
-    return runWithoutTenantContext(() =>
-      runWithoutTenantDatabaseScope(() =>
-        runWithSystemDatabaseScope(
-          this.db,
-          reason,
-          (scopedDb) => work(new MCPCatalogRepository(scopedDb)),
-          { capability: 'mcp_catalog_ingestion' }
+  /**
+   * Build the factory ingestion uses to open one short system database unit per
+   * page and per probe write.
+   *
+   * Returning a factory rather than wrapping the whole run is the point: a full
+   * sync spans minutes of registry pagination and probe requests, and holding
+   * one Postgres transaction across that would pin a pooled connection, hold
+   * back autovacuum database-wide, and discard every upsert if the connection
+   * dropped near the end.
+   */
+  private withSystemScope(reason: string): WithCatalogRepository {
+    return <T>(work: (repository: MCPCatalogRepository) => Promise<T>): Promise<T> =>
+      // Timers inherit AsyncLocalStorage. Detach any ambient tenant identity and
+      // transaction before entering system scope, which refuses to open from one.
+      runWithoutTenantContext(() =>
+        runWithoutTenantDatabaseScope(() =>
+          runWithSystemDatabaseScope(
+            this.db,
+            reason,
+            (scopedDb) => work(new MCPCatalogRepository(scopedDb)),
+            { capability: 'mcp_catalog_ingestion' }
+          )
         )
-      )
-    );
+      );
   }
 }

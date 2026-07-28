@@ -5,6 +5,15 @@ import { dbTest } from '../db/test-helpers';
 import { runCatalogIngestion } from './ingestion';
 import { MCPRegistryClient, normalizeRegistryServer } from './registry-client';
 
+/**
+ * The production callers open a fresh database unit per page and per probe.
+ * Tests exercise the same signature with a pass-through, so a regression that
+ * reintroduced a run-long transaction would still be a type error here.
+ */
+function withRepository(repository: MCPCatalogRepository) {
+  return <T>(work: (repo: MCPCatalogRepository) => Promise<T>): Promise<T> => work(repository);
+}
+
 /** Build a registry envelope in the shape the live API returns. */
 function registryRecord(
   name: string,
@@ -135,7 +144,7 @@ describe('runCatalogIngestion', () => {
       { records: [registryRecord('c.example/three')] },
     ]);
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry,
       probeBudget: 0,
       sleep: noSleep,
@@ -150,13 +159,13 @@ describe('runCatalogIngestion', () => {
     const repository = new MCPCatalogRepository(db);
     const page = [registryRecord('a.example/one', { updatedAt: '2026-01-01T00:00:00.000Z' })];
 
-    await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([{ records: page }]),
       probeBudget: 0,
       sleep: noSleep,
       log: silent,
     });
-    const second = await runCatalogIngestion(repository, {
+    const second = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([{ records: page }]),
       probeBudget: 0,
       sleep: noSleep,
@@ -169,7 +178,7 @@ describe('runCatalogIngestion', () => {
   dbTest('updates a server whose registry timestamp moved forward', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
 
-    await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         {
           records: [
@@ -186,7 +195,7 @@ describe('runCatalogIngestion', () => {
       log: silent,
     });
 
-    const second = await runCatalogIngestion(repository, {
+    const second = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         {
           records: [
@@ -214,7 +223,7 @@ describe('runCatalogIngestion', () => {
     const repository = new MCPCatalogRepository(db);
     const opts = { probeBudget: 0, sleep: noSleep, log: silent };
 
-    await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), {
       ...opts,
       registry: stubRegistry([
         {
@@ -227,7 +236,7 @@ describe('runCatalogIngestion', () => {
         },
       ]),
     });
-    const second = await runCatalogIngestion(repository, {
+    const second = await runCatalogIngestion(withRepository(repository), {
       ...opts,
       registry: stubRegistry([
         {
@@ -250,7 +259,7 @@ describe('runCatalogIngestion', () => {
     await repository.upsertCuration({
       name: 'a.example/one',
       category: 'dev-tools',
-      capabilities: ['repos'],
+      capabilities: ['code-repos'],
       benefit: 'Curated benefit',
       starter_prompt: 'Curated prompt',
       permission_disclosure: 'Curated disclosure',
@@ -259,7 +268,7 @@ describe('runCatalogIngestion', () => {
       popularity_rank: 1,
     });
 
-    await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         { records: [registryRecord('a.example/one', { updatedAt: '2026-06-01T00:00:00.000Z' })] },
       ]),
@@ -279,13 +288,164 @@ describe('runCatalogIngestion', () => {
       title: 'Curated title',
       version: '1.0.0',
     });
-    expect(entry?.capabilities).toEqual(['repos']);
+    expect(entry?.capabilities).toEqual(['code-repos']);
+  });
+
+  dbTest('never nulls a curated connect surface the registry has no opinion on', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertCuration({
+      name: 'io.sentry/mcp',
+      category: 'dev-tools',
+      capabilities: ['logs'],
+      benefit: 'Reads errors',
+      starter_prompt: 'Find the loudest error',
+      permission_disclosure: 'Reads issues',
+      website_url: 'https://sentry.io',
+      verified: true,
+      remote_url: 'https://mcp.sentry.dev/mcp',
+      transport: 'streamable-http',
+    });
+
+    // The vendor publishes a package-only release under the curated name. The
+    // registry has no remote to offer, which must not remove the one curation
+    // supplied — that is the entry's only connect surface.
+    await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([
+        {
+          records: [
+            registryRecord('io.sentry/mcp', {
+              remoteUrl: '',
+              packages: [
+                { registryType: 'npm', identifier: 'sentry-mcp', transport: { type: 'stdio' } },
+              ],
+            }),
+          ],
+        },
+      ]),
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    expect(await repository.findByName('io.sentry/mcp')).toMatchObject({
+      remote_url: 'https://mcp.sentry.dev/mcp',
+      // `transport` follows the remote that won, so the row stays coherent.
+      transport: 'streamable-http',
+      has_remote: true,
+      // The registry does have an opinion about the website, so it takes it.
+      website_url: 'https://example.com',
+      has_package: true,
+    });
+  });
+
+  dbTest('still lets the registry update the connect surface it does publish', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertCuration({
+      name: 'com.example/mcp',
+      category: 'dev-tools',
+      capabilities: ['logs'],
+      benefit: 'b',
+      starter_prompt: 'p',
+      permission_disclosure: 'd',
+      verified: true,
+      remote_url: 'https://guessed.example.com/mcp',
+      transport: 'streamable-http',
+    });
+
+    await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([
+        {
+          records: [
+            registryRecord('com.example/mcp', { remoteUrl: 'https://real.example.com/mcp' }),
+          ],
+        },
+      ]),
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    // The registry is authoritative wherever it has an opinion.
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      remote_url: 'https://real.example.com/mcp',
+    });
+  });
+
+  dbTest(
+    'drops a server the registry has withdrawn instead of leaving it connectable',
+    async ({ db }) => {
+      const repository = new MCPCatalogRepository(db);
+
+      const result = await runCatalogIngestion(withRepository(repository), {
+        registry: stubRegistry([
+          {
+            records: [
+              {
+                ...registryRecord('a.example/gone'),
+                _meta: {
+                  'io.modelcontextprotocol.registry/official': {
+                    status: 'deleted',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                  },
+                },
+              },
+              {
+                ...registryRecord('b.example/deprecated'),
+                _meta: {
+                  'io.modelcontextprotocol.registry/official': {
+                    status: 'deprecated',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                  },
+                },
+              },
+              registryRecord('c.example/active'),
+            ],
+          },
+        ]),
+        probeBudget: 0,
+        sleep: noSleep,
+        log: silent,
+      });
+
+      expect(result).toMatchObject({ created: 1, skipped: 2 });
+      expect(await repository.findByName('a.example/gone')).toBeNull();
+      expect(await repository.findByName('c.example/active')).not.toBeNull();
+    }
+  );
+
+  dbTest('stops when the registry hands back a cursor it already gave out', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    let calls = 0;
+    const registry = {
+      fetchPage: vi.fn(async () => {
+        calls += 1;
+        return {
+          entries: [normalizeRegistryServer(registryRecord(`a.example/${calls}`))].filter(
+            (entry): entry is MCPCatalogRegistryUpsert => Boolean(entry)
+          ),
+          skipped: 0,
+          // Always the same cursor: a naive loop would burn the whole page cap.
+          nextCursor: 'stuck-cursor',
+        };
+      }),
+    } as unknown as MCPRegistryClient;
+
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry,
+      maxPages: 50,
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    expect(result.pagesFetched).toBe(2);
+    expect(result.truncated).toBe(true);
   });
 
   dbTest('counts an unnormalizable record as skipped without losing the page', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         { records: [{ server: { description: 'no name' } }, registryRecord('a.example/one')] },
       ]),
@@ -316,7 +476,7 @@ describe('runCatalogIngestion', () => {
       }),
     } as unknown as MCPRegistryClient;
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry,
       probeBudget: 0,
       maxConsecutivePageFailures: 2,
@@ -338,7 +498,7 @@ describe('runCatalogIngestion', () => {
       }),
     } as unknown as MCPRegistryClient;
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry,
       probeBudget: 0,
       maxConsecutivePageFailures: 1,
@@ -358,7 +518,7 @@ describe('runCatalogIngestion', () => {
       return original(entry);
     });
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         {
           records: [
@@ -392,7 +552,7 @@ describe('runCatalogIngestion', () => {
       }),
     } as unknown as MCPCatalogRepository & MCPRegistryClient;
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: registry as unknown as MCPRegistryClient,
       maxPages: 3,
       probeBudget: 0,
@@ -419,7 +579,7 @@ describe('runCatalogIngestion', () => {
       }),
     } as unknown as MCPRegistryClient;
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry,
       deadlineMs: 12_000,
       probeBudget: 0,
@@ -441,7 +601,7 @@ describe('runCatalogIngestion', () => {
       ...(remoteUrl.includes('one') ? { auth_server_origin: 'https://auth.example.com' } : {}),
     }));
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         { records: [registryRecord('a.example/one'), registryRecord('b.example/two')] },
       ]),
@@ -465,7 +625,7 @@ describe('runCatalogIngestion', () => {
       probed_at: new Date('2026-07-28T00:00:00.000Z'),
     }));
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         {
           records: [
@@ -492,7 +652,7 @@ describe('runCatalogIngestion', () => {
       return { probed_auth_type: 'none' as const, probed_at: new Date() };
     });
 
-    const result = await runCatalogIngestion(repository, {
+    const result = await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         { records: [registryRecord('a.example/one'), registryRecord('b.example/two')] },
       ]),
@@ -520,8 +680,8 @@ describe('runCatalogIngestion', () => {
       log: silent,
     };
 
-    await runCatalogIngestion(repository, opts);
-    const second = await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), opts);
+    const second = await runCatalogIngestion(withRepository(repository), {
       ...opts,
       registry: stubRegistry([{ records: [registryRecord('a.example/one')] }]),
       now: () => new Date('2026-07-28T01:00:00.000Z').getTime(),
@@ -537,7 +697,7 @@ describe('runCatalogIngestion', () => {
       probed_at: new Date(),
     }));
 
-    await runCatalogIngestion(repository, {
+    await runCatalogIngestion(withRepository(repository), {
       registry: stubRegistry([
         {
           records: [

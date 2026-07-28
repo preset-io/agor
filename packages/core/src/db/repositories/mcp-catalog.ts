@@ -80,11 +80,6 @@ function orderFor(sort: MCPCatalogSort | undefined): SQL[] {
         sql`${mcpCatalogEntries.registry_updated_at} DESC`,
         sql`lower(${mcpCatalogEntries.name}) ASC`,
       ];
-    case 'connect_count':
-      return [
-        sql`${mcpCatalogEntries.connect_count} DESC`,
-        sql`lower(${mcpCatalogEntries.name}) ASC`,
-      ];
     // `relevance` has no server-side scoring yet; curated-then-popular is a
     // better default than registry insertion order, and matches `popularity`.
     default:
@@ -130,7 +125,6 @@ export class MCPCatalogRepository {
       icon_url: row.icon_url ?? undefined,
       verified: Boolean(row.verified),
       popularity_rank: row.popularity_rank ?? undefined,
-      connect_count: row.connect_count,
 
       probed_auth_type: row.probed_auth_type,
       probed_at: row.probed_at ? new Date(row.probed_at) : undefined,
@@ -141,6 +135,7 @@ export class MCPCatalogRepository {
       registry_icons: data.registry_icons,
       registry_status: data.registry_status,
       repository_source: data.repository_source,
+      probed_auth_scheme: data.probed_auth_scheme,
     };
   }
 
@@ -264,11 +259,7 @@ export class MCPCatalogRepository {
     const registryColumns = {
       version: entry.version ?? null,
       registry_updated_at: entry.registry_updated_at ?? null,
-      website_url: entry.website_url ?? null,
       repository_url: entry.repository_url ?? null,
-      transport: entry.transport ?? null,
-      remote_url: entry.remote_url ?? null,
-      has_remote: Boolean(entry.remote_url),
       has_package: (entry.packages?.length ?? 0) > 0,
       updated_at: now,
     };
@@ -280,6 +271,10 @@ export class MCPCatalogRepository {
         name: entry.name,
         title: entry.title ?? null,
         description: entry.description ?? null,
+        website_url: entry.website_url ?? null,
+        transport: entry.transport ?? null,
+        remote_url: entry.remote_url ?? null,
+        has_remote: Boolean(entry.remote_url),
         data: {
           remotes: entry.remotes,
           packages: entry.packages,
@@ -300,16 +295,40 @@ export class MCPCatalogRepository {
     // Re-ingesting the same publication is the overwhelmingly common case.
     if (storedAt !== null && incomingAt !== null && incomingAt <= storedAt) return 'unchanged';
 
+    // Two different precedence rules, deliberately:
+    //
+    // Editorial copy is curation's to own — a hand-written title should not be
+    // replaced by the registry's on every republication.
+    const preferCurated = <T>(curatedValue: T | null, incoming: T | undefined): T | null =>
+      existing.curated && curatedValue !== null && curatedValue !== undefined
+        ? curatedValue
+        : (incoming ?? null);
+
+    // The connect surface is the registry's wherever it has an opinion, but a
+    // registry that publishes a package-only release has no opinion about a
+    // remote URL — and nulling the curated one there would silently remove the
+    // entry's only way to connect.
+    const preferRegistry = <T>(curatedValue: T | null, incoming: T | undefined): T | null =>
+      incoming ?? (existing.curated ? curatedValue : null);
+
+    const remoteUrl = preferRegistry(existing.remote_url, entry.remote_url);
+    // `transport` describes `remote_url`, so it has to follow whichever one
+    // won. Taking the registry's `stdio` while keeping a curated remote URL
+    // would describe the row as unconnectable over HTTP when it is not.
+    const transport =
+      remoteUrl === entry.remote_url
+        ? (entry.transport ?? null)
+        : (existing.transport ?? entry.transport ?? null);
+
     await update(this.db, mcpCatalogEntries)
       .set({
         ...registryColumns,
-        // Curation owns the presentation strings once it supplies them; the
-        // registry only fills the gaps it left.
-        title: existing.curated && existing.title ? existing.title : (entry.title ?? null),
-        description:
-          existing.curated && existing.description
-            ? existing.description
-            : (entry.description ?? null),
+        title: preferCurated(existing.title, entry.title),
+        description: preferCurated(existing.description, entry.description),
+        website_url: preferRegistry(existing.website_url, entry.website_url),
+        transport,
+        remote_url: remoteUrl,
+        has_remote: Boolean(remoteUrl),
         data: {
           ...(existing.data ?? {}),
           remotes: entry.remotes,
@@ -384,14 +403,18 @@ export class MCPCatalogRepository {
 
   /** Cache an auth probe verdict on the row. */
   async recordProbeResult(name: string, result: MCPCatalogProbeResult): Promise<void> {
+    const existing = await this.rawByName(name);
+    if (!existing) return;
+
     await update(this.db, mcpCatalogEntries)
       .set({
         probed_auth_type: result.probed_auth_type,
         probed_at: result.probed_at,
         auth_server_origin: result.auth_server_origin ?? null,
+        data: { ...(existing.data ?? {}), probed_auth_scheme: result.probed_auth_scheme },
         updated_at: new Date(),
       })
-      .where(eq(mcpCatalogEntries.name, name))
+      .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
   }
 

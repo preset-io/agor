@@ -286,6 +286,130 @@ export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): s
 }
 
 /**
+ * Parse an IPv4 literal in any form `inet_aton` accepts.
+ *
+ * A dotted-quad check alone is not enough: `http://2130706433/`,
+ * `http://0x7f.1/`, and `http://017700000001/` all reach 127.0.0.1, and a
+ * browser-grade URL parser preserves them verbatim in `hostname`.
+ *
+ * Returns the address as a 32-bit number, or null when the host is not an IPv4
+ * literal in any form.
+ */
+function parseIPv4Literal(host: string): number | null {
+  const parts = host.split('.');
+  if (parts.length > 4 || parts.length === 0) return null;
+
+  const values: number[] = [];
+  for (const part of parts) {
+    if (part.length === 0) return null;
+    let value: number;
+    if (/^0[xX][0-9a-fA-F]+$/.test(part)) value = Number.parseInt(part.slice(2), 16);
+    else if (/^0[0-7]+$/.test(part)) value = Number.parseInt(part.slice(1), 8);
+    else if (/^\d+$/.test(part)) value = Number.parseInt(part, 10);
+    else return null;
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    values.push(value);
+  }
+
+  // The last part absorbs the remaining octets: `10.1` is 10.0.0.1.
+  const trailingOctets = 4 - values.length;
+  const last = values.pop() as number;
+  if (last >= 2 ** (8 * (trailingOctets + 1))) return null;
+  if (values.some((value) => value > 255)) return null;
+
+  let address = last;
+  for (const [index, value] of values.entries()) {
+    address += value * 2 ** (8 * (3 - index));
+  }
+  return address >>> 0;
+}
+
+/** True when a 32-bit IPv4 address is outside the public internet. */
+function isPrivateIPv4(address: number): boolean {
+  const octet = (shift: number): number => (address >>> shift) & 0xff;
+  const a = octet(24);
+  const b = octet(16);
+
+  if (a === 0) return true; // 0.0.0.0/8 "this network"
+  if (a === 10) return true; // RFC 1918
+  if (a === 127) return true; // loopback
+  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return true; // RFC 1918
+  if (a === 192 && b === 168) return true; // RFC 1918
+  if (a === 100 && b >= 64 && b <= 127) return true; // RFC 6598 CGNAT
+  if (a === 192 && b === 0) return true; // RFC 6890 protocol assignments
+  if (a >= 224) return true; // multicast, reserved, broadcast
+  return false;
+}
+
+/** True when an IPv6 literal (already stripped of brackets) is not public. */
+function isPrivateIPv6(host: string): boolean {
+  const address = host.toLowerCase().split('%')[0];
+  if (address === '::1' || address === '::' || address === '') return true;
+  // fc00::/7 unique-local, fe80::/10 link-local.
+  if (/^f[cd][0-9a-f]{0,2}:/.test(address)) return true;
+  if (/^fe[89ab][0-9a-f]?:/.test(address)) return true;
+  // IPv4-mapped and IPv4-compatible forms tunnel the whole IPv4 space through.
+  // `URL` normalizes `::ffff:127.0.0.1` to the hex form `::ffff:7f00:1`, so
+  // both spellings have to be recognised.
+  const dotted = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
+  if (dotted) {
+    const parsed = parseIPv4Literal(dotted[1]);
+    return parsed === null || isPrivateIPv4(parsed);
+  }
+  const hex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(address);
+  if (hex) {
+    const high = Number.parseInt(hex[1], 16);
+    const low = Number.parseInt(hex[2], 16);
+    return isPrivateIPv4(((high << 16) | low) >>> 0);
+  }
+  return false;
+}
+
+/**
+ * True when a URL is safe to fetch from the daemon on behalf of untrusted input.
+ *
+ * Callers that follow a URL supplied by a third party — the MCP catalog's auth
+ * probe fetches endpoints published to a public, unauthenticated registry, and
+ * then whatever URL those endpoints name in a `WWW-Authenticate` header — need
+ * this before every hop, not just the first. A single missed hop turns the
+ * daemon into a blind SSRF proxy into its own private network.
+ *
+ * Refuses non-HTTP(S) schemes, embedded credentials, loopback, RFC 1918,
+ * CGNAT, link-local (including cloud metadata), unique-local IPv6, and the
+ * decimal/octal/hex and IPv4-mapped forms that spell the same addresses
+ * differently.
+ *
+ * This is a literal-address filter. It does NOT resolve DNS, so a hostname that
+ * resolves into private space still passes; defeating that requires resolving
+ * and pinning the address at connect time.
+ */
+export function isPublicHttpUrl(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  // Credentials in a third-party-supplied URL are never something to replay.
+  if (url.username || url.password) return false;
+
+  const host = url.hostname.toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost')) return false;
+  if (host === 'metadata.google.internal') return false;
+
+  // `URL.hostname` keeps IPv6 literals bracketed; nothing else may contain ':'.
+  if (host.startsWith('[') && host.endsWith(']')) return !isPrivateIPv6(host.slice(1, -1));
+
+  const ipv4 = parseIPv4Literal(host);
+  if (ipv4 !== null) return !isPrivateIPv4(ipv4);
+
+  return true;
+}
+
+/**
  * Validates that a health check URL targets an allowed destination.
  *
  * Blocks:
@@ -293,7 +417,10 @@ export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): s
  * - Cloud metadata endpoints (169.254.x.x link-local range, metadata.google.internal)
  * - IPv6 link-local addresses (fe80::) and AWS IPv6 metadata (fd00:ec2::254)
  *
- * Allows localhost/127.0.0.1 since health checks legitimately target local services.
+ * Deliberately weaker than {@link isPublicHttpUrl}: a health check legitimately
+ * targets localhost and private networks, because that is where a branch's dev
+ * server runs. Use `isPublicHttpUrl` for anything reached on behalf of
+ * untrusted input.
  */
 export function isAllowedHealthCheckUrl(urlString: string): boolean {
   // Reuse existing protocol validation (http/https only, rejects non-string/empty/non-http)

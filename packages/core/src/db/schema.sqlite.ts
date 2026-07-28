@@ -1450,12 +1450,11 @@ export const mcpCatalogEntries = sqliteTable(
     verified: t.bool('verified').notNull().default(false),
     /** 1 = most popular. Null sorts last. */
     popularity_rank: integer('popularity_rank'),
-    connect_count: integer('connect_count').notNull().default(0),
 
     // Auth probe results, cached so the connect UI knows which branch to render
     // before the user clicks.
     probed_auth_type: text('probed_auth_type', {
-      enum: ['none', 'oauth', 'unknown'],
+      enum: ['none', 'oauth', 'credentials', 'unreachable', 'unknown'],
     })
       .notNull()
       .default('unknown'),
@@ -1467,8 +1466,6 @@ export const mcpCatalogEntries = sqliteTable(
   (table) => ({
     nameIdx: uniqueIndex('mcp_catalog_entries_name_unique').on(table.name),
     categoryIdx: index('mcp_catalog_entries_category_idx').on(table.category),
-    verifiedIdx: index('mcp_catalog_entries_verified_idx').on(table.verified),
-    curatedIdx: index('mcp_catalog_entries_curated_idx').on(table.curated),
     popularityIdx: index('mcp_catalog_entries_popularity_idx').on(table.popularity_rank),
     probedAtIdx: index('mcp_catalog_entries_probed_at_idx').on(table.probed_at),
   })

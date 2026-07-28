@@ -55,7 +55,7 @@ function curation(
   return {
     name,
     category: 'dev-tools',
-    capabilities: ['repos'],
+    capabilities: ['code-repos'],
     benefit: `Benefit for ${name}`,
     starter_prompt: `Prompt for ${name}`,
     permission_disclosure: `Discloses things for ${name}`,
@@ -123,7 +123,7 @@ describe('MCPCatalogRepository SQL pushdown', () => {
     await repository.upsertCuration(
       curation('com.traces/mcp', { capabilities: ['traces', 'metrics'] })
     );
-    await repository.upsertCuration(curation('com.repos/mcp', { capabilities: ['repos'] }));
+    await repository.upsertCuration(curation('com.repos/mcp', { capabilities: ['code-repos'] }));
 
     const recorder = recordStatements(db);
     const results = await repository.findAll({ capability: 'traces' });
@@ -270,8 +270,13 @@ describe('MCPCatalogRepository filter semantics', () => {
 
   dbTest('does not match a capability tag that is a prefix of another', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
-    await repository.upsertCuration(curation('a.example/one', { capabilities: ['cicd'] }));
-    await repository.upsertCuration(curation('b.example/two', { capabilities: ['ci'] }));
+    // The curated vocabulary has no prefix pair today, but `capability_tags` is
+    // a delimited string and the guard against `|ci|` matching `cicd` has to
+    // hold for whatever the vocabulary grows into. Cast past the enum to state
+    // that invariant directly.
+    const rawTags = (tags: string[]) => tags as never as MCPCatalogCurationUpsert['capabilities'];
+    await repository.upsertCuration(curation('a.example/one', { capabilities: rawTags(['cicd']) }));
+    await repository.upsertCuration(curation('b.example/two', { capabilities: rawTags(['ci']) }));
 
     expect((await repository.findAll({ capability: 'ci' })).map((entry) => entry.name)).toEqual([
       'b.example/two',
