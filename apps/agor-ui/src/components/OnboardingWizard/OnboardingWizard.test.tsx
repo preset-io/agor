@@ -634,6 +634,22 @@ describe('Codex ChatGPT login import', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Key stored but not working/)).not.toBeInTheDocument();
   });
+
+  it('keeps a successfully registered subscription usable when later verification is unknown', async () => {
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+    }));
+    renderWizard({
+      initialStep: 'llm',
+      user: makeUser({ agentic_auth_methods: { codex: 'subscription' } } as never),
+      onCheckAuth,
+    });
+
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Continue →')).toBeInTheDocument();
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
+  });
 });
 
 describe('Codex ChatGPT device sign-in', () => {

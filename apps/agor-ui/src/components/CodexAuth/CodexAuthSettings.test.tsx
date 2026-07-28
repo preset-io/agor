@@ -103,7 +103,9 @@ describe('CodexAuthSettings', () => {
 
     expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
     expect(screen.getByText('Your OpenAI API key is working.')).toBeInTheDocument();
-    await waitFor(() => expect(checkAuth).toHaveBeenCalledWith({ tool: 'codex' }));
+    await waitFor(() =>
+      expect(checkAuth).toHaveBeenCalledWith({ tool: 'codex', validateNative: true })
+    );
   });
 
   it('surfaces a missing subscription login as a prominent "Login not found" error', async () => {
@@ -115,6 +117,8 @@ describe('CodexAuthSettings', () => {
       })
     );
     render(<Harness initialMethod="subscription" checkAuth={checkAuth} />);
+    expect(checkAuth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Recheck connection'));
 
     expect(await screen.findByText('Login not found')).toBeInTheDocument();
     expect(screen.getByText(/Codex login no longer found on this server/i)).toBeInTheDocument();
@@ -199,7 +203,8 @@ describe('CodexAuthSettings', () => {
     );
     expect(await screen.findByText('Key not working')).toBeInTheDocument();
 
-    // Flip to subscription; the second probe is in flight and unresolved.
+    // Flip to subscription. Native auth is not probed merely because the
+    // settings view rendered or changed methods.
     rerender(
       <Harness
         initialMethod="subscription"
@@ -207,8 +212,14 @@ describe('CodexAuthSettings', () => {
         checkAuth={checkAuth}
       />
     );
-    await waitFor(() => expect(checkAuth).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(checkAuth).toHaveBeenCalledTimes(1));
     // Neither the stale api-key rejection nor a subscription failure is shown.
+    expect(screen.queryByText('Login not found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Key not working')).not.toBeInTheDocument();
+
+    // Explicit recheck is the deliberate executor-backed validation boundary.
+    clickText('Recheck connection');
+    await waitFor(() => expect(checkAuth).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Login not found')).not.toBeInTheDocument();
     expect(screen.queryByText('Key not working')).not.toBeInTheDocument();
 
@@ -291,6 +302,7 @@ describe('CodexAuthSettings', () => {
       <Harness initialMethod="subscription" checkAuth={checkAuth} onSaveField={onSaveField} />
     );
 
+    clickText('Recheck connection');
     expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
     expect(screen.getByText('A ChatGPT login is active on this server.')).toBeInTheDocument();
 
@@ -325,12 +337,15 @@ describe('CodexAuthSettings', () => {
     expect(await screen.findByText('WXYZ-9876')).toBeInTheDocument();
   });
 
-  it('imports a pasted login file and re-probes the connection', async () => {
+  it('imports a pasted login file and adopts the verified result without a redundant probe', async () => {
     const importCreate = vi.fn(async () => ({ status: 'authenticated', authMode: 'chatgpt' }));
-    const checkAuth = vi
-      .fn<[], Promise<AuthCheckResult>>()
-      .mockResolvedValueOnce(UNKNOWN)
-      .mockResolvedValue({ status: 'authenticated', authenticated: true, method: 'native' });
+    const checkAuth = vi.fn(
+      async (): Promise<AuthCheckResult> => ({
+        status: 'authenticated',
+        authenticated: true,
+        method: 'native',
+      })
+    );
     render(
       <Harness initialMethod="subscription" importCreate={importCreate} checkAuth={checkAuth} />
     );
@@ -343,8 +358,10 @@ describe('CodexAuthSettings', () => {
     clickText('Import login');
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
-    // onImported triggers a fresh probe, which now reports connected.
+    // The import endpoint returns only after executor write verification, so
+    // the UI can adopt that success without scheduling another executor.
     expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
+    expect(checkAuth).not.toHaveBeenCalled();
   });
 
   it('shows the daemon rejection message when an imported login file is invalid', async () => {
@@ -386,6 +403,7 @@ describe('CodexAuthSettings', () => {
     const { rerender } = render(
       <Harness initialMethod="subscription" checkAuth={checkAuth} logoutCreate={logoutCreate} />
     );
+    clickText('Recheck connection');
     expect(await screen.findByText('Codex is connected')).toBeInTheDocument();
 
     // The confirm's destructive action calls the daemon logout endpoint (no

@@ -25,12 +25,8 @@ import {
   type UnixUserMode,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
-import {
-  type CodexAuthSummary,
-  parseCodexAuthJson,
-  readCodexAuthFile,
-  writeCodexAuthFile,
-} from '../utils/codex-auth-file.js';
+import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
+import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 
 export interface AppLike {
   service(path: string): unknown;
@@ -123,8 +119,9 @@ export async function persistVerifiedCodexAuth(options: {
 }): Promise<CodexAuthSummary> {
   const { app, normalized, targetUnixUser, userId, authUser } = options;
 
+  let summary: CodexAuthSummary;
   try {
-    writeCodexAuthFile(normalized, targetUnixUser);
+    summary = await writeCodexAuthViaExecutor(normalized, targetUnixUser);
   } catch (err) {
     // The error may carry sudo/bash stderr; log a class-level summary only
     // so token material (or its absence) never reaches daemon logs.
@@ -138,24 +135,6 @@ export async function persistVerifiedCodexAuth(options: {
     );
   }
 
-  // Read-back verification: the file must contain exactly the bytes just
-  // written — "some valid credential is there" would let a concurrent
-  // import/refresh be mistaken for this one. A transient read failure gets
-  // one retry (the write already succeeded by exit status). Failing out
-  // leaves the file on disk with the auth method unflipped; that state is
-  // harmless because a re-import cleanly overwrites both.
-  let readBack = readCodexAuthFile(targetUnixUser);
-  if (!readBack.ok && readBack.reason === 'unreadable') {
-    readBack = readCodexAuthFile(targetUnixUser);
-  }
-  const verified =
-    readBack.ok && readBack.content === normalized ? parseCodexAuthJson(readBack.content) : null;
-  if (!verified?.ok) {
-    throw new BadRequest(
-      'The Codex credentials file was written but could not be verified back — try again.'
-    );
-  }
-
   const usersService = app.service('users') as UsersServiceLike;
   const current = await usersService.get(userId, { user: authUser, authenticated: true });
   await usersService.patch(
@@ -164,5 +143,5 @@ export async function persistVerifiedCodexAuth(options: {
     { user: authUser, authenticated: true }
   );
 
-  return verified.summary;
+  return summary;
 }

@@ -1,7 +1,7 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readCodexAuthFile, writeCodexAuthFile } from '../utils/codex-auth-file.js';
+import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexDeviceAuthService } from './codex-device-auth';
 
 vi.mock('@agor/core/config', async () => {
@@ -13,21 +13,19 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-vi.mock('../utils/codex-auth-file.js', async () => {
-  const actual = await vi.importActual<typeof import('../utils/codex-auth-file.js')>(
-    '../utils/codex-auth-file.js'
+vi.mock('../utils/executor-codex-auth.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(
+    '../utils/executor-codex-auth.js'
   );
   return {
     ...actual,
-    writeCodexAuthFile: vi.fn(),
-    readCodexAuthFile: vi.fn(),
+    writeCodexAuthViaExecutor: vi.fn(),
   };
 });
 
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
-const writeCodexAuthFileMock = vi.mocked(writeCodexAuthFile);
-const readCodexAuthFileMock = vi.mocked(readCodexAuthFile);
+const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
 
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -73,14 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  // Readback verification returns whatever the service wrote.
-  let written = '';
-  writeCodexAuthFileMock.mockImplementation((content: string) => {
-    written = content;
-  });
-  readCodexAuthFileMock.mockImplementation(() =>
-    written ? { ok: true, content: written } : { ok: false, reason: 'not-found' }
-  );
+  writeCodexAuthViaExecutorMock.mockResolvedValue({ authMode: 'chatgpt' });
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -127,6 +118,10 @@ describe('codex-device-auth', () => {
   });
 
   it('polls until approval, exchanges the code, persists auth.json, and reports success', async () => {
+    writeCodexAuthViaExecutorMock.mockResolvedValue({
+      authMode: 'chatgpt',
+      planType: 'pro',
+    });
     const { app, usersService } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB);
     mockUserCodeIssued();
@@ -160,7 +155,7 @@ describe('codex-device-auth', () => {
     expect(JSON.stringify(status)).not.toContain('refresh-tok');
     expect(JSON.stringify(status)).not.toContain('access-tok');
 
-    const written = JSON.parse(writeCodexAuthFileMock.mock.calls[0][0]);
+    const written = JSON.parse(writeCodexAuthViaExecutorMock.mock.calls[0][0]);
     expect(written).toMatchObject({
       auth_mode: 'chatgpt',
       OPENAI_API_KEY: null,
@@ -251,7 +246,7 @@ describe('codex-device-auth', () => {
     await vi.advanceTimersByTimeAsync(2100);
     const status = await withTenant(() => service.find(AUTH_PARAMS));
     expect(status.phase).toBe('error');
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('overlapping create calls do not leave an orphaned poll loop', async () => {
@@ -304,7 +299,7 @@ describe('codex-device-auth', () => {
 
     const status = await withTenant(() => service.find(AUTH_PARAMS));
     expect(status.phase).toBe('expired');
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('starting a new attempt cancels and replaces the previous one', async () => {

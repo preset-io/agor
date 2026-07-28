@@ -18,16 +18,8 @@
  * - xterm.js frontend for rendering
  */
 
-import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import {
-  createUserProcessEnvironment,
-  loadConfig,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { createUserProcessEnvironment, loadConfig } from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantId,
@@ -41,7 +33,6 @@ import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, Branch, BranchID, UserID } from '@agor/core/types';
 import {
-  getBranchSymlinkPath,
   resolveUnixUserForImpersonation,
   type UnixUserMode,
   UnixUserNotFoundError,
@@ -103,113 +94,13 @@ export function buildBranchShellTabName(branch: Pick<Branch, 'branch_id' | 'name
   return `${branch.name} · ${shortId(branch.branch_id)}`;
 }
 
-function safeRealpath(pathToResolve: string): string | null {
-  try {
-    return fs.realpathSync(pathToResolve);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolve the cwd for a branch shell.
- *
- * In Unix impersonation modes users get convenience symlinks under
- * ~/agor/worktrees/<branch-name>. Those links are name-keyed, so same-name
- * branches can collide. Only use the symlink when canonical resolution proves
- * it targets the requested branch path; otherwise fall back to branch.path.
- */
 export function resolveBranchShellCwd(
   branch: Pick<Branch, 'name' | 'path'>,
-  finalUnixUser: string | null
+  _finalUnixUser: string | null
 ): string {
-  if (!finalUnixUser) return branch.path;
-
-  const symlinkPath = getBranchSymlinkPath(finalUnixUser, branch.name);
-  const symlinkRealpath = safeRealpath(symlinkPath);
-  if (!symlinkRealpath) return branch.path;
-
-  const branchRealpath = safeRealpath(branch.path);
-  if (!branchRealpath) return branch.path;
-
-  return symlinkRealpath === branchRealpath ? symlinkPath : branch.path;
-}
-
-/**
- * Check if Zellij is installed
- */
-function isZellijAvailable(): boolean {
-  try {
-    execSync('which zellij', { stdio: 'pipe', timeout: 2000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Module-level flag tracking if Zellij warning has been shown */
-let zellijWarningShown = false;
-
-/**
- * Write user environment variables to a shell script
- * This allows shells spawned in Zellij tabs to source the env vars
- *
- * @param userId - User ID for naming the file
- * @param env - Environment variables to export
- * @param chownTo - Optional Unix username to chown the file to (for impersonation)
- * @returns Path to the env file, or null on error
- */
-function writeEnvFile(
-  userId: UserID | undefined,
-  env: Record<string, string>,
-  chownTo?: string | null
-): string | null {
-  if (!userId) return null;
-
-  try {
-    const tmpDir = os.tmpdir();
-    const envFile = path.join(tmpDir, `agor-env-${shortId(userId)}.sh`);
-
-    // Build shell script to export env vars
-    const exportLines = Object.entries(env)
-      .filter(([key]) => {
-        // Skip system/shell env vars that shouldn't be overridden
-        const skipKeys = ['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'OLDPWD', 'TERM', 'COLORTERM'];
-        return !skipKeys.includes(key);
-      })
-      .map(([key, value]) => {
-        // Escape single quotes in value
-        const escapedValue = value.replace(/'/g, "'\\''");
-        return `export ${key}='${escapedValue}'`;
-      });
-
-    const scriptContent = `#!/bin/sh
-# Agor user environment variables
-# Auto-generated - do not edit manually
-${exportLines.join('\n')}
-`;
-
-    // Write file with restrictive permissions initially
-    fs.writeFileSync(envFile, scriptContent, { mode: 0o600 });
-
-    // If we're impersonating a user, chown the file to them so they can read it
-    // Without this, impersonated users can't source the env file (permission denied)
-    if (chownTo) {
-      try {
-        // CRITICAL: Use -n flag to prevent password prompts that freeze the system
-        // Also add timeout to prevent any hangs
-        execSync(`sudo -n chown "${chownTo}" "${envFile}"`, { stdio: 'pipe', timeout: 2000 });
-      } catch (chownError) {
-        console.warn(`Failed to chown env file to ${chownTo}:`, chownError);
-        // Continue anyway - file may still be readable in some configurations
-      }
-    }
-
-    return envFile;
-  } catch (error) {
-    console.warn('Failed to write user env file:', error);
-    return null;
-  }
+  // Path existence/canonicalisation belongs to the executor identity. Passing
+  // the tenant-derived branch path also avoids name-keyed convenience symlinks.
+  return branch.path;
 }
 
 /**
@@ -224,13 +115,20 @@ ${exportLines.join('\n')}
 export class TerminalsService {
   private app: Application;
   private db: TenantScopeAwareDatabase;
+  private reconnectDiscoveryMs: number;
 
-  /** Whether Zellij is available on this system */
-  private zellijAvailable: boolean;
-
-  constructor(app: Application, db: TenantScopeAwareDatabase) {
+  constructor(
+    app: Application,
+    db: TenantScopeAwareDatabase,
+    options: { reconnectDiscoveryMs?: number } = {}
+  ) {
     this.app = app;
     this.db = db;
+    // A surviving terminal executor reconnects and re-announces readiness after
+    // a daemon restart. Give that handshake a bounded head start before
+    // launching a replacement; this closes the request-before-reannounce race
+    // without daemon-side process inspection (and works across pod boundaries).
+    this.reconnectDiscoveryMs = options.reconnectDiscoveryMs ?? 750;
 
     // The socketio relay converts the executor's readiness/failure acks into
     // app events (it can't reach this service instance directly). Readiness
@@ -248,25 +146,6 @@ export class TerminalsService {
         if (data?.userId) this.handleExecutorError(data.userId as UserID, data.message);
       }
     );
-
-    // Check if Zellij is available - warn but don't fail
-    this.zellijAvailable = isZellijAvailable();
-
-    if (!this.zellijAvailable) {
-      if (!zellijWarningShown) {
-        console.warn(
-          '\x1b[33m⚠️  Zellij is not installed or not available in PATH.\x1b[0m\n' +
-            'Terminal functionality will be unavailable.\n' +
-            'To enable terminals, install Zellij:\n' +
-            '  - Ubuntu/Debian: curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin\n' +
-            '  - macOS: brew install zellij\n' +
-            '  - See: https://zellij.dev/documentation/installation'
-        );
-        zellijWarningShown = true;
-      }
-    } else {
-      console.log('\x1b[36m✅ Zellij detected\x1b[0m - persistent terminal sessions enabled');
-    }
   }
 
   private withTenantDatabase<T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>): Promise<T> {
@@ -305,14 +184,6 @@ export class TerminalsService {
     }
     if (data.ensureCliSessionId !== undefined) {
       throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
-    }
-
-    // Check if Zellij is available
-    if (!this.zellijAvailable) {
-      throw new Error(
-        'Terminal functionality is unavailable: Zellij is not installed.\n' +
-          'Please install Zellij to enable terminal support.'
-      );
     }
 
     // Branch RBAC check: if a branch is provided and RBAC is enabled,
@@ -375,31 +246,6 @@ export class TerminalsService {
   }
 
   /**
-   * Look for a running `zellij attach <sessionName>` process. Used at
-   * cold-start to detect executors that survived a daemon restart so
-   * we adopt instead of spawning a duplicate.
-   *
-   * **Anchored regex**: `^[^ ]*zellij attach <sessionName>`. Without
-   * the `^` anchor, `pgrep -f` false-positives on ANY process whose
-   * full command line contains the search string — including, e.g., a
-   * sibling `bash -c 'something something zellij attach agor-X'` that
-   * happens to mention it. The anchor restricts the match to processes
-   * whose first argv element is the `zellij` binary (with optional
-   * path prefix).
-   */
-  private async detectExistingExecutor(sessionName: string): Promise<boolean> {
-    try {
-      execSync(`pgrep -f '^[^ ]*zellij attach ${sessionName}'`, {
-        stdio: 'ignore',
-        timeout: 1500,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Active executor processes per user
    * Key: userId, Value: { process pid, sessionName, branches }
    */
@@ -458,6 +304,13 @@ export class TerminalsService {
    * its "connecting" state.
    */
   handleExecutorReady(userId: UserID): void {
+    if (!this.executorTerminals.has(userId)) {
+      this.executorTerminals.set(userId, {
+        sessionName: buildZellijSessionName(userId),
+        activeBranches: new Set(),
+        startedAt: new Date(),
+      });
+    }
     this.readyExecutors.add(userId);
     this.settleReadyWaiters(userId, true);
     this.app.io?.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
@@ -486,16 +339,23 @@ export class TerminalsService {
    * errors or hasn't become ready within {@link READY_TIMEOUT_MS}. Resolves
    * immediately when the executor is already known-ready.
    */
-  private awaitExecutorReady(userId: UserID): Promise<boolean> {
+  private awaitExecutorReady(
+    userId: UserID,
+    timeoutMs = TerminalsService.READY_TIMEOUT_MS
+  ): Promise<boolean> {
     if (this.readyExecutors.has(userId)) return Promise.resolve(true);
+    if (timeoutMs <= 0) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       const waiters = this.readyWaiters.get(userId) ?? new Set();
       const settle = (ready: boolean) => {
         clearTimeout(timer);
         waiters.delete(settle);
+        if (waiters.size === 0 && this.readyWaiters.get(userId) === waiters) {
+          this.readyWaiters.delete(userId);
+        }
         resolve(ready);
       };
-      const timer = setTimeout(() => settle(false), TerminalsService.READY_TIMEOUT_MS);
+      const timer = setTimeout(() => settle(false), timeoutMs);
       // Don't keep the process (or a test worker) alive on this fallback timer.
       timer.unref?.();
       waiters.add(settle);
@@ -567,38 +427,6 @@ export class TerminalsService {
     // turns duplicate mount/refocus calls into ordinary warm-path attaches.
     if (await waitForPendingStart()) {
       return this.createExecutorTerminal(data, params);
-    }
-
-    // Cold-start adoption: after a daemon restart, `executorTerminals`
-    // is empty but the browser's PRIOR `zellij attach agor-<short>`
-    // process is still alive (Zellij keeps the session). Without this
-    // check, every browser reload post-restart spawns ANOTHER executor
-    // → multiple processes listening on `user/<id>/terminal` → every
-    // `terminal:tab create` event runs N times → duplicate tabs.
-    //
-    // Detect any running `zellij attach agor-<sessionName>` and adopt
-    // it into the Map so subsequent dispatch reuses the existing
-    // executor instead of fork-bombing.
-    const expectedSessionName = buildZellijSessionName(userId);
-    if (!this.executorTerminals.get(userId)) {
-      const adopted = await this.detectExistingExecutor(expectedSessionName);
-      if (adopted) {
-        console.log(
-          `[TerminalsService] adopting existing zellij executor for user ${shortId(userId)} (sessionName=${expectedSessionName})`
-        );
-        this.executorTerminals.set(userId, {
-          sessionName: expectedSessionName,
-          activeBranches: new Set(),
-          startedAt: new Date(),
-        });
-        // Deliberately NOT marked ready here. A `pgrep` match means the process
-        // exists, not that it has re-established its socket + re-authenticated
-        // after the daemon restart — it may be reconnecting or failing auth.
-        // Readiness is granted only when the adopted executor actually
-        // re-announces `terminal:ready` (handleExecutorReady). Until then the
-        // warm path gates its choreography and reports ready:false so the
-        // browser waits for the real ack instead of us firing into a dead room.
-      }
     }
 
     // Check if user already has an executor running
@@ -673,12 +501,28 @@ export class TerminalsService {
       };
     }
 
-    // Re-check the barrier after the async adoption probe above. Two
-    // callers can both enter with no pending start, then both await
-    // `detectExistingExecutor`; whichever resumes first installs the
-    // reservation below, and the later caller must wait/re-enter instead
-    // of spawning a second attach process.
+    // Re-check the barrier after the asynchronous warm-path work above so a
+    // concurrent caller that installed a reservation is reused.
     if (await waitForPendingStart()) {
+      return this.createExecutorTerminal(data, params);
+    }
+
+    // After a daemon restart the in-memory map is empty while the executor and
+    // its Zellij PTY may still be alive. The executor owns that runtime state:
+    // it reconnects and emits terminal:ready, which handleExecutorReady adopts.
+    // Reserve this bounded discovery window so concurrent browser requests
+    // cannot both miss the reannouncement and launch duplicate bridges.
+    let resolveDiscovery!: () => void;
+    const discoveryReservation = new Promise<void>((resolve) => {
+      resolveDiscovery = resolve;
+    });
+    this.executorStarting.set(userId, discoveryReservation);
+    const reannounced = await this.awaitExecutorReady(userId, this.reconnectDiscoveryMs);
+    resolveDiscovery();
+    if (this.executorStarting.get(userId) === discoveryReservation) {
+      this.executorStarting.delete(userId);
+    }
+    if (reannounced || this.executorTerminals.has(userId)) {
       return this.createExecutorTerminal(data, params);
     }
 
@@ -718,13 +562,12 @@ export class TerminalsService {
       }
 
       // Determine cwd and branch info
-      let cwd = os.homedir();
+      let cwd: string | undefined;
       let branchName: string | undefined;
       let branchTabName: string | undefined;
 
-      const { branch, userEnv, executorEnv } = await this.withTenantDatabase(async (tenantDb) => ({
+      const { branch, executorEnv } = await this.withTenantDatabase(async (tenantDb) => ({
         branch: data.branchId ? await new BranchRepository(tenantDb).findById(data.branchId) : null,
-        userEnv: await resolveUserEnvironment(userId, tenantDb),
         // Get executor process environment (includes system vars). When
         // impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them.
         executorEnv: await createUserProcessEnvironment(
@@ -762,9 +605,6 @@ export class TerminalsService {
         TERMINAL_EXECUTOR_TOKEN_TTL
       );
 
-      // File/process work stays outside the tenant database unit of work.
-      const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
-
       // Spawn executor with zellij.attach command
       spawnExecutorFireAndForget(
         {
@@ -774,11 +614,10 @@ export class TerminalsService {
           params: {
             userId,
             sessionName,
-            cwd,
+            ...(cwd ? { cwd } : {}),
             tabName: branchTabName,
             cols: data.cols || 160,
             rows: data.rows || 40,
-            envFile, // Pass env file path for shell to source
           },
         },
         {
