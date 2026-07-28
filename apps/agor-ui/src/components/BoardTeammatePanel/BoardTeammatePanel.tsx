@@ -28,13 +28,13 @@ import {
 import { mapToArray } from '../../utils/mapHelpers';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
-import { BoardSessionList } from '../BranchListDrawer';
+import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
-export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
+export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
 
 interface BoardTeammatePanelProps {
   board: Board | null;
@@ -450,6 +450,23 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                     sessionsByBranch={sessionsByBranch}
                     onSessionClick={onSessionClick}
                   />
+                ) : (
+                  <div style={{ padding: 16 }}>
+                    <Skeleton active paragraph={{ rows: 4 }} title={false} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
+            ),
+          },
+          {
+            key: 'all-branches',
+            label: 'All branches',
+            children: board ? (
+              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+                {sessionDetailsHydrated ? (
+                  <BoardBranchList board={board} repoById={repoById} client={client} />
                 ) : (
                   <div style={{ padding: 16 }}>
                     <Skeleton active paragraph={{ rows: 4 }} title={false} />
