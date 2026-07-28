@@ -139,7 +139,6 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -153,6 +152,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
+import { createSessionMcpTokenHook } from './utils/session-mcp-token-hook.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
@@ -572,6 +572,18 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
   const executionMode = resolveExecutionSecurityMode(config);
+  const attachMcpTokenAfterGet = createSessionMcpTokenHook({
+    app,
+    config,
+    onAttached: (session) =>
+      mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`),
+  });
+  const attachMcpTokenAfterCreate = createSessionMcpTokenHook({
+    app,
+    config,
+    onAttached: (session) =>
+      console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`),
+  });
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
@@ -2616,53 +2628,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      get: [
-        async (context) => {
-          // Attach an MCP token for fetched session (cached/reused when still valid).
-          if (config.daemon?.mcpEnabled === false) {
-            return context;
-          }
-
-          const session = context.result as Session;
-          const callerUser = (context.params as AuthenticatedParams).user;
-
-          // Rationale for the narrow gate lives on canReceiveMcpTokenForSession.
-          if (
-            !canReceiveMcpTokenForSession({
-              callerUserId: callerUser?.user_id,
-              callerRole: callerUser?.role,
-            })
-          ) {
-            return context;
-          }
-
-          const { generateSessionToken } = await import('./mcp/tokens.js');
-          const userId = callerUser?.user_id;
-          if (!userId) {
-            return context;
-          }
-
-          const jwtSecret = app.settings.authentication?.secret;
-          if (!jwtSecret) {
-            console.error('❌ JWT secret not configured - cannot generate MCP token');
-            return context;
-          }
-
-          const mcpToken = await generateSessionToken(
-            app,
-            session.session_id,
-            userId as import('@agor/core/types').UserID
-          );
-
-          mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`);
-
-          // Add token to result. Tokens are not stored on the session row; the
-          // token module may reuse a still-valid issued token or mint a new one.
-          context.result = { ...session, mcp_token: mcpToken };
-
-          return context;
-        },
-      ],
+      get: [attachMcpTokenAfterGet],
       create: [
         async (context) => {
           const session = context.result as Session;
@@ -2673,57 +2639,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
-        async (context) => {
-          // Skip MCP setup if MCP server is disabled
-          if (config.daemon?.mcpEnabled === false) {
-            return context;
-          }
-
-          // Gate MCP token issuance through the same caller-scoped policy as `after:get`.
-          const callerUser = (context.params as AuthenticatedParams).user;
-          if (
-            !canReceiveMcpTokenForSession({
-              callerUserId: callerUser?.user_id,
-              callerRole: callerUser?.role,
-            })
-          ) {
-            return context;
-          }
-
-          // Resolve MCP token for this session (cached/reused when still valid).
-          // Mint it for the active caller, not for an inherited/parent creator.
-          const { generateSessionToken } = await import('./mcp/tokens.js');
-          const session = context.result as Session;
-          const userId = callerUser?.user_id;
-          if (!userId) {
-            return context;
-          }
-
-          // Get JWT secret from app settings
-          const jwtSecret = app.settings.authentication?.secret;
-          if (!jwtSecret) {
-            console.error('❌ JWT secret not configured - cannot generate MCP token');
-            return context;
-          }
-
-          const mcpToken = await generateSessionToken(
-            app,
-            session.session_id,
-            userId as import('@agor/core/types').UserID
-          );
-
-          console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`);
-
-          // Note: We no longer auto-attach global MCP servers to sessions.
-          // Instead, getMcpServersForSession() will automatically provide ALL
-          // global servers plus any session-specific servers assigned to this
-          // session. This avoids polluting the session_mcp_servers junction table.
-
-          // Update context.result to include the token
-          context.result = { ...session, mcp_token: mcpToken };
-
-          return context;
-        },
+        attachMcpTokenAfterCreate,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
 
         // Unix Integration: When a non-owner creates a session in a branch with

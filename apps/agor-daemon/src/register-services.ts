@@ -10,6 +10,7 @@ import {
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   and,
@@ -207,6 +208,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { initMcpTokens } = await import('./mcp/tokens.js');
   initMcpTokens({
     db,
+    multiTenancy: resolveMultiTenancyConfig(config),
     expirationMs: config.execution?.mcp_token_expiration_ms,
   });
 
