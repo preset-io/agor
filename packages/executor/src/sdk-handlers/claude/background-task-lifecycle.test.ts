@@ -13,15 +13,15 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
   it('keeps a Workflow alive across its parent result until its completion turn', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('workflow-1', 'local_workflow'));
-    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
     lifecycle.observe(settled('workflow-1'));
-    expect(lifecycle.observe(result())).toBe('terminal');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
   });
 
   it('preserves the parent result while an Agent completion notification is pending', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('agent-1'));
-    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
     expect(lifecycle.activeTaskCount).toBe(1);
     lifecycle.observe(settled('agent-1'));
     expect(lifecycle.activeTaskCount).toBe(0);
@@ -34,30 +34,32 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
   ] as const)('allows a terminal continuation after a %s task notification', (status) => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('agent-1'));
-    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
     lifecycle.observe(settled('agent-1', status));
-    expect(lifecycle.observe(result())).toBe('terminal');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
   });
 
   it('waits for every background task before accepting a later result', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('agent-1'));
     lifecycle.observe(started('agent-2'));
-    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
     lifecycle.observe(settled('agent-1'));
-    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
     lifecycle.observe(settled('agent-2'));
-    expect(lifecycle.observe(result())).toBe('terminal');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
   });
 
   it('ends ordinary turns immediately', () => {
-    expect(new ClaudeBackgroundTaskLifecycle().observe(result())).toBe('terminal');
+    expect(new ClaudeBackgroundTaskLifecycle().observe(result()).resultDisposition).toBe(
+      'terminal'
+    );
   });
 
   it('ends error results even if a task never reports settlement', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('agent-1'));
-    expect(lifecycle.observe(result('error_during_execution'))).toBe('terminal');
+    expect(lifecycle.observe(result('error_during_execution')).resultDisposition).toBe('terminal');
   });
 
   it('ignores duplicate and unknown settlement notifications', () => {
@@ -67,6 +69,15 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     lifecycle.observe(settled('agent-1'));
     lifecycle.observe(settled('agent-1'));
     expect(lifecycle.activeTaskCount).toBe(0);
-    expect(lifecycle.observe(result())).toBe('terminal');
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+  });
+
+  it('reports only real task transitions and can clear orphaned activity', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    expect(lifecycle.observe(started('agent-1')).taskTransition).toBe('started');
+    expect(lifecycle.observe(started('agent-1')).taskTransition).toBeUndefined();
+    expect(lifecycle.observe(settled('unknown')).taskTransition).toBeUndefined();
+    expect(lifecycle.clearActiveTasks()).toBe(1);
+    expect(lifecycle.clearActiveTasks()).toBe(0);
   });
 });

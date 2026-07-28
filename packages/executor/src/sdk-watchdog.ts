@@ -208,8 +208,10 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (detail === 'tool.start') this.state.activeToolCount++;
-      if (detail === 'tool.complete') {
+      if (detail === 'tool.start' || detail === 'background_task.start') {
+        this.state.activeToolCount++;
+      }
+      if (detail === 'tool.complete' || detail === 'background_task.complete') {
         this.state.activeToolCount = Math.max(0, this.state.activeToolCount - 1);
       }
     }

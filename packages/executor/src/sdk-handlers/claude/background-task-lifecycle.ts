@@ -1,6 +1,11 @@
 import type { SDKMessage } from '@agor/core/sdk';
 
-export type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
+type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
+
+export interface ClaudeQueryLifecycleTransition {
+  resultDisposition: ResultDisposition;
+  taskTransition?: 'started' | 'settled';
+}
 
 /**
  * Tracks the documented Agent SDK task lifecycle within one streaming-input
@@ -10,27 +15,41 @@ export type ResultDisposition = 'not-result' | 'await-background-tasks' | 'termi
 export class ClaudeBackgroundTaskLifecycle {
   private readonly activeTaskIds = new Set<string>();
 
-  observe(message: SDKMessage): ResultDisposition {
+  observe(message: SDKMessage): ClaudeQueryLifecycleTransition {
     if (message.type === 'system' && message.subtype === 'task_started') {
+      const wasActive = this.activeTaskIds.has(message.task_id);
       this.activeTaskIds.add(message.task_id);
-      return 'not-result';
+      return {
+        resultDisposition: 'not-result',
+        taskTransition: wasActive ? undefined : 'started',
+      };
     }
 
     if (message.type === 'system' && message.subtype === 'task_notification') {
-      this.activeTaskIds.delete(message.task_id);
-      return 'not-result';
+      return {
+        resultDisposition: 'not-result',
+        taskTransition: this.activeTaskIds.delete(message.task_id) ? 'settled' : undefined,
+      };
     }
 
-    if (message.type !== 'result') return 'not-result';
+    if (message.type !== 'result') return { resultDisposition: 'not-result' };
 
     // Error results cannot reliably produce later settlement notifications.
     // Let the normal error/teardown path contain any remaining subprocess work.
-    if (message.subtype !== 'success') return 'terminal';
+    if (message.subtype !== 'success') return { resultDisposition: 'terminal' };
 
-    return this.activeTaskIds.size > 0 ? 'await-background-tasks' : 'terminal';
+    return {
+      resultDisposition: this.activeTaskIds.size > 0 ? 'await-background-tasks' : 'terminal',
+    };
   }
 
   get activeTaskCount(): number {
     return this.activeTaskIds.size;
+  }
+
+  clearActiveTasks(): number {
+    const count = this.activeTaskIds.size;
+    this.activeTaskIds.clear();
+    return count;
   }
 }

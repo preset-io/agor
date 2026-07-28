@@ -24,6 +24,7 @@ import type { MessagesService, SessionsPatchClient, TasksService } from '../base
 import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
+import { aggregateClaudeResults } from './result-aggregation.js';
 
 export interface PromptResult {
   /** Assistant messages (can be multiple: tool invocation, then response) */
@@ -215,6 +216,13 @@ If you continue to see authentication errors, please contact your Agor administr
       enableTokenStreaming: ClaudePromptService.ENABLE_TOKEN_STREAMING,
     });
     const backgroundTasks = new ClaudeBackgroundTaskLifecycle();
+    const sdkResults: SDKResultMessage[] = [];
+    const clearBackgroundTaskActivity = () => {
+      const activeTaskCount = backgroundTasks.clearActiveTasks();
+      for (let index = 0; index < activeTaskCount; index++) {
+        onActivity?.('progress', 'background_task.complete');
+      }
+    };
 
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
@@ -222,23 +230,22 @@ If you continue to see authentication errors, please contact your Agor administr
     try {
       for await (const msg of result) {
         reportSdkActivity(onActivity, 'claude-code', msg.type);
-        const activeTaskCountBefore = backgroundTasks.activeTaskCount;
-        const resultDisposition = backgroundTasks.observe(msg);
+        const lifecycleTransition = backgroundTasks.observe(msg);
+        const { resultDisposition } = lifecycleTransition;
         if (
-          msg.type === 'system' &&
-          msg.subtype === 'task_started' &&
-          backgroundTasks.activeTaskCount > activeTaskCountBefore
+          msg.type === 'result' &&
+          msg.subtype !== 'success' &&
+          backgroundTasks.activeTaskCount > 0
         ) {
+          clearBackgroundTaskActivity();
+        }
+        if (lifecycleTransition.taskTransition === 'started') {
           // Keep the SDK watchdog paused for the documented lifetime of the
           // background task, not merely the Agent/Workflow launch tool call.
-          onActivity?.('progress', 'tool.start');
+          onActivity?.('progress', 'background_task.start');
         }
-        if (
-          msg.type === 'system' &&
-          msg.subtype === 'task_notification' &&
-          backgroundTasks.activeTaskCount < activeTaskCountBefore
-        ) {
-          onActivity?.('progress', 'tool.complete');
+        if (lifecycleTransition.taskTransition === 'settled') {
+          onActivity?.('progress', 'background_task.complete');
         }
         // Process message through processor
         const events = await processor.process(msg);
@@ -267,25 +274,27 @@ If you continue to see authentication errors, please contact your Agor administr
           // (via a pending Promise) specifically so this control request can use
           // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
+            sdkResults.push(event.raw_sdk_message);
             if (resultDisposition === 'await-background-tasks') {
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
               );
-              continue;
-            }
-            try {
-              const contextUsage = await result.getContextUsage();
-              console.log(
-                `📊 SDK context usage: ${contextUsage.totalTokens}/${contextUsage.maxTokens} tokens (${contextUsage.percentage}%)`
-              );
-              yield { type: 'context_usage', contextUsage } as ProcessedEvent;
-            } catch (error) {
-              console.warn(
-                `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
-              );
-            } finally {
-              // Release the held input iterable so the SDK can close stdin
-              result.releaseInput();
+            } else {
+              event.raw_sdk_message = aggregateClaudeResults(sdkResults);
+              try {
+                const contextUsage = await result.getContextUsage();
+                console.log(
+                  `📊 SDK context usage: ${contextUsage.totalTokens}/${contextUsage.maxTokens} tokens (${contextUsage.percentage}%)`
+                );
+                yield { type: 'context_usage', contextUsage } as ProcessedEvent;
+              } catch (error) {
+                console.warn(
+                  `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
+                );
+              } finally {
+                // Release the held input iterable so the SDK can close stdin
+                result.releaseInput();
+              }
             }
           }
 
@@ -312,6 +321,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     } catch (error) {
       // Ensure stdin is released on any error so the subprocess can exit cleanly
+      clearBackgroundTaskActivity();
       result.releaseInput();
 
       const state = processor.getState();
