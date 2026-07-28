@@ -251,80 +251,34 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
  * executor handler, but having them at the schema boundary means malformed
  * payloads fail at parse time with a clear message.
  */
-const enforceClonePayloadInvariants = (
-  params: { storageMode?: 'worktree' | 'clone'; cloneDepth?: number },
-  ctx: z.RefinementCtx
-): void => {
-  if (params.cloneDepth !== undefined && params.storageMode !== 'clone') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['cloneDepth'],
-      message:
-        "cloneDepth is only meaningful when storageMode === 'clone'; omit it for worktree mode",
-    });
-  }
-};
-
 export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.add'),
 
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
-  params: z
-    .object({
-      /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
-      branchId: z.string().uuid(),
+  params: z.object({
+    /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
+    branchId: z.string().uuid(),
 
-      /** Repo ID (UUID) */
-      repoId: z.string().uuid(),
+    /** Repo ID (UUID) */
+    repoId: z.string().uuid(),
 
-      /** Branch to checkout or create */
-      branch: z.string().optional(),
+    /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
+    restoreMode: z.boolean().optional(),
 
-      /** Source branch when creating new branch */
-      sourceBranch: z.string().optional(),
+    /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
+    initUnixGroup: z.boolean().optional().default(false),
 
-      /** Create new branch */
-      createBranch: z.boolean().optional(),
+    /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
+    fixBasicPermissions: z.boolean().optional().default(false),
 
-      /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
-      restoreMode: z.boolean().optional(),
+    /** User ID of the requesting user (for per-user credential resolution) */
+    userId: z.string().uuid().optional(),
 
-      /** Type of ref (branch or tag) */
-      refType: z.enum(['branch', 'tag']).optional(),
-
-      /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
-      initUnixGroup: z.boolean().optional().default(false),
-
-      /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
-      fixBasicPermissions: z.boolean().optional().default(false),
-
-      /** Access level for non-owners ('none' | 'read' | 'write') */
-      othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
-
-      /** User ID of the requesting user (for per-user credential resolution) */
-      userId: z.string().uuid().optional(),
-
-      /**
-       * Branch storage model. Default 'worktree' (native `git worktree add`,
-       * legacy behaviour). 'clone' routes through `createBranchAsClone` for a
-       * self-standing `git clone` — closes cross-branch leak vectors at the
-       * `.git/config` layer. Forwarded from the branches DB record.
-       */
-      storageMode: z.enum(['worktree', 'clone']).optional(),
-
-      /**
-       * Shallow-clone depth. Only meaningful when storageMode='clone'. Positive
-       * integer → `git clone --depth N`. Omit (or pass null/undefined) for a
-       * full clone with complete history.
-       */
-      cloneDepth: z.number().int().positive().optional(),
-
-      /** Whether clone mode may use the tenant-fetched repo path as an object-cache hint. */
-      useReference: z.boolean().optional().default(false),
-    })
-    .superRefine(enforceClonePayloadInvariants),
+    /** Whether clone mode may use the tenant-fetched repo path as an object-cache hint. */
+    useReference: z.boolean().optional().default(false),
+  }),
 });
 
 export type GitBranchAddPayload = z.infer<typeof GitBranchAddPayloadSchema>;

@@ -1131,6 +1131,7 @@ export async function handleGitBranchAdd(
   let resolvedRepoPath: string | undefined;
   let resolvedBranchPath: string | undefined;
   let resolvedBranchName: string | undefined;
+  let resolvedOthersAccess: 'none' | 'read' | 'write' = 'read';
 
   // Dry run mode
   if (options.dryRun) {
@@ -1141,11 +1142,7 @@ export async function handleGitBranchAdd(
         command: 'git.branch.add',
         branchId,
         repoId: payload.params.repoId,
-        branch: payload.params.branch,
-        sourceBranch: payload.params.sourceBranch,
-        createBranch: payload.params.createBranch,
-        storageMode: payload.params.storageMode,
-        cloneDepth: payload.params.cloneDepth,
+        restoreMode: payload.params.restoreMode,
         useReference: payload.params.useReference,
       },
     };
@@ -1179,13 +1176,14 @@ export async function handleGitBranchAdd(
     resolvedRepoPath = repoPath;
     resolvedBranchPath = branchPath;
     resolvedBranchName = branchName;
-    const branch = payload.params.branch || branchName;
-    const shouldCreateBranch = payload.params.createBranch ?? false;
-    const sourceBranch = payload.params.sourceBranch;
-    const refType = payload.params.refType;
+    resolvedOthersAccess = branchRecord.others_fs_access || 'read';
+    const branch = branchRecord.ref || branchName;
+    const shouldCreateBranch = branchRecord.new_branch ?? false;
+    const sourceBranch = branchRecord.base_ref || repo.default_branch || 'main';
+    const refType = branchRecord.ref_type;
     const restoreMode = payload.params.restoreMode ?? false;
-    const storageMode = payload.params.storageMode ?? 'worktree';
-    const cloneDepth = payload.params.cloneDepth;
+    const storageMode = branchRecord.storage_mode ?? 'worktree';
+    const cloneDepth = branchRecord.clone_depth;
     const remoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
     const referencePath = payload.params.useReference ? repo.local_path : undefined;
 
@@ -1266,7 +1264,7 @@ export async function handleGitBranchAdd(
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && branchId) {
       try {
-        const othersAccess = payload.params.othersAccess || 'read';
+        const othersAccess = resolvedOthersAccess;
         console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
         const result = await client
           .service('branches')
@@ -1393,8 +1391,9 @@ export async function handleGitBranchAdd(
       // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          const othersAccess = payload.params.othersAccess || 'read';
-          await client.service('branches').initializeUnixGroup({ branchId, othersAccess });
+          await client
+            .service('branches')
+            .initializeUnixGroup({ branchId, othersAccess: resolvedOthersAccess });
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {
@@ -1410,7 +1409,7 @@ export async function handleGitBranchAdd(
     let userMessage = errorMessage;
     if (errorMessage.includes('already exists')) {
       if (errorMessage.includes('branch')) {
-        userMessage = `A branch named '${payload.params.branch || resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
+        userMessage = `A branch named '${resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
       } else {
         userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
       }

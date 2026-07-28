@@ -11,10 +11,12 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  ensureBranchStorageModeAllowed,
   getBranchesDir,
   loadConfig,
   loadConfigSync,
   PAGINATION,
+  resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -661,6 +663,29 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
+    const { defaultMode } = resolveBranchStorageConfig();
+    const storageMode = withDefaults.storage_mode ?? defaultMode;
+    ensureBranchStorageModeAllowed(storageMode);
+    if (
+      storageMode === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
+      );
+    }
+    if (withDefaults.clone_depth !== undefined) {
+      if (storageMode !== 'clone') {
+        throw new BadRequest("clone_depth is only meaningful when storage_mode='clone'.");
+      }
+      if (!Number.isInteger(withDefaults.clone_depth) || withDefaults.clone_depth <= 0) {
+        throw new BadRequest('clone_depth must be a positive integer when set.');
+      }
+    }
+    // Persist the effective mode so the executor never reconstructs a
+    // configuration default at the filesystem boundary.
+    withDefaults.storage_mode = storageMode;
+
     // New branches always start aligned with their board. Branch-specific
     // overrides are an explicit post-create action in the Branch modal.
     withDefaults.permission_source = 'board';
@@ -1644,17 +1669,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // without creating OS groups.
       const executionMode = resolveExecutionSecurityMode();
       const initUnixGroup = executionMode.shouldInitUnixGroups;
-      const { getDaemonUser } = await import('@agor/core/config');
-      const daemonUser = getDaemonUser();
 
-      // No user impersonation for infrastructure operations — the daemon user
-      // owns all branches and impersonation would resolve getBranchesDir()
-      // to the wrong home directory, causing safety check failures.
-
-      // Mirror the create path's storage-mode forwarding. Without this, a
-      // clone-mode branch that was archived with filesystemAction='deleted'
-      // would silently rebuild as native worktree mode, leaving the DB row
-      // (storage_mode='clone') and disk (.git pointer file) inconsistent.
+      // The executor derives the materialization mode from this persisted row.
       const storageMode = branch.storage_mode ?? 'worktree';
       if (storageMode === 'clone' && !repo.remote_url) {
         const errMsg =
@@ -1686,25 +1702,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
-              branch: branch.ref,
-              refType: branch.ref_type || 'branch',
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
               // This is safe because it only creates a new branch when ls-remote confirms
               // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
-              createBranch: false,
               restoreMode: true,
-              sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
               initUnixGroup,
               fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
-              othersAccess: branch.others_fs_access || 'read',
-              daemonUser,
-              repoUnixGroup: repo.unix_group,
-              // Branch storage mode — preserves the branch's original
-              // storage_mode across archive → delete → unarchive.
-              storageMode,
-              ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
               useReference:
                 storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
             },

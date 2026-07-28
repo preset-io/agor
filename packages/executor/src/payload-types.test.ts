@@ -294,78 +294,25 @@ describe('GitBranchAddPayloadSchema', () => {
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
-  it('should parse with branch creation options', () => {
-    const payload = {
+  it('strips duplicated materialization facts and retains operational intent', () => {
+    const result = GitBranchAddPayloadSchema.parse({
       command: 'git.branch.add',
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        branch: 'feature-x',
-        sourceBranch: 'main',
-        createBranch: true,
+        branch: 'untrusted',
+        storageMode: 'worktree',
+        cloneDepth: 100,
+        restoreMode: true,
+        useReference: true,
       },
-    };
-
-    const result = GitBranchAddPayloadSchema.parse(payload);
-    expect(result.params.branch).toBe('feature-x');
-    expect(result.params.sourceBranch).toBe('main');
-    expect(result.params.createBranch).toBe(true);
-  });
-
-  // Clone-mode invariants live on the schema (not just in the executor
-  // handler) so malformed payloads fail at parse time with a clear message.
-  // See enforceClonePayloadInvariants in payload-types.ts.
-  describe('clone-mode invariants (superRefine)', () => {
-    const basePayload = {
-      command: 'git.branch.add' as const,
-      sessionToken: 'jwt-token-here',
-      params: {
-        branchId: '550e8400-e29b-41d4-a716-446655440002',
-        repoId: '550e8400-e29b-41d4-a716-446655440003',
-      },
-    };
-
-    it('accepts a clone-mode intent payload with optional cloneDepth and reference policy', () => {
-      const result = GitBranchAddPayloadSchema.parse({
-        ...basePayload,
-        params: {
-          ...basePayload.params,
-          storageMode: 'clone',
-          cloneDepth: 100,
-          useReference: true,
-        },
-      });
-      expect(result.params.storageMode).toBe('clone');
-      expect(result.params.cloneDepth).toBe(100);
-      expect(result.params.useReference).toBe(true);
     });
-
-    it('rejects cloneDepth paired with branch (or undefined) mode', () => {
-      // Explicit worktree mode.
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            storageMode: 'worktree',
-            cloneDepth: 100,
-          },
-        })
-      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
-
-      // Mode unset (legacy callers) — same rule: cloneDepth without
-      // explicit clone mode is a config bug, not silently dropped.
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            cloneDepth: 100,
-          },
-        })
-      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
-    });
+    expect(result.params).not.toHaveProperty('branch');
+    expect(result.params).not.toHaveProperty('storageMode');
+    expect(result.params).not.toHaveProperty('cloneDepth');
+    expect(result.params.restoreMode).toBe(true);
+    expect(result.params.useReference).toBe(true);
   });
 });
 

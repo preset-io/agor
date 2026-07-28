@@ -189,6 +189,12 @@ describe('managed executor git/fs commands', () => {
         repo_id: repoId,
         path: '/trusted/branch',
         name: 'feature',
+        ref: 'trusted-ref',
+        base_ref: 'trusted-base',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+        clone_depth: 42,
       },
     });
 
@@ -199,8 +205,6 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
-          branch: 'main',
-          storageMode: 'clone',
           useReference: true,
         },
       },
@@ -211,6 +215,9 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
       expect.objectContaining({
         remoteUrl: 'https://example.com/trusted/repo.git',
+        ref: 'trusted-base',
+        newBranchName: 'trusted-ref',
+        depth: 42,
         referencePath: '/trusted/repo',
       })
     );
@@ -232,7 +239,6 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
-          storageMode: 'clone',
         },
       },
       {}

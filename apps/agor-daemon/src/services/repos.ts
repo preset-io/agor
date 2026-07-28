@@ -149,10 +149,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
     if (
-      id &&
       data.repo_type === 'local' &&
       resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
     ) {
+      if (!id) {
+        throw new BadRequest(
+          'Bulk conversion to local repositories is unavailable in hosted multi-tenant mode.'
+        );
+      }
       const current = await this.get(id, params);
       if (current.repo_type !== 'local') {
         throw new BadRequest(
@@ -695,9 +699,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
-    // the time we get here. Resolve it before clone preflight so private
-    // remotes can use the same per-user git credentials the executor will
-    // use for the eventual clone.
+    // the time we get here. The identity is forwarded so executor-local Git
+    // can resolve the requesting user's credentials in strict Unix mode.
     const userId = (params as AuthenticatedParams).user!.user_id as UserID;
 
     if (storageMode === 'clone') {
@@ -708,13 +711,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         );
       }
     }
-    // NOTE: Filesystem preflights (target-dir-exists,
-    // branch-already-checked-out) live in the executor / core helpers —
-    // they're filesystem facts, not DB facts. Clone-mode remote-ref
-    // visibility is deliberately checked above before persisting, because
-    // clone-mode cannot materialize local-only base branches and the async
-    // executor failure path otherwise leaves confusing placeholder state.
-    // The executor surfaces other materialization failures via
+    // NOTE: Filesystem and remote-ref checks live in the executor / core
+    // helpers — they're filesystem/network facts, not DB facts. The daemon
+    // persists the authorized intent first; the executor atomically resolves
+    // the tenant-scoped row and performs those checks during materialization.
+    // Materialization failures are surfaced via
     // `filesystem_status='failed'` + `error_message`, which the UI already
     // renders cleanly. Daemon stays focused on DB/auth/config validation.
     // See `core.createBranch` / `createBranchAsClone` for the equivalent
@@ -951,18 +952,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           params: {
             branchId: branch.branch_id,
             repoId: repo.repo_id,
-            branch: data.ref,
-            sourceBranch: data.sourceBranch,
-            createBranch: data.createBranch,
-            refType: data.refType,
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
             fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
-            othersAccess: branch.others_fs_access || 'read',
-            // Branch storage mode (forwarded for the clone-mode code path)
-            storageMode,
-            ...(cloneDepth !== undefined ? { cloneDepth } : {}),
             useReference:
               storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
           },

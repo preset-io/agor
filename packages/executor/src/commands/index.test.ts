@@ -181,7 +181,7 @@ describe('executeCommand - git.clone', () => {
     });
   });
 
-  it('should include optional fields in dry-run response', async () => {
+  it('should include restore intent in dry-run response', async () => {
     const payloadWithOptions: GitClonePayload = {
       ...gitClonePayload,
       params: {
@@ -250,9 +250,7 @@ describe('executeCommand - git.branch.add', () => {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        sourceBranch: 'main',
-        createBranch: true,
+        restoreMode: true,
       },
     };
 
@@ -260,24 +258,15 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      branch: 'feature-x',
-      sourceBranch: 'main',
-      createBranch: true,
+      restoreMode: true,
     });
   });
 
-  it('should round-trip storageMode / cloneDepth / reference policy in dry-run response', async () => {
-    // PR 1 of the branch→clone storage migration. The daemon forwards
-    // these three knobs; the executor branches on storageMode at run time.
-    // Pin them through the dry-run echo so the daemon-side test fixture
-    // can assert payload-shape correctness without spinning up a real git.
+  it('should round-trip the clone reference policy in dry-run response', async () => {
     const clonePayload: GitBranchAddPayload = {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        storageMode: 'clone',
-        cloneDepth: 100,
         useReference: true,
       },
     };
@@ -286,8 +275,6 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      storageMode: 'clone',
-      cloneDepth: 100,
       useReference: true,
     });
   });
