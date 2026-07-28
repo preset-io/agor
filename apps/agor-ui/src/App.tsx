@@ -774,8 +774,6 @@ function AppContent() {
       client,
       repoById: agorStore.getState().repoById,
       onCreateBranch: handleCreateBranch,
-      onUpdateBranch: (branchId, updates) =>
-        handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
       onCreateSession: handleCreateSession,
       onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
     });

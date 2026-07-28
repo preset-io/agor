@@ -33,7 +33,6 @@ describe('createTeammateBranch', () => {
     const repo = makeRepo();
     const branch = makeBranch({ board_id: 'board-1' });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
-    const onUpdateBranch = vi.fn();
     const boardsService = {
       create: vi.fn().mockResolvedValue({
         board_id: 'board-1',
@@ -62,7 +61,6 @@ describe('createTeammateBranch', () => {
         client: client as never,
         repoById: new Map([[repo.repo_id, repo]]),
         onCreateBranch,
-        onUpdateBranch,
       }
     );
 
@@ -90,10 +88,49 @@ describe('createTeammateBranch', () => {
       teammateName: 'Pineapple Helper',
       teammateEmoji: '🍍',
     });
-    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
-      boardId: 'board-1',
-      branchId: branch.branch_id,
-    });
-    expect(onUpdateBranch).not.toHaveBeenCalled();
+    // The branches create hook auto-promotes a new teammate to board primary
+    // when the board has none (setPrimaryTeammateIfUnset). Forcing it here would
+    // demote an existing primary from ungated create entry points, so the client
+    // must NOT call setPrimaryTeammate.
+    expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
+  });
+
+  it('reuses the provided boardId instead of creating a new board', async () => {
+    const repo = makeRepo();
+    const branch = makeBranch({ board_id: 'existing-board' });
+    const onCreateBranch = vi.fn().mockResolvedValue(branch);
+    const boardsService = {
+      create: vi.fn(),
+      ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
+      setPrimaryTeammate: vi.fn().mockResolvedValue({}),
+    };
+    const client = {
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    };
+
+    await createTeammateBranch(
+      {
+        displayName: 'Board Buddy',
+        repoId: repo.repo_id,
+        boardId: 'existing-board',
+      },
+      {
+        client: client as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+      }
+    );
+
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({ boardId: 'existing-board' })
+    );
+    // No forcible primary assignment: we rely on the server's create hook to
+    // promote the teammate only when the reused board has no primary yet.
+    expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
   });
 });

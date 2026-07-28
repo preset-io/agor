@@ -1,10 +1,11 @@
 import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
   Button,
+  Divider,
   Empty,
   Select,
   Skeleton,
@@ -74,6 +75,7 @@ interface BoardTeammatePanelProps {
   onCollapse?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
+  onCreateTeammate?: () => void;
   client: AgorClient | null;
 }
 
@@ -102,6 +104,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   onCollapse,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
+  onCreateTeammate,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -176,11 +179,15 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  const teammateOptions = useMemo(() => {
-    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
+  const needsTeammateList = !primaryTeammateBranch && !primaryTeammateInaccessible;
 
+  const teammateOptions = useMemo(() => {
+    if (!needsTeammateList) return [];
+
+    // The store's branchById holds all non-archived branches instance-wide, so
+    // cross-board teammates are already available here — no fetch.
     return Array.from(branchById.values())
-      .filter((branch) => isTeammate(branch) && !branch.archived)
+      .filter((b) => isTeammate(b) && !b.archived)
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -198,7 +205,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
+  }, [branchById, needsTeammateList, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -385,7 +392,15 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           style={{ padding: '24px 0 16px' }}
         />
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-          <Typography.Text strong>Assign an existing teammate</Typography.Text>
+          {onCreateTeammate && (
+            <>
+              <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate} block>
+                Create teammate
+              </Button>
+              <Divider style={{ margin: 0 }}>or</Divider>
+            </>
+          )}
+          <Typography.Text strong>Move an existing teammate here</Typography.Text>
           <Select
             showSearch
             placeholder="Select a teammate"
@@ -407,7 +422,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             loading={assigningTeammate}
             disabled={!selectedTeammateId || !board || !client}
           >
-            Assign
+            Move here
           </Button>
         </Space>
       </div>

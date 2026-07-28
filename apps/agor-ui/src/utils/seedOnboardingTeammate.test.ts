@@ -16,7 +16,6 @@ const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSessio
 function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
   const onWarn = vi.fn();
   const onCreateBranch = vi.fn();
-  const onUpdateBranch = vi.fn();
   const onCreateSession = vi.fn(async () => 'session-1');
   const input: SeedOnboardingTeammateInput = {
     frameworkRepo: { repo_id: 'repo-fw', slug: 'preset-io/agor-teammate' } as Repo,
@@ -29,12 +28,11 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     client: {} as SeedOnboardingTeammateInput['client'],
     repoById: new Map(),
     onCreateBranch,
-    onUpdateBranch,
     onCreateSession,
     onWarn,
     ...overrides,
   };
-  return { input, onWarn, onCreateBranch, onUpdateBranch, onCreateSession };
+  return { input, onWarn, onCreateBranch, onCreateSession };
 }
 
 describe('seedOnboardingTeammate', () => {
@@ -47,7 +45,7 @@ describe('seedOnboardingTeammate', () => {
     } as Branch);
     startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
 
-    const { input, onWarn, onCreateBranch, onUpdateBranch, onCreateSession } = setup();
+    const { input, onWarn, onCreateBranch, onCreateSession } = setup();
     const result = await seedOnboardingTeammate(input);
 
     // Branch is created on the framework repo, reusing the wizard's board.
@@ -59,7 +57,7 @@ describe('seedOnboardingTeammate', () => {
         repoId: 'repo-fw',
         boardId: 'board-1',
       }),
-      expect.objectContaining({ onCreateBranch, onUpdateBranch })
+      expect.objectContaining({ onCreateBranch })
     );
 
     // Onboarding session is started for the created branch.

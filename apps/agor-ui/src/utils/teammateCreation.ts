@@ -1,4 +1,4 @@
-import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, TeammateConfig } from '@agor-live/client';
 import { slugify } from '@/utils/repoSlug';
 import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
@@ -36,17 +36,14 @@ export interface TeammateCreationDeps {
       notes?: string | null;
     }
   ) => Promise<Branch | null>;
-  onUpdateBranch: (
-    branchId: string,
-    updates: { board_id?: BoardID; custom_context?: Record<string, unknown>; notes?: string | null }
-  ) => void | Promise<void>;
 }
 
 /**
- * Shared teammate creation logic used by CreateDialog (via App.tsx).
+ * Shared teammate creation logic used by CreateDialog (via App.tsx) and the
+ * onboarding wizard.
  *
- * Flow: resolve repo → create board → create branch → tag branch with
- * teammate metadata → designate the branch as the board primary.
+ * Flow: resolve repo → reuse or create a board → create the branch with
+ * teammate metadata on the initial row.
  */
 export async function createTeammateBranch(
   input: TeammateCreationInput,
@@ -88,9 +85,8 @@ export async function createTeammateBranch(
     createdViaOnboarding: input.createdViaOnboarding ?? false,
   };
 
-  // Create the branch with teammate metadata on the initial row. That keeps
-  // the board card consistent immediately and avoids a race where a later
-  // executor readiness patch can arrive before the UI sees the metadata patch.
+  // Carry teammate metadata on the initial create so the board card is
+  // consistent immediately, avoiding a race with a later executor-readiness patch.
   const branch = await deps.onCreateBranch(input.repoId, {
     name: branchName,
     ref: branchName,
@@ -102,19 +98,9 @@ export async function createTeammateBranch(
     ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
   });
 
-  if (branch) {
-    // Assign to board (if not already passed via boardId above)
-    if (boardId && !branch.board_id) {
-      await deps.onUpdateBranch(branch.branch_id, {
-        board_id: boardId as BoardID,
-      });
-    }
-    if (boardId) {
-      await deps.client
-        ?.service('boards')
-        .setPrimaryTeammate({ boardId, branchId: branch.branch_id });
-    }
-  }
-
+  // No explicit setPrimaryTeammate here: the branches create hook promotes a new
+  // teammate to board primary only when the board has none (setPrimaryTeammateIfUnset).
+  // Forcing it from ungated create entry points would silently demote a board's
+  // existing primary teammate.
   return branch;
 }
