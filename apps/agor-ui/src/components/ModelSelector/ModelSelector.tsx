@@ -121,9 +121,10 @@ const PIN_PLACEHOLDERS: Record<string, string> = {
 /**
  * Model Selector Component
  *
- * Presents a curated, richly-labelled list of model aliases (latest per family)
- * and a "Pin a specific version…" affordance for exact model IDs. Picking from
- * the list maps to `mode: 'alias'`; a pinned/custom ID maps to `mode: 'exact'`.
+ * Presents the complete discovered, richly-labelled list of model aliases with
+ * the default first, plus a "Pin a specific version…" affordance for exact
+ * model IDs. Picking from the list maps to `mode: 'alias'`; a pinned/custom ID
+ * maps to `mode: 'exact'`.
  */
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
@@ -265,7 +266,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
 
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
-  // version, anything else is a curated alias selection.
+  // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
   useEffect(() => {
     setPinned(value?.mode === 'exact');
@@ -328,8 +329,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     selectAlias(curated.some((m) => m.id === currentModel) ? currentModel : fallbackModel);
   };
 
-  // Alias options: curated list, with the currently-selected alias preserved
-  // even if curation would otherwise hide it (e.g. a superseded version).
+  // Preserve the currently-selected alias even if it is absent from the latest
+  // discovery result.
   const aliasOptions = curated.map((m) => ({
     value: m.id,
     label: m.displayName,
@@ -389,7 +390,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       searchText: o.searchText,
     }));
     // Compact has no pin toggle, so an exact/pinned current value would be
-    // absent from the curated list — always surface the current selection.
+    // absent from the discovered list — always surface the current selection.
     if (currentModel && !compactOptions.some((o) => o.value === currentModel)) {
       const norm = normalizedList.find((m) => m.id === currentModel);
       compactOptions.unshift({
