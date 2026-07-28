@@ -21,6 +21,7 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -90,7 +91,7 @@ function isValidManifest(value: unknown): value is PriorityContextManifest {
 
 /**
  * Open `absolutePath` once and read at most `maxBytes` from that single
- * file descriptor — closes two gaps a separate `stat()` + `readFile()`
+ * file descriptor — closes three gaps a separate `stat()` + `readFile()`
  * pair would leave open:
  *
  * - A regular file can grow between an initial size check and a later
@@ -102,28 +103,50 @@ function isValidManifest(value: unknown): value is PriorityContextManifest {
  *   per-session prompt lock (`withSessionTurnLock`). `handle.stat()` on
  *   the open descriptor rejects anything that isn't a regular file before
  *   any read is attempted.
+ * - Opening a FIFO with a plain read-only flag can itself block until a
+ *   writer connects, before `stat()` ever runs. `O_NONBLOCK` makes the
+ *   `open()` call itself return immediately instead of waiting for a
+ *   writer; it has no effect on reading a regular file.
  *
- * Reads `maxBytes + 1` bytes so an over-budget file can be distinguished
- * from one that exactly fits, without ever holding more than
- * `maxBytes + 1` bytes in memory. Returns `undefined` for anything that
- * can't be opened or isn't a regular file (treated the same as a missing
- * file by callers); `truncated: true` when the real content exceeds
- * `maxBytes`.
+ * Reads up to `maxBytes + 1` bytes, looping until EOF or the cap is hit —
+ * `FileHandle.read()` is allowed to return fewer bytes than requested
+ * before EOF, so a single call isn't enough to guarantee the full content
+ * was read. Memory never exceeds `maxBytes + 1` bytes. Returns `undefined`
+ * for anything that can't be opened or isn't a regular file (treated the
+ * same as a missing file by callers); `truncated: true` when the real
+ * content exceeds `maxBytes`,
+ * alongside the exact number of content bytes actually accepted
+ * (`bytesRead`, always `<= maxBytes`) so callers doing their own budget
+ * accounting don't need to re-derive it from the decoded string (which can
+ * disagree with the source byte count across a split/invalid UTF-8
+ * sequence at the truncation boundary).
  */
 async function readBoundedFile(
   absolutePath: string,
   maxBytes: number
-): Promise<{ content: string; truncated: boolean } | undefined> {
+): Promise<{ content: string; bytesRead: number; truncated: boolean } | undefined> {
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(absolutePath, 'r');
+    handle = await fs.open(absolutePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
     const stats = await handle.stat();
     if (!stats.isFile()) return undefined;
 
     const buffer = Buffer.alloc(maxBytes + 1);
-    const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0);
-    const truncated = bytesRead > maxBytes;
-    return { content: buffer.toString('utf-8', 0, Math.min(bytesRead, maxBytes)), truncated };
+    let total = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break; // EOF
+      total += bytesRead;
+      if (total >= buffer.length) break;
+    }
+
+    const truncated = total > maxBytes;
+    const acceptedBytes = Math.min(total, maxBytes);
+    return {
+      content: buffer.toString('utf-8', 0, acceptedBytes),
+      bytesRead: acceptedBytes,
+      truncated,
+    };
   } catch {
     return undefined;
   } finally {
@@ -330,7 +353,7 @@ export async function readPriorityContextFiles(
     }
 
     results.push({ path: relativePath, content: bounded.content });
-    totalBytes += Buffer.byteLength(bounded.content, 'utf-8');
+    totalBytes += bounded.bytesRead;
   }
 
   return results;

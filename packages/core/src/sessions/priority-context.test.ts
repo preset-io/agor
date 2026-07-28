@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -192,6 +193,23 @@ describe('readPriorityContextFiles', () => {
 
     const files = await readPriorityContextFiles(worktree, {
       files: ['NOT_A_FILE.md', 'SOUL.md'],
+    });
+
+    expect(files).toEqual([{ path: 'SOUL.md', content: 'ok' }]);
+  });
+
+  it('skips a FIFO with no writer instead of hanging (open() must not block)', {
+    timeout: 5_000,
+  }, async () => {
+    const fifoPath = path.join(worktree, 'PIPE.md');
+    execFileSync('mkfifo', [fifoPath]);
+    await writeFile('SOUL.md', 'ok');
+
+    // No writer ever connects to the FIFO. A plain blocking open() would
+    // hang here indefinitely (while holding the daemon's per-session
+    // prompt lock in production); this must return promptly instead.
+    const files = await readPriorityContextFiles(worktree, {
+      files: ['PIPE.md', 'SOUL.md'],
     });
 
     expect(files).toEqual([{ path: 'SOUL.md', content: 'ok' }]);
