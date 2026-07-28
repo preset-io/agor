@@ -18,10 +18,12 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { userInfo } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
+  assertRemoteRefVisibleForClone,
   categorizeGitError,
   cleanBranch,
   cloneRepo,
@@ -32,10 +34,15 @@ import {
   deleteBranchDirectory,
   deleteRepoDirectory,
   ensureGitRemoteUrl,
+  getDefaultBranch,
+  getRemoteUrl,
   getReposDir,
+  isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
+  scanGitConfigRemoteCredentials,
+  scrubGitConfigRemoteCredentials,
   stripGitUrlCredentials,
 } from '../git/index.js';
 import type {
@@ -48,13 +55,156 @@ import type {
   GitBranchCleanPayload,
   GitBranchRemovePayload,
   GitClonePayload,
+  GitManagedCredentialsReconcilePayload,
   GitRepoDeletePayload,
+  GitRepoInspectPayload,
+  GitRepoPreflightPayload,
   GitRepoRealignOriginPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 import { fixBranchGitDirPermissionsBasic } from './unix.js';
+
+/**
+ * Self-hosted compatibility operation. The daemon authorizes the request and
+ * launches this narrow inspection under the caller's resolved executor Unix
+ * identity; the command deliberately has no daemon capability token.
+ */
+export async function handleGitRepoInspect(
+  payload: GitRepoInspectPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  try {
+    let inputPath = payload.params.path.trim();
+    if (inputPath.startsWith('~')) {
+      inputPath = join(userInfo().homedir, inputPath.slice(1).replace(/^[/\\]?/, ''));
+    }
+    if (!isAbsolute(inputPath)) throw new Error(`Path must be absolute: ${inputPath}`);
+    const repoPath = resolve(inputPath);
+    if (!(await isValidGitRepo(repoPath))) {
+      throw new Error(`Not a valid git repository: ${repoPath}`);
+    }
+    const remoteUrl = stripGitUrlCredentials((await getRemoteUrl(repoPath)) ?? '') || undefined;
+    let environment: unknown;
+    let environmentWarning: string | undefined;
+    try {
+      environment = parseAgorYml(join(repoPath, '.agor.yml')) ?? undefined;
+    } catch {
+      environmentWarning = 'Failed to parse .agor.yml; repository registration will continue.';
+    }
+    const scan = await scanGitConfigRemoteCredentials(repoPath);
+    return {
+      success: true,
+      data: {
+        path: repoPath,
+        defaultBranch: await getDefaultBranch(repoPath),
+        remoteUrl,
+        environment,
+        credentialFindingCount: scan.findings.length,
+        ...(environmentWarning ? { environmentWarning } : {}),
+        ...(options.dryRun ? { dryRun: true } : {}),
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: 'GIT_REPO_INSPECT_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+export async function handleGitRepoPreflight(
+  payload: GitRepoPreflightPayload,
+  _options: CommandOptions
+): Promise<ExecutorResult> {
+  let client: AgorClient | null = null;
+  try {
+    client = await createExecutorClient(
+      payload.daemonUrl || 'http://localhost:3030',
+      payload.sessionToken
+    );
+    const repo = await client.service('repos').get(payload.params.repoId);
+    if (repo.local_path) await scrubGitConfigRemoteCredentials(repo.local_path);
+    if (repo.remote_url && payload.params.ref) {
+      const env = await fetchUserGitEnvironment(client, payload.params.userId);
+      await assertRemoteRefVisibleForClone({
+        remoteUrl: stripGitUrlCredentials(repo.remote_url),
+        ref: payload.params.ref,
+        refType: payload.params.refType ?? 'branch',
+        env,
+      });
+    }
+    return { success: true, data: { repoId: payload.params.repoId } };
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: 'GIT_REPO_PREFLIGHT_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  } finally {
+    client?.io.disconnect();
+  }
+}
+
+export async function handleGitManagedCredentialsReconcile(
+  payload: GitManagedCredentialsReconcilePayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  let client: AgorClient | null = null;
+  try {
+    client = await createExecutorClient(
+      payload.daemonUrl || 'http://localhost:3030',
+      payload.sessionToken
+    );
+    const fetchAll = async (service: 'repos' | 'branches', query: Record<string, unknown>) => {
+      const rows: Array<{
+        repo_id?: string;
+        repo_type?: string;
+        local_path?: string;
+        path?: string;
+      }> = [];
+      while (true) {
+        const result = await client!.service(service).find({
+          query: { ...query, $limit: 1000, $skip: rows.length },
+        });
+        const page = Array.isArray(result) ? result : result.data;
+        rows.push(...page);
+        if (Array.isArray(result) || page.length === 0 || rows.length >= result.total) return rows;
+      }
+    };
+    const repos = await fetchAll('repos', {});
+    let findings = 0;
+    for (const repo of repos.filter((item) => item.repo_type === 'remote')) {
+      if (!options.dryRun && repo.local_path)
+        findings += (await scrubGitConfigRemoteCredentials(repo.local_path)).findings.length;
+      const branches = await fetchAll('branches', {
+        repo_id: repo.repo_id,
+        archived: { $in: [true, false] },
+      });
+      for (const branch of branches) {
+        if (!options.dryRun && branch.path)
+          findings += (await scrubGitConfigRemoteCredentials(branch.path)).findings.length;
+      }
+    }
+    return { success: true, data: { findings, dryRun: options.dryRun === true } };
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: 'GIT_MANAGED_CREDENTIALS_RECONCILE_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  } finally {
+    client?.io.disconnect();
+  }
+}
 
 /**
  * Fetch the requesting user's git environment via Feathers RPC.

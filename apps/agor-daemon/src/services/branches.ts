@@ -13,8 +13,10 @@ import {
   ENVIRONMENT,
   getBranchesDir,
   loadConfig,
+  loadConfigSync,
   PAGINATION,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   BoardRepository,
@@ -1286,6 +1288,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (
+      (branch.storage_mode ?? 'worktree') === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
+      );
+    }
 
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically

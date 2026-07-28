@@ -4,12 +4,11 @@
  * Provides REST + WebSocket API for repository management.
  * Uses DrizzleService adapter with RepoRepository.
  *
- * Git clone/worktree mutations for queued branch/repo operations are delegated
- * to the executor process for Unix isolation. The daemon still performs a small
- * set of local preflight/repair checks for registered repo metadata.
+ * Repository Git/filesystem inspection and mutation are delegated to the
+ * executor process. The daemon owns authorization, pure validation, and DB
+ * metadata only.
  */
 
-import { homedir } from 'node:os';
 import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
@@ -19,11 +18,12 @@ import {
   getReposDir,
   isValidGitUrl,
   isValidSlug,
+  loadConfigSync,
   normalizeRepoUrl,
   PAGINATION,
-  parseAgorYml,
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -33,14 +33,6 @@ import {
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import {
-  assertRemoteRefVisibleForClone,
-  getDefaultBranch,
-  getRemoteUrl,
-  isValidGitRepo,
-  scanGitConfigRemoteCredentials,
-  scrubGitConfigRemoteCredentials,
-} from '@agor/core/git/exec';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
@@ -74,7 +66,7 @@ export type RepoParams = QueryParams<{
   cleanup?: boolean; // For delete operations: true = delete filesystem, false = database only
 }>;
 
-async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise<RepoSlug> {
+function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: string): RepoSlug {
   if (explicitSlug) {
     if (!isValidSlug(explicitSlug)) {
       throw new Error(`Invalid slug format: ${explicitSlug}`);
@@ -98,7 +90,6 @@ async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise
     return `local/${sanitized}` as RepoSlug;
   };
 
-  const remoteUrl = await getRemoteUrl(path);
   if (remoteUrl && isValidGitUrl(remoteUrl)) {
     try {
       const remoteSlug = extractSlugFromUrl(remoteUrl);
@@ -109,7 +100,7 @@ async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise
   }
 
   throw new Error(
-    `Could not auto-detect slug for local repository at ${path}.\nUse --slug to provide one explicitly`
+    'Could not auto-detect slug for local repository.\nUse --slug to provide one explicitly'
   );
 }
 
@@ -135,6 +126,42 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     this.repoRepo = repoRepo;
     this.app = app;
     this.db = db;
+  }
+
+  override async create(
+    data: Partial<Repo> | Partial<Repo>[],
+    params?: RepoParams
+  ): Promise<Repo | Repo[]> {
+    const rows = Array.isArray(data) ? data : [data];
+    if (
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth' &&
+      rows.some((row) => row.repo_type === 'local')
+    ) {
+      throw new BadRequest(
+        'Local repository registration is unavailable in hosted multi-tenant mode.'
+      );
+    }
+    return super.create(data, params);
+  }
+
+  override async patch(
+    id: string | null,
+    data: Partial<Repo>,
+    params?: RepoParams
+  ): Promise<Repo | Repo[]> {
+    if (
+      id &&
+      data.repo_type === 'local' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      const current = await this.get(id, params);
+      if (current.repo_type !== 'local') {
+        throw new BadRequest(
+          'Local repository registration is unavailable in hosted multi-tenant mode.'
+        );
+      }
+    }
+    return super.patch(id, data, params);
   }
 
   /**
@@ -472,6 +499,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // post-patch shape so we catch both "URL provided in patch" and
     // "URL already on the row".
     const effectiveType = cleanPatch.repo_type ?? current.repo_type;
+    if (
+      effectiveType === 'local' &&
+      current.repo_type !== 'local' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        'Local repository registration is unavailable in hosted multi-tenant mode.'
+      );
+    }
     const effectiveRemoteUrl =
       'remote_url' in cleanPatch ? cleanPatch.remote_url : current.remote_url;
     if (effectiveType === 'remote' && !effectiveRemoteUrl) {
@@ -490,33 +526,42 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { path: string; slug?: string },
     params?: RepoParams
   ): Promise<Repo> {
+    if (resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth') {
+      throw new BadRequest(
+        'Local repository registration is unavailable in hosted multi-tenant mode.'
+      );
+    }
     if (!data.path) {
       throw new Error('Path is required to add a local repository');
     }
 
-    let inputPath = data.path.trim();
+    const inputPath = data.path.trim();
     if (!inputPath) {
       throw new Error('Path is required to add a local repository');
     }
 
-    // Expand leading ~ to user's home directory
-    if (inputPath.startsWith('~')) {
-      const homeDir = homedir();
-      inputPath = path.join(homeDir, inputPath.slice(1).replace(/^[/\\]?/, ''));
-    }
-
-    if (!path.isAbsolute(inputPath)) {
-      throw new Error(`Path must be absolute: ${inputPath}`);
-    }
-
-    const repoPath = path.resolve(inputPath);
-
-    const isValidRepo = await isValidGitRepo(repoPath);
-    if (!isValidRepo) {
-      throw new Error(`Not a valid git repository: ${repoPath}`);
-    }
-
-    const slug = await deriveLocalRepoSlug(repoPath, data.slug);
+    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+    const asUser = await resolveExecutorReadAsUser(this.db, userId);
+    const inspection = await runExecutorCommand(
+      {
+        command: 'git.repo.inspect',
+        daemonUrl: getDaemonUrl(),
+        params: { path: inputPath },
+      },
+      { asUser, logPrefix: '[repos.local.inspect]' }
+    );
+    if (!inspection.success)
+      throw new Error(inspection.error?.message ?? 'Repository inspection failed');
+    const metadata = inspection.data as {
+      path: string;
+      defaultBranch?: string;
+      remoteUrl?: string;
+      environment?: RepoEnvironment;
+      credentialFindingCount: number;
+      environmentWarning?: string;
+    };
+    const repoPath = metadata.path;
+    const slug = deriveLocalRepoSlug(metadata.remoteUrl, data.slug);
 
     const existing = await this.repoRepo.findBySlug(slug);
     if (existing) {
@@ -525,30 +570,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    const defaultBranch = await getDefaultBranch(repoPath);
-
-    const agorYmlPath = path.join(repoPath, '.agor.yml');
-    let environment: RepoEnvironment | undefined;
-
-    try {
-      const parsed = parseAgorYml(agorYmlPath);
-      if (parsed) {
-        environment = parsed;
-        console.log(`✅ Loaded environment config from .agor.yml for ${slug}`);
-      }
-    } catch (error) {
+    if (metadata.credentialFindingCount > 0) {
       console.warn(
-        `⚠️  Failed to parse .agor.yml for ${slug}:`,
-        error instanceof Error ? error.message : String(error)
+        `[repos.local] Registered local repo has ${metadata.credentialFindingCount} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
       );
     }
-
-    const remoteUrl = stripGitUrlCredentials((await getRemoteUrl(repoPath)) ?? '') || undefined;
-    const scanResult = await scanGitConfigRemoteCredentials(repoPath);
-    if (scanResult.findings.length > 0) {
-      console.warn(
-        `[repos.local] Registered local repo has ${scanResult.findings.length} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
-      );
+    if (metadata.environmentWarning) {
+      console.warn(`[repos.local] ${metadata.environmentWarning}`);
     }
     const name = slug.split('/').pop() ?? slug;
 
@@ -557,10 +585,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         repo_type: 'local',
         slug,
         name,
-        remote_url: remoteUrl,
+        remote_url: metadata.remoteUrl,
         local_path: repoPath,
-        default_branch: defaultBranch,
-        environment,
+        default_branch: metadata.defaultBranch,
+        environment: metadata.environment,
       },
       params
     )) as Repo;
@@ -644,6 +672,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const { defaultMode } = resolveBranchStorageConfig();
     const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
     ensureBranchStorageModeAllowed(storageMode);
+    if (
+      storageMode === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
+      );
+    }
     const cloneDepth = data.clone_depth;
     if (cloneDepth !== undefined) {
       if (storageMode !== 'clone') {
@@ -672,30 +708,31 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Use storage_mode='worktree' or register the repo with a remote first.`
         );
       }
-      const cloneRemoteUrl = repo.remote_url;
-      const cloneRef = data.createBranch ? data.sourceBranch || data.ref : data.ref;
-      const usersService = this.app.service('users') as unknown as {
-        getGitEnvironment(
-          data: { userId: string },
-          params?: RepoParams
-        ): Promise<Record<string, string>>;
-      };
-      const gitEnv = await usersService.getGitEnvironment({ userId }, params);
-      await assertRemoteRefVisibleForClone({
-        remoteUrl: cloneRemoteUrl,
-        ref: cloneRef,
-        refType: data.refType || 'branch',
-        env: gitEnv,
-      });
     }
-
-    if (repo.local_path) {
-      const scrubResult = await scrubGitConfigRemoteCredentials(repo.local_path);
-      if (scrubResult.findings.length > 0) {
-        console.warn(
-          `[ReposService.createBranch] Scrubbed ${scrubResult.findings.length} credential-bearing git remote URL(s) from repo '${repo.slug}' before branch creation.`
-        );
-      }
+    const preflightToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    );
+    const preflightAsUser = await resolveExecutorReadAsUser(this.db, userId);
+    const preflight = await runExecutorCommand(
+      {
+        command: 'git.repo.preflight',
+        sessionToken: preflightToken,
+        daemonUrl: getDaemonUrl(),
+        params: {
+          repoId: repo.repo_id,
+          userId,
+          ...(storageMode === 'clone'
+            ? {
+                ref: data.createBranch ? data.sourceBranch || data.ref : data.ref,
+                refType: data.refType || 'branch',
+              }
+            : {}),
+        },
+      },
+      { asUser: preflightAsUser, logPrefix: '[repos.branch.preflight]' }
+    );
+    if (!preflight.success) {
+      throw new Error(preflight.error?.message ?? 'Repository preflight failed');
     }
 
     // NOTE: Filesystem preflights (target-dir-exists,

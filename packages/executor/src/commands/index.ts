@@ -30,7 +30,10 @@ import {
   handleGitBranchClean,
   handleGitBranchRemove,
   handleGitClone,
+  handleGitManagedCredentialsReconcile,
   handleGitRepoDelete,
+  handleGitRepoInspect,
+  handleGitRepoPreflight,
   handleGitRepoRealignOrigin,
 } from './git.js';
 import { handleBranchKnowledgeRead, handleBranchKnowledgeWrite } from './knowledge.js';
@@ -191,6 +194,9 @@ registerCommand('environment.lifecycle', handleEnvironmentLifecycle);
 registerCommand('environment.logs', handleEnvironmentLogs);
 registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
 registerCommand('git.repo.delete', handleGitRepoDelete);
+registerCommand('git.repo.inspect', handleGitRepoInspect);
+registerCommand('git.repo.preflight', handleGitRepoPreflight);
+registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentialsReconcile);
 registerCommand('unix.sync-repo', handleUnixSyncRepo);
 registerCommand('unix.sync-branch', handleUnixSyncBranch);
 registerCommand('unix.sync-board', handleUnixSyncBoard);

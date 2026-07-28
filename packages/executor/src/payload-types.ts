@@ -754,6 +754,35 @@ export const GitRepoRealignOriginPayloadSchema = BasePayloadSchema.extend({
 
 export type GitRepoRealignOriginPayload = z.infer<typeof GitRepoRealignOriginPayloadSchema>;
 
+export const GitRepoInspectPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.repo.inspect'),
+  params: z.object({
+    path: z.string().min(1),
+  }),
+});
+export type GitRepoInspectPayload = z.infer<typeof GitRepoInspectPayloadSchema>;
+
+export const GitRepoPreflightPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.repo.preflight'),
+  sessionToken: z.string(),
+  params: z.object({
+    repoId: z.string().uuid(),
+    ref: z.string().optional(),
+    refType: z.enum(['branch', 'tag']).optional(),
+    userId: z.string().uuid().optional(),
+  }),
+});
+export type GitRepoPreflightPayload = z.infer<typeof GitRepoPreflightPayloadSchema>;
+
+export const GitManagedCredentialsReconcilePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('git.managed-credentials.reconcile'),
+  sessionToken: z.string(),
+  params: z.object({}),
+});
+export type GitManagedCredentialsReconcilePayload = z.infer<
+  typeof GitManagedCredentialsReconcilePayloadSchema
+>;
+
 // ═══════════════════════════════════════════════════════════
 // Git Repo Delete Payload
 // ═══════════════════════════════════════════════════════════
@@ -1014,6 +1043,9 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   GitRepoRealignOriginPayloadSchema,
+  GitRepoInspectPayloadSchema,
+  GitRepoPreflightPayloadSchema,
+  GitManagedCredentialsReconcilePayloadSchema,
   GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
   UnixSyncBoardPayloadSchema,
@@ -1073,6 +1105,9 @@ export function getSupportedCommands(): string[] {
     'git.branch.add',
     'git.branch.remove',
     'git.branch.clean',
+    'git.repo.inspect',
+    'git.repo.preflight',
+    'git.managed-credentials.reconcile',
     'branch.files.list',
     'branch.files.browse',
     'branch.files.read',
