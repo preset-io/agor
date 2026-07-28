@@ -1121,6 +1121,29 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       []
     );
 
+    // Click-to-pan on the minimap: a plain click re-centers the main
+    // viewport on the clicked point. React Flow hands us `position` already
+    // in flow (board) coordinates — the same viewBox transform that drives
+    // the draggable mask — so there's no coordinate math to reinvent here.
+    //
+    // Drag-vs-click is handled for us: with `pannable`, React Flow drives the
+    // mask via d3-zoom, which calls d3's `dragEnable(view, moved)` on mouseup.
+    // A real drag (pointer moved) installs a capture-phase click suppressor,
+    // so this `onClick` fires only for a genuine click and never as the tail
+    // of a drag. Zoom is preserved and we reuse the same animated recenter as
+    // `recenterOnNode`.
+    const handleMiniMapClick = useCallback(
+      (_event: React.MouseEvent, position: { x: number; y: number }) => {
+        const instance = reactFlowInstanceRef.current;
+        if (!instance) return;
+        instance.setCenter(position.x, position.y, {
+          zoom: instance.getZoom(),
+          duration: 400,
+        });
+      },
+      []
+    );
+
     useRegisterRecenter(recenterOnNode);
 
     const consumePendingRecenter = useConsumePendingRecenter();
@@ -2812,6 +2835,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             </Controls>
             <MiniMap
               nodeColor={miniMapNodeColor}
+              onClick={handleMiniMapClick}
               pannable
               zoomable
               style={{
