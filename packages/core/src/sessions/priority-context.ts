@@ -85,9 +85,40 @@ function formatDateToken(date: Date): string {
   return date.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-async function fileExists(absolutePath: string): Promise<boolean> {
+/**
+ * Resolve `relativePath` against `worktreePath` and confirm the result
+ * doesn't escape the worktree (`../`, an absolute path, a symlink pointing
+ * outside, etc.). The manifest is repo-authored, but it's still read as
+ * plain untrusted-ish data — a typo'd or malicious `../../.ssh/id_rsa`
+ * entry must never turn into an arbitrary host-file read. Returns
+ * `undefined` for anything outside the worktree, which callers treat the
+ * same as a missing file (`onMissing: 'skip'`).
+ */
+async function resolveWithinWorktree(
+  worktreePath: string,
+  relativePath: string
+): Promise<string | undefined> {
+  if (path.isAbsolute(relativePath)) return undefined;
+
+  const root = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+  const candidate = path.resolve(root, relativePath);
+  const real = await fs.realpath(candidate).catch(() => candidate);
+
+  const relativeToRoot = path.relative(root, real);
+  const escapesRoot = relativeToRoot === '' ? false : relativeToRoot.startsWith('..');
+  if (escapesRoot || path.isAbsolute(relativeToRoot)) return undefined;
+
+  return candidate;
+}
+
+async function fileExistsWithinWorktree(
+  worktreePath: string,
+  relativePath: string
+): Promise<boolean> {
+  const safePath = await resolveWithinWorktree(worktreePath, relativePath);
+  if (!safePath) return false;
   try {
-    await fs.access(absolutePath);
+    await fs.access(safePath);
     return true;
   } catch {
     return false;
@@ -108,20 +139,21 @@ async function resolveTemplatedPath(
   if (!relativePath.includes(TODAY_TOKEN)) return relativePath;
 
   const todayPath = relativePath.replace(TODAY_TOKEN, formatDateToken(now));
-  if (await fileExists(path.join(worktreePath, todayPath))) return todayPath;
+  if (await fileExistsWithinWorktree(worktreePath, todayPath)) return todayPath;
 
   const yesterday = new Date(now);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const yesterdayPath = relativePath.replace(TODAY_TOKEN, formatDateToken(yesterday));
-  if (await fileExists(path.join(worktreePath, yesterdayPath))) return yesterdayPath;
+  if (await fileExistsWithinWorktree(worktreePath, yesterdayPath)) return yesterdayPath;
 
   // Neither exists — return today's path so the normal onMissing skip applies.
   return todayPath;
 }
 
 /**
- * Read a manifest's listed files from the worktree. Missing files are
- * silently skipped — `onMissing: 'skip'` is the only supported mode.
+ * Read a manifest's listed files from the worktree. Missing files, and any
+ * path that resolves outside the worktree, are silently skipped —
+ * `onMissing: 'skip'` is the only supported mode.
  */
 export async function readPriorityContextFiles(
   worktreePath: string,
@@ -132,8 +164,15 @@ export async function readPriorityContextFiles(
 
   for (const rawPath of manifest.files) {
     const relativePath = await resolveTemplatedPath(worktreePath, rawPath, now);
+    const safePath = await resolveWithinWorktree(worktreePath, relativePath);
+    if (!safePath) {
+      // resolveWithinWorktree only returns undefined for an absolute path or
+      // one that escapes the worktree root — never for a merely-missing file.
+      console.warn(`[priority-context] Skipping "${rawPath}": resolves outside the worktree`);
+      continue;
+    }
     try {
-      const content = await fs.readFile(path.join(worktreePath, relativePath), 'utf-8');
+      const content = await fs.readFile(safePath, 'utf-8');
       results.push({ path: relativePath, content });
     } catch {
       // onMissing: 'skip' — the only supported mode today.

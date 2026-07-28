@@ -77,6 +77,34 @@ describe('readPriorityContextFiles', () => {
     expect(files).toEqual([{ path: 'SOUL.md', content: 'Be warm and concise.' }]);
   });
 
+  it('refuses to read a path that escapes the worktree via ../', async () => {
+    const secretDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-priority-context-secret-'));
+    try {
+      await fs.writeFile(path.join(secretDir, 'secret.md'), 'top secret', 'utf-8');
+      const traversal = `${path.relative(worktree, secretDir)}/secret.md`;
+
+      const files = await readPriorityContextFiles(worktree, { files: [traversal] });
+
+      expect(files).toEqual([]);
+    } finally {
+      await fs.rm(secretDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to read an absolute path', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-priority-context-abs-'));
+    try {
+      const absoluteFile = path.join(outside, 'secret.md');
+      await fs.writeFile(absoluteFile, 'top secret', 'utf-8');
+
+      const files = await readPriorityContextFiles(worktree, { files: [absoluteFile] });
+
+      expect(files).toEqual([]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('resolves a {today} path to the current date file when it exists', async () => {
     await writeFile('memory/2026-07-28.md', "today's log");
 
