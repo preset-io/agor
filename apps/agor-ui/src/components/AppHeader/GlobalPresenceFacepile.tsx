@@ -64,6 +64,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
         activeUsers={allActiveUsers}
         currentUserId={currentUser?.user_id}
         maxVisible={maxVisible}
+        avatarSize={32}
         boardById={boardById}
         onUserClick={onUserClick}
         style={{
