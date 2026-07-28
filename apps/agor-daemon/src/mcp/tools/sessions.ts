@@ -1583,9 +1583,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //
   // Discovery tool so MCP-driven agents can find valid `model` strings without
   // having to scrape tool descriptions. Sourced from the same in-process model
-  // registries the UI uses (packages/core/src/models/*), so when a new model
-  // ships and the registry is updated, this tool returns it on the very next
-  // call — no MCP-tool-description redeploy needed.
+  // registries the UI uses (packages/core/src/models/*). This reads the
+  // registry loaded by the running daemon; it is not provider discovery.
   //
   // Caveats:
   //   - Gemini's authoritative list is fetched live from the Google API per
@@ -1599,7 +1598,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_models_list',
     {
       description:
-        'List valid model IDs grouped by agenticTool. Use this to discover what to pass for `modelConfig` (or its string shorthand) in agor_sessions_create / spawn / prompt. Sourced live from the daemon model registry — when new models ship and the registry is updated, this tool returns them on the next call.',
+        'List selectable model aliases grouped by agenticTool. Use this to discover what to pass for `modelConfig` (or its string shorthand) in agor_sessions_create / spawn / prompt. Lists the registry loaded by the running daemon; provider-specific exact IDs may be account-dependent.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
@@ -1620,6 +1619,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         id,
         displayName: meta.name,
         description: meta.description,
+        status: meta.status,
+        availability: meta.availability,
       }));
 
       const copilotModels = Object.entries(COPILOT_MODEL_METADATA).map(([id, meta]) => ({
@@ -1648,7 +1649,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
-          note: 'Codex defaults to gpt-5.6-sol; omit modelConfig unless a specific model is required. Use gpt-5.6-terra for balanced everyday work or gpt-5.6-luna for clear, high-volume tasks. Legacy Codex aliases are intentionally omitted from this selectable list.',
+          note: 'Latest models are listed first; omit modelConfig to use the default. Current models are supported defaults; older entries marked provider-dependent may vary by Codex account and are checked by Codex at startup. This is Agor’s known-model registry, not a dynamic Codex CLI/provider listing. Provider-specific IDs absent from this list must be passed with mode "exact". Known unsupported legacy aliases are omitted.',
         },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,

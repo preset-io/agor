@@ -6,6 +6,7 @@ import {
   DEFAULT_CODEX_MODEL,
   formatUnsupportedAgorCodexModelMessage,
   getCodexModelLifecycle,
+  getCodexModelSelectionError,
   isUnsupportedAgorCodexModel,
 } from './codex.js';
 
@@ -15,14 +16,15 @@ describe('Codex model registry', () => {
     expect(CODEX_MINI_MODEL).toBe('gpt-5.6-terra');
   });
 
-  it('surfaces only selectable models to callers', () => {
+  it('surfaces supported and provider-dependent models newest-first', () => {
     const selectableIds = Object.keys(CODEX_MODEL_METADATA);
 
-    expect(selectableIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-    expect(selectableIds).not.toContain('gpt-5.5');
-    expect(selectableIds).not.toContain('gpt-5.4-mini');
-    expect(selectableIds).not.toContain('gpt-5.4');
+    expect(selectableIds.slice(0, 3)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(selectableIds).toContain('gpt-5.5');
+    expect(selectableIds).toContain('gpt-5.4-mini');
+    expect(selectableIds).toContain('gpt-5.4');
     expect(selectableIds).not.toContain('gpt-5-codex');
+    expect(CODEX_MODEL_METADATA['gpt-5.5'].availability).toBe('provider-dependent');
   });
 
   it('keeps legacy aliases in the lifecycle registry for diagnostics', () => {
@@ -63,5 +65,27 @@ describe('Codex model registry', () => {
     expect(message).toContain('gpt-5.6-sol');
     expect(message).toContain('user defaults');
     expect(message).toContain('omit modelConfig');
+  });
+
+  it('accepts curated aliases and rejects unknown alias selections actionably', () => {
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.6-sol' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.4' })).toBeUndefined();
+
+    const error = getCodexModelSelectionError({
+      mode: 'alias',
+      model: 'gpt-5.6-codex',
+    });
+    expect(error).toContain('gpt-5.6-codex');
+    expect(error).toContain('agor_models_list');
+    expect(error).toContain('mode "exact"');
+  });
+
+  it('allows unknown exact provider IDs but still rejects known unsupported aliases', () => {
+    expect(
+      getCodexModelSelectionError({ mode: 'exact', model: 'account-preview-model' })
+    ).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'exact', model: 'gpt-5-codex' })).toContain(
+      'legacy alias'
+    );
   });
 });

@@ -1337,11 +1337,17 @@ describe('agor_models_list', () => {
     expect(parsed.codex.note).toContain('omit modelConfig');
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
-    expect(codexIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-    expect(codexIds).not.toContain('gpt-5.5');
-    expect(codexIds).not.toContain('gpt-5.4-mini');
-    expect(codexIds).not.toContain('gpt-5.4');
+    expect(codexIds.slice(0, 3)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(codexIds).toContain('gpt-5.5');
+    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).toContain('gpt-5.4');
     expect(codexIds).not.toContain('gpt-5-codex');
+    expect(
+      parsed.codex.models.find((model: { id: string }) => model.id === 'gpt-5.5')
+    ).toMatchObject({
+      status: 'known',
+      availability: 'provider-dependent',
+    });
   });
 });
 

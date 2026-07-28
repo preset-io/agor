@@ -35,9 +35,8 @@ import {
 } from '@agor/core/feathers';
 import {
   formatModelToolMismatchWarning,
-  formatUnsupportedAgorCodexModelMessage,
+  getCodexModelSelectionError,
   isResolvedModelConfig,
-  isUnsupportedAgorCodexModel,
   lintModelToolMatch,
 } from '@agor/core/models';
 import { resolveChildSessionConfig } from '@agor/core/sessions';
@@ -218,13 +217,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     agenticTool: AgenticToolName,
     modelConfig: Session['model_config'] | undefined
   ): void {
-    if (
-      agenticTool === 'codex' &&
-      modelConfig?.model &&
-      isUnsupportedAgorCodexModel(modelConfig.model)
-    ) {
-      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(modelConfig.model));
-    }
+    if (agenticTool !== 'codex' || !modelConfig) return;
+    const modelError = getCodexModelSelectionError(modelConfig);
+    if (modelError) throw new BadRequest(modelError);
   }
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
@@ -332,6 +327,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         model_config: modelConfig,
       };
     }
+    this.assertSupportedModelConfig(
+      (createData.agentic_tool ?? agenticTool) as Session['agentic_tool'],
+      createData.model_config
+    );
     const created = await super.create(createData, params);
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
@@ -357,11 +356,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         agenticTool,
         session.agentic_tool_preset_id
       );
-      return this.sessionRepo.update(
-        session.session_id,
-        presetConfigurationToSessionPatch(agenticTool, preset.configuration),
-        { replaceAgenticConfig: true }
-      );
+      const materialized = presetConfigurationToSessionPatch(agenticTool, preset.configuration);
+      this.assertSupportedModelConfig(agenticTool, materialized.model_config);
+      return this.sessionRepo.update(session.session_id, materialized, {
+        replaceAgenticConfig: true,
+      });
     });
   }
 
@@ -1285,6 +1284,18 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         await assertInlineAgenticConfigurationAllowed(
           this.db,
           requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool)
+        );
+      }
+      // Validate only a newly selected/effective model. Existing persisted
+      // sessions remain patchable when the curated registry changes.
+      if (
+        data.model_config !== undefined ||
+        data.agentic_tool !== undefined ||
+        data.agentic_tool_preset_id !== undefined
+      ) {
+        this.assertSupportedModelConfig(
+          data.agentic_tool ?? current.agentic_tool,
+          data.model_config === undefined ? current.model_config : data.model_config
         );
       }
     }

@@ -39,11 +39,7 @@
  */
 
 import { BadRequest } from '@agor/core/feathers';
-import {
-  formatUnsupportedAgorCodexModelMessage,
-  isResolvedModelConfig,
-  isUnsupportedAgorCodexModel,
-} from '@agor/core/models';
+import { getCodexModelSelectionError, isResolvedModelConfig } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type { CreateSessionInput, HookContext, User } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
@@ -82,12 +78,9 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       throw new BadRequest(`Unsupported agentic tool: ${String(agenticTool)}`);
     }
 
-    if (
-      agenticTool === 'codex' &&
-      data.model_config?.model &&
-      isUnsupportedAgorCodexModel(data.model_config.model)
-    ) {
-      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(data.model_config.model));
+    if (agenticTool === 'codex' && isResolvedModelConfig(data.model_config)) {
+      const modelError = getCodexModelSelectionError(data.model_config);
+      if (modelError) throw new BadRequest(modelError);
     }
 
     if (
@@ -127,12 +120,9 @@ export function applySessionConfigDefaults(opts: ApplySessionConfigDefaultsOpts 
       user,
       overrides: { modelConfig: data.model_config ?? undefined },
     });
-    if (
-      resolved.model_config?.model &&
-      agenticTool === 'codex' &&
-      isUnsupportedAgorCodexModel(resolved.model_config.model)
-    ) {
-      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(resolved.model_config.model));
+    if (agenticTool === 'codex' && resolved.model_config) {
+      const modelError = getCodexModelSelectionError(resolved.model_config);
+      if (modelError) throw new BadRequest(modelError);
     }
 
     if (!hasPermission) {

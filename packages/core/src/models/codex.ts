@@ -11,7 +11,7 @@ export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_MINI_MODEL = 'gpt-5.6-terra';
 
 export type CodexModelStatus = 'current' | 'known';
-export type CodexModelAvailability = 'supported' | 'not-selectable' | 'unsupported';
+export type CodexModelAvailability = 'supported' | 'provider-dependent' | 'unsupported';
 
 export type CodexModelLifecycleMetadata = {
   name: string;
@@ -56,8 +56,8 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5.6',
     description: 'Alias that routes to GPT-5.6 Sol',
     status: 'current',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   // GPT-5.5 models
@@ -66,16 +66,16 @@ const _CODEX_MODEL_REGISTRY = {
     description:
       'Previous frontier model for complex coding, computer use, knowledge work, and research workflows in Codex.',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.5-pro': {
     name: 'GPT-5.5 Pro',
     description: 'Higher-compute GPT-5.5 variant for the toughest professional work',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   // GPT-5.4 models
@@ -83,32 +83,32 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5.4',
     description: 'Frontier model for professional work with strong coding and agentic workflows',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.4-pro': {
     name: 'GPT-5.4 Pro',
     description: 'Higher-compute GPT-5.4 variant for difficult reasoning tasks',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.4-mini': {
     name: 'GPT-5.4 Mini',
     description: 'Fast, efficient model for responsive coding tasks and subagents',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
   'gpt-5.4-nano': {
     name: 'GPT-5.4 Nano',
     description: 'Lowest-cost GPT-5.4-class model for simple high-volume tasks and subagents',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
   // GPT-5.3 models
@@ -116,16 +116,16 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5.3 Codex',
     description: 'Previous Codex coding model.',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.3-codex-spark': {
     name: 'GPT-5.3 Codex Spark',
     description: 'Real-time coding model, 1000+ tokens/sec (Pro users)',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
   // GPT-5.2 models
@@ -133,32 +133,32 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5.2 Codex',
     description: 'Previous coding model optimized for agentic tasks - 400k context',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.2': {
     name: 'GPT-5.2',
     description: 'Previous frontier model for complex tasks - 400k context, thinking mode',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.2-pro': {
     name: 'GPT-5.2 Pro',
     description: 'Highest accuracy, xhigh reasoning for difficult problems',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.2-instant': {
     name: 'GPT-5.2 Instant',
     description: 'Faster model for writing and information seeking',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
   // GPT-5.1 models
@@ -166,32 +166,32 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5.1 Codex Max',
     description: 'Previous model optimized for long-horizon agentic coding',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.1-codex': {
     name: 'GPT-5.1 Codex',
     description: 'Previous model optimized for agentic coding tasks',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.1-codex-mini': {
     name: 'GPT-5.1 Codex Mini',
     description: 'Previous cost-effective Codex variant',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
   'gpt-5.1': {
     name: 'GPT-5.1',
     description: 'General purpose GPT-5.1 model',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   // GPT-5 models (legacy)
@@ -215,8 +215,8 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-5',
     description: 'Legacy general purpose model',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   // GPT-4o models
@@ -224,16 +224,16 @@ const _CODEX_MODEL_REGISTRY = {
     name: 'GPT-4o',
     description: 'General purpose model',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-4o-mini': {
     name: 'GPT-4o Mini',
     description: 'Smaller, faster model',
     status: 'known',
-    selectable: false,
-    availability: 'not-selectable',
+    selectable: true,
+    availability: 'provider-dependent',
     replacement: CODEX_MINI_MODEL,
   },
 } as const satisfies Record<string, CodexModelLifecycleMetadata>;
@@ -243,13 +243,23 @@ export const CODEX_MODEL_REGISTRY = _CODEX_MODEL_REGISTRY;
 export const CODEX_MODEL_METADATA = Object.fromEntries(
   Object.entries(CODEX_MODEL_REGISTRY)
     .filter(([, meta]) => meta.selectable)
-    .map(([id, meta]) => [id, { name: meta.name, description: meta.description }])
+    .map(([id, meta]) => [
+      id,
+      {
+        name: meta.name,
+        description: meta.description,
+        status: meta.status,
+        availability: meta.availability,
+      },
+    ])
 ) as PickSelectableCodexModelMetadata<typeof CODEX_MODEL_REGISTRY>;
 
 type PickSelectableCodexModelMetadata<T extends Record<string, CodexModelLifecycleMetadata>> = {
   [K in keyof T as T[K]['selectable'] extends true ? K : never]: {
     name: T[K]['name'];
     description: T[K]['description'];
+    status: T[K]['status'];
+    availability: T[K]['availability'];
   };
 };
 
@@ -273,7 +283,10 @@ export function getCodexModelLifecycle(model?: string): CodexModelLifecycleMetad
     ([a], [b]) => b.length - a.length
   );
   for (const [id, meta] of longestFirstEntries) {
-    if (normalized.startsWith(`${id}-`)) {
+    const suffix = normalized.slice(id.length + 1);
+    // Recognize dated provider snapshots without treating an arbitrary,
+    // guessed suffix (for example gpt-5.6-codex) as a valid known alias.
+    if (normalized.startsWith(`${id}-`) && /^\d{4}-\d{2}-\d{2}(?:$|-)/.test(suffix)) {
       return meta;
     }
   }
@@ -283,6 +296,50 @@ export function getCodexModelLifecycle(model?: string): CodexModelLifecycleMetad
 
 export function isUnsupportedAgorCodexModel(model?: string): boolean {
   return getCodexModelLifecycle(model)?.availability === 'unsupported';
+}
+
+export type CodexModelSelection = {
+  mode: 'alias' | 'exact';
+  model: string;
+};
+
+/**
+ * Validate a newly selected Codex model.
+ *
+ * `alias` is Agor's known-model selection mode, so only entries exposed by
+ * CODEX_MODEL_METADATA are accepted. Some older entries are provider-dependent
+ * and can still be rejected for a particular account. `exact` is an explicit provider model
+ * ID escape hatch: unknown IDs are allowed because availability is
+ * account-specific and can change independently of an Agor release. Known
+ * aliases marked unsupported are rejected in either mode.
+ *
+ * This is selection-time validation. Persisted sessions are not scanned or
+ * invalidated when the registry changes; the provider remains authoritative
+ * at dispatch time.
+ */
+export function getCodexModelSelectionError(
+  selection: CodexModelSelection | null | undefined
+): string | undefined {
+  if (!selection?.model) return undefined;
+
+  const lifecycle = getCodexModelLifecycle(selection.model);
+  if (lifecycle?.availability === 'unsupported') {
+    return formatUnsupportedAgorCodexModelMessage(selection.model);
+  }
+  if (selection.mode === 'exact') return undefined;
+  if (lifecycle?.selectable) return undefined;
+
+  const replacement = lifecycle?.replacement ?? DEFAULT_CODEX_MODEL;
+  const reason = lifecycle
+    ? 'is known but is not selectable'
+    : 'is not a selectable Agor Codex alias';
+  return (
+    `Codex model "${selection.model}" ${reason}. ` +
+    `Call agor_models_list for current selectable aliases, omit modelConfig to use the default ` +
+    `(${DEFAULT_CODEX_MODEL}), or use "${replacement}". ` +
+    'If this is an intentional provider-specific model ID, pass modelConfig with mode "exact"; ' +
+    'provider/account availability will then be checked when Codex starts.'
+  );
 }
 
 export function formatUnsupportedAgorCodexModelMessage(model: string): string {
