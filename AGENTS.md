@@ -513,6 +513,30 @@ pnpm agor config --yaml
 Tunable from `~/.agor/config.yaml` under `security.*` — see
 [`context/concepts/security.md`](context/concepts/security.md).
 
+### MCP Catalog (`mcp_catalog.*`)
+
+The MCP marketplace catalog is a mirror of the public
+[MCP registry](https://registry.modelcontextprotocol.io) with a curated overlay
+from `packages/core/src/mcp-catalog/curated.yaml`. Unlike every other table,
+`mcp_catalog_entries` has no `tenant_id`: it holds only public-registry and
+repo-checked-in data, and Agor resolves tenants from request auth so there is no
+tenant list an ingestion job could enumerate. Postgres RLS keeps reads open to
+all tenants and confines writes to the `mcp_catalog_ingestion` system
+capability.
+
+Ingestion makes outbound requests — to the registry, and during the auth probe
+to arbitrary registry-published hosts. Restricted networks can turn that off;
+the curated overlay still seeds, so the marketplace stays populated offline.
+
+```yaml
+# ~/.agor/config.yaml
+mcp_catalog:
+  registry_sync_enabled: true # false = curation only, no outbound requests
+  sync_interval_hours: 6
+  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
+  # registry_url: https://registry.internal  # advanced override
+```
+
 ### Git Config Hardening (`security.git_config_parameters`)
 
 The daemon injects a `GIT_CONFIG_PARAMETERS` env var at startup that propagates

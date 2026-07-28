@@ -14,6 +14,7 @@
  * has no registry of them to enumerate.
  */
 
+import type { AgorMCPCatalogSettings } from '@agor/core/config';
 import {
   MCPCatalogRepository,
   runWithoutTenantContext,
@@ -23,6 +24,7 @@ import {
 } from '@agor/core/db';
 import {
   type IngestionResult,
+  MCPRegistryClient,
   runCatalogIngestion,
   seedCuratedCatalog,
 } from '@agor/core/mcp-catalog';
@@ -38,6 +40,32 @@ export interface MCPCatalogIngestionOptions {
   initialDelayMs?: number;
   /** Skip the network sync and only reapply curation. */
   registrySyncEnabled?: boolean;
+  /** Entries auth-probed per run. Zero disables probing. */
+  probeBudget?: number;
+  registryUrl?: string;
+}
+
+/**
+ * Resolve worker options from `~/.agor/config.yaml`.
+ *
+ * Registry sync reaches a third party and the auth probe reaches arbitrary
+ * registry-published hosts, so both are operator-controllable. Turning them off
+ * leaves the repo-shipped curated overlay, which still seeds offline.
+ */
+export function resolveMCPCatalogOptions(
+  settings: AgorMCPCatalogSettings | undefined
+): MCPCatalogIngestionOptions {
+  const options: MCPCatalogIngestionOptions = {
+    registrySyncEnabled: settings?.registry_sync_enabled !== false,
+  };
+  if (typeof settings?.sync_interval_hours === 'number' && settings.sync_interval_hours > 0) {
+    options.intervalMs = settings.sync_interval_hours * 60 * 60 * 1000;
+  }
+  if (typeof settings?.probe_budget === 'number' && settings.probe_budget >= 0) {
+    options.probeBudget = settings.probe_budget;
+  }
+  if (settings?.registry_url?.trim()) options.registryUrl = settings.registry_url.trim();
+  return options;
 }
 
 export class MCPCatalogIngestionWorker {
@@ -101,6 +129,12 @@ export class MCPCatalogIngestionWorker {
 
       const result = await this.withSystemScope('mcp-catalog registry sync', (repository) =>
         runCatalogIngestion(repository, {
+          ...(this.options.registryUrl
+            ? { registry: new MCPRegistryClient({ baseUrl: this.options.registryUrl }) }
+            : {}),
+          ...(this.options.probeBudget === undefined
+            ? {}
+            : { probeBudget: this.options.probeBudget }),
           log: (message) => console.warn(`[mcp-catalog] ${message}`),
         })
       );

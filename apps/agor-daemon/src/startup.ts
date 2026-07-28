@@ -33,7 +33,10 @@ import { DistributedHealthMonitor } from './services/distributed-health-monitor.
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
-import { MCPCatalogIngestionWorker } from './services/mcp-catalog-ingestion.js';
+import {
+  MCPCatalogIngestionWorker,
+  resolveMCPCatalogOptions,
+} from './services/mcp-catalog-ingestion.js';
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
@@ -819,7 +822,10 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 8b. Start MCP catalog ingestion. The catalog is global, so this runs once
   // per daemon regardless of tenancy mode; it enters an explicit system
   // database scope rather than any tenant's.
-  const mcpCatalogIngestion = new MCPCatalogIngestionWorker(db);
+  const mcpCatalogIngestion = new MCPCatalogIngestionWorker(
+    db,
+    resolveMCPCatalogOptions(config.mcp_catalog)
+  );
   mcpCatalogIngestion.start();
   app.set('mcpCatalogIngestion', mcpCatalogIngestion);
   console.log('📚 MCP catalog ingestion scheduled');
