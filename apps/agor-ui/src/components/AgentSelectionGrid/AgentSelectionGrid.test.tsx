@@ -4,7 +4,7 @@
  * variant keeps its fixed-column layout unchanged.
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionGrid } from './AgentSelectionGrid';
@@ -25,6 +25,27 @@ function gridEl(container: HTMLElement): HTMLElement {
 }
 
 describe('AgentSelectionGrid tile layout', () => {
+  it('does not replace an unavailable persisted selection unless fallback is opted in', () => {
+    const onSelect = vi.fn();
+    render(
+      <AgentSelectionGrid agents={agents} selectedAgentId="claude-code-cli" onSelect={onSelect} />
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('allows creation flows to opt into the first visible fallback', async () => {
+    const onSelect = vi.fn();
+    render(
+      <AgentSelectionGrid
+        agents={agents}
+        selectedAgentId="claude-code-cli"
+        onSelect={onSelect}
+        fallbackToFirstVisibleAgent
+      />
+    );
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('claude-code'));
+  });
+
   it('uses auto-fit responsive tracks for the small variant (no overflow)', () => {
     const { container } = render(
       <AgentSelectionGrid

@@ -22,7 +22,7 @@ import type {
 // zone / session). Shared with the daemon's fire-zone-trigger route and the
 // MCP `agor_branches_set_zone` path so all three render against the same
 // shape.
-import { buildZoneTriggerContext } from '@agor-live/client';
+import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -89,7 +89,9 @@ export const ZoneTriggerModal = ({
   const [mode, setMode] = useState<'create_new' | 'reuse_existing'>('create_new');
 
   // Agent selection (only for create_new mode)
-  const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
+  const requiresSupportedToolSelection =
+    mode === 'create_new' && selectedAgent === null && trigger.agent !== undefined;
 
   // Session selection (only for reuse mode)
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
@@ -115,7 +117,10 @@ export const ZoneTriggerModal = ({
 
   // Filter sessions for this branch using O(1) Map lookup
   const branchSessions = useMemo(() => {
-    return sessionsByBranch.get(branchId) || [];
+    return (sessionsByBranch.get(branchId) || []).filter(
+      (session): session is Session & { agentic_tool: AgenticToolName } =>
+        isAgenticToolName(session.agentic_tool)
+    );
   }, [sessionsByBranch, branchId]);
 
   // Smart default: Most recent active/completed session
@@ -153,10 +158,17 @@ export const ZoneTriggerModal = ({
       setMode(branchSessions.length > 0 ? 'reuse_existing' : 'create_new');
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
+      setSelectedAgent(
+        trigger.agent === undefined
+          ? 'claude-code'
+          : isAgenticToolName(trigger.agent)
+            ? trigger.agent
+            : null
+      );
       form.resetFields();
       setSessionConfig({}); // Clear session config state
     }
-  }, [open, smartDefaultSession, form, branchSessions.length]);
+  }, [open, smartDefaultSession, form, branchSessions.length, trigger.agent]);
 
   // Pre-populate form AND state when creating new session
   // Priority: Most recent session > User defaults > System defaults
@@ -270,6 +282,7 @@ export const ZoneTriggerModal = ({
 
   const handleExecute = async () => {
     if (mode === 'create_new') {
+      if (!selectedAgent) return;
       // Use component state which is guaranteed to have the correct values
       // regardless of whether the form fields are mounted/visible
       await onExecute({
@@ -320,7 +333,7 @@ export const ZoneTriggerModal = ({
       onCancel={onCancel}
       onOk={handleExecute}
       okText="Execute Trigger"
-      okButtonProps={{ disabled: isRendering }}
+      okButtonProps={{ disabled: isRendering || requiresSupportedToolSelection }}
       cancelText="Cancel"
       width={700}
     >
@@ -408,13 +421,22 @@ export const ZoneTriggerModal = ({
         >
           {mode === 'create_new' && (
             <div>
+              {requiresSupportedToolSelection && (
+                <Alert
+                  title="This zone uses a removed agentic tool"
+                  description="Choose a supported tool before creating a new session. Existing sessions remain available for reuse."
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+              )}
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
                 Select Agent
               </Typography.Text>
               <AgentSelectionGrid
                 agents={availableAgents}
                 selectedAgentId={selectedAgent}
-                onSelect={setSelectedAgent}
+                onSelect={(agent) => setSelectedAgent(agent as AgenticToolName)}
                 columns={2}
                 showHelperText={false}
                 showComparisonLink={false}
@@ -446,21 +468,19 @@ export const ZoneTriggerModal = ({
                         showIcon
                       />
                     )}
-                    {mode === 'create_new' ? (
+                    {mode === 'create_new' && selectedAgent ? (
                       <AgenticToolConfigurationPicker
-                        tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+                        tool={selectedAgent}
                         mcpServerById={mcpServerById}
                         showHelpText={true}
                         client={client}
                       />
-                    ) : (
+                    ) : mode === 'reuse_existing' ? (
                       <AgenticToolConfigForm
-                        agenticTool={
-                          (selectedSession?.agentic_tool as AgenticToolName) || 'claude-code'
-                        }
+                        agenticTool={selectedSession?.agentic_tool || 'claude-code'}
                         showHelpText={true}
                       />
-                    )}
+                    ) : null}
                   </Space>
                 ),
               },

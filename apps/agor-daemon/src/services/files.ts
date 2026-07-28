@@ -104,8 +104,7 @@ export class FilesService {
       }
 
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        params
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;

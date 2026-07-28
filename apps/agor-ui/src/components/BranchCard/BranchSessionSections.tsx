@@ -710,7 +710,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             : undefined
         }
       >
-        <div style={sessionRowStyle(session)} onClick={() => onSessionClick?.(session.session_id)}>
+        <div
+          style={sessionRowStyle(session)}
+          data-session-id={session.session_id}
+          onClick={() => onSessionClick?.(session.session_id)}
+        >
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
@@ -835,6 +839,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       >
         <div
           style={sessionRowStyle(session)}
+          data-session-id={session.session_id}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
             if (onForkSession || onSpawnSession) {

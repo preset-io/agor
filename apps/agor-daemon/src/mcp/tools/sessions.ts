@@ -19,6 +19,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_CAPABILITIES,
+  AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,
   getSessionType,
@@ -30,11 +31,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
+import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
-import { serviceTokenScopeForParams } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -577,7 +578,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Optional title for the session (defaults to first 100 chars of prompt)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Which agent to use for the subsession (defaults to same as parent)'),
         enableCallback: z
@@ -666,7 +667,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session), btw (ephemeral fork — works even on running sessions, auto-callbacks result to caller, auto-archives when done)'
           ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
@@ -717,7 +718,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const targetSession = await ctx.app
           .service('sessions')
           .get(sessionId, ctx.baseServiceParams);
-        const caps = AGENTIC_TOOL_CAPABILITIES[targetSession.agentic_tool as AgenticToolName];
+        const targetTool = requireActiveAgenticTool(targetSession.agentic_tool);
+        const caps = AGENTIC_TOOL_CAPABILITIES[targetTool];
         if (caps && !caps.supportsSessionFork) {
           return textResult({
             error: `${targetSession.agentic_tool} does not support session forking. Use mode "subsession" instead to delegate work to a fresh session.`,
@@ -918,7 +920,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Branch ID where the session will run (required)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .describe('Which agent to use for this session (required)'),
         title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
         description: mcpOptionalString('description', 'Session description (optional)'),
@@ -989,7 +991,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
         asUser,
         logPrefix: `[mcp.sessions.create ${branch.name}]`,
-        serviceTokenScope: serviceTokenScopeForParams(ctx.baseServiceParams),
       });
 
       // Resolve permission_config / model_config / inherited mcp_server_ids
@@ -1593,7 +1594,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list — it's exposed via the branch config UI today.
+  //     list. Its entry explains that discovery happens after provider choice.
   server.registerTool(
     'agor_models_list',
     {
@@ -1602,7 +1603,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'copilot', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),
@@ -1644,28 +1645,25 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           models: claudeModels,
           note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',
         },
-        // Claude Code CLI shares the same Anthropic model lineup as the
-        // SDK path; surface the same list so MCP clients can pass any
-        // valid claude id to either adapter.
-        'claude-code-cli': {
-          default: DEFAULT_CLAUDE_MODEL,
-          models: claudeModels,
-          note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',
-        },
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
           note: 'Codex defaults to gpt-5.6-sol; omit modelConfig unless a specific model is required. Use gpt-5.6-terra for balanced everyday work or gpt-5.6-luna for clear, high-volume tasks. Legacy Codex aliases are intentionally omitted from this selectable list.',
         },
-        copilot: {
-          default: DEFAULT_COPILOT_MODEL,
-          models: copilotModels,
-          note: "Copilot models are also fetched live via /copilot-models (uses the SDK's listModels()). This is the static fallback — BYOK-configured models may not appear here.",
-        },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,
           models: geminiModels,
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
+        },
+        opencode: {
+          default: null,
+          models: [],
+          note: 'OpenCode models are provider-specific and are discovered after selecting a provider. Pass both modelConfig.provider and modelConfig.model from the OpenCode provider catalog.',
+        },
+        copilot: {
+          default: DEFAULT_COPILOT_MODEL,
+          models: copilotModels,
+          note: "Copilot models are also fetched live via /copilot-models (uses the SDK's listModels()). This is the static fallback — BYOK-configured models may not appear here.",
         },
         cursor: {
           default: DEFAULT_CURSOR_MODEL,
@@ -1678,7 +1676,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ],
           note: "Cursor models are also fetched live via /cursor-models (uses @cursor/sdk's Cursor.models.list()). This is the static fallback — account-specific models may not appear here.",
         },
-      };
+      } satisfies Record<
+        AgenticToolName,
+        { default: string | null; models: unknown[]; note: string }
+      >;
 
       if (args.agenticTool) {
         return textResult({ [args.agenticTool]: all[args.agenticTool] });

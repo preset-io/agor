@@ -13,7 +13,7 @@ import {
   requiredBotEvents,
   requiredBotScopes,
 } from '@agor/core/gateway';
-import { getRequiredSecretFields } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
@@ -58,6 +58,48 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
+
+describe('gateway channel MCP agentic-tool schemas', () => {
+  it('accepts every active tool and rejects historical tools', async () => {
+    const tools = await captureTools();
+    const createSchema = tools.agor_gateway_channels_create.cfg.inputSchema;
+    const updateSchema = tools.agor_gateway_channels_update.cfg.inputSchema;
+
+    for (const agent of AGENTIC_TOOL_NAMES) {
+      expect(
+        createSchema.safeParse({
+          name: 'Draft',
+          targetBranchId: 'branch-1',
+          enabled: false,
+          config: { align_slack_users: true },
+          agenticConfig: { agent },
+        }).success
+      ).toBe(true);
+      expect(
+        updateSchema.safeParse({
+          gatewayChannelId: 'gateway-1',
+          agenticConfig: { agent },
+        }).success
+      ).toBe(true);
+    }
+
+    expect(
+      createSchema.safeParse({
+        name: 'Draft',
+        targetBranchId: 'branch-1',
+        enabled: false,
+        config: { align_slack_users: true },
+        agenticConfig: { agent: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+    expect(
+      updateSchema.safeParse({
+        gatewayChannelId: 'gateway-1',
+        agenticConfig: { agent: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+  });
+});
 
 async function captureTools(
   role: 'admin' | 'member' = 'admin',

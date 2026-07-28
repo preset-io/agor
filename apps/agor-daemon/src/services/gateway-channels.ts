@@ -16,17 +16,22 @@ import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
 import {
   type AuthenticatedParams,
+  GATEWAY_CHANNEL_WRITE_FIELDS,
   type GatewayChannel,
+  type GatewayChannelCreateData,
+  type GatewayChannelPatchData,
   type NullableId,
   type Params,
   resolveSlackAgentTools,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
+import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
-  Partial<GatewayChannel>
+  GatewayChannelPatchData
 > {
   private db: TenantScopeAwareDatabase;
 
@@ -43,11 +48,12 @@ export class GatewayChannelsService extends DrizzleService<
     this.db = db;
   }
 
-  private async validateConfig(config: GatewayChannel['agentic_config']): Promise<void> {
+  private async validateConfig(config: GatewayChannelPatchData['agentic_config']): Promise<void> {
     if (!config) {
       await assertInlineAgenticConfigurationAllowed(this.db, 'claude-code');
       return;
     }
+    requireActiveAgenticTool(config.agent);
     if (config.presetId) {
       await resolveAgenticToolPreset(this.db, config.agent, config.presetId);
       const hasOverrides = Object.entries(config).some(
@@ -60,9 +66,9 @@ export class GatewayChannelsService extends DrizzleService<
   }
 
   private async normalizeConfig(
-    config: GatewayChannel['agentic_config'],
+    config: GatewayChannelPatchData['agentic_config'],
     params?: Params
-  ): Promise<GatewayChannel['agentic_config']> {
+  ): Promise<GatewayChannelPatchData['agentic_config']> {
     if (!config?.presetId) return config;
     const resolved = await resolveAgenticConfigurationReference(
       this.db,
@@ -86,23 +92,42 @@ export class GatewayChannelsService extends DrizzleService<
     };
   }
 
-  async create(data: Partial<GatewayChannel>, params?: Params) {
+  async create(data: GatewayChannelCreateData, params?: Params) {
+    const rawData = data as unknown as Record<string, unknown>;
+    const prepared = assertServiceWriteFields(
+      'Gateway channel',
+      rawData,
+      GATEWAY_CHANNEL_WRITE_FIELDS,
+      params,
+      ['created_by']
+    );
+    data = pickWriteFields<GatewayChannelCreateData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
+
     await this.validateConfig(data.agentic_config ?? null);
     const agenticConfig = await this.normalizeConfig(data.agentic_config ?? null, params);
     data = { ...data, agentic_config: agenticConfig };
-    return super.create(data, params);
+    const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
+    const trustedCreatedBy =
+      creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
+    return super.create(
+      {
+        ...data,
+        ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+      },
+      params
+    );
   }
 
-  async patch(id: NullableId, data: Partial<GatewayChannel>, params?: Params) {
+  async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
+    const rawData = data as Record<string, unknown>;
+    assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
+    data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
+
     if (data.agentic_config !== undefined) {
       await this.validateConfig(data.agentic_config);
       data = { ...data, agentic_config: await this.normalizeConfig(data.agentic_config, params) };
     }
     return super.patch(id, data, params);
-  }
-
-  async update(id: string, data: Partial<GatewayChannel>, params?: Params) {
-    return this.patch(id, data, params) as Promise<GatewayChannel>;
   }
 
   async uploadFileFromExecutor(

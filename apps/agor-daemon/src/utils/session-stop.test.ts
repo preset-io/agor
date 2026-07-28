@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionsServiceImpl } from '../declarations.js';
 
-const stopClaudeCliTask = vi.hoisted(() => vi.fn());
-vi.mock('../services/claude-cli-integration.js', () => ({ stopClaudeCliTask }));
-
 import { markStoppedSessionPromptableNoDrain, stopSessionPreserveQueue } from './session-stop.js';
 
 describe('markStoppedSessionPromptableNoDrain', () => {
@@ -47,7 +44,7 @@ describe('markStoppedSessionPromptableNoDrain', () => {
 });
 
 describe('stopSessionPreserveQueue', () => {
-  it('uses the CLI watcher stop path without requesting executor containment', async () => {
+  it('rejects process control for a historical removed-runtime session', async () => {
     const task = {
       task_id: 'task-cli',
       session_id: 'session-cli',
@@ -61,23 +58,22 @@ describe('stopSessionPreserveQueue', () => {
       ready_for_prompt: false,
       tasks: [task.task_id],
     };
-    stopClaudeCliTask.mockResolvedValueOnce({ status: 'terminal', task, queueHandled: false });
     const requestTermination = vi.fn();
-    const result = await stopSessionPreserveQueue(
-      {
-        app: {
-          service: () => ({ find: vi.fn().mockResolvedValue({ data: [task] }) }),
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {
+            service: () => ({ find: vi.fn().mockResolvedValue({ data: [task] }) }),
+          } as never,
+          taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+          sessionsService: { get: vi.fn().mockResolvedValue(session), patch: vi.fn() } as never,
+          requestTermination: requestTermination as never,
         } as never,
-        taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
-        sessionsService: { get: vi.fn().mockResolvedValue(session), patch: vi.fn() } as never,
-        requestTermination: requestTermination as never,
-      },
-      session.session_id as never
-    );
+        session.session_id as never
+      )
+    ).rejects.toThrow('removed experimental Claude Code CLI integration');
 
-    expect(stopClaudeCliTask).toHaveBeenCalledWith(expect.objectContaining({ session, task }));
     expect(requestTermination).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: true, queueHandled: false });
   });
 
   it('stops only the active task and preserves queued tasks for the caller to drain after the lock', async () => {
@@ -99,6 +95,7 @@ describe('stopSessionPreserveQueue', () => {
     const sessionsService = {
       get: vi.fn(async () => ({
         session_id: sessionId,
+        agentic_tool: 'claude-code',
         status: 'running',
         ready_for_prompt: false,
         tasks: [runningTask.task_id],
@@ -156,6 +153,7 @@ describe('stopSessionPreserveQueue', () => {
     const sessionsService = {
       get: vi.fn(async () => ({
         session_id: sessionId,
+        agentic_tool: 'claude-code',
         status: 'awaiting_input',
         ready_for_prompt: false,
         tasks: [awaitingInputTask.task_id],
@@ -215,6 +213,7 @@ describe('stopSessionPreserveQueue', () => {
     const sessionsService = {
       get: vi.fn(async () => ({
         session_id: sessionId,
+        agentic_tool: 'claude-code',
         status: 'running',
         ready_for_prompt: false,
         tasks: [runningTask.task_id],

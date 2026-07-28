@@ -10,6 +10,7 @@ import {
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   and,
@@ -44,7 +45,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, ROLES, TaskStatus } from '@agor/core/types';
+import { ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -138,13 +139,6 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
-import {
-  computeFileHash,
-  findCodexSessionFile,
-  getCodexHome,
-  getSessionFilePath,
-} from './utils/session-state.js';
-import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -214,6 +208,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { initMcpTokens } = await import('./mcp/tokens.js');
   initMcpTokens({
     db,
+    multiTenancy: resolveMultiTenancyConfig(config),
     expirationMs: config.execution?.mcp_token_expiration_ms,
   });
 
@@ -438,7 +433,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
   // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
-  app.use('/schedules', createSchedulesService(db));
+  app.use('/schedules', createSchedulesService(db), {
+    methods: ['find', 'get', 'create', 'patch', 'remove'],
+  });
 
   // ============================================================================
   // Knowledge (backend/data foundations)
@@ -506,7 +503,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'uploadFileFromExecutor'],
+      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileFromExecutor'],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -793,22 +790,6 @@ function createExecuteHandler(
       throw new Error('Preset-backed sessions cannot override permission mode per task');
     }
 
-    // Validate stateless_fs_mode compatibility with agentic tool
-    if (config.execution?.stateless_fs_mode) {
-      const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
-      const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
-      if (capabilities && !capabilities.supportsStatelessFsMode) {
-        const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
-          .filter(([, caps]) => caps.supportsStatelessFsMode)
-          .map(([name]) => name)
-          .join(', ');
-        throw new Error(
-          `stateless_fs_mode is enabled but tool '${toolName}' does not support it. ` +
-            `Supported tools: ${supported}`
-        );
-      }
-    }
-
     // Generate session token for executor authentication
     const appWithExecutor = app as unknown as {
       sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
@@ -847,12 +828,8 @@ function createExecuteHandler(
     }
 
     // Determine Unix user for executor
-    const {
-      resolveUnixUserForImpersonation,
-      validateResolvedUnixUser,
-      UnixUserNotFoundError,
-      getHomedirFromUsername,
-    } = await import('@agor/core/unix');
+    const { resolveUnixUserForImpersonation, validateResolvedUnixUser, UnixUserNotFoundError } =
+      await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
     const configExecutorUser = config.execution?.executor_unix_user;
@@ -991,29 +968,6 @@ function createExecuteHandler(
       },
     };
 
-    // Stateless FS mode: resolve executor home dir for session file path
-    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : undefined;
-
-    // Stateless FS mode: restore session file from DB before executor starts
-    if (config.execution?.stateless_fs_mode && session.sdk_session_id) {
-      try {
-        await pullIfNeeded({
-          db,
-          sessionId,
-          sdkSessionId: session.sdk_session_id,
-          branchPath: cwd,
-          tool: session.agentic_tool,
-          executorHomeDir,
-        });
-      } catch (err) {
-        console.error(
-          '[stateless-fs] pullIfNeeded failed:',
-          err instanceof Error ? err.message : err
-        );
-        // Don't block the executor — proceed with potentially stale/missing session file
-      }
-    }
-
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
     let localExecutorPid: number | undefined;
@@ -1101,61 +1055,6 @@ function createExecuteHandler(
           }
         } catch (error) {
           console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
-        }
-
-        // Stateless FS mode: serialize session file to DB after executor exits
-        if (config.execution?.stateless_fs_mode) {
-          try {
-            // Re-fetch session to get sdk_session_id (may have been set during execution)
-            const freshSession = await app.service('sessions').get(sessionId, params);
-            if (freshSession.sdk_session_id) {
-              pushAsync({
-                db,
-                sessionId,
-                branchId: freshSession.branch_id,
-                taskId,
-                sdkSessionId: freshSession.sdk_session_id,
-                branchPath: cwd,
-                tool: freshSession.agentic_tool,
-                executorHomeDir,
-              });
-
-              // Also compute and write session_md5 to the task record
-              try {
-                let filePath: string;
-                if (freshSession.agentic_tool === 'codex') {
-                  const codexHome = getCodexHome(executorHomeDir);
-                  const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
-                  filePath = found || '';
-                } else {
-                  filePath = getSessionFilePath(
-                    freshSession.agentic_tool,
-                    cwd,
-                    freshSession.sdk_session_id,
-                    executorHomeDir
-                  );
-                }
-                if (filePath) {
-                  const md5 = await computeFileHash(filePath);
-                  if (md5) {
-                    await app
-                      .service('tasks')
-                      .patch(taskId, { session_md5: md5 }, { ...params, provider: undefined });
-                  }
-                }
-              } catch (md5Err) {
-                console.error(
-                  '[stateless-fs] Failed to write session_md5 to task:',
-                  md5Err instanceof Error ? md5Err.message : md5Err
-                );
-              }
-            }
-          } catch (pushErr) {
-            console.error(
-              '[stateless-fs] pushAsync setup failed:',
-              pushErr instanceof Error ? pushErr.message : pushErr
-            );
-          }
         }
 
         appWithExecutor.sessionTokenService?.revokeToken(sessionToken);

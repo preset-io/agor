@@ -84,8 +84,7 @@ export class FileService
     extraParams: Record<string, unknown> = {}
   ) {
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      params
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
     return runExecutorCommand(
       {

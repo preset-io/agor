@@ -67,7 +67,7 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
   max: 'Max',
 };
 
-const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']);
+const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code']);
 
 /**
  * Renders nothing but lets a `Form.Item` register a field so `Form.useWatch`

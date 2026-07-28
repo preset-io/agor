@@ -5,7 +5,7 @@
  * Messages are stored in a normalized table and referenced by tasks via message_range.
  */
 
-import type { AgenticToolName } from './agentic-tool';
+import type { PersistedAgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { WidgetMessageMetadata } from './widget';
 
@@ -19,14 +19,18 @@ export enum MessageRole {
 }
 
 /**
- * Message source - where the message originated
- * - 'gateway': Message came from external platform (Slack, Discord, etc.)
+ * Message source accepted by current prompt/runtime paths.
+ * - 'gateway': Message came from an external platform (Slack, Discord, etc.)
  * - 'agor': Message originated from Agor UI
- * - 'cli-repl': Message originated from a Claude Code CLI REPL turn that
- *   the user typed directly into the embedded xterm (not via Agor's
- *   textarea / /prompt route). Written by the JSONL watcher.
  */
-export type MessageSource = 'gateway' | 'agor' | 'cli-repl';
+export type MessageSource = 'gateway' | 'agor';
+
+/**
+ * Read-only provenance left on messages written by removed integrations.
+ * Runtime request types intentionally exclude these values.
+ */
+export type LegacyMessageSource = 'cli-repl';
+export type PersistedMessageSource = MessageSource | LegacyMessageSource;
 
 /**
  * Message type
@@ -256,7 +260,7 @@ export interface Message {
      * - 'agor': Message originated from Agor UI
      * - undefined: Legacy message or source not tracked
      */
-    source?: MessageSource;
+    source?: PersistedMessageSource;
 
     /**
      * Widget request state. Only populated on `type === 'widget_request'`
@@ -298,7 +302,7 @@ export interface Message {
      * raw error; `tool` names the provider that needs a credential.
      */
     error_kind?: 'missing_credential';
-    tool?: AgenticToolName;
+    tool?: PersistedAgenticToolName;
 
     /** Additional agent-specific fields */
     [key: string]: unknown;

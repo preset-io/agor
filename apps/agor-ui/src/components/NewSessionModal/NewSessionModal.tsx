@@ -347,6 +347,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             columns={4}
             size="small"
             showComparisonLink={false}
+            fallbackToFirstVisibleAgent
           />
         </Form.Item>
 

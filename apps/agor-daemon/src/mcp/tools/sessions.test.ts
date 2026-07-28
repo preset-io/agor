@@ -13,6 +13,7 @@
  * calls, and assert on the session payload + attach calls.
  */
 
+import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1297,9 +1298,7 @@ describe('agor_models_list', () => {
     const result = await agor_models_list({});
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(parsed['claude-code']).toBeDefined();
-    expect(parsed.codex).toBeDefined();
-    expect(parsed.gemini).toBeDefined();
+    expect(Object.keys(parsed)).toEqual(AGENTIC_TOOL_NAMES);
 
     expect(parsed['claude-code'].default).toBe('claude-sonnet-5');
     expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
@@ -1312,6 +1311,11 @@ describe('agor_models_list', () => {
     const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
     expect(claudeIds).toContain('claude-opus-4-6');
     expect(claudeIds).toContain('claude-sonnet-5');
+    expect(parsed.opencode).toMatchObject({
+      default: null,
+      models: [],
+      note: expect.stringContaining('provider-specific'),
+    });
   });
 
   it('filters to a single agenticTool when requested', async () => {
@@ -1342,6 +1346,58 @@ describe('agor_models_list', () => {
 });
 
 describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
+  it('accepts every active tool and rejects historical tools on session creation boundaries', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_create', 'agor_sessions_spawn', 'agor_sessions_prompt', 'agor_models_list']
+    );
+
+    for (const agenticTool of AGENTIC_TOOL_NAMES) {
+      expect(
+        tools.agor_sessions_create.cfg.inputSchema!.safeParse({
+          branchId: 'branch-1',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_sessions_spawn.cfg.inputSchema!.safeParse({
+          prompt: 'delegate',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_sessions_prompt.cfg.inputSchema!.safeParse({
+          sessionId: 'session-1',
+          prompt: 'delegate',
+          mode: 'subsession',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_models_list.cfg.inputSchema!.safeParse({
+          agenticTool,
+        }).success
+      ).toBe(true);
+    }
+
+    for (const tool of Object.values(tools)) {
+      expect(
+        tool.cfg.inputSchema!.safeParse({
+          branchId: 'branch-1',
+          sessionId: 'session-1',
+          prompt: 'delegate',
+          mode: 'subsession',
+          agenticTool: 'claude-code-cli',
+        }).success
+      ).toBe(false);
+    }
+    expect(
+      tools.agor_models_list.cfg.inputSchema!.safeParse({
+        agenticTool: 'claude-code-cli',
+      }).success
+    ).toBe(false);
+  });
+
   // Regression: a Zod `.transform()` on `modelConfig` made `toJSONSchema` throw
   // ("Transforms cannot be represented in JSON Schema"). The catch in
   // `mcp/server.ts` then degraded the *entire* containing tool's schema to

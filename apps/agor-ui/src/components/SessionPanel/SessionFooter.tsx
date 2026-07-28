@@ -1,5 +1,6 @@
 import type {
   AgenticToolCapabilities,
+  AgenticToolName,
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -9,7 +10,6 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
-import { usesExecutorRuntime } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -46,7 +46,7 @@ import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 export interface SessionFooterProps {
   // Session data for chips
-  session: Session;
+  session: Session & { agentic_tool: AgenticToolName };
   footerTimerTask: Task | null;
   tokenBreakdown: {
     total: number;
@@ -144,7 +144,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   promptInputSlot,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
-  const supportsLiveEffort = usesExecutorRuntime(session.agentic_tool);
+  const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [prefs, setPref] = useFooterPreferences();

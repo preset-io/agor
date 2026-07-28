@@ -102,8 +102,7 @@ export function OnboardingBanners({
   const userId = user?.user_id;
   const onboardingCompleted = !!user?.onboarding_completed;
   const probeAgent = resolveGovernedProbeAgent(user, agenticToolSettings);
-  const canonicalProbeAgent = probeAgent === 'claude-code-cli' ? 'claude-code' : probeAgent;
-  const probeSettings = agenticToolSettings.get(canonicalProbeAgent as never);
+  const probeSettings = agenticToolSettings.get(probeAgent as never);
   const hasLlm = hasConfiguredCredentialFor(user, probeAgent, probeSettings);
   const credentialOwner = preferredCredentialOwner(probeSettings);
   const canManageWorkspaceCredentials = user?.role === 'admin' || user?.role === 'superadmin';

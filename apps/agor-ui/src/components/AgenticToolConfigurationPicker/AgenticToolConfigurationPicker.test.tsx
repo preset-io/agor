@@ -146,29 +146,6 @@ describe('AgenticToolConfigurationPicker', () => {
     );
   });
 
-  it('reads the default under the canonical key on claude-code-cli surfaces', async () => {
-    // Default stored under 'claude-code'; the CLI surface must still see it.
-    renderPicker(userWithConfigDefault, 'claude-code-cli');
-    await waitFor(() => expect(screen.getByText(/My default/)).toBeInTheDocument());
-    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
-  });
-
-  it('prefers a claude-code-cli default over the canonical fallback', async () => {
-    const user = {
-      user_id: 'u5',
-      default_agentic_config: {
-        'claude-code': { modelConfig: { model: 'claude-sonnet-5' } },
-        'claude-code-cli': { modelConfig: { model: 'claude-opus-4-8' } },
-      },
-    } as unknown as User;
-
-    renderPicker(user, 'claude-code-cli');
-
-    await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Opus 4.8/)).toBeInTheDocument()
-    );
-  });
-
   it('selects an available preset when inline configuration is disabled without a workspace default', async () => {
     storeSettings.inlineAllowed = false;
 
@@ -209,18 +186,18 @@ describe('persistUserDefaultFromForm', () => {
       },
     } as unknown as User;
 
-    await persistUserDefaultFromForm(client, user, 'claude-code-cli', {
+    await persistUserDefaultFromForm(client, user, 'gemini', {
       permissionMode: 'acceptEdits',
     });
 
     expect(patch).toHaveBeenCalledTimes(1);
     const [userId, payload] = patch.mock.calls[0];
     expect(userId).toBe('u9');
-    expect(payload.default_agentic_config['claude-code-cli']).toEqual({
+    expect(payload.default_agentic_config.gemini).toEqual({
       modelConfig: undefined,
       permissionMode: 'acceptEdits',
     });
-    expect(payload.default_agentic_selection['claude-code-cli']).toEqual({ source: 'inline' });
+    expect(payload.default_agentic_selection.gemini).toEqual({ source: 'inline' });
     // Existing per-tool entries are preserved.
     expect(payload.default_agentic_config.codex).toEqual({ permissionMode: 'auto' });
     expect(payload.default_agentic_selection.codex).toEqual({ source: 'inline' });

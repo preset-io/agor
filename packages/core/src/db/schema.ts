@@ -51,7 +51,6 @@ export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
 export const gatewayOutboundMessages = schema.gatewayOutboundMessages;
 export const userApiKeys = schema.userApiKeys;
-export const serializedSessions = schema.serializedSessions;
 export const kbNamespaces = schema.kbNamespaces;
 export const kbNamespaceAcl = schema.kbNamespaceAcl;
 export const kbDocuments = schema.kbDocuments;

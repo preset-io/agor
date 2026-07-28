@@ -358,8 +358,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         {
           command: 'branch.filesystem.status',
           sessionToken: generateScopedServiceToken(
-            ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-            ctx.baseServiceParams
+            ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
           ),
           daemonUrl: getDaemonUrl(),
           params: { branchIds: branches.map((branch) => branch.branch_id) },

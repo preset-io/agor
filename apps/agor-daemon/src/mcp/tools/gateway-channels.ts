@@ -23,11 +23,14 @@ import {
   type SlackWizardOptions,
 } from '@agor/core/gateway';
 import {
+  AGENTIC_TOOL_NAMES,
   type Branch,
   type BranchID,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
+  type GatewayChannelCreateData,
+  type GatewayChannelPatchData,
   type GatewaySource,
   getGatewaySource,
   getRequiredSecretFields,
@@ -202,7 +205,7 @@ const envVarSchema = z.strictObject({
 const agenticConfigSchema = z
   .strictObject({
     agent: z
-      .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
+      .enum(AGENTIC_TOOL_NAMES)
       .describe('Agent used for sessions created from this gateway channel.'),
     permissionMode: z
       .enum([
@@ -729,12 +732,14 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
   };
 }
 
-function toServiceCreateData(args: z.infer<typeof gatewayChannelCreateSchema>) {
+function toServiceCreateData(
+  args: z.infer<typeof gatewayChannelCreateSchema>
+): GatewayChannelCreateData {
   return {
     name: args.name,
     channel_type: args.channelType,
-    target_branch_id: args.targetBranchId,
-    agor_user_id: args.agorUserId ?? '',
+    target_branch_id: args.targetBranchId as GatewayChannelCreateData['target_branch_id'],
+    agor_user_id: (args.agorUserId ?? '') as GatewayChannelCreateData['agor_user_id'],
     enabled: args.enabled ?? true,
     config: args.config,
     mcp_server_ids: args.mcpServerIds,
@@ -750,24 +755,30 @@ function toServiceCreateData(args: z.infer<typeof gatewayChannelCreateSchema>) {
   };
 }
 
-function toServiceUpdateData(args: z.infer<typeof gatewayChannelUpdateSchema>) {
-  const updates: Partial<GatewayChannel> = {};
+function toServiceUpdateData(
+  args: z.infer<typeof gatewayChannelUpdateSchema>
+): GatewayChannelPatchData {
+  const updates: GatewayChannelPatchData = {};
   if (args.name !== undefined) updates.name = args.name;
   if (args.channelType !== undefined) updates.channel_type = args.channelType;
-  if (args.targetBranchId !== undefined) updates.target_branch_id = args.targetBranchId as never;
-  if (args.agorUserId !== undefined) updates.agor_user_id = args.agorUserId as never;
+  if (args.targetBranchId !== undefined) {
+    updates.target_branch_id = args.targetBranchId as GatewayChannelPatchData['target_branch_id'];
+  }
+  if (args.agorUserId !== undefined) {
+    updates.agor_user_id = args.agorUserId as GatewayChannelPatchData['agor_user_id'];
+  }
   if (args.enabled !== undefined) updates.enabled = args.enabled;
   if (args.config !== undefined) updates.config = args.config;
   if (args.mcpServerIds !== undefined) updates.mcp_server_ids = args.mcpServerIds;
   if (args.agenticConfig !== undefined) {
     updates.agentic_config = args.agenticConfig
-      ? ({
+      ? {
           ...args.agenticConfig,
           envVars: args.agenticConfig.envVars?.map((envVar) => ({
             ...envVar,
             forceOverride: envVar.forceOverride ?? false,
           })),
-        } as never)
+        }
       : null;
   }
   return updates;
@@ -1637,7 +1648,6 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             command: 'branch.gateway.slack-file-upload',
             sessionToken: generateScopedServiceToken(
               ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-              ctx.baseServiceParams,
               {
                 executor_action: 'gateway.slack-file-upload',
                 executor_user_id: ctx.authenticatedUser.user_id,

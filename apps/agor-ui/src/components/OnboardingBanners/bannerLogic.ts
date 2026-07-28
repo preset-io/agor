@@ -33,20 +33,12 @@ const CLAUDE_CREDENTIAL_FIELDS = [
  * both `agentic_tools[tool]` and `env_vars`); base-URL fields are excluded. OpenCode
  * is server-based — no credential field — so it never contributes a stored key, but
  * a user who SELECTED it still resolves to probing `opencode` (always authenticated).
- * `probeTarget` overrides which tool check-auth actually verifies: claude-code-cli
- * shares Claude's credentials and native path, so it is probed as claude-code.
  */
 const SUPPORTED_AGENTIC_TOOLS: readonly {
   tool: AgenticToolName;
   credentialFields: readonly string[];
-  probeTarget?: AgenticToolName;
 }[] = [
   { tool: 'claude-code', credentialFields: CLAUDE_CREDENTIAL_FIELDS },
-  {
-    tool: 'claude-code-cli',
-    credentialFields: CLAUDE_CREDENTIAL_FIELDS,
-    probeTarget: 'claude-code',
-  },
   { tool: 'codex', credentialFields: ['OPENAI_API_KEY'] },
   { tool: 'gemini', credentialFields: ['GEMINI_API_KEY'] },
   { tool: 'copilot', credentialFields: ['COPILOT_GITHUB_TOKEN'] },
@@ -98,11 +90,6 @@ function onboardingSelectedAgent(user: User | null | undefined): AgenticToolName
   return SUPPORTED_AGENTIC_TOOLS.find(({ tool }) => config[tool])?.tool ?? null;
 }
 
-/** The tool check-auth should verify for `tool` (maps claude-code-cli → claude-code). */
-function probeTargetFor(tool: AgenticToolName): AgenticToolName {
-  return SUPPORTED_AGENTIC_TOOLS.find((spec) => spec.tool === tool)?.probeTarget ?? tool;
-}
-
 /**
  * The single tool to probe for a given user: a stored key's tool, else the
  * onboarding-selected default, else Claude Code, mapped to its probe target.
@@ -110,9 +97,7 @@ function probeTargetFor(tool: AgenticToolName): AgenticToolName {
  * false-positive case).
  */
 export function resolveProbeAgent(user: User | null | undefined): AgenticToolName {
-  return probeTargetFor(
-    primaryAgentForUser(user) ?? onboardingSelectedAgent(user) ?? 'claude-code'
-  );
+  return primaryAgentForUser(user) ?? onboardingSelectedAgent(user) ?? 'claude-code';
 }
 
 /** Pick one enabled, policy-governed provider for the persistent auth banner. */
@@ -121,14 +106,11 @@ export function resolveGovernedProbeAgent(
   settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>
 ): AgenticToolName {
   const preferred = resolveProbeAgent(user);
-  const canonical = preferred === 'claude-code-cli' ? 'claude-code' : preferred;
-  if (settings.get(canonical as TenantAgenticToolName)?.enabled !== false) return preferred;
+  if (settings.get(preferred as TenantAgenticToolName)?.enabled !== false) return preferred;
   const fallback = SUPPORTED_AGENTIC_TOOLS.find(
-    ({ tool }) =>
-      settings.get((tool === 'claude-code-cli' ? 'claude-code' : tool) as TenantAgenticToolName)
-        ?.enabled !== false
+    ({ tool }) => settings.get(tool as TenantAgenticToolName)?.enabled !== false
   );
-  return fallback ? probeTargetFor(fallback.tool) : 'claude-code';
+  return fallback?.tool ?? 'claude-code';
 }
 
 export function hasConfiguredCredentialFor(

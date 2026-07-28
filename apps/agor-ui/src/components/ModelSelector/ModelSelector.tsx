@@ -1,4 +1,5 @@
 import {
+  type AgenticToolName,
   type AgorClient,
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -35,22 +36,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot'
-    | 'cursor'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot'
-    | 'cursor';
+  agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: AgenticToolName;
   /**
    * Optional Feathers client. When provided AND the agentic tool supports
    * dynamic model discovery (Copilot/Cursor), the picker fetches the live
@@ -150,7 +137,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
-  const isClaude = effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli';
+  const isClaude = effectiveTool === 'claude-code';
 
   // Dynamic model lists — fetched once when the picker opens for a given tool
   // and a client is available.

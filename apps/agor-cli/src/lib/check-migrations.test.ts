@@ -37,6 +37,7 @@ describe('getPendingMigrationsInfo', () => {
       hasPending: false,
       pending: [],
       applied: ['0000_init'],
+      dbAheadOfBinary: false,
     });
 
     await expect(getPendingMigrationsInfo()).resolves.toBeNull();
@@ -47,6 +48,7 @@ describe('getPendingMigrationsInfo', () => {
       hasPending: true,
       pending: ['0005_add_widgets', '0006_add_gizmos'],
       applied: ['0000_init'],
+      dbAheadOfBinary: false,
     });
 
     const info = await getPendingMigrationsInfo();
@@ -65,6 +67,7 @@ describe('getPendingMigrationsInfo', () => {
       hasPending: true,
       pending: ['0001_thing'],
       applied: [],
+      dbAheadOfBinary: false,
     });
 
     const info = await getPendingMigrationsInfo('file:/tmp/agor-override.db');

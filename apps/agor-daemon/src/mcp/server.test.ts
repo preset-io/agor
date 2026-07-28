@@ -1,4 +1,5 @@
 import { request as httpRequest } from 'node:http';
+import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -242,7 +243,10 @@ describe('POST /mcp token source', () => {
   });
 
   it('rejects an internal MCP token replayed under a conflicting trusted tenant', async () => {
-    initMcpTokens({ db: testSqliteDb() });
+    initMcpTokens({
+      db: testSqliteDb(),
+      multiTenancy: resolveMultiTenancyConfig({}),
+    });
     const now = Math.floor(Date.now() / 1000);
     const token = jwt.sign(
       {

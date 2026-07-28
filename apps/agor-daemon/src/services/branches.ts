@@ -1592,8 +1592,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
     const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      params
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
     const statusResult = await runExecutorCommand(
       {
@@ -1669,8 +1668,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          params
+          this.app as unknown as { settings: { authentication?: { secret?: string } } }
         );
         spawnExecutor(
           {

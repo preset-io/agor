@@ -1,7 +1,7 @@
 // src/types/task.ts
-import type { AgenticToolName } from './agentic-tool';
+import type { PersistedAgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
-import type { MessageSource } from './message';
+import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
 export const TaskStatus = {
@@ -64,7 +64,7 @@ export type SdkFailureReason =
 export interface SdkFailure {
   reason: SdkFailureReason;
   detected_at: string;
-  tool: AgenticToolName;
+  tool: PersistedAgenticToolName;
   last_pulse?: ExecutorPulse;
   elapsed_ms?: number;
   watchdog_action?: 'would_fire' | 'enforced';
@@ -124,7 +124,7 @@ export interface ExecutorTerminationCompleteInput {
  */
 export interface TaskMetadata {
   is_agor_callback?: boolean;
-  source?: MessageSource;
+  source?: PersistedMessageSource;
   queued_by_user_id?: string;
   child_session_id?: SessionID;
   child_task_id?: TaskID;
@@ -338,9 +338,6 @@ export interface Task {
     approved_by?: string; // userId
     approved_at?: string;
   };
-
-  /** MD5 of the SDK session file at task completion (only populated when stateless_fs_mode is enabled) */
-  session_md5?: string;
 
   created_at: string;
   started_at?: string; // When task execution was dispatched (UTC ISO string)

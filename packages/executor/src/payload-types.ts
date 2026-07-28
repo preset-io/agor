@@ -9,6 +9,7 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
+import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -71,16 +72,8 @@ const GitUrlSchema = z.string().refine(isGitUrl, {
 /**
  * Tool types supported by the prompt command
  */
-export const ToolTypeSchema = z.enum([
-  'claude-code',
-  'claude-code-cli',
-  'gemini',
-  'codex',
-  'opencode',
-  'copilot',
-  'cursor',
-]);
-export type ToolType = z.infer<typeof ToolTypeSchema>;
+export const ToolTypeSchema = z.enum(AGENTIC_TOOL_NAMES);
+export type ToolType = AgenticToolName;
 
 /**
  * Permission modes for agent execution
@@ -967,48 +960,13 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
 
   params: z.object({
     /** Action: create new tab, focus existing, or close-by-name */
-    action: z.enum(['create', 'focus', 'close']),
+    action: z.enum(['create', 'focus']),
 
     /** Tab name (branch name) */
     tabName: z.string(),
 
     /** Working directory (for 'create' action) */
     cwd: z.string().optional(),
-
-    /**
-     * Optional binary to run inside the new tab.
-     * Maps to `zellij action new-tab --command <bin>`.
-     *
-     * Use case: spawn the `claude` shell binary directly into a tab so
-     * its REPL is the tab's foreground process. Without this the tab
-     * opens a default shell.
-     *
-     * Only honored when `action === 'create'`.
-     */
-    command: z.string().optional(),
-
-    /**
-     * Argv passed to `command`. Each element produces a separate
-     * `--args <one>` repetition on the `zellij action new-tab` invocation
-     * (Zellij requires this rather than space-separated argv).
-     *
-     * Ignored when `command` is omitted.
-     */
-    commandArgs: z.array(z.string()).optional(),
-
-    /**
-     * Force-recreate semantics for `action: 'create'`. Closes EVERY tab
-     * matching `tabName` before issuing `new-tab` — bypasses the
-     * default "tab exists → focus instead" auto-converse.
-     *
-     * Used by:
-     *   - `/sessions/:id/restart-cli` — always wants a fresh `claude`.
-     *   - The ensure-create path when the daemon detected the in-tab
-     *     `claude` is dead (pgrep returned no match).
-     *
-     * Ignored when `action !== 'create'`.
-     */
-    forceRecreate: z.boolean().optional(),
   }),
 });
 

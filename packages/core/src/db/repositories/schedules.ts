@@ -7,8 +7,8 @@
 
 import type {
   BranchID,
+  PersistedScheduleAgenticToolConfig,
   Schedule,
-  ScheduleAgenticToolConfig,
   ScheduleID,
   SessionID,
   TimezoneMode,
@@ -61,12 +61,13 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
   private rowToSchedule(row: ScheduleRow): Schedule {
     const storedConfig =
       typeof row.agentic_tool_config === 'string'
-        ? (JSON.parse(row.agentic_tool_config) as ScheduleAgenticToolConfig)
-        : (row.agentic_tool_config as ScheduleAgenticToolConfig);
-    const config: ScheduleAgenticToolConfig = {
+        ? (JSON.parse(row.agentic_tool_config) as PersistedScheduleAgenticToolConfig)
+        : (row.agentic_tool_config as PersistedScheduleAgenticToolConfig);
+    const config: PersistedScheduleAgenticToolConfig = {
       ...storedConfig,
       preset_id:
-        (row.agentic_tool_preset_id as ScheduleAgenticToolConfig['preset_id']) ?? undefined,
+        (row.agentic_tool_preset_id as PersistedScheduleAgenticToolConfig['preset_id']) ??
+        undefined,
     };
 
     return attachHiddenTenant(

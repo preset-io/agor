@@ -227,8 +227,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      params
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
 
     // Unix group initialization is a filesystem concern controlled by
@@ -918,8 +917,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        params
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -1009,8 +1007,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     serviceParams?: RepoParams
   ) {
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      serviceParams
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,
@@ -1198,8 +1195,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        params
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
       const cleanupResult = await runExecutorCommand(

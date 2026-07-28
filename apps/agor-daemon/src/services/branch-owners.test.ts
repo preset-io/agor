@@ -9,8 +9,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../utils/spawn-executor.js', () => ({
   createServiceToken: mocks.createServiceToken,
   getDaemonUrl: () => 'http://localhost:3030',
-  serviceTokenScopeForParams: (params?: { tenant?: { tenant_id?: string } }) =>
-    params?.tenant?.tenant_id ? { tenant_id: params.tenant.tenant_id } : {},
+  serviceTokenScopeForCurrentTenant: () => ({ tenant_id: 'tenant-a' }),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 

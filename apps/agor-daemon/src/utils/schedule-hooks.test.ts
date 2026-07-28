@@ -125,6 +125,49 @@ describe('ensureCurrentScheduleLoaded', () => {
 });
 
 describe('validateScheduleConfig', () => {
+  it('rejects create data that omits timezone mode and would otherwise default to invalid local', async () => {
+    const ctx = makeContext({
+      method: 'create',
+      data: { cron_expression: '0 9 * * *', prompt: 'Run' },
+    });
+    await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/timezone_mode is required/);
+  });
+
+  it('rejects an invalid timezone mode on create', async () => {
+    const ctx = makeContext({
+      method: 'create',
+      data: {
+        cron_expression: '0 9 * * *',
+        timezone_mode: 'invalid',
+        prompt: 'Run',
+      } as unknown as Partial<Schedule>,
+    });
+    await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/either 'local' or 'utc'/);
+  });
+
+  it('rejects an invalid timezone mode on patch', async () => {
+    const ctx = makeContext({
+      method: 'patch',
+      id: 'sched-test-0001',
+      data: { timezone_mode: 'invalid' } as unknown as Partial<Schedule>,
+      cachedSchedule: makeSchedule(),
+    });
+    await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/either 'local' or 'utc'/);
+  });
+
+  it('rejects a timezone on a UTC create', async () => {
+    const ctx = makeContext({
+      method: 'create',
+      data: {
+        cron_expression: '0 9 * * *',
+        timezone_mode: 'utc',
+        timezone: 'America/Los_Angeles',
+        prompt: 'Run',
+      },
+    });
+    await expect(validateScheduleConfig()(ctx)).rejects.toThrow(/must be omitted/);
+  });
+
   it('validates cron against merged tz on patch', async () => {
     // Current schedule has tz='America/Los_Angeles'; patch only sends a
     // new cron. Validator must compose merged tz from the current row.

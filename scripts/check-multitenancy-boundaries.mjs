@@ -39,14 +39,12 @@ const checks = [
     baseline: {
       'apps/agor-daemon/src/register-hooks.ts': 1,
       'apps/agor-daemon/src/register-services.ts': 11,
-      'apps/agor-daemon/src/register-routes.ts': 12,
+      'apps/agor-daemon/src/register-routes.ts': 10,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
-      // Claude CLI launch and Stop target only the owning user's terminal room.
-      'apps/agor-daemon/src/services/claude-cli-integration.ts': 4,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream and tenant+task executor-control joins,
       // the existence-gated room lookup (existingChannel — used by publish +

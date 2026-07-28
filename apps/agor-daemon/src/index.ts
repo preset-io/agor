@@ -39,7 +39,7 @@ import {
   resolveSecurity,
   saveConfig,
 } from '@agor/core/config';
-import { getDatabaseUrl, runWithTenantDatabaseScope } from '@agor/core/db';
+import { getDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -69,7 +69,7 @@ import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
-import { runPostStartJob, startup } from './startup.js';
+import { startup } from './startup.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
@@ -267,7 +267,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
-  configureExecutor(config.execution);
+  configureExecutor(config.execution, {
+    requireTenantContext: multiTenancy.mode === 'required_from_auth',
+  });
 
   // --------------------------------------------------------------------------
   // Create Feathers app + Express middleware
@@ -588,11 +590,9 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const allowSuperadmin = config.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
-  // Stash the shared Drizzle handle on the Feathers app so utilities
-  // that don't get db passed as a constructor arg (Claude Code CLI
-  // watcher sink/persister, lifecycle hooks fired from after.create
-  // contexts) can resolve it via `getDb(app)`. Existing services that
-  // already receive `db` via constructor injection are unaffected.
+  // Stash the shared Drizzle handle on the Feathers app so lifecycle
+  // utilities that are not constructed with a database argument can resolve
+  // it via `getDb(app)`. Services using constructor injection are unaffected.
   app.set('database', db);
   app.set('config', config);
 
@@ -730,39 +730,5 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
-  });
-
-  // --------------------------------------------------------------------------
-  // Phase 5: Re-instantiate Claude Code CLI watchers for in-flight sessions.
-  //
-  // Has to run AFTER services are up (we use `app.service('branches')` to
-  // resolve cwds + `app.service('messages')` indirectly via the sink) and
-  // AFTER `app.set('database', db)` (the watcher persister uses
-  // `getDb(app)`). Sessions that were mid-turn at the previous daemon
-  // shutdown get their `cli_state.active_turn` rehydrated AND their
-  // stale-task watchdog re-started, so a Ctrl-D'd REPL that straddled
-  // the restart is detected and the task is closed.
-  // --------------------------------------------------------------------------
-  runPostStartJob('cli-watcher-rehydrate', async () => {
-    const { rehydrateCliWatchers, scanCliWatcherRehydrateSessions } = await import(
-      './services/claude-cli-integration.js'
-    );
-    const cliSessions = await runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, () =>
-      scanCliWatcherRehydrateSessions(app)
-    );
-    await rehydrateCliWatchers(
-      app,
-      (branchId) =>
-        runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, async () => {
-          try {
-            const branch = (await app.service('branches').get(branchId)) as { path?: string };
-            return branch?.path ?? null;
-          } catch {
-            return null;
-          }
-        }),
-      cliSessions,
-      { tenantId: multiTenancy.static_tenant_id }
-    );
   });
 }
