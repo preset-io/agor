@@ -152,7 +152,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
-import { createSessionMcpTokenHook } from './utils/session-mcp-token-hook.js';
+import { createSessionMcpTokenAfterHooks } from './utils/session-mcp-token-hook.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
@@ -572,16 +572,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
   const executionMode = resolveExecutionSecurityMode(config);
-  const attachMcpTokenAfterGet = createSessionMcpTokenHook({
+  const sessionMcpTokenAfterHooks = createSessionMcpTokenAfterHooks({
     app,
     config,
-    onAttached: (session) =>
+    onGetAttached: (session) =>
       mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`),
-  });
-  const attachMcpTokenAfterCreate = createSessionMcpTokenHook({
-    app,
-    config,
-    onAttached: (session) =>
+    onCreateAttached: (session) =>
       console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`),
   });
 
@@ -682,10 +678,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // Without tenant columns (SQLite / single-tenant), tenant-owned services skip
   // the full RLS-transaction hooks — but they must still carry ambient tenant
-  // identity so tenant-aware call sites (e.g. MCP session-token minting in
-  // mcp/tokens.ts) can resolve the active tenant instead of throwing "missing
-  // active tenant context". Identity only: no data stamping or DB transaction,
-  // which are Postgres tenant-column mechanics.
+  // identity for tenant-aware call sites. MCP session-token issuance can
+  // resolve the configured tenant without ambient identity in static mode,
+  // while required_from_auth remains fail-closed. Identity only: no data
+  // stamping or DB transaction, which are Postgres tenant-column mechanics.
   const registerTenantIdentityForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
       safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
@@ -2628,7 +2624,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      get: [attachMcpTokenAfterGet],
+      get: [sessionMcpTokenAfterHooks.get],
       create: [
         async (context) => {
           const session = context.result as Session;
@@ -2639,7 +2635,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
-        attachMcpTokenAfterCreate,
+        sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
 
         // Unix Integration: When a non-owner creates a session in a branch with

@@ -8,19 +8,38 @@ import {
   sessions,
   shortId,
 } from '@agor/core/db';
-import type { HookContext, Session, SessionID } from '@agor/core/types';
+import { feathers } from '@agor/core/feathers';
+import type { Session, SessionID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { initMcpTokens, shutdownMcpTokens } from '../mcp/tokens.js';
-import { createSessionMcpTokenHook } from './session-mcp-token-hook.js';
+import { createSessionMcpTokenAfterHooks } from './session-mcp-token-hook.js';
 
 const JWT_SECRET = 'session-mcp-hook-test-secret';
 
-function makeApp() {
-  return {
-    settings: { authentication: { secret: JWT_SECRET } },
-  } as never;
+function makeApp(session: Session) {
+  const app = feathers();
+  app.set('authentication', { secret: JWT_SECRET });
+  app.use('sessions', {
+    async create() {
+      return { ...session };
+    },
+    async get() {
+      return { ...session };
+    },
+  });
+  const hooks = createSessionMcpTokenAfterHooks({
+    app: app as never,
+    config: {},
+  });
+  app.service('sessions').hooks({
+    after: {
+      create: [hooks.create],
+      get: [hooks.get],
+    },
+  });
+  return app;
 }
 
 async function seedSession(db: Database): Promise<Session> {
@@ -81,38 +100,36 @@ describe('sessions MCP-token after hook', () => {
       multiTenancy: resolveMultiTenancyConfig({}),
     });
     const session = await seedSession(db);
-    const hook = createSessionMcpTokenHook({
-      app: makeApp(),
-      config: {},
-    });
-    const context = {
-      method,
-      result: session,
-      params: {
-        // No provider, request tenant params, or ambient ALS: this models the
-        // executor/background fetches that exposed issue #2003.
-        user,
-      },
-    } as unknown as HookContext;
+    const service = makeApp(session).service('sessions');
+    const params = {
+      // No provider, request tenant params, or ambient ALS: this models the
+      // executor/background fetches that exposed issue #2003.
+      user,
+    };
+    const result =
+      method === 'create'
+        ? await service.create({}, params as never)
+        : await service.get(session.session_id, params as never);
 
-    await hook(context);
-
-    const token = (context.result as Session).mcp_token;
+    const token = (result as Session).mcp_token;
     expect(token).toEqual(expect.any(String));
     expect((jwt.verify(token!, JWT_SECRET) as { tid?: string }).tid).toBe('default');
   }
 
-  dbTest('attaches a default-static token on request-less after:create', async ({ db }) => {
+  dbTest('attaches a default-static token through Feathers sessions.create', async ({ db }) => {
     await expectDefaultStaticToken(db, 'create', {
       user_id: 'member-user',
       role: 'member',
     });
   });
 
-  dbTest('attaches a default-static token on executor/background after:get', async ({ db }) => {
-    await expectDefaultStaticToken(db, 'get', {
-      user_id: 'executor-service',
-      role: 'service',
-    });
-  });
+  dbTest(
+    'attaches a default-static token through executor/background Feathers sessions.get',
+    async ({ db }) => {
+      await expectDefaultStaticToken(db, 'get', {
+        user_id: 'executor-service',
+        role: 'service',
+      });
+    }
+  );
 });

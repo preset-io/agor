@@ -10,6 +10,12 @@ export interface SessionMcpTokenHookOptions {
   onAttached?: (session: Session) => void;
 }
 
+export interface SessionMcpTokenAfterHooksOptions
+  extends Omit<SessionMcpTokenHookOptions, 'onAttached'> {
+  onGetAttached?: (session: Session) => void;
+  onCreateAttached?: (session: Session) => void;
+}
+
 /**
  * Build the shared sessions after:get / after:create MCP-token hook.
  *
@@ -45,5 +51,27 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);
     return context;
+  };
+}
+
+/**
+ * Build the paired hooks registered on the sessions service.
+ *
+ * Keeping the method mapping beside the shared hook implementation makes it
+ * harder for create/get behavior to drift and gives integration tests one
+ * canonical registration shape to exercise through Feathers.
+ */
+export function createSessionMcpTokenAfterHooks(options: SessionMcpTokenAfterHooksOptions) {
+  return {
+    get: createSessionMcpTokenHook({
+      app: options.app,
+      config: options.config,
+      onAttached: options.onGetAttached,
+    }),
+    create: createSessionMcpTokenHook({
+      app: options.app,
+      config: options.config,
+      onAttached: options.onCreateAttached,
+    }),
   };
 }

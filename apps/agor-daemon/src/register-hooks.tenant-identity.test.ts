@@ -2,19 +2,16 @@
  * Regression: tenant-owned services must carry ambient tenant identity even
  * without tenant columns (SQLite / single-tenant default).
  *
- * PR #1942 made MCP session-token minting (mcp/tokens.ts) call
- * `requireCurrentTenantId()`, which throws when no tenant context is active.
- * register-hooks.ts only registered the tenant around-hook when tenant columns
- * were enabled (PostgreSQL), so on the default SQLite deployment `sessions`
- * had no around-hook, no ambient tenant, and every `sessions.create` /
- * `sessions.get` 500'd with "missing active tenant context" — surfaced in the
- * UI as "Failed to create session".
+ * Tenant-aware service code should observe the configured static tenant even
+ * when tenant columns are absent. MCP token issuance can independently resolve
+ * the configured tenant in static mode, but other service code still relies on
+ * this ambient identity and required_from_auth must never receive a static
+ * fallback.
  *
  * The fix registers the identity-only around hook (no data stamping, no RLS
  * transaction) for tenant-owned services in SQLite mode. This test drives that
  * exact hook through its Feathers `(context, next)` contract and proves the
- * wrapped service body runs with the static tenant active — which is what lets
- * `generateSessionToken` succeed downstream instead of throwing.
+ * wrapped service body runs with the static tenant active.
  */
 
 import { DEFAULT_STATIC_TENANT_ID } from '@agor/core/config';
@@ -50,7 +47,7 @@ describe('tenant identity for owned services (SQLite / static mode)', () => {
   it('activates the static tenant while the wrapped service body runs', async () => {
     let observed: string | undefined = 'sentinel';
     await identityAround(makeContext(), async () => {
-      // Stand-in for the after-hook (mcp/tokens.ts) reading the active tenant.
+      // Stand-in for tenant-aware service code reading the active tenant.
       observed = getCurrentTenantId();
     });
 
