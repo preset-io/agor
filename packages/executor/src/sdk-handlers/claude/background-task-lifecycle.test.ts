@@ -1,0 +1,72 @@
+import type { SDKMessage } from '@agor/core/sdk';
+import { describe, expect, it } from 'vitest';
+import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
+
+const message = (value: Record<string, unknown>) => value as SDKMessage;
+const started = (taskId: string, taskType = 'agent') =>
+  message({ type: 'system', subtype: 'task_started', task_id: taskId, task_type: taskType });
+const settled = (taskId: string, status: 'completed' | 'failed' | 'stopped' = 'completed') =>
+  message({ type: 'system', subtype: 'task_notification', task_id: taskId, status });
+const result = (subtype = 'success') => message({ type: 'result', subtype });
+
+describe('ClaudeBackgroundTaskLifecycle', () => {
+  it('keeps a Workflow alive across its parent result until its completion turn', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('workflow-1', 'local_workflow'));
+    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    lifecycle.observe(settled('workflow-1'));
+    expect(lifecycle.observe(result())).toBe('terminal');
+  });
+
+  it('preserves the parent result while an Agent completion notification is pending', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    expect(lifecycle.activeTaskCount).toBe(1);
+    lifecycle.observe(settled('agent-1'));
+    expect(lifecycle.activeTaskCount).toBe(0);
+  });
+
+  it.each([
+    'completed',
+    'failed',
+    'stopped',
+  ] as const)('allows a terminal continuation after a %s task notification', (status) => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    lifecycle.observe(settled('agent-1', status));
+    expect(lifecycle.observe(result())).toBe('terminal');
+  });
+
+  it('waits for every background task before accepting a later result', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    lifecycle.observe(started('agent-2'));
+    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    lifecycle.observe(settled('agent-1'));
+    expect(lifecycle.observe(result())).toBe('await-background-tasks');
+    lifecycle.observe(settled('agent-2'));
+    expect(lifecycle.observe(result())).toBe('terminal');
+  });
+
+  it('ends ordinary turns immediately', () => {
+    expect(new ClaudeBackgroundTaskLifecycle().observe(result())).toBe('terminal');
+  });
+
+  it('ends error results even if a task never reports settlement', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    expect(lifecycle.observe(result('error_during_execution'))).toBe('terminal');
+  });
+
+  it('ignores duplicate and unknown settlement notifications', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('agent-1'));
+    lifecycle.observe(settled('unknown'));
+    lifecycle.observe(settled('agent-1'));
+    lifecycle.observe(settled('agent-1'));
+    expect(lifecycle.activeTaskCount).toBe(0);
+    expect(lifecycle.observe(result())).toBe('terminal');
+  });
+});

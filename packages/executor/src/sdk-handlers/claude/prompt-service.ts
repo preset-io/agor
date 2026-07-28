@@ -21,6 +21,7 @@ import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 
@@ -213,6 +214,7 @@ If you continue to see authentication errors, please contact your Agor administr
       existingSdkSessionId,
       enableTokenStreaming: ClaudePromptService.ENABLE_TOKEN_STREAMING,
     });
+    const backgroundTasks = new ClaudeBackgroundTaskLifecycle();
 
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
@@ -220,6 +222,24 @@ If you continue to see authentication errors, please contact your Agor administr
     try {
       for await (const msg of result) {
         reportSdkActivity(onActivity, 'claude-code', msg.type);
+        const activeTaskCountBefore = backgroundTasks.activeTaskCount;
+        const resultDisposition = backgroundTasks.observe(msg);
+        if (
+          msg.type === 'system' &&
+          msg.subtype === 'task_started' &&
+          backgroundTasks.activeTaskCount > activeTaskCountBefore
+        ) {
+          // Keep the SDK watchdog paused for the documented lifetime of the
+          // background task, not merely the Agent/Workflow launch tool call.
+          onActivity?.('progress', 'tool.start');
+        }
+        if (
+          msg.type === 'system' &&
+          msg.subtype === 'task_notification' &&
+          backgroundTasks.activeTaskCount < activeTaskCountBefore
+        ) {
+          onActivity?.('progress', 'tool.complete');
+        }
         // Process message through processor
         const events = await processor.process(msg);
 
@@ -247,6 +267,12 @@ If you continue to see authentication errors, please contact your Agor administr
           // (via a pending Promise) specifically so this control request can use
           // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
+            if (resultDisposition === 'await-background-tasks') {
+              console.log(
+                `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
+              );
+              continue;
+            }
             try {
               const contextUsage = await result.getContextUsage();
               console.log(
@@ -265,6 +291,9 @@ If you continue to see authentication errors, please contact your Agor administr
 
           // Handle end event
           if (event.type === 'end') {
+            if (resultDisposition === 'await-background-tasks') {
+              continue;
+            }
             console.log(`🏁 Conversation ended: ${event.reason}`);
             break; // Exit for-await loop
           }
@@ -274,7 +303,10 @@ If you continue to see authentication errors, please contact your Agor administr
         }
 
         // If we got an end event, break the outer loop
-        if (events.some((e) => e.type === 'end')) {
+        if (
+          resultDisposition !== 'await-background-tasks' &&
+          events.some((e) => e.type === 'end')
+        ) {
           break;
         }
       }
