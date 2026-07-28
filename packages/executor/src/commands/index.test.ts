@@ -230,9 +230,8 @@ describe('executeCommand - git.branch.add', () => {
     command: 'git.branch.add',
     sessionToken: 'jwt-token',
     params: {
-      repoPath: '/data/agor/repos/repo.git',
-      branchName: 'feature-x',
-      branchPath: '/data/agor/worktrees/repo/feature-x',
+      branchId: '550e8400-e29b-41d4-a716-446655440002',
+      repoId: '550e8400-e29b-41d4-a716-446655440003',
     },
   };
 
@@ -243,9 +242,6 @@ describe('executeCommand - git.branch.add', () => {
     expect(result.data).toMatchObject({
       dryRun: true,
       command: 'git.branch.add',
-      repoPath: branchAddPayload.params.repoPath,
-      branchName: branchAddPayload.params.branchName,
-      branchPath: branchAddPayload.params.branchPath,
     });
   });
 
@@ -270,7 +266,7 @@ describe('executeCommand - git.branch.add', () => {
     });
   });
 
-  it('should round-trip storageMode / cloneDepth / remoteUrl in dry-run response', async () => {
+  it('should round-trip storageMode / cloneDepth / reference policy in dry-run response', async () => {
     // PR 1 of the branch→clone storage migration. The daemon forwards
     // these three knobs; the executor branches on storageMode at run time.
     // Pin them through the dry-run echo so the daemon-side test fixture
@@ -282,7 +278,7 @@ describe('executeCommand - git.branch.add', () => {
         branch: 'feature-x',
         storageMode: 'clone',
         cloneDepth: 100,
-        remoteUrl: 'https://github.com/org/repo.git',
+        useReference: true,
       },
     };
 
@@ -292,7 +288,7 @@ describe('executeCommand - git.branch.add', () => {
     expect(result.data).toMatchObject({
       storageMode: 'clone',
       cloneDepth: 100,
-      remoteUrl: 'https://github.com/org/repo.git',
+      useReference: true,
     });
   });
 });

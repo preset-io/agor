@@ -37,65 +37,6 @@ vi.mock('../utils/spawn-executor.js', () => {
   };
 });
 
-describe('ReposService.createBranch clone preflight', () => {
-  it('rejects clone-mode local-only source refs before persisting branch state', async () => {
-    const branchesCreate = vi.fn();
-    executorMocks.runExecutorCommand.mockResolvedValueOnce({
-      success: false,
-      error: {
-        code: 'GIT_REPO_PREFLIGHT_FAILED',
-        message: "Clone mode cannot clone local-only or missing branch 'local-only'",
-      },
-    });
-
-    const app = {
-      service(path: string) {
-        if (path === 'branches') return { create: branchesCreate };
-        throw new Error(`Unexpected service: ${path}`);
-      },
-    } as unknown as Application;
-
-    const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'get').mockResolvedValue({
-      repo_id: 'repo-1',
-      slug: 'org/repo',
-      remote_url: 'https://github.com/org/repo.git',
-      local_path: undefined,
-      default_branch: 'main',
-    } as never);
-
-    await expect(
-      service.createBranch(
-        'repo-1',
-        {
-          name: 'new-branch',
-          ref: 'new-branch',
-          createBranch: true,
-          sourceBranch: 'local-only',
-          boardId: 'board-1',
-          storage_mode: 'clone',
-        },
-        { user: { user_id: 'user-1' } } as never
-      )
-    ).rejects.toThrow(/Clone mode cannot clone local-only/);
-
-    expect(executorMocks.runExecutorCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'git.repo.preflight',
-        sessionToken: 'scoped-token',
-        params: expect.objectContaining({
-          repoId: 'repo-1',
-          userId: 'user-1',
-          ref: 'local-only',
-          refType: 'branch',
-        }),
-      }),
-      expect.any(Object)
-    );
-    expect(branchesCreate).not.toHaveBeenCalled();
-  });
-});
-
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
     executorMocks.runExecutorCommand.mockResolvedValueOnce({

@@ -23,7 +23,6 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
-  assertRemoteRefVisibleForClone,
   categorizeGitError,
   cleanBranch,
   cloneRepo,
@@ -58,7 +57,6 @@ import type {
   GitManagedCredentialsReconcilePayload,
   GitRepoDeletePayload,
   GitRepoInspectPayload,
-  GitRepoPreflightPayload,
   GitRepoRealignOriginPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
@@ -114,41 +112,6 @@ export async function handleGitRepoInspect(
         message: error instanceof Error ? error.message : String(error),
       },
     };
-  }
-}
-
-export async function handleGitRepoPreflight(
-  payload: GitRepoPreflightPayload,
-  _options: CommandOptions
-): Promise<ExecutorResult> {
-  let client: AgorClient | null = null;
-  try {
-    client = await createExecutorClient(
-      payload.daemonUrl || 'http://localhost:3030',
-      payload.sessionToken
-    );
-    const repo = await client.service('repos').get(payload.params.repoId);
-    if (repo.local_path) await scrubGitConfigRemoteCredentials(repo.local_path);
-    if (repo.remote_url && payload.params.ref) {
-      const env = await fetchUserGitEnvironment(client, payload.params.userId);
-      await assertRemoteRefVisibleForClone({
-        remoteUrl: stripGitUrlCredentials(repo.remote_url),
-        ref: payload.params.ref,
-        refType: payload.params.refType ?? 'branch',
-        env,
-      });
-    }
-    return { success: true, data: { repoId: payload.params.repoId } };
-  } catch (error) {
-    return {
-      success: false,
-      error: {
-        code: 'GIT_REPO_PREFLIGHT_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
-  } finally {
-    client?.io.disconnect();
   }
 }
 
@@ -1165,6 +1128,9 @@ export async function handleGitBranchAdd(
   options: CommandOptions
 ): Promise<ExecutorResult> {
   const branchId = payload.params.branchId;
+  let resolvedRepoPath: string | undefined;
+  let resolvedBranchPath: string | undefined;
+  let resolvedBranchName: string | undefined;
 
   // Dry run mode
   if (options.dryRun) {
@@ -1175,18 +1141,12 @@ export async function handleGitBranchAdd(
         command: 'git.branch.add',
         branchId,
         repoId: payload.params.repoId,
-        repoPath: payload.params.repoPath,
-        branchName: payload.params.branchName,
-        branchPath: payload.params.branchPath,
         branch: payload.params.branch,
         sourceBranch: payload.params.sourceBranch,
         createBranch: payload.params.createBranch,
         storageMode: payload.params.storageMode,
         cloneDepth: payload.params.cloneDepth,
-        remoteUrl: payload.params.remoteUrl
-          ? stripGitUrlCredentials(payload.params.remoteUrl)
-          : payload.params.remoteUrl,
-        referencePath: payload.params.referencePath,
+        useReference: payload.params.useReference,
       },
     };
   }
@@ -1199,14 +1159,26 @@ export async function handleGitBranchAdd(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.branch.add] Connected to daemon');
 
+    // Resolve filesystem-bearing repository metadata through the scoped
+    // service token in this same executor. This makes authorization, trusted
+    // path resolution, credential scrub, and materialization one operation.
+    const repo = await client.service('repos').get(payload.params.repoId);
+    const branchRecord = await client.service('branches').get(branchId);
+    if (branchRecord.repo_id !== payload.params.repoId) {
+      throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
+    }
+
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const branchPath = payload.params.branchPath;
-    const repoPath = payload.params.repoPath;
-    const branchName = payload.params.branchName;
+    const branchPath = branchRecord.path;
+    const repoPath = repo.local_path;
+    const branchName = branchRecord.name;
+    resolvedRepoPath = repoPath;
+    resolvedBranchPath = branchPath;
+    resolvedBranchName = branchName;
     const branch = payload.params.branch || branchName;
     const shouldCreateBranch = payload.params.createBranch ?? false;
     const sourceBranch = payload.params.sourceBranch;
@@ -1214,8 +1186,12 @@ export async function handleGitBranchAdd(
     const restoreMode = payload.params.restoreMode ?? false;
     const storageMode = payload.params.storageMode ?? 'worktree';
     const cloneDepth = payload.params.cloneDepth;
-    const remoteUrl = payload.params.remoteUrl;
-    const referencePath = payload.params.referencePath;
+    const remoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
+    const referencePath = payload.params.useReference ? repo.local_path : undefined;
+
+    if (!repoPath && storageMode === 'worktree') {
+      throw new Error(`Repository ${repoId} has no local_path for worktree materialization`);
+    }
 
     console.log(`[git.branch.add] Creating branch at ${branchPath}...`);
     console.log(
@@ -1231,8 +1207,7 @@ export async function handleGitBranchAdd(
       // payload schema also enforces this via superRefine.)
       if (!remoteUrl) {
         throw new Error(
-          `storageMode='clone' requires remoteUrl in payload (got none). ` +
-            `The daemon should forward repo.remote_url alongside storageMode.`
+          `Cannot materialize clone-mode branch: tenant-scoped repository ${repoId} has no remote_url.`
         );
       }
 
@@ -1305,7 +1280,7 @@ export async function handleGitBranchAdd(
           error instanceof Error ? error.message : String(error)
         );
       }
-    } else if (!payload.params.initUnixGroup && storageMode === 'worktree') {
+    } else if (payload.params.fixBasicPermissions && storageMode === 'worktree') {
       // RBAC is explicitly disabled — set basic permissions for the base
       // repo's .git/worktrees/<name>/ entry so git operations work even
       // without Unix group isolation.
@@ -1397,7 +1372,7 @@ export async function handleGitBranchAdd(
     // unblocks sync-unix, sessions, and manual recovery — the directory just
     // won't be a proper git branch. Also repairs perms if a prior attempt
     // created the dir but failed on group initialization.
-    const fallbackPath = payload.params.branchPath;
+    const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
     let fallbackPermissionsApplied = false;
     if (fallbackPath) {
@@ -1435,9 +1410,9 @@ export async function handleGitBranchAdd(
     let userMessage = errorMessage;
     if (errorMessage.includes('already exists')) {
       if (errorMessage.includes('branch')) {
-        userMessage = `A branch named '${payload.params.branch || payload.params.branchName}' already exists and is in use by another branch. Please choose a different name.`;
+        userMessage = `A branch named '${payload.params.branch || resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
       } else {
-        userMessage = `Directory '${payload.params.branchPath || payload.params.branchName}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
+        userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
       }
     }
 
@@ -1465,9 +1440,9 @@ export async function handleGitBranchAdd(
         details: {
           branchId,
           repoId: payload.params.repoId,
-          repoPath: payload.params.repoPath,
-          branchName: payload.params.branchName,
-          branchPath: payload.params.branchPath,
+          repoPath: resolvedRepoPath,
+          branchName: resolvedBranchName,
+          branchPath: resolvedBranchPath,
           fallbackDirectoryCreated: fallbackCreated,
           fallbackPermissionsApplied,
         },

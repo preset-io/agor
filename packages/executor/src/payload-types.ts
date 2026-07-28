@@ -252,16 +252,9 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
  * payloads fail at parse time with a clear message.
  */
 const enforceClonePayloadInvariants = (
-  params: { storageMode?: 'worktree' | 'clone'; remoteUrl?: string; cloneDepth?: number },
+  params: { storageMode?: 'worktree' | 'clone'; cloneDepth?: number },
   ctx: z.RefinementCtx
 ): void => {
-  if (params.storageMode === 'clone' && !params.remoteUrl) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['remoteUrl'],
-      message: "remoteUrl is required when storageMode === 'clone'",
-    });
-  }
   if (params.cloneDepth !== undefined && params.storageMode !== 'clone') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -286,15 +279,6 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
       /** Repo ID (UUID) */
       repoId: z.string().uuid(),
 
-      /** Path to the repository */
-      repoPath: z.string(),
-
-      /** Name for the branch */
-      branchName: z.string(),
-
-      /** Path where branch will be created */
-      branchPath: z.string(),
-
       /** Branch to checkout or create */
       branch: z.string().optional(),
 
@@ -312,6 +296,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
       /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
       initUnixGroup: z.boolean().optional().default(false),
+
+      /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
+      fixBasicPermissions: z.boolean().optional().default(false),
 
       /** Access level for non-owners ('none' | 'read' | 'write') */
       othersAccess: z.enum(['none', 'read', 'write']).optional().default('read'),
@@ -334,22 +321,8 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
        */
       cloneDepth: z.number().int().positive().optional(),
 
-      /**
-       * Remote URL for clone-mode. Daemon resolves from the repo record and
-       * forwards it; the executor uses it as the `git clone` source. Ignored
-       * when storageMode='worktree'.
-       */
-      remoteUrl: z.string().optional(),
-
-      /**
-       * Optional `git clone --reference <path>` hint. Daemon resolves this
-       * to the per-repo base clone (e.g. `~/.agor/repos/<slug>/`) and
-       * forwards it; the executor checks the path on its own filesystem
-       * before adding `--reference` to the clone command. Path missing
-       * (different mount, base not seeded yet) → silent fallback to a
-       * full clone. Ignored when storageMode='worktree'.
-       */
-      referencePath: z.string().optional(),
+      /** Whether clone mode may use the tenant-fetched repo path as an object-cache hint. */
+      useReference: z.boolean().optional().default(false),
     })
     .superRefine(enforceClonePayloadInvariants),
 });
@@ -762,18 +735,6 @@ export const GitRepoInspectPayloadSchema = BasePayloadSchema.extend({
 });
 export type GitRepoInspectPayload = z.infer<typeof GitRepoInspectPayloadSchema>;
 
-export const GitRepoPreflightPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('git.repo.preflight'),
-  sessionToken: z.string(),
-  params: z.object({
-    repoId: z.string().uuid(),
-    ref: z.string().optional(),
-    refType: z.enum(['branch', 'tag']).optional(),
-    userId: z.string().uuid().optional(),
-  }),
-});
-export type GitRepoPreflightPayload = z.infer<typeof GitRepoPreflightPayloadSchema>;
-
 export const GitManagedCredentialsReconcilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.managed-credentials.reconcile'),
   sessionToken: z.string(),
@@ -1044,7 +1005,6 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   EnvironmentLogsPayloadSchema,
   GitRepoRealignOriginPayloadSchema,
   GitRepoInspectPayloadSchema,
-  GitRepoPreflightPayloadSchema,
   GitManagedCredentialsReconcilePayloadSchema,
   GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
@@ -1106,7 +1066,6 @@ export function getSupportedCommands(): string[] {
     'git.branch.remove',
     'git.branch.clean',
     'git.repo.inspect',
-    'git.repo.preflight',
     'git.managed-credentials.reconcile',
     'branch.files.list',
     'branch.files.browse',

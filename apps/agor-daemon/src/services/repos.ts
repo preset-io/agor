@@ -49,7 +49,6 @@ import { DrizzleService } from '../adapters/drizzle';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -264,7 +263,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
     // (#1140, #1143). Callers no longer duplicate the gate.
-    const asUser = await resolveGitImpersonationForUser(this.db, userId);
+    const asUser = await resolveExecutorReadAsUser(this.db, userId);
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -709,32 +708,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         );
       }
     }
-    const preflightToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
-    );
-    const preflightAsUser = await resolveExecutorReadAsUser(this.db, userId);
-    const preflight = await runExecutorCommand(
-      {
-        command: 'git.repo.preflight',
-        sessionToken: preflightToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          repoId: repo.repo_id,
-          userId,
-          ...(storageMode === 'clone'
-            ? {
-                ref: data.createBranch ? data.sourceBranch || data.ref : data.ref,
-                refType: data.refType || 'branch',
-              }
-            : {}),
-        },
-      },
-      { asUser: preflightAsUser, logPrefix: '[repos.branch.preflight]' }
-    );
-    if (!preflight.success) {
-      throw new Error(preflight.error?.message ?? 'Repository preflight failed');
-    }
-
     // NOTE: Filesystem preflights (target-dir-exists,
     // branch-already-checked-out) live in the executor / core helpers —
     // they're filesystem facts, not DB facts. Clone-mode remote-ref
@@ -959,13 +932,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode, not by app-level branch RBAC.
-      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
+      const executionMode = resolveExecutionSecurityMode();
+      const initUnixGroup = executionMode.shouldInitUnixGroups;
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
       // (#1140, #1143). Callers no longer duplicate the gate.
-      const asUser = await resolveGitImpersonationForUser(this.db, userId);
-      const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
+      // Git/materialization runs as the requesting user in strict mode. Any
+      // privileged group/ACL setup is a separate daemon RPC below; in simple
+      // Cloud mode the pod/mount is the filesystem security boundary.
+      const asUser = await resolveExecutorReadAsUser(this.db, userId);
 
       spawnExecutorFireAndForget(
         {
@@ -975,9 +951,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           params: {
             branchId: branch.branch_id,
             repoId: repo.repo_id,
-            repoPath: repo.local_path,
-            branchName: data.name,
-            branchPath,
             branch: data.ref,
             sourceBranch: data.sourceBranch,
             createBranch: data.createBranch,
@@ -985,19 +958,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
+            fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             othersAccess: branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,
             ...(cloneDepth !== undefined ? { cloneDepth } : {}),
-            ...(storageMode === 'clone' && safeRemoteUrl ? { remoteUrl: safeRemoteUrl } : {}),
-            // Hand the executor the per-repo base clone as a `--reference`
-            // hint only when that object cache is readable by the eventual
-            // session identity. In strict mode, per-user sessions need fully
-            // self-standing clones instead of alternates into daemon-owned
-            // managed repos.
-            ...(storageMode === 'clone' && repo.local_path && shouldUseCloneReferencePath()
-              ? { referencePath: repo.local_path }
-              : {}),
+            useReference:
+              storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
           },
         },
         {

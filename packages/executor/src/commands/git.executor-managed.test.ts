@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   deleteBranchDirectory: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
+  createBranchAsClone: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
   gitRaw: vi.fn(),
@@ -18,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   getRemoteUrl: vi.fn(),
   scanGitConfigRemoteCredentials: vi.fn(),
   scrubGitConfigRemoteCredentials: vi.fn(),
-  assertRemoteRefVisibleForClone: vi.fn(),
   userHome: '/passwd/home',
 }));
 
@@ -42,6 +42,7 @@ vi.mock('../git/index.js', async () => {
     ...actual,
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
+    createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     getReposDir: mocks.getReposDir,
@@ -50,7 +51,6 @@ vi.mock('../git/index.js', async () => {
     getRemoteUrl: mocks.getRemoteUrl,
     scanGitConfigRemoteCredentials: mocks.scanGitConfigRemoteCredentials,
     scrubGitConfigRemoteCredentials: mocks.scrubGitConfigRemoteCredentials,
-    assertRemoteRefVisibleForClone: mocks.assertRemoteRefVisibleForClone,
   };
 });
 
@@ -62,12 +62,12 @@ import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
   handleBranchInspect,
+  handleGitBranchAdd,
   handleGitBranchRemove,
   handleGitClone,
   handleGitManagedCredentialsReconcile,
   handleGitRepoDelete,
   handleGitRepoInspect,
-  handleGitRepoPreflight,
 } from './git.js';
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
@@ -139,6 +139,10 @@ function createClient(records: {
         return {
           get: vi.fn(async () => records.branch),
           find,
+          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
+            ...(records.branch ?? {}),
+            ...data,
+          })),
         };
       }
       throw new Error(`unexpected service ${name}`);
@@ -162,6 +166,7 @@ beforeEach(() => {
     repoName: 'agor-assistant',
     defaultBranch: 'main',
   });
+  mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
@@ -169,10 +174,73 @@ beforeEach(() => {
     findings: [{ configPath: '/repo/.git/config' }],
   });
   mocks.scrubGitConfigRemoteCredentials.mockResolvedValue({ findings: [] });
-  mocks.assertRemoteRefVisibleForClone.mockResolvedValue(undefined);
 });
 
 describe('managed executor git/fs commands', () => {
+  it('resolves trusted repo metadata just-in-time inside git.branch.add', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://user:secret@example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+      },
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: {
+          branchId,
+          repoId,
+          branch: 'main',
+          storageMode: 'clone',
+          useReference: true,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteUrl: 'https://example.com/trusted/repo.git',
+        referencePath: '/trusted/repo',
+      })
+    );
+  });
+
+  it('denies missing tenant-scoped repo before filesystem materialization', async () => {
+    mocks.createExecutorClient.mockResolvedValueOnce({
+      io: { disconnect: vi.fn() },
+      service: vi.fn(() => ({
+        get: vi.fn(async () => {
+          throw new Error('Not found');
+        }),
+      })),
+    });
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'other-tenant-token',
+        params: {
+          branchId,
+          repoId,
+          storageMode: 'clone',
+        },
+      },
+      {}
+    );
+    expect(result).toMatchObject({ success: false, error: { message: 'Not found' } });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  });
+
   it('inspects local repository contents only inside the executor and returns sanitized metadata', async () => {
     const result = await handleGitRepoInspect(
       {
@@ -225,56 +293,6 @@ describe('managed executor git/fs commands', () => {
       {}
     );
     expect(result).toMatchObject({ success: false, error: { code: 'GIT_REPO_INSPECT_FAILED' } });
-  });
-
-  it('fails preflight when the tenant-scoped executor token cannot fetch the repo', async () => {
-    mocks.createExecutorClient.mockResolvedValueOnce({
-      io: { disconnect: vi.fn() },
-      service: vi.fn(() => ({
-        get: vi.fn(async () => {
-          throw new Error('Not found');
-        }),
-      })),
-    });
-    const result = await handleGitRepoPreflight(
-      {
-        command: 'git.repo.preflight',
-        sessionToken: 'tenant-b-token',
-        params: { repoId, ref: 'main' },
-      },
-      {}
-    );
-    expect(result).toMatchObject({
-      success: false,
-      error: { code: 'GIT_REPO_PREFLIGHT_FAILED', message: 'Not found' },
-    });
-    expect(mocks.scrubGitConfigRemoteCredentials).not.toHaveBeenCalled();
-  });
-
-  it('uses tenant-fetched repo paths and remote metadata for preflight', async () => {
-    createClient({
-      repo: {
-        repo_id: repoId,
-        local_path: '/trusted/repo',
-        remote_url: 'https://user:secret@example.com/trusted/repo.git',
-      },
-    });
-    const result = await handleGitRepoPreflight(
-      {
-        command: 'git.repo.preflight',
-        sessionToken: 'tenant-a-token',
-        params: { repoId, ref: 'main', refType: 'branch' },
-      },
-      {}
-    );
-    expect(result.success).toBe(true);
-    expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith('/trusted/repo');
-    expect(mocks.assertRemoteRefVisibleForClone).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remoteUrl: 'https://example.com/trusted/repo.git',
-        ref: 'main',
-      })
-    );
   });
 
   it('paginates self-hosted reconciliation and dry-run does not mutate configs', async () => {

@@ -39,7 +39,6 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Board,
@@ -1288,15 +1287,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    if (
-      (branch.storage_mode ?? 'worktree') === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
-    ) {
-      throw new BadRequest(
-        'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
-      );
-    }
-
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
@@ -1566,6 +1556,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (
+      (branch.storage_mode ?? 'worktree') === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
+      );
+    }
 
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
@@ -1644,7 +1642,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
       // without creating OS groups.
-      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
+      const executionMode = resolveExecutionSecurityMode();
+      const initUnixGroup = executionMode.shouldInitUnixGroups;
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 
@@ -1671,7 +1670,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         return unarchivedBranch;
       }
-      const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
 
       try {
         // Use a service JWT so the executor can patch rendered env command
@@ -1688,9 +1686,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
-              repoPath: repo.local_path,
-              branchName: branch.name,
-              branchPath: branch.path,
               branch: branch.ref,
               refType: branch.ref_type || 'branch',
               // Use restore mode: checks if branch exists on remote via ls-remote,
@@ -1702,6 +1697,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
               initUnixGroup,
+              fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
               othersAccess: branch.others_fs_access || 'read',
               daemonUser,
               repoUnixGroup: repo.unix_group,
@@ -1709,13 +1705,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               // storage_mode across archive → delete → unarchive.
               storageMode,
               ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
-              ...(storageMode === 'clone' && safeRemoteUrl ? { remoteUrl: safeRemoteUrl } : {}),
-              // `--reference` hint: see the create-path call site in
-              // ReposService.createBranch for the rationale and strict-mode
-              // exception.
-              ...(storageMode === 'clone' && repo.local_path && shouldUseCloneReferencePath()
-                ? { referencePath: repo.local_path }
-                : {}),
+              useReference:
+                storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
             },
           },
           {

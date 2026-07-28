@@ -285,15 +285,12 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
     const result = GitBranchAddPayloadSchema.parse(payload);
     expect(result.command).toBe('git.branch.add');
-    expect(result.params.branchName).toBe('feature-x');
+    expect(result.params.repoId).toBe('550e8400-e29b-41d4-a716-446655440003');
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
@@ -304,9 +301,6 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branch: 'feature-x',
         sourceBranch: 'main',
         createBranch: true,
@@ -329,38 +323,22 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
-    it('accepts a clone-mode payload with a remoteUrl (and optional cloneDepth)', () => {
+    it('accepts a clone-mode intent payload with optional cloneDepth and reference policy', () => {
       const result = GitBranchAddPayloadSchema.parse({
         ...basePayload,
         params: {
           ...basePayload.params,
           storageMode: 'clone',
-          remoteUrl: 'https://github.com/user/repo.git',
           cloneDepth: 100,
+          useReference: true,
         },
       });
       expect(result.params.storageMode).toBe('clone');
-      expect(result.params.remoteUrl).toBe('https://github.com/user/repo.git');
       expect(result.params.cloneDepth).toBe(100);
-    });
-
-    it('rejects a clone-mode payload missing remoteUrl', () => {
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            storageMode: 'clone',
-            // no remoteUrl
-          },
-        })
-      ).toThrow(/remoteUrl is required/);
+      expect(result.params.useReference).toBe(true);
     });
 
     it('rejects cloneDepth paired with branch (or undefined) mode', () => {
@@ -579,9 +557,6 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/repos/repo.git',
-        branchName: 'feature',
-        branchPath: '/data/branches/feature',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);
@@ -626,7 +601,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('git.branch.clean');
     expect(commands).toContain('git.repo.inspect');
-    expect(commands).toContain('git.repo.preflight');
     expect(commands).toContain('git.managed-credentials.reconcile');
     expect(commands).toContain('branch.files.list');
     expect(commands).toContain('branch.files.browse');
@@ -651,6 +625,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(31);
+    expect(commands.length).toBe(30);
   });
 });
