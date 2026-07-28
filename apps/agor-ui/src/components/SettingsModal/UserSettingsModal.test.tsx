@@ -377,7 +377,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     renderWithApp(<Harness />);
 
     fireEvent.click(screen.getByRole('menuitem', { name: /environment variables/i }));
-    await screen.findByRole('heading', { name: 'Environment Variables' });
+    await screen.findByRole('heading', { name: 'Environment variables' });
 
     fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
       target: { value: 'ALPHA_TOKEN' },
@@ -392,7 +392,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       });
     }, ASYNC);
 
-    expect(screen.getByRole('heading', { name: 'Environment Variables' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Environment variables' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -417,7 +417,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
     // Groups & Access is admin-only nav; the force-password control lives there.
     fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
-    await screen.findByRole('heading', { name: 'Groups & Access' });
+    await screen.findByRole('heading', { name: 'Groups & access' });
     expect(screen.getByText(/force password change/i)).toBeInTheDocument();
   });
 

@@ -15,7 +15,6 @@ import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from 
 import {
   BellOutlined,
   CheckCircleOutlined,
-  CloseOutlined,
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
@@ -31,7 +30,6 @@ import {
   Button,
   Checkbox,
   Divider,
-  Flex,
   Form,
   Input,
   Layout,
@@ -68,6 +66,7 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
@@ -942,15 +941,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const activeVisible = filteredGroups.some((group) =>
     group.children.some((child) => child.key === activeKey)
   );
-  const effectiveKey = activeKey;
-  const effectiveTool: AgenticToolName | null = effectiveKey.startsWith(PROVIDER_KEY_PREFIX)
-    ? toolFromProviderKey(effectiveKey)
-    : null;
 
   const isInlineSavePanel =
-    effectiveKey === 'env-vars' ||
-    effectiveKey === 'tokens' ||
-    (!!effectiveTool && providerSubtab === 'auth');
+    activeKey === 'env-vars' ||
+    activeKey === 'tokens' ||
+    (!!activeTool && providerSubtab === 'auth');
 
   // Unified footer action. Batch panels commit their edits and close; inline
   // panels (env vars, tokens, provider auth) have already persisted per row /
@@ -960,9 +955,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user || savingModal) return;
     setSavingModal(true);
     try {
-      if (effectiveTool) {
+      if (activeTool) {
         if (providerSubtab === 'defaults') {
-          await handleAgenticConfigSave(effectiveTool);
+          await handleAgenticConfigSave(activeTool);
         } else {
           await saveDirtyAgenticConfigs();
         }
@@ -970,7 +965,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return;
       }
 
-      switch (effectiveKey) {
+      switch (activeKey) {
         case 'profile':
           if (!(await handleProfileSave())) return;
           break;
@@ -993,39 +988,27 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
   };
 
-  const renderPanelHeader = (title: string, description?: React.ReactNode) => (
-    <div style={{ marginBottom: token.marginLG }}>
-      <Typography.Title level={4} style={{ marginTop: 0, marginBottom: description ? 4 : 0 }}>
-        {title}
-      </Typography.Title>
-      {description && (
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, maxWidth: 560 }}>
-          {description}
-        </Typography.Paragraph>
-      )}
-    </div>
-  );
-
   const renderProfilePanel = () => (
     <>
-      {renderPanelHeader(
-        'Profile',
-        'Your identity across Agor — how teammates and agents see you.'
-      )}
-      <Form form={form} layout="vertical">
-        <Form.Item label="Name" style={{ marginBottom: 24 }}>
-          <Flex gap={8}>
+      <PanelHeader
+        title="Profile"
+        description="Your identity across Agor — how teammates and agents see you."
+      />
+      <Form form={form} layout="vertical" requiredMark={false}>
+        <FieldRow label="Name">
+          <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="emoji" noStyle>
               <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
             </Form.Item>
-            <Form.Item name="name" noStyle style={{ flex: 1 }}>
-              <Input placeholder="John Doe" style={{ flex: 1 }} />
+            <Form.Item name="name" noStyle>
+              <Input placeholder="John Doe" />
             </Form.Item>
-          </Flex>
-        </Form.Item>
+          </Space.Compact>
+        </FieldRow>
 
-        <Form.Item
+        <FieldRow
           label="Email"
+          required
           name="email"
           rules={[
             { required: true, message: 'Please enter an email' },
@@ -1033,39 +1016,47 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ]}
         >
           <Input placeholder="user@example.com" />
-        </Form.Item>
+        </FieldRow>
 
-        <Form.Item
+        <FieldRow
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          tooltip="When enabled, Agor shows your Slack-synced profile image. Turn this off to keep using your emoji tile."
+          help="Shows your Slack-synced profile image instead of the emoji tile above. Turn this off to keep using your emoji tile."
         >
           <Switch />
-        </Form.Item>
+        </FieldRow>
 
-        <Form.Item
+        <FieldRow
           label="Role"
+          required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
           help={isAdmin ? undefined : 'Maintained by administrators'}
         >
           <Select
             disabled={!isAdmin}
+            style={{ maxWidth: 320 }}
             options={ROLE_OPTIONS.map((opt) => ({
               value: opt.value,
               label: opt.label,
-              title: opt.description,
+              description: opt.description,
             }))}
+            optionRender={(opt) => (
+              <div>
+                <div>{opt.data.label}</div>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  {opt.data.description}
+                </Typography.Text>
+              </div>
+            )}
           />
-        </Form.Item>
+        </FieldRow>
       </Form>
 
       {onRestartOnboarding && isSelf && (
         <>
-          <Divider titlePlacement="left" style={{ color: token.colorTextTertiary }}>
-            Onboarding
-          </Divider>
+          <SectionDivider label="Onboarding" />
           <Typography.Paragraph type="secondary" style={{ maxWidth: 480 }}>
             Reopen the AI teammate setup wizard from the beginning. Existing repos, boards,
             branches, and credentials stay in place.
@@ -1086,19 +1077,26 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderSecurityPanel = () => (
     <>
-      {renderPanelHeader('Security', 'Password and platform-level identity for this account.')}
-      <Form form={form} layout="vertical">
-        <Form.Item label="Password" name="password" help="Leave blank to keep current password">
+      <PanelHeader
+        title="Security"
+        description="Password and platform-level identity for this account."
+      />
+      <Form form={form} layout="vertical" requiredMark={false}>
+        <FieldRow
+          label="Password"
+          name="password"
+          help="Leave blank to keep your current password."
+        >
           <Input.Password placeholder="••••••••" />
-        </Form.Item>
+        </FieldRow>
 
-        <Form.Item
-          label="Unix Username"
+        <FieldRow
+          label="Unix username"
           name="unix_username"
           help={
             isAdmin
-              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
-              : 'Maintained by administrators'
+              ? 'Unix user for process impersonation (lowercase letters, numbers, hyphens, underscores).'
+              : 'Maintained by administrators.'
           }
           rules={[
             {
@@ -1109,54 +1107,51 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ]}
         >
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />
-        </Form.Item>
+        </FieldRow>
       </Form>
     </>
   );
 
   const renderPreferencesPanel = () => (
     <>
-      {renderPanelHeader('Preferences', 'How Agor sounds and looks for you day to day.')}
+      <PanelHeader
+        title="Preferences"
+        description="How Agor sounds and looks for you day to day."
+      />
       <AudioSettingsTab user={user} form={audioForm} />
-      <Divider titlePlacement="left" style={{ color: token.colorTextTertiary }}>
-        Interface
-      </Divider>
-      <Form form={form} layout="vertical">
-        <Form.Item
-          label={
-            <Space size={4}>
-              Live Event Stream
-              <Tag color={token.colorPrimary} style={{ fontSize: 10, marginLeft: 4 }}>
-                BETA
-              </Tag>
-            </Space>
+      <SectionDivider label="Interface" />
+      <Form form={form} layout="vertical" requiredMark={false}>
+        <FieldRow
+          label="Live event stream"
+          badge={
+            <Tag color={token.colorPrimary} style={{ fontSize: token.fontSizeSM }}>
+              BETA
+            </Tag>
           }
           name="eventStreamEnabled"
           valuePropName="checked"
-          tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
+          help="Adds an icon to the navbar to inspect live WebSocket events for debugging."
         >
           <Switch />
-        </Form.Item>
+        </FieldRow>
       </Form>
     </>
   );
 
   const renderEnvVarsPanel = () => (
     <>
-      {renderPanelHeader(
-        'Environment Variables',
-        'Environment variables are encrypted at rest and available to all sessions for this user.'
-      )}
+      <PanelHeader
+        title="Environment variables"
+        description="Environment variables are encrypted at rest and available to all sessions for this user."
+      />
       <Alert
         type="info"
         showIcon
-        style={{ marginBottom: 16 }}
-        title="Looking for SDK credentials?"
-        description={
+        style={{ marginBottom: 20 }}
+        message={
           <span>
-            API keys and SDK config (Anthropic, OpenAI, Gemini, Copilot) live under each tool's
-            screen in the <strong>AI Providers</strong> section. Per-tool config takes precedence
-            over generic user environment variables and is scoped so credentials never leak across
+            Looking for SDK credentials? API keys and per-tool config live under{' '}
+            <strong>AI Providers</strong> in the sidebar, scoped so credentials never leak across
             SDKs.
           </span>
         }
@@ -1173,9 +1168,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderAccessPanel = () => (
     <>
-      {renderPanelHeader('Groups & Access', 'Add or remove this user from admin-managed groups.')}
-      <Form form={form} layout="vertical">
-        <Form.Item
+      <PanelHeader
+        title="Groups & access"
+        description="Add or remove this user from admin-managed groups."
+      />
+      <Form form={form} layout="vertical" requiredMark={false}>
+        <FieldRow
           label="Groups"
           name="groupIds"
           help="Group memberships affect group-aware branch permissions."
@@ -1188,14 +1186,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             options={groupSelectOptions}
             {...searchableSelectProps}
           />
-        </Form.Item>
+        </FieldRow>
 
         {isEditingOther && (
           <>
-            <Divider titlePlacement="left" style={{ color: token.colorTextTertiary }}>
-              Danger zone
-            </Divider>
-            <Form.Item name="must_change_password" valuePropName="checked">
+            <SectionDivider label="Danger zone" />
+            <Form.Item
+              name="must_change_password"
+              valuePropName="checked"
+              style={{ marginBottom: 0 }}
+            >
               <Checkbox>Force password change on next login</Checkbox>
             </Form.Item>
           </>
@@ -1237,25 +1237,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       );
 
     const header = (
-      <Flex align="center" gap={12} style={{ marginBottom: 20 }}>
-        <ToolIcon tool={tool} size={32} />
-        <Typography.Title level={4} style={{ margin: 0, flex: 1 }}>
-          {displayName}
-        </Typography.Title>
-        {statusTag}
-      </Flex>
+      <PanelHeader
+        title={displayName}
+        icon={<ToolIcon tool={tool} size={32} />}
+        extra={statusTag}
+      />
     );
 
     const defaultsPane = (
       <>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Configure default settings for {displayName}. These will prepopulate session creation
-          forms.
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 20 }}>
+          Prepopulates session creation forms with these defaults.
         </Typography.Paragraph>
         <Form
           key={tool}
           form={currentForm}
           layout="vertical"
+          requiredMark={false}
           onValuesChange={(_, allValues) => {
             setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: allValues }));
             markAgenticConfigDirty(tool);
@@ -1264,9 +1262,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           <UserAgenticDefaultEditor tool={tool} client={client} isAdmin={isAdmin} />
           <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={false} />
         </Form>
-        <div style={{ marginTop: 16 }}>
-          <Button onClick={() => handleAgenticConfigClear(tool)}>Clear Defaults</Button>
-        </div>
+        <Divider style={{ margin: '20px 0' }} />
+        <Button danger type="text" onClick={() => handleAgenticConfigClear(tool)}>
+          Clear defaults
+        </Button>
       </>
     );
 
@@ -1287,19 +1286,32 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ? 'Your personal configuration is used first, with workspace configuration as fallback.'
           : 'Workspace configuration is used first. Your personal configuration is retained as fallback.';
 
+    const authNote = managedByWorkspace ? (
+      <Alert
+        type="info"
+        showIcon
+        message="Authentication is managed by this workspace — your personal configuration is never used while this policy is active."
+        style={{ marginBottom: 16 }}
+      />
+    ) : effectiveSource === 'Unavailable' ? (
+      <Alert
+        type="warning"
+        showIcon
+        message="No credentials configured yet"
+        style={{ marginBottom: 16 }}
+      />
+    ) : (
+      <Typography.Paragraph
+        type="secondary"
+        style={{ fontSize: token.fontSizeSM, marginBottom: 16 }}
+      >
+        Effective source: {effectiveSource}. {personalPolicyDescription}
+      </Typography.Paragraph>
+    );
+
     const authPane = (
       <>
-        <Alert
-          type={effectiveSource === 'Unavailable' ? 'warning' : 'info'}
-          showIcon
-          title={`Effective source: ${effectiveSource}`}
-          description={
-            managedByWorkspace
-              ? 'Authentication is managed by this workspace. Personal configuration is never used.'
-              : personalPolicyDescription
-          }
-          style={{ marginBottom: 16 }}
-        />
+        {authNote}
         {managedByWorkspace ? (
           personalConfigured && (
             <Space direction="vertical">
@@ -1347,19 +1359,26 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             }
           />
         ) : (
-          <>
+          <Form component={false} layout="vertical" requiredMark={false}>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Personal credentials are encrypted at rest and injected only into the agent runtime.
             </Typography.Paragraph>
             {canonicalTool === 'claude-code' && (
-              <Radio.Group
-                value={authMethod}
-                onChange={(event) => void handleAuthMethodChange(canonicalTool, event.target.value)}
-                style={{ marginBottom: 16 }}
+              <FieldRow
+                label="Sign-in method"
+                help="Choose one — Agor uses whichever is selected, the other is ignored."
               >
-                <Radio.Button value="subscription">Claude subscription</Radio.Button>
-                <Radio.Button value="api_key">API key</Radio.Button>
-              </Radio.Group>
+                <Radio.Group
+                  buttonStyle="solid"
+                  value={authMethod}
+                  onChange={(event) =>
+                    void handleAuthMethodChange(canonicalTool, event.target.value)
+                  }
+                >
+                  <Radio.Button value="subscription">Claude subscription</Radio.Button>
+                  <Radio.Button value="api_key">API key</Radio.Button>
+                </Radio.Group>
+              </FieldRow>
             )}
             <ApiKeyFields
               tool={tool}
@@ -1374,7 +1393,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   | undefined
               }
             />
-          </>
+          </Form>
         )}
       </>
     );
@@ -1404,9 +1423,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const renderContent = () => {
-    if (effectiveTool) return renderProviderPanel(effectiveTool);
+    if (activeTool) return renderProviderPanel(activeTool);
 
-    switch (effectiveKey) {
+    switch (activeKey) {
       case 'profile':
         return renderProfilePanel();
       case 'security':
@@ -1418,7 +1437,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'tokens':
         return (
           <>
-            {renderPanelHeader('API Tokens')}
+            <PanelHeader
+              title="API tokens"
+              description="Agor API tokens allow you to authenticate with the Agor API from scripts, CI pipelines, and external tools. Tokens have the same permissions as your user account."
+            />
             <PersonalApiKeysTab client={client} />
           </>
         );
@@ -1438,37 +1460,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     'Settings'
   );
 
-  const footer = (
-    <Flex
-      justify="flex-end"
-      align="center"
-      gap={8}
-      style={{ padding: '12px 24px', background: token.colorBgContainer }}
-    >
-      {isInlineSavePanel ? (
-        <>
-          <Typography.Text
-            type="secondary"
-            style={{ fontSize: token.fontSizeSM, marginRight: token.marginXS }}
-          >
-            Changes save automatically
-          </Typography.Text>
-          <Button type="primary" onClick={handleModalSave} loading={savingModal}>
-            Done
-          </Button>
-        </>
-      ) : (
-        <>
-          <Button onClick={handleClose} disabled={savingModal}>
-            Close
-          </Button>
-          <Button type="primary" onClick={handleModalSave} loading={savingModal}>
-            Save
-          </Button>
-        </>
-      )}
-    </Flex>
-  );
+  const footer = isInlineSavePanel
+    ? [
+        <Typography.Text key="hint" type="secondary" style={{ marginRight: token.marginXS }}>
+          Changes save automatically
+        </Typography.Text>,
+        <Button key="done" type="primary" onClick={handleModalSave} loading={savingModal}>
+          Done
+        </Button>,
+      ]
+    : [
+        <Button key="close" onClick={handleClose} disabled={savingModal}>
+          Close
+        </Button>,
+        <Button key="save" type="primary" onClick={handleModalSave} loading={savingModal}>
+          Save
+        </Button>,
+      ];
 
   return (
     <Modal
@@ -1478,62 +1486,32 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       footer={footer}
       closable
       width="min(1050px, calc(100vw - 32px))"
-      style={{ top: 40 }}
       styles={{
-        wrapper: {
-          padding: 0,
-          overflow: 'hidden',
-        },
-        container: {
-          padding: 0,
-          borderRadius: 8,
-          overflow: 'hidden',
-        },
-        header: {
-          padding: '16px 24px',
-          margin: 0,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        },
         body: {
           padding: 0,
           height: 'calc(100vh - 280px)',
           minHeight: 450,
           maxHeight: 650,
         },
-        footer: {
-          padding: 0,
-          margin: 0,
-          background: token.colorBgContainer,
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-        },
       }}
-      closeIcon={<CloseOutlined />}
     >
       {/* Keep inactive form instances connected to Ant Form. Without these
           lightweight hidden connectors, calling form methods while switching
           panels can produce noisy "useForm is not connected" console warnings. */}
       <div hidden aria-hidden="true">
-        {!MAIN_FORM_KEYS.includes(effectiveKey as (typeof MAIN_FORM_KEYS)[number]) && (
+        {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
           <Form component={false} form={form} />
         )}
-        {effectiveKey !== 'preferences' && <Form component={false} form={audioForm} />}
+        {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
         {visibleAgenticToolTabs.map((tool) =>
-          effectiveTool === tool ? null : (
+          activeTool === tool ? null : (
             <Form key={tool} component={false} form={agenticFormByTool[tool]} />
           )
         )}
       </div>
-      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-        <Sider
-          width={232}
-          style={{
-            background: token.colorBgElevated,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
-            overflow: 'auto',
-            padding: '16px 0',
-          }}
-        >
-          <div style={{ padding: '0 16px 12px' }}>
+      <Layout style={{ height: '100%', background: 'transparent' }}>
+        <Sider width={232} style={{ background: 'transparent', overflow: 'auto' }}>
+          <div style={{ padding: '4px 16px 12px' }}>
             <Input
               allowClear
               placeholder="Search settings"
@@ -1552,14 +1530,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               selectedKeys={activeVisible ? [activeKey] : []}
               onClick={({ key }) => setActiveKey(key)}
               items={menuItems}
-              style={{
-                border: 'none',
-                background: 'transparent',
-              }}
+              style={{ borderInlineEnd: 'none', background: 'transparent' }}
             />
           )}
         </Sider>
-        <Content style={{ padding: '24px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+        <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
       </Layout>
     </Modal>
   );

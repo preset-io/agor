@@ -156,11 +156,6 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
 
   return (
     <div>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        Agor API tokens allow you to authenticate with the Agor API from scripts, CI pipelines, and
-        external tools. Tokens have the same permissions as your user account.
-      </Typography.Paragraph>
-
       <Space style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Input
           allowClear
