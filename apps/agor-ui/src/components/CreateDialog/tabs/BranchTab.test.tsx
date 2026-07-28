@@ -148,3 +148,115 @@ describe('BranchTab — branch storage policy', () => {
     expect(result!.storage_mode).toBe('worktree');
   });
 });
+
+describe('BranchTab — repository clone readiness', () => {
+  it('does not select or submit a failed repository', async () => {
+    const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
+      current: null,
+    };
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+    });
+    const board = makeBoard();
+    const onValidityChange = vi.fn();
+
+    render(
+      <BranchTab
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map([[board.board_id, board]])}
+        currentBoardId={board.board_id}
+        onValidityChange={onValidityChange}
+        formRef={formRef}
+      />
+    );
+
+    expect(screen.getByText('No repositories are ready')).toBeInTheDocument();
+    expect(await formRef.current?.()).toBeNull();
+    expect(onValidityChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('skips a failed last-used repository and initializes the first ready repository', async () => {
+    const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
+      current: null,
+    };
+    const failed = makeRepo({
+      repo_id: 'repo-failed',
+      name: 'failed',
+      clone_status: 'failed',
+    });
+    const ready = makeRepo({
+      repo_id: 'repo-ready',
+      name: 'ready',
+      default_branch: 'develop',
+      clone_status: 'ready',
+    });
+    localStorage.setItem('agor-last-repo-id', failed.repo_id);
+
+    render(
+      <BranchTab
+        repoById={
+          new Map([
+            [failed.repo_id, failed],
+            [ready.repo_id, ready],
+          ])
+        }
+        onValidityChange={vi.fn()}
+        formRef={formRef}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByLabelText(/Source Branch/i)).toHaveValue('develop'));
+  });
+
+  it('invalidates an open form if the selected clone later fails', async () => {
+    const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
+      current: null,
+    };
+    const board = makeBoard();
+    const ready = makeRepo({ clone_status: 'ready' });
+    const onValidityChange = vi.fn();
+    const { rerender } = render(
+      <BranchTab
+        repoById={new Map([[ready.repo_id, ready]])}
+        boardById={new Map([[board.board_id, board]])}
+        currentBoardId={board.board_id}
+        onValidityChange={onValidityChange}
+        formRef={formRef}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText(/Branch Name/i), {
+      target: { value: 'new-branch' },
+    });
+    await waitFor(() => expect(onValidityChange).toHaveBeenCalledWith(true));
+
+    const failed = makeRepo({
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+    });
+    rerender(
+      <BranchTab
+        repoById={new Map([[failed.repo_id, failed]])}
+        boardById={new Map([[board.board_id, board]])}
+        currentBoardId={board.board_id}
+        onValidityChange={onValidityChange}
+        formRef={formRef}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onValidityChange).toHaveBeenLastCalledWith(false);
+    });
+    expect(screen.getByText('Repository clone failed')).toBeInTheDocument();
+    expect(await formRef.current?.()).toBeNull();
+  });
+});

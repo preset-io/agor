@@ -24,7 +24,12 @@ import {
   stripGitUrlCredentials,
 } from './pure';
 
-export type RepoCloneErrorCategory = 'auth_failed' | 'not_found' | 'network' | 'unknown';
+export type RepoCloneErrorCategory =
+  | 'auth_failed'
+  | 'not_found'
+  | 'network'
+  | 'timeout'
+  | 'unknown';
 
 /**
  * Validate a user-supplied git ref (branch name, tag) before it is passed to
@@ -366,6 +371,13 @@ async function resolveAuthHost(repoPath: string): Promise<string> {
  */
 export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
   const s = stderr.toLowerCase();
+  if (
+    s.includes('clone timed out after') ||
+    s.includes('git clone timed out') ||
+    s.includes('block timeout reached')
+  ) {
+    return 'timeout';
+  }
   if (
     s.includes('authentication failed') ||
     s.includes('could not read username') ||

@@ -560,7 +560,7 @@ export const repos = sqliteTable(
         clone_status?: 'cloning' | 'ready' | 'failed';
         clone_error?: {
           exit_code: number;
-          category: 'auth_failed' | 'not_found' | 'network' | 'unknown';
+          category: 'auth_failed' | 'not_found' | 'network' | 'timeout' | 'unknown';
           message: string;
         };
         // v2 environment config — source of truth. Named variants + optional

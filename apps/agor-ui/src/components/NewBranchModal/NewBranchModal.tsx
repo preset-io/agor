@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { isRepoReadyForBranchCreation } from '@/utils/repoReadiness';
 import { BranchFormFields } from '../BranchFormFields';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 
@@ -37,6 +38,12 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
 
   const selectedRepo = selectedRepoId ? repoById.get(selectedRepoId) : undefined;
 
+  useEffect(() => {
+    if (selectedRepoId && !isRepoReadyForBranchCreation(selectedRepo)) {
+      setIsFormValid(false);
+    }
+  }, [selectedRepo, selectedRepoId]);
+
   // Form validation handler
   const handleValuesChange = useCallback(() => {
     // Use setTimeout to ensure we're checking after the form state has updated
@@ -44,10 +51,16 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       const values = form.getFieldsValue();
 
       // Check if required fields are filled
-      const isValid = !!(values.repoId && values.sourceBranch && values.name && values.boardId);
+      const isValid = !!(
+        values.repoId &&
+        isRepoReadyForBranchCreation(repoById.get(values.repoId)) &&
+        values.sourceBranch &&
+        values.name &&
+        values.boardId
+      );
       setIsFormValid(isValid);
     }, 0);
-  }, [form]);
+  }, [form, repoById]);
 
   // Initialize form once per modal-open session. Without this guard the
   // effect re-fires on every `repos.patched` WebSocket event (which gives
@@ -64,9 +77,11 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
     if (initialized.current || repoById.size === 0) return;
 
     const lastRepoId = localStorage.getItem('agor-last-repo-id');
+    const readyRepos = mapToArray(repoById).filter(isRepoReadyForBranchCreation);
+    if (readyRepos.length === 0) return;
 
     // If we have a last used repo and it still exists, use it
-    if (lastRepoId && repoById.has(lastRepoId)) {
+    if (lastRepoId && isRepoReadyForBranchCreation(repoById.get(lastRepoId))) {
       initialized.current = true;
       form.setFieldsValue({
         repoId: lastRepoId,
@@ -76,10 +91,10 @@ export const NewBranchModal: React.FC<NewBranchModalProps> = ({
       setSelectedRepoId(lastRepoId);
       // Trigger validation check
       handleValuesChange();
-    } else if (repoById.size > 0) {
+    } else {
       // No last-repo-id or it doesn't exist anymore - auto-select first repo
       initialized.current = true;
-      const firstRepo = mapToArray(repoById)[0];
+      const firstRepo = readyRepos[0];
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
         sourceBranch: firstRepo.default_branch,

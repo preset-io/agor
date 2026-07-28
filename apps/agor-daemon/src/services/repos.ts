@@ -59,6 +59,14 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
+  cancelTrackedCloneOperation,
+  REPO_CLONE_CLEANUP_TIMEOUT_MS,
+  REPO_CLONE_TIMEOUT_MS,
+  REPO_CLONE_TOKEN_TTL_SECONDS,
+  superviseRepoClone,
+  trackCloneOperation,
+} from '../utils/repo-clone-supervisor.js';
+import {
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -226,8 +234,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
+    // There was no clone timer on this fire-and-forget path; the only
+    // built-in exact ~300s lifecycle boundary was the generic service-token
+    // default. Clones that legitimately ran longer outlived the credential
+    // needed to persist their final state. Give this clone-specific token
+    // enough life for the bounded 30-minute clone window plus bounded
+    // cleanup and a small scheduling margin.
     const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      {},
+      REPO_CLONE_TOKEN_TTL_SECONDS
     );
 
     // Unix group initialization is a filesystem concern controlled by
@@ -277,7 +293,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // through the same service layer the executor uses — that way clients
     // receive `repos.patched` regardless of which path declares failure.
     const reposService = this.app.service('repos');
-    spawnExecutorFireAndForget(
+    const cloneProcess = spawnExecutorFireAndForget(
       {
         command: 'git.clone',
         sessionToken,
@@ -299,67 +315,113 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       {
         logPrefix: `[clone ${slug}]`,
         asUser, // Run as resolved user (fresh groups via sudo -u)
-        onExit: (code) => {
-          if (code !== 0 && code !== null) {
-            // Broadcast clone failure to all connected clients (the existing
-            // toast UX). Persistent failure state lives on the repo row.
-            console.error(
-              `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
-            );
-            const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
-              .io;
-            if (io) {
-              // Include the pinned branch in the message so an operator who
-              // typo'd the Default Branch can self-diagnose. `git clone
-              // --branch <X>` failure is one of the most common reasons a
-              // clone exits non-zero, but the executor's stderr is consumed
-              // by spawnExecutorFireAndForget — without this hint the user
-              // sees only "Clone failed (exit code 128)" and has no idea
-              // the branch field is the cause.
-              const branchHint = data.default_branch
-                ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
-                : '';
-              io.emit('repo:cloneError', {
-                slug,
-                url: remoteUrl,
-                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
-                repo_id: repoId,
-              });
-            }
-
-            // Safety net: if the executor crashed before it could patch the
-            // row (e.g. lost daemon connection), the repo would be stuck in
-            // `'cloning'` forever. Force it to `'failed'` here, but only if
-            // it's still 'cloning' (don't clobber a 'failed' write the
-            // executor already made with a richer category/message).
-            //
-            // Use the service (no `params` → internal call, bypasses auth
-            // hooks) so the patched event fires for any client that joined
-            // after the initial broadcast above.
-            void (async () => {
-              try {
-                const current = (await reposService.get(repoId)) as Repo;
-                if (current.clone_status === 'cloning') {
-                  await reposService.patch(repoId, {
-                    clone_status: 'failed',
-                    clone_error: {
-                      exit_code: code,
-                      category: 'unknown',
-                      message: `Clone exited with code ${code} before reporting an error.`,
-                    },
-                  });
-                }
-              } catch (err) {
-                console.error(
-                  `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
-                  err instanceof Error ? err.message : String(err)
-                );
-              }
-            })();
-          }
-        },
       }
     );
+
+    const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } }).io;
+    const cloneSupervisor = superviseRepoClone({
+      process: cloneProcess,
+      timeoutMs: REPO_CLONE_TIMEOUT_MS,
+      cleanupPartialClone: async () => {
+        // Use a fresh token: cleanup must not depend on the clone executor's
+        // credential still being valid. The command re-reads the placeholder
+        // row, validates every path against tenant-scoped roots, and runs as
+        // the same Unix identity that created the partial checkout.
+        const cleanupToken = generateScopedServiceToken(
+          app as unknown as { settings: { authentication?: { secret?: string } } }
+        );
+        const cleanupResult = await runExecutorCommand(
+          {
+            command: 'git.repo.delete',
+            sessionToken: cleanupToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              repoId,
+              reposRoot: getReposDir(tenantId),
+              branchesRoot: getBranchesDir(tenantId),
+            },
+          },
+          {
+            logPrefix: `[clone ${slug} cleanup]`,
+            asUser,
+            timeoutMs: REPO_CLONE_CLEANUP_TIMEOUT_MS,
+          }
+        );
+        if (!cleanupResult.success) {
+          throw new Error(cleanupResult.error?.message ?? 'clone cleanup executor failed');
+        }
+      },
+      onExit: async ({ code, signal }) => {
+        if (code === 0) return;
+
+        const effectiveCode = code ?? 1;
+        const exitDescription = signal ? `signal ${signal}` : `exit code ${effectiveCode}`;
+        console.error(`[clone ${slug}] Clone failed with ${exitDescription}, broadcasting error`);
+
+        // Include the pinned branch in the message so an operator who typo'd
+        // it can self-diagnose. The executor normally persists richer stderr
+        // classification before it exits; this is only the crash safety net.
+        const branchHint = data.default_branch
+          ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
+          : '';
+        io?.emit('repo:cloneError', {
+          slug,
+          url: remoteUrl,
+          error: `Clone failed (${exitDescription}). Check that the repository URL is correct and accessible.${branchHint}`,
+          repo_id: repoId,
+        });
+
+        try {
+          const current = (await reposService.get(repoId)) as Repo;
+          if (current.clone_status === 'cloning') {
+            await reposService.patch(repoId, {
+              clone_status: 'failed',
+              clone_error: {
+                exit_code: effectiveCode,
+                category: 'unknown',
+                message: `Clone exited with ${exitDescription} before reporting an error.`,
+              },
+            });
+          }
+        } catch (err) {
+          console.error(
+            `[clone ${slug}] Failed to mark repo as failed in exit safety net:`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      },
+      onTimeout: async ({ error }) => {
+        // Timeout owns the terminal state once its deadline fires. Patch after
+        // process-tree termination and cleanup so a late executor completion
+        // cannot overwrite this truthful outcome.
+        try {
+          await reposService.patch(repoId, {
+            clone_status: 'failed',
+            clone_error: error,
+          });
+          io?.emit('repo:cloneError', {
+            slug,
+            url: remoteUrl,
+            error: error.message,
+            repo_id: repoId,
+          });
+        } catch (err) {
+          console.error(
+            `[clone ${slug}] Failed to persist timeout state:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          throw err;
+        }
+      },
+    });
+
+    trackCloneOperation('repo', repoId, cloneSupervisor);
+    void cloneSupervisor.completion.catch((error) => {
+      console.error(
+        `[clone ${slug}] Clone supervisor failed:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    });
 
     // Return immediately - callers can poll `agor_repos_get(repoId)` for
     // `clone_status: 'ready' | 'failed'` to discover the final outcome.
@@ -619,6 +681,28 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const repo = await this.get(id, params);
+
+    // Remote clone rows are created before filesystem materialization. Never
+    // let a branch request fall through to simple-git while that base checkout
+    // is absent or partial: callers should receive the durable clone failure,
+    // not an implementation error about a missing directory (#2031).
+    if (repo.clone_status === 'cloning') {
+      throw new BadRequest(
+        `Cannot create a branch from repository '${repo.slug}': the repository clone is still in progress. ` +
+          `Wait for clone_status='ready' before retrying.`
+      );
+    }
+    if (repo.clone_status === 'failed') {
+      const cloneError = repo.clone_error;
+      const category = cloneError?.category ? ` (${cloneError.category})` : '';
+      const detail = cloneError?.message
+        ? ` ${cloneError.message}`
+        : ' The repository checkout is unavailable or incomplete.';
+      throw new BadRequest(
+        `Cannot create a branch from repository '${repo.slug}': clone failed${category}.${detail} ` +
+          'Retry the repository clone before creating a branch.'
+      );
+    }
 
     console.log('🔍 RepoService.createBranch - repo lookup result:', {
       repo_id: repo.repo_id,
@@ -917,7 +1001,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        {},
+        storageMode === 'clone' ? REPO_CLONE_TOKEN_TTL_SECONDS : undefined
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -930,7 +1016,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const asUser = await resolveGitImpersonationForUser(this.db, userId);
       const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
 
-      spawnExecutorFireAndForget(
+      const branchProcess = spawnExecutorFireAndForget(
         {
           command: 'git.branch.add',
           sessionToken,
@@ -968,6 +1054,68 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           asUser, // Run as resolved user (fresh groups via sudo -u)
         }
       );
+
+      if (storageMode === 'clone') {
+        const branchCloneSupervisor = superviseRepoClone({
+          process: branchProcess,
+          timeoutMs: REPO_CLONE_TIMEOUT_MS,
+          cleanupPartialClone: async () => {
+            const cleanupToken = generateScopedServiceToken(
+              this.app as unknown as {
+                settings: { authentication?: { secret?: string } };
+              }
+            );
+            const cleanupResult = await runExecutorCommand(
+              {
+                command: 'git.branch.remove',
+                sessionToken: cleanupToken,
+                daemonUrl: getDaemonUrl(),
+                params: {
+                  branchId: branch.branch_id,
+                  branchPath,
+                  branchesRoot: getBranchesDir(tenantId),
+                  deleteDbRecord: false,
+                  storageMode: 'clone',
+                },
+              },
+              {
+                logPrefix: `[ReposService.createBranch ${data.name} cleanup]`,
+                asUser,
+                timeoutMs: REPO_CLONE_CLEANUP_TIMEOUT_MS,
+              }
+            );
+            if (!cleanupResult.success) {
+              throw new Error(
+                cleanupResult.error?.message ?? 'branch clone cleanup executor failed'
+              );
+            }
+          },
+          onExit: async ({ code, signal }) => {
+            if (code === 0) return;
+            const current = (await branchesService.get(branch.branch_id)) as Branch;
+            if (current.filesystem_status !== 'creating') return;
+            const exitDescription = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
+            await branchesService.patch(branch.branch_id, {
+              filesystem_status: 'failed',
+              error_message: `Branch clone exited with ${exitDescription} before reporting an error.`,
+            });
+          },
+          onTimeout: async ({ error }) => {
+            await branchesService.patch(branch.branch_id, {
+              filesystem_status: 'failed',
+              error_message: error.message,
+            });
+          },
+        });
+
+        trackCloneOperation('branch', branch.branch_id, branchCloneSupervisor);
+        void branchCloneSupervisor.completion.catch((error) => {
+          console.error(
+            `[ReposService.createBranch ${data.name}] Clone supervisor failed:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        });
+      }
     } catch (error) {
       console.error(
         '[ReposService.createBranch] Failed to spawn executor:',
@@ -1164,6 +1312,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async remove(id: string, params?: RepoParams): Promise<Repo> {
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
+
+    // Removing an in-flight clone is explicit user cancellation. Stop and
+    // await the complete process tree before either preserving its partial
+    // files (`cleanup=false`) or delegating safe filesystem deletion below.
+    // The clone supervisor deliberately does not classify this as a timeout.
+    await cancelTrackedCloneOperation('repo', repo.repo_id);
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use an internal call (no provider) so repo deletion owns the

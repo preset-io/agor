@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { isRepoReadyForBranchCreation } from '@/utils/repoReadiness';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
@@ -85,8 +86,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   onClose,
   branchStorageConfig,
 }) => {
-  const repos = mapToArray(repoById);
-  const boards = mapToArray(boardById);
+  const repos = useMemo(() => mapToArray(repoById), [repoById]);
+  const readyRepos = useMemo(() => repos.filter(isRepoReadyForBranchCreation), [repos]);
+  const boards = useMemo(() => mapToArray(boardById), [boardById]);
   const { token } = theme.useToken();
   // Reuses the `branchById` prop so we don't read the same data via
   // both props and context. Only goToBranch is used from this table.
@@ -121,6 +123,15 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const [archivedLoaded, setArchivedLoaded] = useState(false);
   const [archivedLoading, setArchivedLoading] = useState(false);
   const archivedFetchingRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      selectedRepoId &&
+      !isRepoReadyForBranchCreation(repoById.get(selectedRepoId as Repo['repo_id']))
+    ) {
+      setIsFormValid(false);
+    }
+  }, [repoById, selectedRepoId]);
 
   // No need for reposById anymore, we already have it as a prop
 
@@ -162,14 +173,14 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
-    const hasRepo = !!values.repoId;
+    const hasRepo = !!values.repoId && isRepoReadyForBranchCreation(repoById.get(values.repoId));
     const hasSourceBranch = !!values.sourceBranch;
     const hasName = !!values.name && /^[a-z0-9-]+$/.test(values.name);
     const hasBranchName = useSameBranchName || !!values.branchName;
     const hasBoard = !!values.boardId;
 
     setIsFormValid(hasRepo && hasSourceBranch && hasName && hasBranchName && hasBoard);
-  }, [form, useSameBranchName]);
+  }, [form, repoById, useSameBranchName]);
 
   // Initialize form once per modal-open session. Without the useRef guard
   // the effect re-fires whenever `repoById` / `boardById` get new Map
@@ -184,7 +195,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       createInitialized.current = false;
       return;
     }
-    if (createInitialized.current || repos.length === 0) return;
+    if (createInitialized.current || readyRepos.length === 0) return;
     createInitialized.current = true;
 
     // Get last used values from localStorage or use first repo/board
@@ -192,9 +203,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     const lastBoardId = localStorage.getItem('agor:lastUsedBoardId');
 
     const defaultRepoId =
-      lastRepoId && repos.find((r: Repo) => r.repo_id === lastRepoId)
+      lastRepoId && readyRepos.find((r: Repo) => r.repo_id === lastRepoId)
         ? lastRepoId
-        : repos[0].repo_id;
+        : readyRepos[0].repo_id;
 
     const defaultBoardId =
       lastBoardId && boards.find((b: Board) => b.board_id === lastBoardId)
@@ -207,12 +218,13 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     form.setFieldsValue({
       repoId: defaultRepoId,
       boardId: defaultBoardId,
-      sourceBranch: repos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
+      sourceBranch:
+        readyRepos.find((r: Repo) => r.repo_id === defaultRepoId)?.default_branch || 'main',
     });
 
     setSelectedRepoId(defaultRepoId);
     validateForm();
-  }, [createModalOpen, repos, boards, form, validateForm]);
+  }, [createModalOpen, readyRepos, boards, form, validateForm]);
 
   // Helper to get repo name from repo_id
   const getRepoName = (repoId: string): string => {
@@ -567,14 +579,24 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               ]}
             />
           </Space>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
-            disabled={repos.length === 0}
+          <Tooltip
+            title={
+              repos.length > 0 && readyRepos.length === 0
+                ? 'Wait for a repository clone to finish or retry a failed clone.'
+                : undefined
+            }
           >
-            Create Branch
-          </Button>
+            <span>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateModalOpen(true)}
+                disabled={readyRepos.length === 0}
+              >
+                Create Branch
+              </Button>
+            </span>
+          </Tooltip>
         </Space>
       </Space>
 

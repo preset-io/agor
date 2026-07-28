@@ -553,6 +553,22 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       const current = this.rowToBranch(currentRow, baseUrl);
 
+      // Clone-mode timeout cleanup makes the branch path unavailable. A
+      // final executor patch may already be queued when that timeout wins;
+      // row locking plus this terminal-state precedence makes both write
+      // orders converge on the timeout rather than allowing a late `ready`
+      // (or generic failure) patch to describe deleted filesystem state.
+      const cloneTimeoutAlreadyWon =
+        current.filesystem_status === 'failed' &&
+        current.error_message?.startsWith('Clone timed out after');
+      const incomingFilesystemOutcome = updates.filesystem_status;
+      const repeatsCloneTimeout =
+        incomingFilesystemOutcome === 'failed' &&
+        updates.error_message?.startsWith('Clone timed out after');
+      if (cloneTimeoutAlreadyWon && incomingFilesystemOutcome && !repeatsCloneTimeout) {
+        return current;
+      }
+
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
       const merged = deepMerge(current, {

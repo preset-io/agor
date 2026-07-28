@@ -38,6 +38,7 @@ import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
+import { terminateProcessTree } from './process-tree.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -109,6 +110,20 @@ export type ExecutorSpawnMode = 'local' | 'templated';
 
 export interface ExecutorSpawnContext {
   mode: ExecutorSpawnMode;
+}
+
+export interface ExecutorExitResult extends ExecutorSpawnContext {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+export interface ExecutorProcessHandle {
+  /** Direct executor/wrapper PID. Descendants share its POSIX process group. */
+  readonly pid?: number;
+  readonly context: ExecutorSpawnContext;
+  readonly completion: Promise<ExecutorExitResult>;
+  /** Terminate the complete executor process tree and wait until it is gone. */
+  terminate(): Promise<void>;
 }
 
 export interface SpawnExecutorOptions {
@@ -258,6 +273,8 @@ export function findExecutorPath(): string {
  *
  * This is the SINGLE entry point for all executor spawning. It:
  * - Returns immediately after spawning (does NOT wait for completion)
+ * - Returns a process handle for the few lifecycle owners that need to
+ *   terminate/await the executor tree; ordinary callers may ignore it
  * - Supports both local subprocess and templated (k8s/docker) execution
  * - Logs stdout/stderr to daemon logs
  *
@@ -273,7 +290,7 @@ export function findExecutorPath(): string {
 export function spawnExecutor(
   payload: Record<string, unknown>,
   options: SpawnExecutorOptions = {}
-): void {
+): ExecutorProcessHandle {
   const { templateVariables, logPrefix = '[Executor]' } = options;
   const tenantId = resolveExecutorTenantId();
 
@@ -287,7 +304,7 @@ export function spawnExecutor(
   const payloadWithConfig = withResolvedConfig(payload);
 
   if (executorCommandTemplate) {
-    spawnExecutorWithTemplate(payloadWithConfig, {
+    return spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
       asUser,
       executorCommandTemplate,
@@ -302,7 +319,7 @@ export function spawnExecutor(
       logPrefix,
     });
   } else {
-    spawnExecutorLocal(payloadWithConfig, { ...options, asUser });
+    return spawnExecutorLocal(payloadWithConfig, { ...options, asUser });
   }
 }
 
@@ -310,7 +327,10 @@ export function spawnExecutor(
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
-function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
+function spawnExecutorLocal(
+  payload: Record<string, unknown>,
+  options: SpawnExecutorOptions
+): ExecutorProcessHandle {
   const executorPath = findExecutorPath();
 
   // Default cwd to executor package directory for proper module resolution
@@ -408,7 +428,11 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     // conventional "command not found" exit code; close enough semantically
     // for "the cwd is gone" without inventing a new one.
     options.onExit?.(127, { mode: 'local' });
-    return;
+    return {
+      context: { mode: 'local' },
+      completion: Promise.resolve({ mode: 'local', code: 127, signal: null }),
+      async terminate() {},
+    };
   }
 
   let reportedExit = false;
@@ -418,12 +442,25 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     options.onExit?.(code, { mode: 'local' });
   };
 
+  const detachedProcessGroup = process.platform !== 'win32';
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: process.platform !== 'win32',
+    detached: detachedProcessGroup,
   });
+
+  let resolveCompletion!: (result: ExecutorExitResult) => void;
+  const completion = new Promise<ExecutorExitResult>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  let completed = false;
+  const complete = (code: number | null, signal: NodeJS.Signals | null): void => {
+    if (completed) return;
+    completed = true;
+    reportExit(code);
+    resolveCompletion({ mode: 'local', code, signal });
+  };
 
   // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
   // file before exec, but if sudo/bash failed to launch — or `set -eu`
@@ -439,20 +476,30 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     // executable itself cannot be spawned (for example, missing sudo in a dev
     // image). Surface that through the normal onExit safety net so callers do
     // not leave persistent rows stuck in in-progress states.
-    reportExit(127);
+    complete(127, null);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(`${logPrefix} Executor completed successfully`);
     } else {
       console.error(`${logPrefix} Executor exited with code ${code}`);
     }
-    reportExit(code);
+    complete(code, signal);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
   executorProcess.stdin?.end();
+
+  return {
+    pid: executorProcess.pid,
+    context: { mode: 'local' },
+    completion,
+    terminate: () =>
+      terminateProcessTree(executorProcess, {
+        detachedProcessGroup,
+      }),
+  };
 }
 
 function spawnExecutorWithTemplate(
@@ -461,7 +508,7 @@ function spawnExecutorWithTemplate(
     executorCommandTemplate: string;
     templateVariables: ExecutorTemplateVariables;
   }
-): void {
+): ExecutorProcessHandle {
   const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
   const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
 
@@ -479,10 +526,24 @@ function spawnExecutorWithTemplate(
     options.onExit?.(code, { mode: 'templated' });
   };
 
+  const detachedProcessGroup = process.platform !== 'win32';
   const executorProcess = spawn('sh', ['-c', command], {
     env: { ...process.env, LOG_LEVEL: logLevel },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: detachedProcessGroup,
   });
+
+  let resolveCompletion!: (result: ExecutorExitResult) => void;
+  const completion = new Promise<ExecutorExitResult>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  let completed = false;
+  const complete = (code: number | null, signal: NodeJS.Signals | null): void => {
+    if (completed) return;
+    completed = true;
+    reportExit(code);
+    resolveCompletion({ mode: 'templated', code, signal });
+  };
 
   options.onSpawn?.(executorProcess, { mode: 'templated' });
 
@@ -496,10 +557,10 @@ function spawnExecutorWithTemplate(
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
-    reportExit(127);
+    complete(127, null);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(
         `${logPrefix} Executor completed successfully (task: ${templateVariables.task_id})`
@@ -509,11 +570,21 @@ function spawnExecutorWithTemplate(
         `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
       );
     }
-    reportExit(code);
+    complete(code, signal);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
   executorProcess.stdin?.end();
+
+  return {
+    pid: executorProcess.pid,
+    context: { mode: 'templated' },
+    completion,
+    terminate: () =>
+      terminateProcessTree(executorProcess, {
+        detachedProcessGroup,
+      }),
+  };
 }
 
 const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
@@ -681,11 +752,12 @@ function runExecutorCommandLocal(
     let stderr = '';
     let settled = false;
 
+    const detachedProcessGroup = process.platform !== 'win32';
     const child = spawn(cmd, args, {
       cwd,
       env: asUser ? undefined : { ...envWithDaemonUrl },
       stdio: ['pipe', 'pipe', 'pipe'],
-      detached: false,
+      detached: detachedProcessGroup,
     });
 
     attachEnvFileCleanup(child, { envFilePath: prepared.envFilePath, asUser });
@@ -693,15 +765,25 @@ function runExecutorCommandLocal(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command },
-        },
-      });
+      void (async () => {
+        let terminationError: string | undefined;
+        try {
+          await terminateProcessTree(child, { detachedProcessGroup });
+        } catch (error) {
+          terminationError = error instanceof Error ? error.message : String(error);
+        }
+        resolve({
+          success: false,
+          error: {
+            code: 'EXECUTOR_TIMEOUT',
+            message: `Executor command timed out after ${timeoutMs}ms`,
+            details: {
+              command: payload.command,
+              ...(terminationError ? { terminationError } : {}),
+            },
+          },
+        });
+      })();
     }, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -781,23 +863,36 @@ function runExecutorCommandWithTemplate(
     let stderr = '';
     let settled = false;
 
+    const detachedProcessGroup = process.platform !== 'win32';
     const child = spawn('sh', ['-c', command], {
       env: { ...process.env, LOG_LEVEL: logLevel },
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: detachedProcessGroup,
     });
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command, taskId: templateVariables.task_id },
-        },
-      });
+      void (async () => {
+        let terminationError: string | undefined;
+        try {
+          await terminateProcessTree(child, { detachedProcessGroup });
+        } catch (error) {
+          terminationError = error instanceof Error ? error.message : String(error);
+        }
+        resolve({
+          success: false,
+          error: {
+            code: 'EXECUTOR_TIMEOUT',
+            message: `Executor command timed out after ${timeoutMs}ms`,
+            details: {
+              command: payload.command,
+              taskId: templateVariables.task_id,
+              ...(terminationError ? { terminationError } : {}),
+            },
+          },
+        });
+      })();
     }, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -975,8 +1070,8 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
   return function configuredSpawnExecutor(
     payload: Record<string, unknown>,
     options: Omit<SpawnExecutorOptions, 'executorCommandTemplate'> = {}
-  ): void {
-    spawnExecutor(payload, {
+  ): ExecutorProcessHandle {
+    return spawnExecutor(payload, {
       ...options,
       // `null` intentionally suppresses module-level defaults so this
       // factory remains an explicit dependency-injection variant rather than
@@ -990,8 +1085,7 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
   };
 }
 
-// `spawnExecutorFireAndForget` is the canonical name used by ~10 call sites
-// across daemon/services and daemon/register-hooks. We keep it as the public
-// name because that's what callers expect; `spawnExecutor` remains the
-// underlying implementation.
+// `spawnExecutorFireAndForget` is the canonical name used by ~10 call sites.
+// Ignoring its returned handle preserves that behavior; clone lifecycle
+// owners retain the handle so timeout/cancellation can contain the process.
 export const spawnExecutorFireAndForget = spawnExecutor;

@@ -832,6 +832,33 @@ describe('BranchRepository.update', () => {
     expect(updated2.base_ref).toBe('develop');
   });
 
+  dbTest('does not let a late clone completion overwrite a timeout outcome', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const data = createBranchData({ repo_id: repo.repo_id, storage_mode: 'clone' });
+    await branchRepo.create({
+      ...data,
+      filesystem_status: 'failed',
+      error_message:
+        'Clone timed out after 30 minutes. The clone process tree was terminated and the partial checkout was removed.',
+    });
+
+    const lateCompletion = await branchRepo.update(data.branch_id, {
+      filesystem_status: 'ready',
+      error_message: undefined,
+      unix_group: 'late-executor-group',
+    });
+    const persisted = await branchRepo.findById(data.branch_id);
+
+    expect(lateCompletion).toMatchObject({
+      filesystem_status: 'failed',
+      error_message: expect.stringMatching(/^Clone timed out after 30 minutes/),
+    });
+    expect(lateCompletion.unix_group).toBeUndefined();
+    expect(persisted).toMatchObject(lateCompletion);
+  });
+
   dbTest('should update all field types comprehensively', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);

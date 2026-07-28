@@ -52,3 +52,22 @@ describe('ReposTable search', () => {
     expect(screen.getByText('preset-docs').tagName.toLowerCase()).toBe('mark');
   });
 });
+
+describe('ReposTable clone state', () => {
+  it('shows the durable clone failure category and message', () => {
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+    });
+
+    render(<ReposTable repoById={new Map([[repo.repo_id, repo]])} />);
+
+    expect(screen.getByText('Clone failed')).toBeInTheDocument();
+    expect(screen.getByText('Repository clone failed (timeout)')).toBeInTheDocument();
+    expect(screen.getByText('Clone timed out after 30 minutes.')).toBeInTheDocument();
+  });
+});

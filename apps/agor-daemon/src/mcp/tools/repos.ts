@@ -35,7 +35,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'Get detailed information about a specific repository, including async clone state. ' +
         'For repos created via agor_repos_create_remote, check `clone_status` ' +
         '(`cloning` | `ready` | `failed`). On `failed`, `clone_error.category` ' +
-        '(`auth_failed` | `not_found` | `network` | `unknown`) tells you what went wrong; ' +
+        '(`auth_failed` | `not_found` | `network` | `timeout` | `unknown`) tells you what went wrong; ' +
         '`auth_failed` usually means the calling user has not configured a `GITHUB_TOKEN` ' +
         'in Settings → API Keys (or it has expired/lost access).',
       annotations: { readOnlyHint: true },

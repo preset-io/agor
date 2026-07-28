@@ -5,8 +5,9 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock } = vi.hoisted(() => ({
+const { spawnMock, terminateProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
+  terminateProcessTreeMock: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -26,6 +27,10 @@ vi.mock('./build-resolved-config-slice.js', () => ({
     ...payload,
     resolvedConfig: {},
   }),
+}));
+
+vi.mock('./process-tree.js', () => ({
+  terminateProcessTree: terminateProcessTreeMock,
 }));
 
 function createMockProcess() {
@@ -51,6 +56,8 @@ describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
+    terminateProcessTreeMock.mockReset();
+    terminateProcessTreeMock.mockResolvedValue(undefined);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -259,6 +266,38 @@ describe('configured executor spawning', () => {
       ['-c', "launch --tenant-id 'tenant-run' -- branch.inspect"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
+  });
+
+  it('waits for process-tree termination before resolving a command timeout', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    let allowTermination!: () => void;
+    terminateProcessTreeMock.mockReturnValue(
+      new Promise<void>((resolve) => {
+        allowTermination = resolve;
+      })
+    );
+    const { runExecutorCommand } = await import('./spawn-executor');
+
+    let resolved = false;
+    const resultPromise = runExecutorCommand(
+      { command: 'branch.inspect' },
+      {
+        timeoutMs: 5,
+      }
+    ).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => expect(terminateProcessTreeMock).toHaveBeenCalledOnce());
+    expect(resolved).toBe(false);
+
+    allowTermination();
+    await expect(resultPromise).resolves.toMatchObject({
+      success: false,
+      error: { code: 'EXECUTOR_TIMEOUT' },
+    });
   });
 
   it('refuses every unscoped executor launch when tenant context is required', async () => {

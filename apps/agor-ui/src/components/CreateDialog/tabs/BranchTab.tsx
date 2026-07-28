@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { isRepoReadyForBranchCreation } from '@/utils/repoReadiness';
 import { BranchFormFields } from '../../BranchFormFields';
 
 export interface BranchTabConfig {
@@ -52,13 +53,28 @@ export const BranchTab: React.FC<BranchTabProps> = ({
 
   const selectedRepo = selectedRepoId ? repoById.get(selectedRepoId) : undefined;
 
+  // A ready clone can still transition to failed from a daemon event while
+  // this form is open. Disable the parent action immediately; submit-time
+  // validation below remains the final UI guard.
+  useEffect(() => {
+    if (selectedRepoId && !isRepoReadyForBranchCreation(selectedRepo)) {
+      onValidityChange(false);
+    }
+  }, [onValidityChange, selectedRepo, selectedRepoId]);
+
   const handleValuesChange = useCallback(() => {
     setTimeout(() => {
       const values = form.getFieldsValue();
-      const isValid = !!(values.repoId && values.sourceBranch && values.name && values.boardId);
+      const isValid = !!(
+        values.repoId &&
+        isRepoReadyForBranchCreation(repoById.get(values.repoId)) &&
+        values.sourceBranch &&
+        values.name &&
+        values.boardId
+      );
       onValidityChange(isValid);
     }, 0);
-  }, [form, onValidityChange]);
+  }, [form, onValidityChange, repoById]);
 
   // Initialize form once per mount. Without this guard the effect re-fires
   // on every `repos.patched` WebSocket event (which gives `repoById` a new
@@ -71,7 +87,10 @@ export const BranchTab: React.FC<BranchTabProps> = ({
     if (initialized.current || repoById.size === 0) return;
 
     const lastRepoId = localStorage.getItem('agor-last-repo-id');
-    if (lastRepoId && repoById.has(lastRepoId)) {
+    const readyRepos = mapToArray(repoById).filter(isRepoReadyForBranchCreation);
+    if (readyRepos.length === 0) return;
+
+    if (lastRepoId && isRepoReadyForBranchCreation(repoById.get(lastRepoId))) {
       initialized.current = true;
       form.setFieldsValue({
         repoId: lastRepoId,
@@ -80,9 +99,9 @@ export const BranchTab: React.FC<BranchTabProps> = ({
       });
       setSelectedRepoId(lastRepoId);
       handleValuesChange();
-    } else if (repoById.size > 0) {
+    } else {
       initialized.current = true;
-      const firstRepo = mapToArray(repoById)[0];
+      const firstRepo = readyRepos[0];
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
         sourceBranch: firstRepo.default_branch,

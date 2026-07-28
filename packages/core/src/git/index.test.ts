@@ -1594,6 +1594,12 @@ describe('categorizeGitError', () => {
     ).toBe('network');
   });
 
+  it('categorizes clone lifecycle timeouts separately from network failures', () => {
+    expect(categorizeGitError('Clone timed out after 30 minutes.')).toBe('timeout');
+    expect(categorizeGitError('GitPluginError: block timeout reached')).toBe('timeout');
+    expect(categorizeGitError('fatal: operation timed out')).toBe('network');
+  });
+
   it('falls through to unknown for unrecognised stderr', () => {
     expect(categorizeGitError('fatal: corrupted ref refs/heads/main')).toBe('unknown');
     expect(categorizeGitError('')).toBe('unknown');

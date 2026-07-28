@@ -86,3 +86,28 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     );
   });
 });
+
+describe('BranchesTable — repository clone readiness', () => {
+  it('disables branch creation when no repository clone is ready', () => {
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+    });
+
+    renderWithProviders(
+      <BranchesTable
+        client={null}
+        branchById={new Map()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map()}
+        sessionsByBranch={new Map()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Create Branch/i })).toBeDisabled();
+  });
+});

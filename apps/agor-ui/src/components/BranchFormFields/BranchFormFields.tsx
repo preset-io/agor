@@ -8,6 +8,7 @@
 
 import type { Board, Repo } from '@agor-live/client';
 import {
+  Alert,
   Checkbox,
   Form,
   Input,
@@ -27,6 +28,10 @@ import {
   resolveUiBranchStorageConfig,
 } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import {
+  getRepoBranchCreationBlockReason,
+  isRepoReadyForBranchCreation,
+} from '@/utils/repoReadiness';
 
 /**
  * Default depth pre-filled into the "Depth" input when the user selects
@@ -90,6 +95,10 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
     [branchStorageConfig]
   );
   const previousDefaultStorageMode = useRef<BranchStorageMode | undefined>(undefined);
+  const repos = useMemo(() => mapToArray(repoById), [repoById]);
+  const selectedRepo = selectedRepoId ? repoById.get(selectedRepoId) : undefined;
+  const selectedRepoBlockReason = getRepoBranchCreationBlockReason(selectedRepo);
+  const hasReadyRepo = repos.some(isRepoReadyForBranchCreation);
 
   useEffect(() => {
     const current = form.getFieldValue(storageFieldName) as BranchStorageMode | undefined;
@@ -120,7 +129,16 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
       <Form.Item
         name={`${fieldPrefix}repoId`}
         label="Repository"
-        rules={[{ required: true, message: 'Please select a repository' }]}
+        rules={[
+          { required: true, message: 'Please select a repository' },
+          {
+            validator: (_, repoId: string | undefined) => {
+              if (!repoId) return Promise.resolve();
+              const reason = getRepoBranchCreationBlockReason(repoById.get(repoId));
+              return reason ? Promise.reject(new Error(reason)) : Promise.resolve();
+            },
+          },
+        ]}
         validateTrigger={['onBlur', 'onChange']}
       >
         <Select
@@ -131,15 +149,50 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
               .toLowerCase()
               .includes(input.toLowerCase())
           }
-          options={mapToArray(repoById)
+          options={repos
             .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
-            .map((repo: Repo) => ({
-              value: repo.repo_id,
-              label: repo.name || repo.slug,
-            }))}
+            .map((repo: Repo) => {
+              const blockReason = getRepoBranchCreationBlockReason(repo);
+              const statusSuffix =
+                repo.clone_status === 'failed'
+                  ? ' — Clone failed'
+                  : repo.clone_status === 'cloning'
+                    ? ' — Cloning'
+                    : '';
+              return {
+                value: repo.repo_id,
+                label: `${repo.name || repo.slug}${statusSuffix}`,
+                disabled: !isRepoReadyForBranchCreation(repo),
+                title: blockReason,
+              };
+            })}
           onChange={onRepoChange}
         />
       </Form.Item>
+
+      {selectedRepoBlockReason ? (
+        <Alert
+          type={selectedRepo?.clone_status === 'failed' ? 'error' : 'info'}
+          showIcon
+          title={
+            selectedRepo?.clone_status === 'failed'
+              ? 'Repository clone failed'
+              : 'Repository clone in progress'
+          }
+          description={selectedRepoBlockReason}
+          style={{ marginBottom: 24 }}
+        />
+      ) : (
+        !hasReadyRepo && (
+          <Alert
+            type="warning"
+            showIcon
+            title="No repositories are ready"
+            description="Wait for a repository clone to finish or retry a failed clone before creating a branch."
+            style={{ marginBottom: 24 }}
+          />
+        )
+      )}
 
       {showBoardSelector && (
         <Form.Item

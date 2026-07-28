@@ -1,7 +1,7 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -205,6 +205,8 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                     <Tag color={tagColor} style={{ marginLeft: 8 }}>
                       <HighlightMatch text={tagLabel} query={searchTerm} />
                     </Tag>
+                    {repo.clone_status === 'cloning' && <Tag color="gold">Cloning</Tag>}
+                    {repo.clone_status === 'failed' && <Tag color="red">Clone failed</Tag>}
                   </Space>
                 }
                 extra={
@@ -227,6 +229,27 @@ export const ReposTable: React.FC<ReposTableProps> = ({
               >
                 {/* Repo metadata */}
                 <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+                  {repo.clone_status === 'cloning' && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      title="Repository clone in progress"
+                      description="Branch creation will be available after the clone finishes."
+                    />
+                  )}
+                  {repo.clone_status === 'failed' && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      title={`Repository clone failed${
+                        repo.clone_error?.category ? ` (${repo.clone_error.category})` : ''
+                      }`}
+                      description={
+                        repo.clone_error?.message ||
+                        'The repository checkout is unavailable or incomplete.'
+                      }
+                    />
+                  )}
                   <div>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       Slug:{' '}

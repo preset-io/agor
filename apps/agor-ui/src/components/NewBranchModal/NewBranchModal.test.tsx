@@ -111,3 +111,28 @@ describe('NewBranchModal — source-branch preservation', { timeout: 10_000 }, (
     expect((screen.getByLabelText(/Source Branch/i) as HTMLInputElement).value).toBe('develop');
   });
 });
+
+describe('NewBranchModal — repository clone readiness', () => {
+  it('keeps branch creation disabled when every repository clone failed', () => {
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+    });
+
+    render(
+      <NewBranchModal
+        open
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+        repoById={new Map([[repo.repo_id, repo]])}
+      />
+    );
+
+    expect(screen.getByText('No repositories are ready')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create Branch/i })).toBeDisabled();
+  });
+});

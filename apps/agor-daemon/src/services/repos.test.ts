@@ -38,6 +38,58 @@ vi.mock('@agor/core/git/exec', async (importOriginal) => {
 });
 
 describe('ReposService.createBranch clone preflight', () => {
+  it.each([
+    {
+      status: 'cloning',
+      cloneError: undefined,
+      expected: /clone is still in progress.*clone_status='ready'/i,
+    },
+    {
+      status: 'failed',
+      cloneError: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out after 30 minutes.',
+      },
+      expected: /clone failed \(timeout\).*Clone timed out after 30 minutes.*Retry/i,
+    },
+  ])('rejects a $status repository before branch persistence or git preflight', async ({
+    status,
+    cloneError,
+    expected,
+  }) => {
+    const app = {
+      service(path: string) {
+        throw new Error(`Unexpected service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: 'repo-1',
+      slug: 'org/repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/org/repo.git',
+      local_path: '/tmp/incomplete-repo',
+      clone_status: status,
+      clone_error: cloneError,
+    } as never);
+
+    await expect(
+      service.createBranch(
+        'repo-1',
+        {
+          name: 'new-branch',
+          ref: 'new-branch',
+          sourceBranch: 'main',
+          boardId: 'board-1',
+        },
+        { user: { user_id: 'user-1' } } as never
+      )
+    ).rejects.toThrow(expected);
+
+    expect(assertRemoteRefVisibleForClone).not.toHaveBeenCalled();
+  });
+
   it('rejects clone-mode local-only source refs before persisting branch state', async () => {
     const branchesCreate = vi.fn();
     const getGitEnvironment = vi.fn(async () => ({ GITHUB_TOKEN: 'gh_test_token_for_preflight' }));

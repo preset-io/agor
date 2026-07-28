@@ -72,6 +72,14 @@ import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
+  cancelTrackedCloneOperation,
+  REPO_CLONE_CLEANUP_TIMEOUT_MS,
+  REPO_CLONE_TIMEOUT_MS,
+  REPO_CLONE_TOKEN_TTL_SECONDS,
+  superviseRepoClone,
+  trackCloneOperation,
+} from '../utils/repo-clone-supervisor.js';
+import {
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -1287,6 +1295,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
 
+    // A delete while a self-standing clone is being materialized is explicit
+    // cancellation. Wait for its complete process tree before deleting the DB
+    // row or asking a cleanup executor to touch the same directory.
+    await cancelTrackedCloneOperation('branch', branch.branch_id);
+
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
@@ -1371,6 +1384,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
+
+    await cancelTrackedCloneOperation('branch', branch.branch_id);
 
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
@@ -1668,9 +1683,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } }
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          {},
+          storageMode === 'clone' ? REPO_CLONE_TOKEN_TTL_SECONDS : undefined
         );
-        spawnExecutor(
+        const branchProcess = spawnExecutor(
           {
             command: 'git.branch.add',
             sessionToken,
@@ -1712,6 +1729,68 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             logPrefix: `[BranchesService.unarchive ${branch.name}]`,
           }
         );
+
+        if (storageMode === 'clone') {
+          const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+          const branchCloneSupervisor = superviseRepoClone({
+            process: branchProcess,
+            timeoutMs: REPO_CLONE_TIMEOUT_MS,
+            cleanupPartialClone: async () => {
+              const cleanupToken = generateScopedServiceToken(
+                this.app as unknown as {
+                  settings: { authentication?: { secret?: string } };
+                }
+              );
+              const cleanupResult = await runExecutorCommand(
+                {
+                  command: 'git.branch.remove',
+                  sessionToken: cleanupToken,
+                  daemonUrl: getDaemonUrl(),
+                  params: {
+                    branchId: branch.branch_id,
+                    branchPath: branch.path,
+                    branchesRoot: getBranchesDir(tenantId),
+                    deleteDbRecord: false,
+                    storageMode: 'clone',
+                  },
+                },
+                {
+                  logPrefix: `[BranchesService.unarchive ${branch.name} cleanup]`,
+                  timeoutMs: REPO_CLONE_CLEANUP_TIMEOUT_MS,
+                }
+              );
+              if (!cleanupResult.success) {
+                throw new Error(
+                  cleanupResult.error?.message ?? 'branch clone cleanup executor failed'
+                );
+              }
+            },
+            onExit: async ({ code, signal }) => {
+              if (code === 0) return;
+              const current = await this.get(branch.branch_id);
+              if (current.filesystem_status !== 'creating') return;
+              const exitDescription = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
+              await this.patch(branch.branch_id, {
+                filesystem_status: 'failed',
+                error_message: `Branch clone exited with ${exitDescription} before reporting an error.`,
+              });
+            },
+            onTimeout: async ({ error }) => {
+              await this.patch(branch.branch_id, {
+                filesystem_status: 'failed',
+                error_message: error.message,
+              });
+            },
+          });
+
+          trackCloneOperation('branch', branch.branch_id, branchCloneSupervisor);
+          void branchCloneSupervisor.completion.catch((error) => {
+            console.error(
+              `[BranchesService.unarchive ${branch.name}] Clone supervisor failed:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+        }
       } catch (error) {
         console.error(
           `⚠️  Failed to spawn executor for branch recreation:`,

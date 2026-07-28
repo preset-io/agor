@@ -576,6 +576,68 @@ describe('RepoRepository.update', () => {
     expect(updated.local_path).toBe('/new/path');
   });
 
+  dbTest('does not let a late clone completion overwrite a timeout outcome', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create({
+      ...data,
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out and the partial checkout was removed.',
+      },
+    });
+
+    const lateCompletion = await repo.update(data.repo_id, {
+      name: 'Late executor name',
+      local_path: '/path/from/late-completion',
+      clone_status: 'ready',
+      clone_error: undefined,
+    });
+    const persisted = await repo.findById(data.repo_id);
+
+    expect(lateCompletion).toMatchObject({
+      name: data.name,
+      local_path: data.local_path,
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+      },
+    });
+    expect(persisted).toMatchObject(lateCompletion);
+  });
+
+  dbTest('does not let a late ordinary failure replace timeout classification', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const data = createRepoData();
+    await repo.create({
+      ...data,
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 124,
+        category: 'timeout',
+        message: 'Clone timed out.',
+      },
+    });
+
+    const lateFailure = await repo.update(data.repo_id, {
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 1,
+        category: 'network',
+        message: 'Connection reset.',
+      },
+    });
+
+    expect(lateFailure.clone_error).toMatchObject({
+      exit_code: 124,
+      category: 'timeout',
+      message: 'Clone timed out.',
+    });
+  });
+
   dbTest('should update local repo without requiring remote_url', async ({ db }) => {
     const repo = new RepoRepository(db);
     const data = createRepoData({

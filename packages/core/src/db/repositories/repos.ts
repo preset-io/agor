@@ -360,6 +360,25 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
         const current = this.rowToRepo(currentRow);
 
+        // A timeout is the authoritative terminal outcome for this clone
+        // attempt. The executor may already have sent its final `ready` or
+        // ordinary `failed` patch when the daemon's timeout wins; row locking
+        // serializes the writes, and this precedence rule makes either order
+        // converge on the timeout instead of allowing a late completion to
+        // resurrect a checkout that the timeout path already removed.
+        //
+        // Failed rows are deleted before retry, so accepting a non-timeout
+        // clone-status transition from a timeout row is never a legitimate
+        // retry path. Metadata-only edits remain allowed.
+        const timeoutAlreadyWon =
+          current.clone_status === 'failed' && current.clone_error?.category === 'timeout';
+        const incomingCloneOutcome = updates.clone_status;
+        const repeatsTimeoutOutcome =
+          incomingCloneOutcome === 'failed' && updates.clone_error?.category === 'timeout';
+        if (timeoutAlreadyWon && incomingCloneOutcome && !repeatsTimeoutOutcome) {
+          return current;
+        }
+
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
