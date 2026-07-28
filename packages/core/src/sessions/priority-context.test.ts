@@ -55,10 +55,15 @@ describe('canInjectPriorityContextForBranch', () => {
   // pair — it can't distinguish "the raw branch column" from "a group grant
   // that overrode it", so it correctly denies/allows based on whatever
   // resolveUserAccess decided, whether that raises or lowers access relative
-  // to the branch's raw others_fs_access fallback. The combinatorics of how
-  // resolveUserAccess itself picks a winning candidate across direct
-  // ownership, branch/board group grants, and board-aligned defaults are
-  // covered in `db/repositories/branches.test.ts` ("resolveUserAccess").
+  // to the branch's raw others_fs_access fallback. `resolveUserAccess`
+  // itself (how it picks a winning candidate across ownership, group
+  // grants, and board-aligned defaults) is exercised separately in
+  // `db/repositories/branches.test.ts` ("resolveUserAccess"), though that
+  // suite doesn't yet cover every combination (e.g. a group grant that
+  // lowers filesystem access below a stronger app permission, or a
+  // board-aligned `none` default) — this predicate's contract doesn't
+  // depend on those cases being covered there, but the resolver's own test
+  // suite would benefit from them.
 });
 
 let worktree: string;

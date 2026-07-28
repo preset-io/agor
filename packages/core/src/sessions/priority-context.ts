@@ -24,6 +24,7 @@ import { Buffer } from 'node:buffer';
 import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import type { EffectiveBranchAccess } from '../types/index.js';
 
 export interface PriorityContextManifest {
   /** Paths relative to the worktree root. May contain a `{today}` segment. */
@@ -73,19 +74,16 @@ export function isRootSessionGenealogy(genealogy: PriorityContextGenealogy): boo
  * injection on it so a non-owner denied filesystem access can't receive
  * file contents through the injected prompt instead.
  *
- * Takes the shape of `BranchRepository.resolveUserAccess(...)`'s return
- * value (deliberately duck-typed rather than importing that type, to keep
- * this module dependency-free) so callers pass its result directly — not
- * the branch's raw `others_fs_access` column. A user's effective access can
- * differ from that raw fallback via branch/board group grants or
+ * Takes `BranchRepository.resolveUserAccess(...)`'s return value directly —
+ * not the branch's raw `others_fs_access` column. A user's effective access
+ * can differ from that raw fallback via branch/board group grants or
  * board-aligned defaults, so passing the raw column here would both leak
  * (when a grant lowers access below the raw fallback) and over-deny (when a
  * grant raises it above).
  */
-export function canInjectPriorityContextForBranch(access: {
-  is_owner: boolean;
-  fs_access?: 'none' | 'read' | 'write';
-}): boolean {
+export function canInjectPriorityContextForBranch(
+  access: Pick<EffectiveBranchAccess, 'is_owner' | 'fs_access'>
+): boolean {
   return access.is_owner || access.fs_access !== 'none';
 }
 
