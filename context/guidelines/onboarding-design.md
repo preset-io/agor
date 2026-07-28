@@ -29,11 +29,14 @@ prompt. Don't carry that framing forward.
 
 ## The four goal cards (locked copy)
 
-These went through several rounds of copywriting. **Do not rewrite them.**
+These went through several rounds of copywriting. **Do not rewrite them.** The one exception on
+record: card 1's noun was changed from "assistant" to "teammate" per an explicit resolved decision
+(see "Resolved: it's 'teammate'" below) — a one-word correction to match the product noun, not an
+ad hoc rewrite. The "locked copy" rule still holds for everything else.
 
 | # | Card | Description |
 | - | ---- | ----------- |
-| 1 | 🔍 **Finally, a personal assistant** | Reads your inbox, Slack, and news so you don't have to. |
+| 1 | 🔍 **Finally, a personal teammate** | Reads your inbox, Slack, and news so you don't have to. |
 | 2 | ✍️ **Never chase a status update again** | Meeting notes, action items, and project updates — drafted for you. |
 | 3 | 🛠️ **Ship without the busywork** | PRs, bug triage, release notes — handled. |
 | 4 | 👥 **Give your team an AI teammate** | One helper who knows everyone's Slack, docs, and boards — not just yours. |
@@ -106,18 +109,14 @@ The canonical source for user-facing voice is the Agor team Knowledge base doc
 CLAUDE.md names as the source of truth for this repo's copy. The rules above are consistent with it;
 the cross-checks below reconcile the three places this surface touches that doc.
 
-### "Assistant" vs "teammate" — open naming question
+### Resolved: it's "teammate"
 
-The messaging doc (2026-06-21) leans on **"assistant"** for the entity name. A later decision doc,
-`product/assistant-to-teammate-rename-audit.md` (2026-07-07), and the shipped wizard code both use
-**"AI teammate"** ("Name your AI teammate", the `teammateName` step in `seedOnboardingTeammate.ts`).
-So "teammate" is the current, more recent product noun, superseding the messaging doc's "assistant".
-
-Card 1's locked title — "Finally, a **personal assistant**" — is the one place the wizard calls the
-entity an "assistant" while everything else calls it a "teammate". **This is a real terminology
-mismatch, flagged here as an open copy question for whoever owns the rename audit.** The card copy
-was deliberately locked after several rounds of iteration, so **do not rewrite it here** — resolve
-it with the copy owner before implementation, not silently in code.
+Max decided the product noun is **"teammate"**, not "assistant". Card 1 was updated accordingly,
+from "Finally, a personal **assistant**" to "Finally, a personal **teammate**", so the wizard is
+consistent throughout. This reconciles the messaging doc's older "assistant" language (2026-06-21)
+with the later `product/assistant-to-teammate-rename-audit.md` decision (2026-07-07) and the
+wizard's existing "AI teammate" copy ("Name your AI teammate", the `teammateName` step in
+`seedOnboardingTeammate.ts`) — "teammate" wins across the board.
 
 ### Two persona systems — don't conflate them
 
@@ -159,5 +158,5 @@ this in the implementation PR.
 - [ ] Two-goal bootstrap leads with a concrete action on the primary goal — no clarifying question — and surfaces the secondary only after the first win.
 - [ ] Card/bootstrap copy names concrete artifacts, stays plain and second-person, and avoids hedging adjectives.
 - [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
-- [ ] The "assistant" (card 1) vs "teammate" (rest of wizard) naming question was raised with the copy owner, not silently rewritten.
+- [ ] Card 1 says "personal teammate" (not "assistant"), consistent with the wizard's "teammate" product noun.
 - [ ] Card 1's inbox/news promise is backed by a real connector or the copy was adjusted; the gap is flagged in the PR.
