@@ -328,7 +328,14 @@ export function getCodexModelSelectionError(
   }
   if (selection.mode === 'exact') return undefined;
   const normalized = selection.model.toLowerCase();
-  if (Object.hasOwn(CODEX_MODEL_METADATA, normalized)) return undefined;
+  if (Object.hasOwn(CODEX_MODEL_METADATA, normalized)) {
+    if (selection.model === normalized) return undefined;
+    return (
+      `Codex model alias "${selection.model}" must use its canonical registry casing: ` +
+      `"${normalized}". Use that value, or pass mode "exact" for an intentional ` +
+      'provider-specific model ID.'
+    );
+  }
 
   const replacement = lifecycle?.replacement ?? DEFAULT_CODEX_MODEL;
   return (

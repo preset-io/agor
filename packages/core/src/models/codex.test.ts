@@ -89,6 +89,17 @@ describe('Codex model registry', () => {
     expect(getCodexModelSelectionError({ mode: 'exact', model: snapshot })).toBeUndefined();
   });
 
+  it('rejects non-canonical alias casing instead of persisting it unchanged', () => {
+    const error = getCodexModelSelectionError({
+      mode: 'alias',
+      model: 'GPT-5.6-SOL',
+    });
+
+    expect(error).toContain('canonical registry casing');
+    expect(error).toContain('"gpt-5.6-sol"');
+    expect(getCodexModelSelectionError({ mode: 'exact', model: 'GPT-5.6-SOL' })).toBeUndefined();
+  });
+
   it('allows unknown exact provider IDs but still rejects known unsupported aliases', () => {
     expect(
       getCodexModelSelectionError({ mode: 'exact', model: 'account-preview-model' })
