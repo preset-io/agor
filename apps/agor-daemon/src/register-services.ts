@@ -48,6 +48,8 @@ import type {
 import { ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
+import { shouldRegisterLocalHostOperations } from './cell/availability.js';
+import { createLocalCellHostOperations } from './cell/local/local-cell-host-operations.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -552,7 +554,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
-  app.use('/admin/local-actions', createLocalActionsService());
+  // Host ACL/user/group operations exist only on a self-hosted Cell. Hosted
+  // registration is intentionally absent rather than forwarding privileged
+  // work through an impersonated executor.
+  if (shouldRegisterLocalHostOperations(config)) {
+    app.use('/admin/local-actions', createLocalActionsService(createLocalCellHostOperations()));
+  }
 
   app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
