@@ -506,6 +506,11 @@ export type CreateSessionInput = Omit<
   model_config?: Partial<NonNullable<Session['model_config']>> | null;
 };
 
+/** Session patch semantics: omit/undefined preserves, string sets, null clears. */
+export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id'> & {
+  sdk_session_id?: string | null;
+};
+
 /**
  * Minimal persisted session state needed to decide whether a new task can
  * start immediately.

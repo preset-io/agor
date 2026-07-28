@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Session, SessionID, SessionUpdate, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
@@ -56,7 +56,7 @@ export type SessionArchiveStateUpdate = {
  * Do not add title/description/model/permission fields here — those are
  * user-visible session metadata changes and should continue to affect recency.
  */
-function isSessionTimestampNeutralPatch(updates: Partial<Session>): boolean {
+function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
   const keys = Object.keys(updates);
   return keys.length === 1 && keys[0] === 'ready_for_prompt' && updates.ready_for_prompt === false;
 }
@@ -163,7 +163,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       archived_reason: session.archived_reason ?? null,
       data: {
         agentic_tool_version: session.agentic_tool_version,
-        sdk_session_id: session.sdk_session_id, // Preserve SDK session ID for conversation continuity
+        ...(session.sdk_session_id !== undefined ? { sdk_session_id: session.sdk_session_id } : {}),
         mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
         title: session.title,
         description: session.description,
@@ -711,7 +711,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async update(
     id: string,
-    updates: Partial<Session>,
+    updates: SessionUpdate,
     options: { replaceAgenticConfig?: boolean } = {}
   ): Promise<Session> {
     try {
@@ -751,7 +751,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // IMPORTANT: Receiver-side merge for nested objects (permission_config, model_config, etc.)
         // This prevents partial updates from losing existing nested fields.
         // Strategy: Objects = deep merge, Arrays = replace, Primitives = replace
-        const merged = deepMerge(current, updates);
+        const { sdk_session_id: sdkSessionIdUpdate, ...genericUpdates } = updates;
+        const merged = deepMerge(current, genericUpdates);
+        if (sdkSessionIdUpdate === null) {
+          delete merged.sdk_session_id;
+        } else if (sdkSessionIdUpdate !== undefined) {
+          merged.sdk_session_id = sdkSessionIdUpdate;
+        }
         if (options.replaceAgenticConfig) {
           if (Object.hasOwn(updates, 'model_config')) {
             merged.model_config = updates.model_config;

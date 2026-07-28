@@ -44,6 +44,7 @@ import type {
   SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionUpdate,
   Task,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
@@ -319,7 +320,13 @@ export interface KnowledgeReindexService {
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
  */
-export interface SessionsService extends AgorService<Session, CreatePayload<CreateSessionInput>> {
+export interface SessionsService
+  extends AgorService<
+    Session,
+    CreatePayload<CreateSessionInput>,
+    ClientInput<SessionUpdate>,
+    ClientInput<SessionUpdate>
+  > {
   /**
    * Fork a session at a decision point
    * Creates a new session branching from the parent at a specific task

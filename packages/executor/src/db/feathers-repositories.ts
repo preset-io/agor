@@ -19,6 +19,7 @@ import type {
   Session,
   SessionID,
   SessionMCPServer,
+  SessionUpdate,
   User,
 } from '@agor/core/types';
 
@@ -70,7 +71,7 @@ export class FeathersSessionsRepository {
     }
   }
 
-  async update(sessionId: SessionID, data: Partial<Session>): Promise<Session> {
+  async update(sessionId: SessionID, data: SessionUpdate): Promise<Session> {
     const service = this.client.service('sessions');
     return await service.patch(sessionId, data);
   }
