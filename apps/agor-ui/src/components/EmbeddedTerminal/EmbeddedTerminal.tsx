@@ -1,27 +1,17 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: xterm requires an exact ANSI terminal palette
 // biome-ignore-all lint/plugin/noHardcodedColorProperty: xterm requires compound terminal overlay colors
 /**
- * EmbeddedTerminal — an xterm.js terminal rendered INLINE inside a session
- * pane (not in a modal), bound to the user's existing Zellij terminal
- * channel.
- *
- * Used by the Claude Code CLI adapter so the conversation pane can host the
- * live `claude` REPL directly, fulfilling the analysis doc's "Terminal view"
- * (and, when shown alongside the conversation message feed, the spec's
- * developer-affordance split view).
+ * EmbeddedTerminal — an xterm.js terminal rendered inline, bound to the
+ * user's existing Zellij terminal channel.
  *
  * Architecture:
  *   - Calls `terminals.create({ branchId })` to ensure the user's Zellij
  *     executor exists (idempotent — returns existing connection if running).
  *   - Joins the `user/<id>/terminal` channel and renders the live PTY stream.
- *   - If `focusTabName` is provided, emits a `terminal:tab` { action: 'focus' }
- *     so the embedded view lands on the correct CLI session tab.
+ *   - If `focusTabName` is provided, asks the daemon to focus that tab.
  *
- * Mirroring with the popout modal: since both views connect to the SAME
- * channel, opening both at once mirrors output across them — this is the
- * spec's "split view" for debugging. Input from either flows to the same
- * Zellij session, which is the desired behavior (typing somewhere in the
- * conversation hits the same `claude` process the modal sees).
+ * Since embedded and popout views connect to the same channel, opening both
+ * mirrors output and sends input to the same Zellij session.
  *
  * This is a minimal extraction from TerminalModal — the modal-specific
  * concerns (close-confirm, role-gating UI) are kept in TerminalModal.tsx;
@@ -45,20 +35,8 @@ export interface EmbeddedTerminalProps {
    *  Zellij session gets the right cwd / env. */
   branchId?: string;
   /** When provided, the embedded view emits a Zellij `focus` on this tab name
-   *  once connected. Use the CLI session's `cli-<short>` tab name. */
+   *  once connected. */
   focusTabName?: string;
-  /**
-   * For `claude-code-cli` sessions: pass the Agor session id here. The
-   * server looks up `cli_state` + `model_config`, builds the safe
-   * `claude --session-id <X> ...` argv, and emits a create-with-command
-   * `terminal:tab` event — guaranteeing the cli-XXX tab exists with
-   * `claude` running inside even on first-run / cold-start. Without
-   * this, the cold-start path emits a `focus` for a tab that may not
-   * yet exist (because `onCliSessionCreated`'s dispatch raced an
-   * absent executor) and the user sees a bash prompt instead of the
-   * REPL. Browser never sees raw argv — the daemon builds it server-side.
-   */
-  ensureCliSessionId?: string;
   /** Fixed pixel height. Default 480. Ignored when `fill` is true. */
   height?: number;
   /** When true, the terminal flexes to fill its parent's available
@@ -85,7 +63,6 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
   userId,
   branchId,
   focusTabName,
-  ensureCliSessionId,
   height = 480,
   fill = false,
   visible = true,
@@ -221,7 +198,6 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           cols: terminal.cols,
           branchId,
           focusTabName,
-          ensureCliSessionId,
         })) as {
           userId: UserID;
           channel: string;
@@ -306,7 +282,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       setReconnecting(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, userId, branchId, focusTabName, ensureCliSessionId]);
+  }, [client, userId, branchId, focusTabName]);
 
   /**
    * Refocus tab when the embedded view becomes visible. Two cases:
@@ -332,7 +308,6 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           cols: terminalRef.current?.cols ?? 140,
           branchId,
           focusTabName,
-          ensureCliSessionId,
         });
       } catch (err) {
         if (cancelled) return;
@@ -343,7 +318,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [visible, client, userId, branchId, focusTabName, ensureCliSessionId]);
+  }, [visible, client, userId, branchId, focusTabName]);
 
   return (
     <div

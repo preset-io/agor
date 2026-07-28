@@ -16,7 +16,7 @@ export interface ModelOptionLike {
   id: string;
 }
 
-const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']);
+const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code']);
 
 /** Common option shape the picker renders: a friendly name plus optional blurb. */
 export interface NormalizedModelOption {

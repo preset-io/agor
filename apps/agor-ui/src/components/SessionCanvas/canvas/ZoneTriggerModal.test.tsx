@@ -75,6 +75,7 @@ const makeSession = (id: string, status: string, lastUpdated: string, title: str
   ({
     session_id: id,
     branch_id: BRANCH_ID,
+    agentic_tool: 'claude-code',
     status,
     title,
     archived: false,
@@ -115,6 +116,32 @@ describe('ZoneTriggerModal smart-default session selection', () => {
     // session — surfaced as the closed Select's selected value.
     expect(document.body.textContent).toContain('Newer session');
     expect(document.body.textContent).not.toContain('Older session');
+  });
+
+  it('does not offer historical removed-runtime sessions for reuse', () => {
+    const historical = {
+      ...makeSession('s-historical', 'completed', '2026-06-20T00:00:00.000Z', 'Historical session'),
+      agentic_tool: 'claude-code-cli',
+    } as unknown as Session;
+
+    render(
+      <ZoneTriggerModal
+        open
+        onCancel={() => {}}
+        client={null}
+        branchId={BRANCH_ID}
+        branch={undefined}
+        sessionsByBranch={new Map([[BRANCH_ID, [historical]]])}
+        zoneName="Zone"
+        trigger={{ template: 'do {{thing}}' } as never}
+        availableAgents={[]}
+        mcpServerById={new Map()}
+        onExecute={async () => {}}
+      />
+    );
+
+    expect(screen.getByText('No existing sessions in this branch')).toBeInTheDocument();
+    expect(screen.queryByText('Historical session')).not.toBeInTheDocument();
   });
 });
 

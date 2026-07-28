@@ -89,6 +89,8 @@ export const sessions = pgTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
+      // Retain the removed identifier so historical rows remain readable.
+      // Runtime creation and execution validate against AgenticToolName.
       enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'],
     }).notNull(),
     agentic_tool_preset_id: varchar('agentic_tool_preset_id', { length: 36 }).references(
@@ -193,11 +195,8 @@ export const sessions = pgTable(
           };
         };
 
-        // Claude Code CLI adapter state (only set when agentic_tool === 'claude-code-cli').
-        // Persisted so the daemon can re-instantiate the JSONL watcher across
-        // daemon restarts without losing offset. See
-        // apps/agor-daemon/src/services/claude-cli-watcher.ts and
-        // docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
+        // Read-only metadata retained for historical sessions created by the
+        // removed experimental Claude CLI integration. No runtime consumes it.
         cli_state?: {
           watcher_offset?: number;
           last_event_ts?: string;
@@ -213,11 +212,7 @@ export const sessions = pgTable(
           } | null;
         };
 
-        // Billing model for this session.
-        // - 'subscription': running against the user's Claude Pro/Max
-        //   subscription's interactive limits (CLI adapter, default).
-        // - 'api-key': ANTHROPIC_API_KEY was set at spawn → per-token billing.
-        // - 'unknown': legacy rows or pre-flag detection.
+        // Read-only billing metadata retained with historical sessions.
         billing_mode?: 'subscription' | 'api-key' | 'unknown';
       }>()
       .notNull(),
@@ -960,15 +955,6 @@ export const users = pgTable(
             ANTHROPIC_AUTH_TOKEN?: string;
             ANTHROPIC_BASE_URL?: string;
           };
-          'claude-code-cli'?: {
-            // Mirrors 'claude-code' — the CLI accepts the same Anthropic env
-            // vars on the api-key path. Subscription auth reads
-            // ~/.claude/.credentials.json, not these env vars.
-            ANTHROPIC_API_KEY?: string;
-            CLAUDE_CODE_OAUTH_TOKEN?: string;
-            ANTHROPIC_AUTH_TOKEN?: string;
-            ANTHROPIC_BASE_URL?: string;
-          };
           codex?: {
             OPENAI_API_KEY?: string;
             OPENAI_BASE_URL?: string;
@@ -1004,15 +990,6 @@ export const users = pgTable(
         // Default agentic tool configuration (prepopulates session creation forms)
         default_agentic_config?: {
           'claude-code'?: {
-            modelConfig?: {
-              mode?: 'alias' | 'exact';
-              model?: string;
-              effort?: EffortLevel;
-              advisorModel?: string;
-            };
-            permissionMode?: string;
-          };
-          'claude-code-cli'?: {
             modelConfig?: {
               mode?: 'alias' | 'exact';
               model?: string;

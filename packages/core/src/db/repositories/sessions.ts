@@ -185,12 +185,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         current_context_usage: session.current_context_usage,
         context_window_limit: session.context_window_limit,
         last_context_update_at: session.last_context_update_at,
-        // Claude Code CLI adapter state. Hard-coded in this insert
-        // builder so updates to `cli_state` actually persist — without
-        // this entry deepMerge in update() would put the field on the
-        // in-memory object but sessionToInsert would drop it on save.
+        // Preserve read-only metadata on historical rows. No runtime consumes
+        // these fields, but omitting them here would silently erase history
+        // during unrelated session patches.
         cli_state: session.cli_state,
-        // Billing model snapshot (subscription / api-key / unknown).
         billing_mode: session.billing_mode,
       },
     };

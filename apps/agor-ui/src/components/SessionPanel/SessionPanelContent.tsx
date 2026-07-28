@@ -1,15 +1,12 @@
 import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
-import { getTeammateConfig, isTeammate, sessionPath, shortId } from '@agor-live/client';
+import { getTeammateConfig, isTeammate, sessionPath } from '@agor-live/client';
 import {
-  CodeOutlined,
-  CommentOutlined,
   CopyOutlined,
   DeleteOutlined,
-  ReloadOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
@@ -19,7 +16,6 @@ import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
-import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminalLazy';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 
 export interface SessionPanelContentProps {
@@ -39,12 +35,6 @@ export interface SessionPanelContentProps {
   onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
   inputValueRef: React.RefObject<string>;
   isOpen: boolean;
-  /** Claude Code CLI view toggle. Ignored for non-CLI tools. */
-  cliViewMode?: 'terminal' | 'conversation';
-  /** Setter for the view toggle. When provided, this component renders the
-   *  Tabs bar inline above the panel; when omitted, the parent is
-   *  expected to render the bar itself (legacy header-level placement). */
-  setCliViewMode?: (mode: 'terminal' | 'conversation') => void;
   /** When true, all task blocks are force-expanded (used by in-session search) */
   forceExpandAll?: boolean;
 }
@@ -66,8 +56,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     onSpawnModalConfirm,
     inputValueRef,
     isOpen,
-    cliViewMode = 'terminal',
-    setCliViewMode,
     forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
@@ -178,155 +166,28 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           </Space>
         </div>
 
-        {/* CLI session: proper Tabs bar (CLI terminal / Agor conversation)
-            sits directly above the panel it switches, with a Restart
-            affordance pinned to the right when the terminal view is
-            active. Tabs are controlled — the actual content is rendered
-            below as siblings (both views always mounted; see fix note
-            above the ConversationView wrapper). */}
-        {session.agentic_tool === 'claude-code-cli' && setCliViewMode ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-end',
-              justifyContent: 'space-between',
-              gap: token.sizeUnit * 2,
-              marginTop: token.sizeUnit * 2,
-            }}
-          >
-            <Tabs
-              activeKey={cliViewMode}
-              onChange={(k) => setCliViewMode(k as 'terminal' | 'conversation')}
-              size="small"
-              style={{ flex: 1, marginBottom: -1 }}
-              items={[
-                {
-                  key: 'terminal',
-                  label: (
-                    <span>
-                      <CodeOutlined style={{ marginRight: 6 }} />
-                      CLI terminal
-                    </span>
-                  ),
-                },
-                {
-                  key: 'conversation',
-                  label: (
-                    <span>
-                      <CommentOutlined style={{ marginRight: 6 }} />
-                      Agor conversation
-                    </span>
-                  ),
-                },
-              ]}
-            />
-            {cliViewMode === 'terminal' && client && (
-              <Tooltip title="Restart claude REPL in this tab (closes the Zellij tab and re-spawns claude — JSONL transcript preserved, watcher resumes from offset)">
-                <Button
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  onClick={async () => {
-                    try {
-                      await client.service(`sessions/${session.session_id}/restart-cli`).create({});
-                      showSuccess('Restarting claude…');
-                    } catch (err) {
-                      showError(
-                        `Failed to restart: ${err instanceof Error ? err.message : String(err)}`
-                      );
-                    }
-                  }}
-                  style={{ marginBottom: token.sizeUnit }}
-                >
-                  Restart
-                </Button>
-              </Tooltip>
-            )}
-          </div>
-        ) : (
-          <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
-        )}
+        <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
 
-        {/* Claude Code CLI: embedded live `claude` REPL.
-            Mounted exactly once across both view modes — we don't unmount/
-            remount when the user switches to Conversation and back, because
-            tearing down xterm + the Zellij channel loses scrollback. Hide
-            via `display:none` instead. */}
-        {session.agentic_tool === 'claude-code-cli' && (
-          <div
-            style={{
-              display: cliViewMode === 'terminal' ? 'flex' : 'none',
-              flex: 1,
-              minHeight: 0,
-              flexDirection: 'column',
-            }}
-          >
-            <EmbeddedTerminal
-              client={client}
-              userId={currentUserId}
-              branchId={session.branch_id}
-              focusTabName={`cli-${shortId(session.session_id)}`}
-              // Server-side ensure-create — if the cli tab doesn't yet
-              // exist (cold-start race where `onCliSessionCreated`'s
-              // dispatch landed in an empty room), terminals.create
-              // builds the safe spawn argv from the session row and
-              // creates it. Idempotent: already-running tabs no-op
-              // into focus.
-              ensureCliSessionId={session.session_id}
-              fill
-              visible={cliViewMode === 'terminal'}
-            />
-          </div>
-        )}
-
-        {/* Conversation View — the structured message feed rebuilt from
-            the JSONL by the daemon watcher.
-            We keep ConversationView mounted in both view modes (hiding via
-            display:none rather than unmount/remount) for two reasons:
-              1. Toggling the view should NOT lose scrollback / queued task
-                 subscriptions / Feathers `messages` listeners.
-              2. Repeatedly tearing down + recreating a deep React subtree
-                 in a session pane appears to interact badly with React
-                 Flow's pane on the left of the board (whole left column
-                 loses Ant Design theming for a frame on remount). Keeping
-                 both subtrees stable side-steps that. */}
-        <div
-          style={{
-            // `contents` lets ConversationView's own flex/sizing flow as
-            // if this wrapper weren't here when visible. `none` fully
-            // hides without unmounting.
-            display:
-              session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal'
-                ? 'none'
-                : 'contents',
-          }}
-        >
-          <ConversationView
-            client={client}
-            sessionId={session.session_id}
-            agentic_tool={session.agentic_tool}
-            sessionModel={session.model_config?.model}
-            userById={userById}
-            currentUserId={currentUserId}
-            onScrollRef={handleScrollRef}
-            onPermissionDecision={onPermissionDecision}
-            branchName={branch?.name}
-            scheduledFromBranch={session.scheduled_from_branch}
-            scheduledRunAt={session.scheduled_run_at}
-            // Keep ConversationView fully active even when the CLI session
-            // is showing the terminal tab — otherwise the JSONL watcher's
-            // `messages.create` events land on a non-subscribing pane and
-            // the user has to switch tabs + scroll to trigger a refetch.
-            // The wrapper above hides the visual via display:none; data
-            // listeners stay live underneath.
-            isActive={isOpen}
-            genealogy={session.genealogy}
-            teammateEmoji={
-              branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
-            }
-            forceExpandAll={forceExpandAll}
-            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-          />
-        </div>
+        <ConversationView
+          client={client}
+          sessionId={session.session_id}
+          agentic_tool={session.agentic_tool}
+          sessionModel={session.model_config?.model}
+          userById={userById}
+          currentUserId={currentUserId}
+          onScrollRef={handleScrollRef}
+          onPermissionDecision={onPermissionDecision}
+          branchName={branch?.name}
+          scheduledFromBranch={session.scheduled_from_branch}
+          scheduledRunAt={session.scheduled_run_at}
+          isActive={isOpen}
+          genealogy={session.genealogy}
+          teammateEmoji={
+            branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
+          }
+          forceExpandAll={forceExpandAll}
+          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+        />
 
         {/* Queued Tasks Drawer - Above Footer.
             Reads tasks (status='queued') instead of messages now that the queue

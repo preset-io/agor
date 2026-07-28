@@ -92,7 +92,7 @@ const codexSession = {
 } as unknown as Session;
 
 describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
-  it('does not expose effort changes for an active Claude Code CLI session', () => {
+  it('shows historical removed-runtime sessions as read-only', () => {
     render(
       <SessionSettingsModal
         open
@@ -103,6 +103,8 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       />
     );
 
+    expect(screen.getByText('Historical Session')).toBeInTheDocument();
+    expect(screen.getByText(/runtime settings cannot be changed/i)).toBeInTheDocument();
     expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
   });
 

@@ -32,7 +32,7 @@ import { textResult } from '../server.js';
 const agenticToolConfigSchema = z
   .object({
     agentic_tool: z
-      .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
+      .enum(['claude-code', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
       .describe('Agent to spawn for runs of this schedule.'),
     preset_id: mcpOptionalNonEmptyString(
       'agentic_tool_config.preset_id',

@@ -154,11 +154,11 @@ export interface TasksClientHelpers {
   /**
    * Trigger executor pickup for an already-created task. Pure-REST harnesses
    * use this after `POST /tasks` to avoid needing an MCP client. Returns the
-   * Task with `status: 'dispatching'` for non-CLI executors (or `'running'`
-   * for `claude-code-cli`). Only `'created'` tasks on idle sessions
-   * are accepted — `'queued'` tasks drain automatically in queue-position
-   * order via the queue processor, and busy sessions should be prompted via
-   * `client.sessions.prompt()` (which creates and queues the task atomically).
+   * Task with `status: 'dispatching'`; the authenticated executor claims it
+   * as `running`. Only `'created'` tasks on idle sessions are accepted —
+   * `'queued'` tasks drain automatically in queue-position order, and busy
+   * sessions should be prompted via `client.sessions.prompt()` (which creates
+   * and queues the task atomically).
    */
   run(taskId: string, options?: TaskRunOptions): Promise<Task>;
 }

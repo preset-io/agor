@@ -391,10 +391,9 @@ function hasProviderCredential(
   tool: AgenticToolName,
   connection: Record<string, string | undefined>
 ): boolean {
-  const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
-  if (!(canonicalTool in PROVIDER_CREDENTIAL_FIELDS)) return false;
-  return PROVIDER_CREDENTIAL_FIELDS[canonicalTool as keyof typeof PROVIDER_CREDENTIAL_FIELDS].some(
-    (field) => connection[field]?.trim()
+  if (!(tool in PROVIDER_CREDENTIAL_FIELDS)) return false;
+  return PROVIDER_CREDENTIAL_FIELDS[tool as keyof typeof PROVIDER_CREDENTIAL_FIELDS].some((field) =>
+    connection[field]?.trim()
   );
 }
 

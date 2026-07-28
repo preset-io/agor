@@ -21,14 +21,7 @@ interface ModeOption {
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot'
-    | 'cursor';
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /**

@@ -63,10 +63,9 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
 }) => {
   const { token } = theme.useToken();
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
-  const visibleAgents = agents.filter((agent) => {
-    const canonical = agent.id === 'claude-code-cli' ? 'claude-code' : agent.id;
-    return settings.get(canonical as TenantAgenticToolName)?.enabled !== false;
-  });
+  const visibleAgents = agents.filter(
+    (agent) => settings.get(agent.id as TenantAgenticToolName)?.enabled !== false
+  );
   useEffect(() => {
     if (
       selectedAgentId &&

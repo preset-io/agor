@@ -202,7 +202,7 @@ const envVarSchema = z.strictObject({
 const agenticConfigSchema = z
   .strictObject({
     agent: z
-      .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
+      .enum(['claude-code', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
       .describe('Agent used for sessions created from this gateway channel.'),
     permissionMode: z
       .enum([

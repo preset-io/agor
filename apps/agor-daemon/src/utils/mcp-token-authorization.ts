@@ -5,10 +5,6 @@ export interface McpTokenAuthorizationParams {
   callerRole: string | undefined;
 }
 
-export interface CliSessionControlParams extends McpTokenAuthorizationParams {
-  sessionCreatedBy: string | null | undefined;
-}
-
 function hasExplicitMinimumRole(
   userRole: string | undefined,
   minimumRole: typeof ROLES.MEMBER
@@ -40,25 +36,4 @@ export function canReceiveMcpTokenForSession(params: McpTokenAuthorizationParams
   const isServiceExecutor = callerRole === 'service';
   const isAuthenticatedMember = !!callerUserId && hasExplicitMinimumRole(callerRole, ROLES.MEMBER);
   return isAuthenticatedMember || isServiceExecutor;
-}
-
-/**
- * Authorization predicate for controlling a Claude CLI process bound to a
- * session (ensure/focus cold-start tab, restart/kill/re-spawn).
- *
- * CLI control is intentionally stricter than caller-scoped Agor MCP token
- * delivery. In simple Unix mode the process may run from the creator's shared
- * home/session state, and even in stricter modes resuming someone else's CLI
- * session can execute with that session's credentials/context. Only the creator,
- * a superadmin, or the service identity may control that process boundary.
- */
-export function canControlCliSession(params: CliSessionControlParams): boolean {
-  const { callerUserId, callerRole, sessionCreatedBy } = params;
-  const isSuperadmin = hasExplicitMinimumRole(callerRole, ROLES.SUPERADMIN);
-  const isServiceExecutor = callerRole === 'service';
-  const isCreatorMember =
-    !!callerUserId &&
-    callerUserId === sessionCreatedBy &&
-    hasExplicitMinimumRole(callerRole, ROLES.MEMBER);
-  return isCreatorMember || isSuperadmin || isServiceExecutor;
 }

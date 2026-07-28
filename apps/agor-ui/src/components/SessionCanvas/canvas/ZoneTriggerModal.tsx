@@ -22,7 +22,7 @@ import type {
 // zone / session). Shared with the daemon's fire-zone-trigger route and the
 // MCP `agor_branches_set_zone` path so all three render against the same
 // shape.
-import { buildZoneTriggerContext } from '@agor-live/client';
+import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -115,7 +115,10 @@ export const ZoneTriggerModal = ({
 
   // Filter sessions for this branch using O(1) Map lookup
   const branchSessions = useMemo(() => {
-    return sessionsByBranch.get(branchId) || [];
+    return (sessionsByBranch.get(branchId) || []).filter(
+      (session): session is Session & { agentic_tool: AgenticToolName } =>
+        isAgenticToolName(session.agentic_tool)
+    );
   }, [sessionsByBranch, branchId]);
 
   // Smart default: Most recent active/completed session
@@ -455,9 +458,7 @@ export const ZoneTriggerModal = ({
                       />
                     ) : (
                       <AgenticToolConfigForm
-                        agenticTool={
-                          (selectedSession?.agentic_tool as AgenticToolName) || 'claude-code'
-                        }
+                        agenticTool={selectedSession?.agentic_tool || 'claude-code'}
                         showHelpText={true}
                       />
                     )}

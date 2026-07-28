@@ -1,6 +1,7 @@
-import type { ScheduleAgenticToolConfig } from '../types';
 import {
+  isAgenticToolName,
   normalizeAgenticToolDefaultConfigurationReference,
+  type ScheduleAgenticToolConfig,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '../types';
 
@@ -33,6 +34,11 @@ function hasDefinedInlineFields(config: ScheduleAgenticToolConfig): boolean {
 export function normalizeScheduleAgenticToolConfig(
   config: ScheduleAgenticToolConfig
 ): ScheduleAgenticToolConfig {
+  if (!isAgenticToolName(config.agentic_tool)) {
+    throw new InvalidScheduleAgenticToolConfigError(
+      `Removed or unsupported schedule agentic tool: ${String(config.agentic_tool)}`
+    );
+  }
   const hasReference = config.configuration_reference !== undefined;
   const hasPreset = config.preset_id !== undefined;
   const hasInline = hasDefinedInlineFields(config);

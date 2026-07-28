@@ -40,15 +40,25 @@ export const CommonSchemas = {
     Type.Literal('failed'),
   ]),
 
-  // Agentic tool enum
+  // Active agentic tool enum
   agenticTool: Type.Union([
     Type.Literal('claude-code'),
     Type.Literal('codex'),
     Type.Literal('gemini'),
     Type.Literal('opencode'),
     Type.Literal('copilot'),
-    Type.Literal('claude-code-cli'),
     Type.Literal('cursor'),
+  ]),
+
+  // Session query compatibility: historical rows keep their removed tool id.
+  persistedAgenticTool: Type.Union([
+    Type.Literal('claude-code'),
+    Type.Literal('codex'),
+    Type.Literal('gemini'),
+    Type.Literal('opencode'),
+    Type.Literal('copilot'),
+    Type.Literal('cursor'),
+    Type.Literal('claude-code-cli'),
   ]),
 
   // Permission mode enum - union of all native SDK modes
@@ -103,7 +113,7 @@ export const sessionQuerySchema = createQuerySchema(
   Type.Object({
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(CommonSchemas.sessionStatus),
-    agentic_tool: Type.Optional(CommonSchemas.agenticTool),
+    agentic_tool: Type.Optional(CommonSchemas.persistedAgenticTool),
     board_id: Type.Optional(CommonSchemas.uuid),
     branch_id: Type.Optional(CommonSchemas.uuid),
     parent_session_id: Type.Optional(CommonSchemas.uuid),

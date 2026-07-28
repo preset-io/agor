@@ -70,10 +70,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
       </div>
 
       {/* Session IDs — shared with SessionIdsButton popover and Settings modal.
-          For Claude Code CLI sessions the two are the same UUID by design
-          (we pass --session-id <agor> to the binary); for SDK adapters they
-          typically differ. SDK row is hidden when no sdk_session_id has
-          been captured yet (fresh SDK sessions before the first response). */}
+          The SDK row is hidden when no sdk_session_id has been captured yet. */}
       <div style={{ marginBottom: 12 }}>
         <SessionIdsList session={session} />
       </div>

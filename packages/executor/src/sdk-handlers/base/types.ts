@@ -10,14 +10,7 @@ import type { ExecutorPulseKind, Message, MessageID, SessionID, TaskID } from '@
 /**
  * Supported tool types
  */
-export type ToolType =
-  | 'claude-code'
-  | 'claude-code-cli'
-  | 'codex'
-  | 'gemini'
-  | 'opencode'
-  | 'copilot'
-  | 'cursor';
+export type ToolType = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor';
 
 /**
  * Streaming callback interface for agents that support real-time streaming

@@ -14,6 +14,7 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  isAgenticToolName,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
@@ -499,7 +500,11 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   }
 
   // Missing-credential failure — show the Connect-AI panel, not the raw error.
-  if (isSystem && message.metadata?.error_kind === 'missing_credential' && message.metadata?.tool) {
+  if (
+    isSystem &&
+    message.metadata?.error_kind === 'missing_credential' &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
     return (
       <MissingCredentialPanel
         tool={message.metadata.tool}

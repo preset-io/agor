@@ -77,8 +77,11 @@ function makeSchedule(): Schedule {
   } as Schedule;
 }
 
-function renderModal(patch: ReturnType<typeof vi.fn>, onClose = vi.fn()) {
-  const schedule = makeSchedule();
+function renderModal(
+  patch: ReturnType<typeof vi.fn>,
+  onClose = vi.fn(),
+  schedule = makeSchedule()
+) {
   const client = {
     service: () => ({
       patch,
@@ -110,6 +113,24 @@ describe('ScheduleModal agentic configuration payload', () => {
       'data-default-resolution',
       'schedule-run'
     );
+  });
+
+  it('preserves a removed tool as historical configuration until explicitly replaced', async () => {
+    const historicalSchedule = {
+      ...makeSchedule(),
+      agentic_tool_config: {
+        agentic_tool: 'claude-code-cli',
+        permission_mode: 'auto',
+      },
+    } as unknown as Schedule;
+
+    renderModal(vi.fn(), vi.fn(), historicalSchedule);
+
+    expect(
+      await screen.findByText('This schedule uses a removed agentic tool')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByTestId('configuration-picker')).not.toBeInTheDocument();
   });
 
   it.each([

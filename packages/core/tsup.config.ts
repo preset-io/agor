@@ -14,7 +14,6 @@ export default defineConfig({
     'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
     'claude/index': 'src/claude/index.ts',
-    'claude-cli/index': 'src/claude-cli/index.ts', // Pure utilities for the Claude Code CLI adapter (path slug, event types, JSONL translator)
     'config/index': 'src/config/index.ts',
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
     'permissions/index': 'src/permissions/index.ts',

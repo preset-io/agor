@@ -30,6 +30,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
+import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
@@ -576,7 +577,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Optional title for the session (defaults to first 100 chars of prompt)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'cursor'])
+          .enum(['claude-code', 'codex', 'gemini', 'opencode', 'cursor'])
           .optional()
           .describe('Which agent to use for the subsession (defaults to same as parent)'),
         enableCallback: z
@@ -665,7 +666,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session), btw (ephemeral fork — works even on running sessions, auto-callbacks result to caller, auto-archives when done)'
           ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
+          .enum(['claude-code', 'codex', 'gemini', 'cursor'])
           .optional()
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
@@ -716,7 +717,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const targetSession = await ctx.app
           .service('sessions')
           .get(sessionId, ctx.baseServiceParams);
-        const caps = AGENTIC_TOOL_CAPABILITIES[targetSession.agentic_tool as AgenticToolName];
+        const targetTool = requireActiveAgenticTool(targetSession.agentic_tool);
+        const caps = AGENTIC_TOOL_CAPABILITIES[targetTool];
         if (caps && !caps.supportsSessionFork) {
           return textResult({
             error: `${targetSession.agentic_tool} does not support session forking. Use mode "subsession" instead to delegate work to a fresh session.`,
@@ -917,7 +919,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Branch ID where the session will run (required)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'gemini', 'cursor'])
+          .enum(['claude-code', 'codex', 'gemini', 'cursor'])
           .describe('Which agent to use for this session (required)'),
         title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
         description: mcpOptionalString('description', 'Session description (optional)'),
@@ -1600,7 +1602,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'claude-code-cli', 'codex', 'copilot', 'gemini', 'cursor'])
+          .enum(['claude-code', 'codex', 'copilot', 'gemini', 'cursor'])
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),
@@ -1638,14 +1640,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const all = {
         'claude-code': {
-          default: DEFAULT_CLAUDE_MODEL,
-          models: claudeModels,
-          note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',
-        },
-        // Claude Code CLI shares the same Anthropic model lineup as the
-        // SDK path; surface the same list so MCP clients can pass any
-        // valid claude id to either adapter.
-        'claude-code-cli': {
           default: DEFAULT_CLAUDE_MODEL,
           models: claudeModels,
           note: 'Claude models are also fetched live via /claude-models (uses the Anthropic Models API). This is the static fallback.',

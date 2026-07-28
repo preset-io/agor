@@ -26,9 +26,6 @@ export type ApiKeyName =
  *   Renaming to 'claude-agent-sdk' is staged for a follow-up commit; the
  *   string value stays 'claude-code' for backward compatibility with
  *   existing DB rows until a coordinated DB+UI migration ships.
- * - claude-code-cli: The `claude` shell binary running interactively in a
- *   Zellij pane, JSONL-tailed by the daemon. Subscription-auth friendly.
- *   See docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
@@ -38,21 +35,37 @@ export type ApiKeyName =
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName =
-  | 'claude-code'
-  | 'claude-code-cli'
-  | 'codex'
-  | 'gemini'
-  | 'opencode'
-  | 'copilot'
-  | 'cursor';
+export const AGENTIC_TOOL_NAMES = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'opencode',
+  'copilot',
+  'cursor',
+] as const;
 
-export const NON_EXECUTOR_AGENTIC_TOOLS: ReadonlySet<AgenticToolName> = new Set([
-  'claude-code-cli',
-]);
+export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
 
-export function usesExecutorRuntime(tool: AgenticToolName): boolean {
-  return !NON_EXECUTOR_AGENTIC_TOOLS.has(tool);
+/**
+ * Removed tool identifiers that may still exist on persisted historical rows.
+ *
+ * They are intentionally excluded from {@link AgenticToolName}: no creation,
+ * configuration, or executor boundary may accept them. Session/task/message
+ * readers use {@link PersistedAgenticToolName} so history remains attributable
+ * without reinterpreting it as another runtime.
+ */
+export const LEGACY_AGENTIC_TOOL_NAMES = ['claude-code-cli'] as const;
+export type LegacyAgenticToolName = (typeof LEGACY_AGENTIC_TOOL_NAMES)[number];
+export type PersistedAgenticToolName = AgenticToolName | LegacyAgenticToolName;
+
+export function isAgenticToolName(value: unknown): value is AgenticToolName {
+  return typeof value === 'string' && (AGENTIC_TOOL_NAMES as readonly string[]).includes(value);
+}
+
+export function isLegacyAgenticToolName(value: unknown): value is LegacyAgenticToolName {
+  return (
+    typeof value === 'string' && (LEGACY_AGENTIC_TOOL_NAMES as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -312,9 +325,9 @@ export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = 
 };
 
 /** Human-readable display name for each agentic tool (user-facing copy). */
-export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
+export const AGENTIC_TOOL_DISPLAY_NAMES: Record<PersistedAgenticToolName, string> = {
   'claude-code': 'Claude Code',
-  'claude-code-cli': 'Claude Code CLI',
+  'claude-code-cli': 'Claude Code CLI (removed)',
   codex: 'Codex',
   gemini: 'Gemini',
   opencode: 'OpenCode',
@@ -325,7 +338,6 @@ export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
 /** Where a user creates a fresh API key for each tool. Keyless tools (opencode) are absent. */
 export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> = {
   'claude-code': 'https://platform.claude.com/settings/keys',
-  'claude-code-cli': 'https://platform.claude.com/settings/keys',
   codex: 'https://platform.openai.com/api-keys',
   gemini: 'https://aistudio.google.com/app/apikey',
   copilot: 'https://github.com/settings/tokens',
@@ -337,17 +349,6 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: true,
-    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
-    defaultReasoningEffort: 'high',
-  },
-  'claude-code-cli': {
-    // First-class CLI flag: `claude --resume <id> --fork-session`
-    supportsSessionFork: true,
-    // New `claude --session-id <new uuid>` in a fresh Zellij pane
-    supportsChildSpawn: true,
-    // v1: false. The on-disk JSONL is ingestable but the "adopt existing
-    // session" UI flow is deferred to v2 (see analysis doc § Phased delivery).
-    supportsSessionImport: false,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     defaultReasoningEffort: 'high',
   },

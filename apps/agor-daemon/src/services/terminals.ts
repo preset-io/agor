@@ -23,7 +23,6 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildClaudeCliSpawn } from '@agor/core/claude-cli';
 import {
   createUserProcessEnvironment,
   loadConfig,
@@ -33,7 +32,6 @@ import {
   BranchRepository,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
-  SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -50,14 +48,7 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
-import { canControlCliSession } from '../utils/mcp-token-authorization.js';
 import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
-import {
-  buildSpawnConfigForSession,
-  isClaudeRunningFor,
-  resolveClaudeCliProviderSpawn,
-  writeClaudeCliMcpConfigForSession,
-} from './claude-cli-integration.js';
 
 /**
  * TTL for the terminal executor's scoped service token. Terminals are
@@ -90,34 +81,8 @@ interface CreateTerminalData {
   rows?: number;
   cols?: number;
   branchId?: BranchID; // Branch context for Zellij integration
-  /**
-   * Optional Zellij tab name to focus once the executor is up. Used by
-   * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
-   * the session's `cli-<short>` tab. Server-only emit (browsers can't
-   * publish `terminal:tab` directly).
-   */
+  /** Optional Zellij tab name to focus once the executor is up. */
   focusTabName?: string;
-  /**
-   * For `claude-code-cli` sessions: the Agor session id whose tab the
-   * caller wants opened. When set, the server looks up the session,
-   * builds the `claude` spawn config from `cli_state` + session config,
-   * and emits a **create-with-command** `terminal:tab` event so the
-   * cli-XXX tab exists with `claude` running inside even on cold start.
-   *
-   * Without this, the cold-start path emits a `focus` event for a tab
-   * that doesn't exist yet (since `onCliSessionCreated`'s dispatch lands
-   * in an empty room when no executor is connected at session create
-   * time) — the user-visible bug is "I created a CLI session and the
-   * embedded terminal is just a bash prompt". `ensureCliSessionId`
-   * closes that race: the embedded terminal can be the bootstrap
-   * trigger for the `claude` REPL itself.
-   *
-   * Browsers pass the session id; the server is the only thing that
-   * knows how to assemble safe argv. The tab name we use is
-   * `cli_state.zellij_tab_name` if set (canonical), else derived
-   * deterministically from the session id.
-   */
-  ensureCliSessionId?: string;
 }
 
 /**
@@ -382,31 +347,12 @@ export class TerminalsService {
       }
     }
 
-    // Resolve `ensureCliSessionId` into a concrete spawn config on the
-    // server side. The browser asks "make sure the cli tab for session
-    // X exists" — it doesn't know (and shouldn't know) the actual
-    // `claude --session-id <X> --add-dir <cwd> --permission-mode <Y>`
-    // argv.
-    //
-    // RBAC: enforced inside `resolveEnsureCliTab` against the
-    // **session's actual branch** (not the caller-supplied
-    // `data.branchId`, which may differ or be omitted). Without this
-    // check a caller could pass an `ensureCliSessionId` for a session
-    // whose branch they don't have `'session'` permission on and get
-    // the daemon to spawn a CLI tab on their behalf.
-    const cliEnsure = await this.resolveEnsureCliTab(
-      data.ensureCliSessionId,
-      data.branchId,
-      params
-    );
-
     return this.createExecutorTerminal(
       {
         branchId: data.branchId,
         cols: data.cols,
         rows: data.rows,
-        focusTabName: data.focusTabName ?? cliEnsure?.tabName,
-        cliEnsure,
+        focusTabName: data.focusTabName,
       },
       params
     );
@@ -461,9 +407,9 @@ export class TerminalsService {
    * Per-user start barrier for the async "no executor exists → spawn one"
    * path.
    *
-   * Opening an embedded Claude CLI terminal in React dev can issue two
-   * near-simultaneous `terminals.create` calls (the initial attach effect
-   * plus the visible/refocus effect; StrictMode/HMR can double this too).
+   * Opening an embedded terminal in React dev can issue two near-simultaneous
+   * `terminals.create` calls (the initial attach effect plus the
+   * visible/refocus effect; StrictMode/HMR can double this too).
    * Without a reservation, both requests observe `executorTerminals` as
    * empty, both spawn `zellij attach agor-<user> --create`, and both
    * executor sockets consume the same `terminal:tab create` broadcasts.
@@ -548,52 +494,17 @@ export class TerminalsService {
     });
   }
 
-  /**
-   * Emit the CLI ensure-or-focus tab command for a user. Extracted so the warm
-   * and cold create paths share one implementation of the
-   * "claude alive ⇒ focus, dead ⇒ forceRecreate" branching.
-   *
-   * `skipTabName` suppresses a redundant focus when the requested tab is the
-   * same branch-shell tab we just created (warm path only).
-   */
-  private async dispatchTabFocus(
+  /** Focus a requested tab, avoiding a redundant focus after creating it. */
+  private dispatchTabFocus(
     userId: UserID,
     opts: {
-      cliEnsure?: {
-        tabName: string;
-        cwd: string;
-        command: string;
-        commandArgs: string[];
-        sessionId: string;
-      } | null;
       focusTabName?: string;
       skipTabName?: string;
     }
-  ): Promise<void> {
-    const { cliEnsure, focusTabName, skipTabName } = opts;
+  ): void {
+    const { focusTabName, skipTabName } = opts;
     const channel = `user/${userId}/terminal`;
-    if (cliEnsure && cliEnsure.tabName !== skipTabName) {
-      const alive = await isClaudeRunningFor(
-        cliEnsure.sessionId as unknown as import('@agor/core/types').SessionID
-      );
-      if (alive) {
-        this.app.io?.to(channel).emit('terminal:tab', {
-          userId,
-          action: 'focus',
-          tabName: cliEnsure.tabName,
-        });
-      } else {
-        this.app.io?.to(channel).emit('terminal:tab', {
-          userId,
-          action: 'create',
-          tabName: cliEnsure.tabName,
-          cwd: cliEnsure.cwd,
-          command: cliEnsure.command,
-          commandArgs: cliEnsure.commandArgs,
-          forceRecreate: true,
-        });
-      }
-    } else if (focusTabName && focusTabName !== skipTabName) {
+    if (focusTabName && focusTabName !== skipTabName) {
       this.app.io?.to(channel).emit('terminal:tab', {
         userId,
         action: 'focus',
@@ -611,161 +522,13 @@ export class TerminalsService {
    *
    * The browser should join the user's terminal channel to receive output.
    */
-  /**
-   * Resolve `ensureCliSessionId` into the spawn args we need to emit at
-   * the executor — `tabName`, `cwd`, `command`, `commandArgs`. Performs
-   * the SessionRepository + branchRepository lookups + builds the
-   * `claude` argv via `buildSpawnConfigForSession`/`buildClaudeCliSpawn`.
-   *
-   * **RBAC**: enforces `'session'`-level `hasBranchPermission` against
-   * the **session's actual branch** (not the caller-supplied
-   * `claimedBranchId`). Without this, a caller could ask the daemon
-   * to ensure-create a CLI tab for a session whose branch they
-   * shouldn't access. Also throws `Forbidden` when `claimedBranchId`
-   * is supplied AND mismatches the session's branch — defense against
-   * "spoof the branch to bypass the upstream branchId check".
-   *
-   * Returns `null` when the input is undefined, the session doesn't
-   * exist, isn't a CLI session, or its branch path can't be resolved.
-   * Caller falls back to the prior focus-only behavior in those cases.
-   */
-  private async resolveEnsureCliTab(
-    sessionId: string | undefined,
-    claimedBranchId: BranchID | undefined,
-    params?: AuthenticatedParams
-  ): Promise<{
-    tabName: string;
-    cwd: string;
-    command: string;
-    commandArgs: string[];
-    sessionId: string;
-  } | null> {
-    if (!sessionId) return null;
-    const config = params?.provider ? await loadConfig() : undefined;
-    const resolved = await this.withTenantDatabase(async (tenantDb) => {
-      const session = await new SessionRepository(tenantDb).findById(sessionId);
-      if (session?.agentic_tool !== 'claude-code-cli') return null;
-      // Branch-spoofing guard: when the caller supplied a branchId,
-      // it MUST match the session's. Otherwise the upstream RBAC
-      // (gated on `data.branchId`) checked a different branch than
-      // the one we're about to spawn into.
-      if (claimedBranchId && claimedBranchId !== session.branch_id) {
-        throw new Forbidden(
-          `ensureCliSessionId session belongs to a different branch than the one provided.`
-        );
-      }
-      // Run the same `'session'` permission check the upstream caller
-      // did, but against the *session's* branch id. This catches the
-      // case where the caller omitted `branchId` entirely (so the
-      // upstream check was skipped) and only passed `ensureCliSessionId`.
-      const branchRepo = new BranchRepository(tenantDb);
-      const branch = await branchRepo.findById(session.branch_id);
-      if (!branch?.path) return null;
-
-      if (params?.provider) {
-        const rbacEnabled = config?.execution?.branch_rbac === true;
-        if (rbacEnabled) {
-          const callerUserId = params?.user?.user_id as UserID | undefined;
-          if (!callerUserId) {
-            throw new Forbidden('Authentication required to ensure a CLI tab');
-          }
-          const isOwner = await branchRepo.isOwner(branch.branch_id, callerUserId);
-          const effectivePermission = await branchRepo.resolveUserPermission(branch, callerUserId);
-          const allowSuperadmin = config?.execution?.allow_superadmin === true;
-          const userRole = params?.user?.role as string | undefined;
-          if (
-            !hasBranchPermission(
-              branch,
-              callerUserId,
-              isOwner,
-              'session',
-              userRole,
-              allowSuperadmin,
-              effectivePermission
-            )
-          ) {
-            throw new Forbidden(
-              `You need 'session' permission on the session's branch to ensure its CLI tab.`
-            );
-          }
-        }
-      }
-      return { session, branch };
-    });
-    if (!resolved) return null;
-    const { session, branch } = resolved;
-
-    if (
-      params?.provider &&
-      !canControlCliSession({
-        callerUserId: params.user?.user_id,
-        callerRole: params.user?.role,
-        sessionCreatedBy: session.created_by,
-      })
-    ) {
-      throw new Forbidden('You can only ensure CLI tabs for Claude CLI sessions you created.');
-    }
-    const mcpConfigPath = await writeClaudeCliMcpConfigForSession(this.app, session, {
-      actor: params?.user ?? null,
-    });
-    const spawnCfg = buildSpawnConfigForSession(session, branch.path, { mcpConfigPath });
-    const built = await resolveClaudeCliProviderSpawn(
-      this.app,
-      session,
-      buildClaudeCliSpawn(spawnCfg)
-    );
-    if (!built) return null;
-    const tabName =
-      session.cli_state?.zellij_tab_name ??
-      spawnCfg.displayName ??
-      `cli-${shortId(session.session_id)}`;
-    return {
-      tabName,
-      cwd: branch.path,
-      command: built.bin,
-      commandArgs: built.args,
-      sessionId: session.session_id,
-    };
-  }
-
   private async createExecutorTerminal(
     data: {
       branchId?: BranchID;
       cols?: number;
       rows?: number;
-      /**
-       * Optional Zellij tab name to focus once the executor is up. Used by
-       * the Claude Code CLI adapter's in-pane EmbeddedTerminal to land on
-       * the session's `cli-<short>` tab rather than the branch default.
-       *
-       * The focus emit happens server-side because browser sockets are not
-       * allowed to publish on `terminal:tab` (only service tokens may).
-       */
+      /** Optional Zellij tab name to focus once the executor is up. */
       focusTabName?: string;
-      /**
-       * Resolved CLI spawn for `ensureCliSessionId`. When set, both the
-       * warm-executor and cold-start paths emit a **create-with-command**
-       * `terminal:tab` event so the cli-XXX tab exists with `claude`
-       * running inside, instead of a plain `focus` that no-ops on a tab
-       * that was never spawned (the original cold-start race). The
-       * executor's `handleTabAction('create')` is already idempotent
-       * (auto-converts to focus when the tab exists), so we can fire
-       * this on every call without worrying about double-spawn.
-       */
-      cliEnsure?: {
-        tabName: string;
-        cwd: string;
-        command: string;
-        commandArgs: string[];
-        /**
-         * Agor session id — used to pgrep for a live `claude` process
-         * bound to it. When the process is dead (Ctrl-D, kill -9, etc.)
-         * we emit `forceRecreate: true` so the executor closes the
-         * stale tab + respawns claude fresh. When alive, we emit a
-         * plain `focus` and preserve scrollback.
-         */
-        sessionId: string;
-      } | null;
     },
     params?: AuthenticatedParams
   ): Promise<{
@@ -851,10 +614,6 @@ export class TerminalsService {
           // waits until the process actually re-announces `terminal:ready`,
           // so we don't emit tab/redraw commands into an empty/dead room.
           //
-          // dispatchTabFocus does the claude liveness branching (alive ⇒
-          // focus preserves scrollback; dead ⇒ create+forceRecreate spawns a
-          // fresh claude), falling back to a plain focus when only a
-          // `focusTabName` was supplied.
           void this.awaitExecutorReady(userId).then(async (isReady) => {
             // Strictly gated: if the ack never arrives (executor errored, or an
             // adopted process never re-announced) we do NOT fire into a dead
@@ -872,8 +631,7 @@ export class TerminalsService {
               tabName: branchTabName,
               cwd: branch.path,
             });
-            await this.dispatchTabFocus(userId, {
-              cliEnsure: data.cliEnsure,
+            this.dispatchTabFocus(userId, {
               focusTabName: data.focusTabName,
               skipTabName: branchTabName,
             });
@@ -1035,15 +793,10 @@ export class TerminalsService {
         startedAt: new Date(),
       });
 
-      // Cold-start path: the executor hasn't yet attached to its Feathers
-      // channel, so a `terminal:tab` emitted now would land in an empty room
-      // and be dropped. Gate the CLI ensure/focus dispatch on the executor's
-      // `terminal:ready` ack instead of guessing a boot delay. Same liveness
-      // branching as the warm path (handled in dispatchTabFocus). If the ack
-      // never arrives we SKIP the dispatch entirely — no blind best-effort
-      // fire into a dead room — and log it.
-      if (data.cliEnsure || data.focusTabName) {
-        const { cliEnsure, focusTabName } = data;
+      // Gate focus on the executor's readiness ack so the event is not emitted
+      // into an empty room during cold start.
+      if (data.focusTabName) {
+        const { focusTabName } = data;
         void this.awaitExecutorReady(userId).then((ready) => {
           // Strictly gated on the readiness ack — no blind best-effort fire.
           if (!ready) {
@@ -1052,7 +805,7 @@ export class TerminalsService {
             );
             return;
           }
-          return this.dispatchTabFocus(userId, { cliEnsure, focusTabName });
+          return this.dispatchTabFocus(userId, { focusTabName });
         });
       }
 

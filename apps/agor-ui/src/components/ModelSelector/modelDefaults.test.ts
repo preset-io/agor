@@ -20,9 +20,6 @@ describe('getModelSelectorFallbackModel', () => {
     expect(getModelSelectorFallbackModel('claude-code', AVAILABLE_CLAUDE_MODEL_ALIASES)).toBe(
       DEFAULT_CLAUDE_MODEL
     );
-    expect(getModelSelectorFallbackModel('claude-code-cli', AVAILABLE_CLAUDE_MODEL_ALIASES)).toBe(
-      DEFAULT_CLAUDE_MODEL
-    );
   });
 
   it('uses canonical non-Claude defaults even when model lists are newest-first', () => {
@@ -95,7 +92,6 @@ describe('curateModelOptions (Claude)', () => {
 describe('getModelDisplayName', () => {
   it('resolves Claude ids to their friendly display name', () => {
     expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5');
-    expect(getModelDisplayName('claude-code-cli', 'claude-opus-4-8')).toBe('Claude Opus 4.8');
   });
 
   it('annotates the 1M context variant', () => {

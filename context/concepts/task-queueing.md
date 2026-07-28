@@ -9,8 +9,8 @@ encodes whether the prompt ran or got queued.**
 
 - `task.status === 'queued'` → session was busy; the task is waiting and will
   drain automatically when the session goes idle.
-- `task.status === 'dispatching'` → daemon persisted launch intent and is starting a non-CLI executor.
-- `task.status === 'running'` → the executor connected (or the session uses `claude-code-cli`).
+- `task.status === 'dispatching'` → daemon persisted launch intent and is starting an executor.
+- `task.status === 'running'` → the executor connected and claimed the task.
 - `task.queue_position` → ordering within the session's queue (lowest drains
   first), populated only while QUEUED.
 
@@ -28,9 +28,8 @@ There is no separate "queued vs ran" envelope. The route does not take a
    processor picks the lowest `queue_position` and hands it to
    `spawnTaskExecutor`, which is the _sole_ place that pins
    `message_range`/`git_state`, writes the initial user-message row, persists
-   DISPATCHING, and spawns the executor. After authentication, non-CLI
-   executors atomically claim DISPATCHING → RUNNING; `claude-code-cli` goes
-   directly to RUNNING because it has no executor connection.
+   DISPATCHING, and spawns the executor. After authentication, the executor
+   atomically claims DISPATCHING → RUNNING.
 3. **Race safety** — `createPending` wraps the `max(queue_position) + 1`
    read-then-insert in a transaction so concurrent writers can't collide on
    identical positions.

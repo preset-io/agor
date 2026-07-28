@@ -66,11 +66,6 @@ vi.mock('@agor/core/db', () => ({
       mocks.databaseScopeDepth -= 1;
     }
   },
-  SessionRepository: class {
-    constructor(db: unknown) {
-      mocks.repositoryDbs.push(db);
-    }
-  },
   UsersRepository: class {
     constructor(db: unknown) {
       mocks.repositoryDbs.push(db);
@@ -97,20 +92,10 @@ vi.mock('../utils/branch-authorization.js', () => ({
   hasBranchPermission: () => true,
 }));
 
-vi.mock('../utils/mcp-token-authorization.js', () => ({
-  canControlCliSession: () => true,
-}));
-
 vi.mock('../utils/spawn-executor.js', () => ({
   generateSessionToken: () => 'session-token',
   generateScopedServiceToken: mocks.generateScopedServiceToken,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
-}));
-
-vi.mock('./claude-cli-integration.js', () => ({
-  buildSpawnConfigForSession: vi.fn(),
-  isClaudeRunningFor: vi.fn(async () => false),
-  writeClaudeCliMcpConfigForSession: vi.fn(async () => undefined),
 }));
 
 import { buildBranchShellTabName, buildZellijSessionName, TerminalsService } from './terminals';

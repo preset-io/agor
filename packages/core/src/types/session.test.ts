@@ -60,10 +60,6 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('claude-code')).toBe('auto');
   });
 
-  it('returns "auto" for claude-code-cli (shares the Claude default)', () => {
-    expect(getDefaultPermissionMode('claude-code-cli')).toBe('auto');
-  });
-
   it('returns "autoEdit" for gemini (native Gemini mode)', () => {
     expect(getDefaultPermissionMode('gemini')).toBe('autoEdit');
   });
@@ -114,7 +110,6 @@ describe('getDefaultPermissionMode', () => {
     it('handles all valid AgenticToolName values', () => {
       const allTools: AgenticToolName[] = [
         'claude-code',
-        'claude-code-cli',
         'codex',
         'gemini',
         'opencode',
@@ -128,7 +123,6 @@ describe('getDefaultPermissionMode', () => {
       }
 
       expect(results['claude-code']).toBe('auto');
-      expect(results['claude-code-cli']).toBe('auto');
       expect(results.codex).toBe('allow-all');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');
@@ -139,7 +133,6 @@ describe('getDefaultPermissionMode', () => {
     it('returns valid PermissionMode values', () => {
       const allTools: AgenticToolName[] = [
         'claude-code',
-        'claude-code-cli',
         'codex',
         'gemini',
         'opencode',

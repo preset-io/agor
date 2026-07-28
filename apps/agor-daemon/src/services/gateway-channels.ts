@@ -22,6 +22,7 @@ import {
   resolveSlackAgentTools,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
 
 export class GatewayChannelsService extends DrizzleService<
@@ -48,6 +49,7 @@ export class GatewayChannelsService extends DrizzleService<
       await assertInlineAgenticConfigurationAllowed(this.db, 'claude-code');
       return;
     }
+    requireActiveAgenticTool(config.agent);
     if (config.presetId) {
       await resolveAgenticToolPreset(this.db, config.agent, config.presetId);
       const hasOverrides = Object.entries(config).some(

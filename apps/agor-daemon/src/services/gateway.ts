@@ -72,6 +72,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
@@ -2007,7 +2008,9 @@ export class GatewayService {
     // settings (which Codex reads from `permission_config.codex`, not `mode`)
     // get silently dropped.
     const agenticConfig = channel.agentic_config;
-    const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const agenticTool: AgenticToolName = requireActiveAgenticTool(
+      agenticConfig?.agent ?? 'claude-code'
+    );
     // HTTP-originated requests carry an ambient tenant DB scope; socket-mode
     // listener messages only carry tenant identity (runWithTenantContext).
     // Open a short tenant unit of work from that identity — same pattern as

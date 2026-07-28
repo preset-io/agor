@@ -216,7 +216,18 @@ All of this is changeable at any point. You don't have to start a new session to
   style={{ maxWidth: '500px' }}
 />
 
-_Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session._
+_Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session for supported runtimes._
+
+### Historical Claude CLI sessions
+
+Agor previously included an experimental `claude-code-cli` runtime. That integration has been
+removed. Existing database rows keep their original tool identifier, transcript, task/message
+history, and historical runtime metadata so their attribution remains accurate and readable.
+
+Agor does **not** convert those rows into Claude Agent SDK (`claude-code`) sessions. Historical
+sessions cannot be prompted, resumed, forked, spawned from, or restarted, and the removed tool is
+not offered for new sessions, schedules, gateway channels, or MCP calls. Create a new Claude Code
+session to continue the work with a supported runtime.
 
 ---
 

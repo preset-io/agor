@@ -12,6 +12,15 @@ import {
 const LEGACY_WORKSPACE_DEFAULT = '___workspace_default___';
 
 describe('normalizeScheduleAgenticToolConfig', () => {
+  it('rejects removed runtime identifiers preserved in historical rows', () => {
+    expect(() =>
+      normalizeScheduleAgenticToolConfig({
+        agentic_tool: 'claude-code-cli',
+        permission_mode: 'auto',
+      } as unknown as ScheduleAgenticToolConfig)
+    ).toThrow(/removed or unsupported schedule agentic tool/i);
+  });
+
   it.each([
     [USER_DEFAULT_AGENTIC_CONFIGURATION, USER_DEFAULT_AGENTIC_CONFIGURATION],
     [WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION],
