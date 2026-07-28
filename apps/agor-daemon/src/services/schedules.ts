@@ -105,16 +105,20 @@ export class SchedulesService extends DrizzleService<Schedule, ScheduleData, Sch
   }
 
   async create(data: ScheduleData, params?: ScheduleParams) {
+    const creatorId = params?.user?.user_id as UserID | undefined;
     if (data.agentic_tool_config) {
       let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
-      const creatorId = (data.created_by ?? params?.user?.user_id) as UserID | undefined;
       agenticToolConfig = await this.validateConfig(agenticToolConfig, creatorId);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,
       };
     }
-    return super.create(data, params);
+    // External Feathers calls are stamped by injectCreatedBy(). Direct service
+    // consumers still receive the same trusted attribution from params rather
+    // than exposing created_by in the public write DTO.
+    const trustedData = creatorId ? { ...data, created_by: creatorId } : data;
+    return super.create(trustedData, params);
   }
 
   async patch(id: string | null, data: ScheduleData, params?: ScheduleParams) {

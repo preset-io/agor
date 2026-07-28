@@ -306,10 +306,22 @@ export interface GatewayChannel {
   last_message_at: string | null;
 }
 
-/** Public create/update DTO: persisted legacy tools remain read-only. */
-export type GatewayChannelData = Omit<Partial<GatewayChannel>, 'agentic_config'> & {
+/**
+ * Public create/update DTO.
+ *
+ * Runtime-owned identity, audit, secret, and activity fields are deliberately
+ * omitted, and persisted legacy tools remain read-only.
+ */
+export interface GatewayChannelData {
+  name?: string;
+  channel_type?: ChannelType;
+  target_branch_id?: BranchID;
+  agor_user_id?: UserID;
+  config?: Record<string, unknown>;
   agentic_config?: GatewayAgenticConfig | null;
-};
+  mcp_server_ids?: string[];
+  enabled?: boolean;
+}
 
 /**
  * Thread-Session Mapping - Links a platform thread to an Agor session

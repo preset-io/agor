@@ -10,7 +10,7 @@ import type {
   CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
-  GatewayChannel,
+  GatewayChannelData,
   PermissionMode,
   Repo,
   Session,
@@ -1591,7 +1591,7 @@ function AppContent() {
   };
 
   // Handle gateway channel CRUD
-  const handleCreateGatewayChannel = async (data: Partial<GatewayChannel>) => {
+  const handleCreateGatewayChannel = async (data: GatewayChannelData) => {
     if (!client) return;
     try {
       await client.service('gateway-channels').create(data);
@@ -1603,10 +1603,7 @@ function AppContent() {
     }
   };
 
-  const handleUpdateGatewayChannel = async (
-    channelId: string,
-    updates: Partial<GatewayChannel>
-  ) => {
+  const handleUpdateGatewayChannel = async (channelId: string, updates: GatewayChannelData) => {
     if (!client) return;
     try {
       await client.service('gateway-channels').patch(channelId, updates);

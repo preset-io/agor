@@ -1,4 +1,4 @@
-import type { Schedule } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, type ScheduleData } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import { registerScheduleTools } from './schedules.js';
@@ -6,6 +6,66 @@ import { registerScheduleTools } from './schedules.js';
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
 describe('schedule MCP input schemas', () => {
+  it('accepts every active tool and rejects historical tools', () => {
+    const configs = new Map<string, { inputSchema: { safeParse: (args: unknown) => any } }>();
+    const fakeServer = {
+      registerTool: (
+        name: string,
+        cfg: { inputSchema: { safeParse: (args: unknown) => any } },
+        _cb: ToolHandler
+      ) => {
+        configs.set(name, cfg);
+      },
+    } as unknown as McpServer;
+
+    registerScheduleTools(fakeServer, {
+      app: { service: () => ({}) } as any,
+      db: {} as any,
+      userId: 'user-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'user-1', email: 'user@example.com', role: 'member' } as any,
+      baseServiceParams: {},
+    });
+
+    const createSchema = configs.get('agor_schedules_create')!.inputSchema;
+    const patchSchema = configs.get('agor_schedules_patch')!.inputSchema;
+    for (const agenticTool of AGENTIC_TOOL_NAMES) {
+      expect(
+        createSchema.safeParse({
+          branchId: 'branch-1',
+          name: 'Heartbeat',
+          cron_expression: '0 9 * * *',
+          timezone_mode: 'utc',
+          prompt: 'Run',
+          agentic_tool_config: { agentic_tool: agenticTool },
+        }).success
+      ).toBe(true);
+      expect(
+        patchSchema.safeParse({
+          scheduleId: 'schedule-1',
+          agentic_tool_config: { agentic_tool: agenticTool },
+        }).success
+      ).toBe(true);
+    }
+
+    expect(
+      createSchema.safeParse({
+        branchId: 'branch-1',
+        name: 'Heartbeat',
+        cron_expression: '0 9 * * *',
+        timezone_mode: 'utc',
+        prompt: 'Run',
+        agentic_tool_config: { agentic_tool: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+    expect(
+      patchSchema.safeParse({
+        scheduleId: 'schedule-1',
+        agentic_tool_config: { agentic_tool: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+  });
+
   it('rejects non-canonical keys and empty required schedule fields', () => {
     const configs = new Map<string, { inputSchema: { safeParse: (args: unknown) => unknown } }>();
     const fakeServer = {
@@ -93,11 +153,11 @@ describe('schedule MCP input schemas', () => {
         handlers.set(name, cb);
       },
     } as unknown as McpServer;
-    const create = vi.fn(async (payload: Partial<Schedule>) => ({
+    const create = vi.fn(async (payload: ScheduleData) => ({
       schedule_id: 'schedule-1',
       ...payload,
     }));
-    const patch = vi.fn(async (_id: string, payload: Partial<Schedule>) => ({
+    const patch = vi.fn(async (_id: string, payload: ScheduleData) => ({
       schedule_id: 'schedule-1',
       ...payload,
     }));

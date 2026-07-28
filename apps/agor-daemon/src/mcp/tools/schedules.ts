@@ -5,7 +5,10 @@
  */
 
 import {
+  AGENTIC_TOOL_NAMES,
   type Schedule,
+  type ScheduleAgenticToolConfig,
+  type ScheduleData,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
@@ -31,9 +34,7 @@ import { textResult } from '../server.js';
 
 const agenticToolConfigSchema = z
   .object({
-    agentic_tool: z
-      .enum(['claude-code', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'])
-      .describe('Agent to spawn for runs of this schedule.'),
+    agentic_tool: z.enum(AGENTIC_TOOL_NAMES).describe('Agent to spawn for runs of this schedule.'),
     preset_id: mcpOptionalNonEmptyString(
       'agentic_tool_config.preset_id',
       'Concrete preset UUID. Reserved default references sent by older clients are also accepted.'
@@ -188,7 +189,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, args.branchId);
-      const payload: Partial<Schedule> = {
+      const payload: ScheduleData = {
         branch_id: branchId,
         name: args.name,
         description: args.description,
@@ -199,7 +200,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         // The zod schema narrows permission_mode/model_config.mode to plain
         // strings; the validator + service hooks coerce them to the
         // canonical enums on save.
-        agentic_tool_config: args.agentic_tool_config as Schedule['agentic_tool_config'],
+        agentic_tool_config: args.agentic_tool_config as ScheduleAgenticToolConfig,
         mcp_server_ids: args.mcp_server_ids,
         enabled: args.enabled,
         allow_concurrent_runs: args.allow_concurrent_runs,
@@ -237,14 +238,15 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     async (args) => {
       const { scheduleId: rawId, ...updates } = args;
       const scheduleId = await resolveScheduleId(ctx, rawId);
-      const payload = {
-        ...updates,
-        ...(updates.agentic_tool_config
+      const { agentic_tool_config: agenticToolConfig, ...scheduleUpdates } = updates;
+      const payload: ScheduleData = {
+        ...scheduleUpdates,
+        ...(agenticToolConfig
           ? {
-              agentic_tool_config: updates.agentic_tool_config as Schedule['agentic_tool_config'],
+              agentic_tool_config: agenticToolConfig as ScheduleAgenticToolConfig,
             }
           : {}),
-      } as Partial<Schedule>;
+      };
       const updated = await ctx.app
         .service('schedules')
         .patch(scheduleId, payload, ctx.baseServiceParams);

@@ -5,6 +5,7 @@ import type {
   CodexSandboxMode,
   PersistedAgenticToolName,
 } from './agentic-tool';
+import { isAgenticToolName } from './agentic-tool';
 import type { BranchID, SessionID, UUID } from './id';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
@@ -88,6 +89,13 @@ export interface ScheduleAgenticToolConfig {
 export type PersistedScheduleAgenticToolConfig = Omit<ScheduleAgenticToolConfig, 'agentic_tool'> & {
   agentic_tool: PersistedAgenticToolName;
 };
+
+/** Narrow a storage-facing configuration before using it at a current runtime/write boundary. */
+export function isActiveScheduleAgenticToolConfig(
+  config: PersistedScheduleAgenticToolConfig | undefined
+): config is ScheduleAgenticToolConfig {
+  return config !== undefined && isAgenticToolName(config.agentic_tool);
+}
 
 /**
  * First-class schedule entity.
@@ -236,7 +244,23 @@ export interface Schedule {
   created_by: UUID;
 }
 
-/** Public create/update DTO: removed tools are never accepted for new writes. */
-export type ScheduleData = Omit<Partial<Schedule>, 'agentic_tool_config'> & {
+/**
+ * Public create/update DTO.
+ *
+ * Runtime-owned identity, audit, and cursor fields are deliberately omitted,
+ * and removed tools are never accepted for new writes.
+ */
+export interface ScheduleData {
+  branch_id?: BranchID;
+  name?: string;
+  description?: string;
+  cron_expression?: string;
+  timezone_mode?: TimezoneMode;
+  timezone?: string;
+  prompt?: string;
   agentic_tool_config?: ScheduleAgenticToolConfig;
-};
+  mcp_server_ids?: string[];
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}

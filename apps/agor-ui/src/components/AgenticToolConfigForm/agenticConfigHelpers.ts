@@ -14,6 +14,7 @@ import type {
   DefaultAgenticToolConfig,
   DefaultModelConfig,
   EffortLevel,
+  PersistedScheduleAgenticToolConfig,
   ScheduleAgenticToolConfig,
 } from '@agor-live/client';
 import { getDefaultPermissionMode } from '@agor-live/client';
@@ -118,7 +119,7 @@ export function scheduleConfigToDefaultConfig(
 export function buildScheduleConfigFromFormValues(
   tool: AgenticToolName,
   values: AgenticFormValues,
-  previous?: ScheduleAgenticToolConfig
+  previous?: PersistedScheduleAgenticToolConfig
 ): ScheduleAgenticToolConfig {
   const builtDefault = buildConfigFromFormValues(tool, values);
   return {

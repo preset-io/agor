@@ -24,10 +24,18 @@
  * description → prompt → cron + timezone → agent → MCP.
  */
 
-import type { AgenticToolName, AgorClient, BranchID, MCPServer, Schedule } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  BranchID,
+  MCPServer,
+  Schedule,
+  ScheduleAgenticToolConfig,
+  ScheduleData,
+} from '@agor-live/client';
 import {
   humanizeCron,
-  isAgenticToolName,
+  isActiveScheduleAgenticToolConfig,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
@@ -147,8 +155,12 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   // fields AgenticToolConfigForm shows (for example runtime-supported effort).
   // The selected value is mirrored into the form as `agenticTool` so save
   // can read it consistently with the rest of the form.
-  const configuredTool = schedule?.agentic_tool_config?.agentic_tool;
-  const configuredActiveTool = isAgenticToolName(configuredTool) ? configuredTool : undefined;
+  const configuredConfig = schedule?.agentic_tool_config;
+  const configuredActiveConfig = isActiveScheduleAgenticToolConfig(configuredConfig)
+    ? configuredConfig
+    : undefined;
+  const configuredTool = configuredConfig?.agentic_tool;
+  const configuredActiveTool = configuredActiveConfig?.agentic_tool;
   const [agentTool, setAgentTool] = useState<AgenticToolName>(
     configuredActiveTool ?? 'claude-code'
   );
@@ -161,13 +173,14 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   // Initialize form when modal opens or the schedule prop changes.
   useEffect(() => {
     if (!open) return;
-    const persistedTool = schedule?.agentic_tool_config?.agentic_tool;
-    const activeTool = isAgenticToolName(persistedTool) ? persistedTool : undefined;
+    const persistedConfig = schedule?.agentic_tool_config;
+    const activeConfig = isActiveScheduleAgenticToolConfig(persistedConfig)
+      ? persistedConfig
+      : undefined;
+    const persistedTool = persistedConfig?.agentic_tool;
+    const activeTool = activeConfig?.agentic_tool;
     const tool = activeTool ?? 'claude-code';
-    const configValues = getFormValuesFromConfig(
-      tool,
-      activeTool ? scheduleConfigToDefaultConfig(schedule?.agentic_tool_config) : undefined
-    );
+    const configValues = getFormValuesFromConfig(tool, scheduleConfigToDefaultConfig(activeConfig));
     setAgentTool(tool);
     setRequiresSupportedToolSelection(Boolean(persistedTool && !activeTool));
     setShowCronPicker(false);
@@ -249,7 +262,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
     setSaving(true);
     try {
-      const payload: Partial<Schedule> = {
+      const payload: ScheduleData = {
         branch_id: branchId,
         name: (all.name ?? '').trim(),
         description: all.description?.trim() || undefined,
@@ -265,11 +278,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                 all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
                   ? {
                       configuration_reference:
-                        all.agenticToolPresetId as Schedule['agentic_tool_config']['configuration_reference'],
+                        all.agenticToolPresetId as ScheduleAgenticToolConfig['configuration_reference'],
                     }
                   : {
-                      preset_id:
-                        all.agenticToolPresetId as Schedule['agentic_tool_config']['preset_id'],
+                      preset_id: all.agenticToolPresetId as ScheduleAgenticToolConfig['preset_id'],
                     }),
               }
             : buildScheduleConfigFromFormValues(

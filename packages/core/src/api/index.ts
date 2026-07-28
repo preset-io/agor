@@ -19,6 +19,8 @@ import type {
   CloneRepositoryResult,
   CreateAgenticToolPreset,
   CreateSessionInput,
+  GatewayChannel,
+  GatewayChannelData,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -37,6 +39,7 @@ import type {
   Repo,
   RuntimeTelemetryInput,
   Schedule,
+  ScheduleData,
   SdkHealthFailureInput,
   Session,
   Task,
@@ -190,6 +193,7 @@ export interface ServiceTypes {
   'repos/local': Repo;
   branches: Branch;
   schedules: Schedule;
+  'gateway-channels': GatewayChannel;
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
@@ -250,6 +254,24 @@ export interface AgorService<
   // Emit custom events to WebSocket clients (available at runtime via FeathersJS socket.io integration)
   emit(event: string, data: unknown): void;
 }
+
+/** Schedules return storage-facing rows but accept active-only public write data. */
+export interface SchedulesService
+  extends AgorService<
+    Schedule,
+    ClientInput<ScheduleData>,
+    ClientInput<ScheduleData>,
+    ClientInput<ScheduleData> | null
+  > {}
+
+/** Gateway channels return storage-facing rows but accept active-only public write data. */
+export interface GatewayChannelsService
+  extends AgorService<
+    GatewayChannel,
+    ClientInput<GatewayChannelData>,
+    ClientInput<GatewayChannelData>,
+    ClientInput<GatewayChannelData> | null
+  > {}
 
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
@@ -627,6 +649,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'schedules'): SchedulesService;
+  service(path: 'gateway-channels'): GatewayChannelsService;
   service(path: 'kb/settings'): KnowledgeSettingsService;
   service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;

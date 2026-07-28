@@ -7,7 +7,14 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { BranchID, Schedule, UserID, UUID } from '@agor/core/types';
+import type {
+  BranchID,
+  Schedule,
+  ScheduleAgenticToolConfig,
+  ScheduleData,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -57,8 +64,8 @@ async function setupContext(db: ConstructorParameters<typeof SchedulesService>[0
 function scheduleData(
   branchId: BranchID,
   creatorId: UserID,
-  config: Schedule['agentic_tool_config']
-): Partial<Schedule> {
+  config: ScheduleAgenticToolConfig
+): ScheduleData & Pick<Schedule, 'created_by'> {
   return {
     branch_id: branchId,
     created_by: creatorId,

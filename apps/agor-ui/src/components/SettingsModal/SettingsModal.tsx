@@ -7,7 +7,7 @@ import type {
   CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
-  GatewayChannel,
+  GatewayChannelData,
   Repo,
   Session,
   UpdateUserInput,
@@ -111,8 +111,8 @@ export interface SettingsModalProps {
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
-  onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
-  onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  onCreateGatewayChannel?: (data: GatewayChannelData) => void;
+  onUpdateGatewayChannel?: (channelId: string, updates: GatewayChannelData) => void;
   onDeleteGatewayChannel?: (channelId: string) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;

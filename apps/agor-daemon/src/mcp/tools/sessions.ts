@@ -1594,7 +1594,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list — it's exposed via the branch config UI today.
+  //     list. Its entry explains that discovery happens after provider choice.
   server.registerTool(
     'agor_models_list',
     {
@@ -1603,7 +1603,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         agenticTool: z
-          .enum(['claude-code', 'codex', 'copilot', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
       }),
@@ -1650,15 +1650,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           models: codexModels,
           note: 'Codex defaults to gpt-5.6-sol; omit modelConfig unless a specific model is required. Use gpt-5.6-terra for balanced everyday work or gpt-5.6-luna for clear, high-volume tasks. Legacy Codex aliases are intentionally omitted from this selectable list.',
         },
-        copilot: {
-          default: DEFAULT_COPILOT_MODEL,
-          models: copilotModels,
-          note: "Copilot models are also fetched live via /copilot-models (uses the SDK's listModels()). This is the static fallback — BYOK-configured models may not appear here.",
-        },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,
           models: geminiModels,
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
+        },
+        opencode: {
+          default: null,
+          models: [],
+          note: 'OpenCode models are provider-specific and are discovered after selecting a provider. Pass both modelConfig.provider and modelConfig.model from the OpenCode provider catalog.',
+        },
+        copilot: {
+          default: DEFAULT_COPILOT_MODEL,
+          models: copilotModels,
+          note: "Copilot models are also fetched live via /copilot-models (uses the SDK's listModels()). This is the static fallback — BYOK-configured models may not appear here.",
         },
         cursor: {
           default: DEFAULT_CURSOR_MODEL,
@@ -1671,7 +1676,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ],
           note: "Cursor models are also fetched live via /cursor-models (uses @cursor/sdk's Cursor.models.list()). This is the static fallback — account-specific models may not appear here.",
         },
-      };
+      } satisfies Record<
+        AgenticToolName,
+        { default: string | null; models: unknown[]; note: string }
+      >;
 
       if (args.agenticTool) {
         return textResult({ [args.agenticTool]: all[args.agenticTool] });
