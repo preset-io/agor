@@ -16,7 +16,12 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { MCPCatalogRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  MCPCatalogRepository,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type {
   AuthenticatedParams,
   Id,
@@ -45,11 +50,7 @@ export type MCPCatalogParams = QueryParams<{
   AuthenticatedParams;
 
 export class MCPCatalogService {
-  private catalogRepo: MCPCatalogRepository;
-
-  constructor(db: TenantScopeAwareDatabase) {
-    this.catalogRepo = new MCPCatalogRepository(db);
-  }
+  constructor(private db: TenantScopeAwareDatabase) {}
 
   /**
    * Map a validated Feathers query onto repository filters.
@@ -78,6 +79,26 @@ export class MCPCatalogService {
     return filters;
   }
 
+  /**
+   * Open a short tenant database unit around a catalog read.
+   *
+   * The catalog is registered as tenant-identity-only — it has no `tenant_id`
+   * to scope or stamp — so no hook opens a database scope for it. In
+   * `required_from_auth` mode the daemon's database proxy is built with
+   * `requireScope: true` and refuses every read taken outside one, so the
+   * service opens its own, the same way the scheduler and Knowledge indexer do
+   * for their non-request work. On Postgres this sets `agor.tenant_id`, which
+   * the catalog's open SELECT policy ignores; the scope exists to satisfy the
+   * fail-closed guard, not to filter rows.
+   */
+  private withTenantDatabase<T>(
+    work: (repository: MCPCatalogRepository) => Promise<T>
+  ): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scopedDb) =>
+      work(new MCPCatalogRepository(scopedDb))
+    );
+  }
+
   async find(params?: MCPCatalogParams): Promise<Paginated<MCPCatalogEntry>> {
     const query = (params?.query ?? {}) as Query;
     const filters = this.filtersFor(query);
@@ -85,19 +106,21 @@ export class MCPCatalogService {
     const limit = Math.min(query.$limit ?? PAGINATION.DEFAULT_LIMIT, PAGINATION.MAX_LIMIT);
     const skip = query.$skip ?? 0;
 
-    const [data, total] = await Promise.all([
-      this.catalogRepo.findAll({ ...filters, limit, offset: skip }),
-      this.catalogRepo.count(filters),
-    ]);
-
-    return { total, limit, skip, data };
+    return this.withTenantDatabase(async (repository) => {
+      const [data, total] = await Promise.all([
+        repository.findAll({ ...filters, limit, offset: skip }),
+        repository.count(filters),
+      ]);
+      return { total, limit, skip, data };
+    });
   }
 
   /** Fetch one entry by catalog entry ID or by its reverse-DNS registry name. */
   async get(id: Id): Promise<MCPCatalogEntry> {
     const key = String(id);
-    const entry =
-      (await this.catalogRepo.findById(key)) ?? (await this.catalogRepo.findByName(key));
+    const entry = await this.withTenantDatabase(
+      async (repository) => (await repository.findById(key)) ?? (await repository.findByName(key))
+    );
     if (!entry) throw new NotFoundError('MCPCatalogEntry', key);
     return entry;
   }

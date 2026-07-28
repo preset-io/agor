@@ -9,7 +9,12 @@
  */
 
 import type { Database, TenantScopeAwareDatabase } from '@agor/core/db';
-import { MCPCatalogRepository } from '@agor/core/db';
+import {
+  createTenantScopedDatabaseProxy,
+  MCPCatalogRepository,
+  MissingTenantDatabaseScopeError,
+  runWithTenantContext,
+} from '@agor/core/db';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { MCPCatalogService } from './mcp-catalog';
@@ -203,6 +208,55 @@ describe('MCPCatalogService get', () => {
   dbTest('throws NotFound for an unknown entry', async ({ db }) => {
     await expect(service(db).get('com.missing/mcp')).rejects.toThrow(/MCPCatalogEntry/);
   });
+});
+
+describe('MCPCatalogService under a scope-requiring database proxy', () => {
+  /**
+   * `required_from_auth` builds the daemon database with `requireScope: true`,
+   * so any read taken outside a tenant or system scope throws. The catalog is
+   * registered tenant-identity-only, which opens no scope — without the
+   * service's own `withTenantDatabase`, every browse would fail in cloud mode
+   * while passing in single-tenant tests.
+   */
+  dbTest('serves reads that the guard would otherwise refuse', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'com.example/mcp', title: 'Example' });
+
+    const guarded = createTenantScopedDatabaseProxy(db, {
+      requireScope: true,
+      label: 'daemon database',
+    });
+    const guardedService = new MCPCatalogService(guarded);
+
+    await runWithTenantContext('tenant-a', async () => {
+      const result = await guardedService.find({ query: {} });
+      expect(result.total).toBe(1);
+      expect((await guardedService.get('com.example/mcp')).name).toBe('com.example/mcp');
+    });
+  });
+
+  dbTest(
+    'reads the guard would refuse without the service opening its own scope',
+    async ({ db }) => {
+      const guarded = createTenantScopedDatabaseProxy(db, {
+        requireScope: true,
+        label: 'daemon database',
+      });
+
+      // The counterfactual: a repository handed the guarded proxy directly, which
+      // is what the service does if `withTenantDatabase` is removed. It throws, so
+      // the test above is not passing by accident.
+      await runWithTenantContext('tenant-a', async () => {
+        // The repository wraps driver failures in RepositoryError, so assert on
+        // the cause rather than the wrapper.
+        const rejection = await new MCPCatalogRepository(guarded)
+          .count()
+          .then(() => null)
+          .catch((error: { cause?: unknown }) => error);
+        expect(rejection?.cause).toBeInstanceOf(MissingTenantDatabaseScopeError);
+      });
+    }
+  );
 });
 
 describe('MCPCatalogService write surface', () => {
