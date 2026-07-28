@@ -60,13 +60,25 @@ When a user picks two goals, **merge the two blocks with one shared rule** — n
 copy per combination. There are 10 possible 1-or-2-goal combinations; hardcoding them all is the
 "persona explosion" failure mode this redesign exists to avoid.
 
-**Merge rule:**
+Selection order matters: the **first-picked** goal is the **primary**, the second is the
+**secondary**. Both merges below lean on that ordering.
 
-- **MCP recs** = union of both goals' lists, deduped, capped at **4 shown**.
-- **Bootstrap prompt** = both goals' bootstrap lines concatenated, plus one bridging instruction:
+**MCP-rec merge** — the union routinely exceeds 4 (e.g. goal 2 + goal 4 = 6 unique), so "cap at 4"
+must say *which* 4 survive. Build the list of **4 shown** in this exact order:
 
-  > They picked two goals — don't run both playbooks at once. Ask which matters more right now,
-  > lead with that one, and mention you can help with the other once the first win lands.
+1. Take the first **2** recs from the **primary** goal's list (in the order listed).
+2. Append the first **2** recs from the **secondary** goal's list (in the order listed).
+3. **Dedup** against what's already included — drop any that repeat.
+4. If dedup left fewer than 4, **refill** from the **primary** goal's remaining recs (in order),
+   then the secondary's, until you reach 4 or both lists are exhausted.
+
+**Bootstrap-prompt merge** — concatenate both goals' bootstrap lines, then append this bridging
+instruction. The user already told you both goals by picking both cards, so **don't reopen with a
+clarifying question** — lead with action:
+
+  > Treat the first-picked goal as primary. Open the first message with a concrete action on it —
+  > not a question. Once that first win is delivered or clearly underway, proactively mention the
+  > second goal: "…and once that's working, I can also help with [secondary goal's outcome]."
 
 ### Per-goal blocks (reference)
 
@@ -89,6 +101,40 @@ Copy on these cards and in bootstrap lines follows three rules:
   "broadcast outcomes, surface blockers" is the anti-pattern.
 - **Second person, short lines, no hedging adjectives.** Drop "robust", "seamless", "powerful".
 
+The canonical source for user-facing voice is the Agor team Knowledge base doc
+`marketing/messaging-and-positioning.md` ("Agor — Messaging & Positioning (v2 draft)"), which
+CLAUDE.md names as the source of truth for this repo's copy. The rules above are consistent with it;
+the cross-checks below reconcile the three places this surface touches that doc.
+
+### "Assistant" vs "teammate" — open naming question
+
+The messaging doc (2026-06-21) leans on **"assistant"** for the entity name. A later decision doc,
+`product/assistant-to-teammate-rename-audit.md` (2026-07-07), and the shipped wizard code both use
+**"AI teammate"** ("Name your AI teammate", the `teammateName` step in `seedOnboardingTeammate.ts`).
+So "teammate" is the current, more recent product noun, superseding the messaging doc's "assistant".
+
+Card 1's locked title — "Finally, a **personal assistant**" — is the one place the wizard calls the
+entity an "assistant" while everything else calls it a "teammate". **This is a real terminology
+mismatch, flagged here as an open copy question for whoever owns the rename audit.** The card copy
+was deliberately locked after several rounds of iteration, so **do not rewrite it here** — resolve
+it with the copy owner before implementation, not silently in code.
+
+### Two persona systems — don't conflate them
+
+The messaging doc has its own **"Personas & use-cases"** section defining four **GTM/marketing
+audience personas** (AI enabler, orchestrator/builder EPD, team-that-learns-together, Slack-native
+business user). Those are a **top-of-funnel marketing** segmentation — a different system for a
+different purpose than the four **onboarding goal cards** in this guideline, which are **first-day,
+in-product outcome selection**. They are not a renaming of each other and must not be mapped 1:1;
+keep the two systems separate when editing either.
+
+### Banned-jargon compliance
+
+The messaging doc's appendix reserves technical nouns — **"git branches", "sessions", "isolation
+modes"** — for the technical/reference tier only. Checked: **none of the four card headlines or
+subtexts use any of them.** Future editors should keep it that way — this bar was verified, not
+assumed.
+
 ---
 
 ## Known gap: card 1 promises connectors that don't exist
@@ -109,6 +155,9 @@ this in the implementation PR.
 - [ ] The four card titles and descriptions match the locked copy exactly.
 - [ ] Selection is multi-select capped at 2, and the step is still skippable.
 - [ ] Each goal is a reusable block (MCP recs + one bootstrap line) — no per-combination copy.
-- [ ] Two-goal merge follows the rule: deduped union capped at 4, concatenated bootstrap lines + the bridging instruction.
+- [ ] Two-goal MCP recs follow the ordered 4-slot rule (2 primary, 2 secondary, dedup, refill from primary).
+- [ ] Two-goal bootstrap leads with a concrete action on the primary goal — no clarifying question — and surfaces the secondary only after the first win.
 - [ ] Card/bootstrap copy names concrete artifacts, stays plain and second-person, and avoids hedging adjectives.
+- [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
+- [ ] The "assistant" (card 1) vs "teammate" (rest of wizard) naming question was raised with the copy owner, not silently rewritten.
 - [ ] Card 1's inbox/news promise is backed by a real connector or the copy was adjusted; the gap is flagged in the PR.
