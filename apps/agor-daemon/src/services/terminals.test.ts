@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { BranchID, BranchName, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
 const mocks = vi.hoisted(() => {
   const branch = {
@@ -273,6 +274,22 @@ describe('TerminalsService readiness ack gating', () => {
     );
     expect(warm.isNew).toBe(false);
     expect(warm.ready).toBe(true);
+  });
+
+  it('rejects stale Claude CLI bootstrap input before adopting or spawning an executor', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create(
+        {
+          branchId: 'branch-1',
+          ensureCliSessionId: 'historical-session',
+          focusTabName: 'cli-historic',
+        },
+        params as never
+      )
+    ).rejects.toThrow(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 
   it('notifies the browser channel on ready and error acks', () => {

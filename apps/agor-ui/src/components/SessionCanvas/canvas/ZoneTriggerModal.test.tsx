@@ -143,6 +143,41 @@ describe('ZoneTriggerModal smart-default session selection', () => {
     expect(screen.getByText('No existing sessions in this branch')).toBeInTheDocument();
     expect(screen.queryByText('Historical session')).not.toBeInTheDocument();
   });
+
+  it('requires an explicit supported tool before a historical trigger creates a session', async () => {
+    const onExecute = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ZoneTriggerModal
+        open
+        onCancel={() => {}}
+        client={null}
+        branchId={BRANCH_ID}
+        branch={undefined}
+        sessionsByBranch={new Map()}
+        zoneName="Zone"
+        trigger={{
+          template: 'prompt',
+          behavior: 'always_new',
+          agent: 'claude-code-cli',
+        }}
+        availableAgents={[{ id: 'codex', name: 'Codex' } as never]}
+        mcpServerById={new Map()}
+        onExecute={onExecute}
+      />
+    );
+
+    expect(screen.getByText('This zone uses a removed agentic tool')).toBeInTheDocument();
+    const execute = screen.getByRole('button', { name: 'Execute Trigger' });
+    expect(execute).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'codex' }));
+    expect(execute).toBeEnabled();
+    fireEvent.click(execute);
+
+    await waitFor(() =>
+      expect(onExecute).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex' }))
+    );
+  });
 });
 
 describe('ZoneTriggerModal reasoning effort', () => {

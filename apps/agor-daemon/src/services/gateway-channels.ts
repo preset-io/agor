@@ -17,6 +17,7 @@ import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
 import {
   type AuthenticatedParams,
   type GatewayChannel,
+  type GatewayChannelData,
   type NullableId,
   type Params,
   resolveSlackAgentTools,
@@ -25,10 +26,7 @@ import { DrizzleService } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
 
-export class GatewayChannelsService extends DrizzleService<
-  GatewayChannel,
-  Partial<GatewayChannel>
-> {
+export class GatewayChannelsService extends DrizzleService<GatewayChannel, GatewayChannelData> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -44,7 +42,7 @@ export class GatewayChannelsService extends DrizzleService<
     this.db = db;
   }
 
-  private async validateConfig(config: GatewayChannel['agentic_config']): Promise<void> {
+  private async validateConfig(config: GatewayChannelData['agentic_config']): Promise<void> {
     if (!config) {
       await assertInlineAgenticConfigurationAllowed(this.db, 'claude-code');
       return;
@@ -62,9 +60,9 @@ export class GatewayChannelsService extends DrizzleService<
   }
 
   private async normalizeConfig(
-    config: GatewayChannel['agentic_config'],
+    config: GatewayChannelData['agentic_config'],
     params?: Params
-  ): Promise<GatewayChannel['agentic_config']> {
+  ): Promise<GatewayChannelData['agentic_config']> {
     if (!config?.presetId) return config;
     const resolved = await resolveAgenticConfigurationReference(
       this.db,
@@ -88,14 +86,14 @@ export class GatewayChannelsService extends DrizzleService<
     };
   }
 
-  async create(data: Partial<GatewayChannel>, params?: Params) {
+  async create(data: GatewayChannelData, params?: Params) {
     await this.validateConfig(data.agentic_config ?? null);
     const agenticConfig = await this.normalizeConfig(data.agentic_config ?? null, params);
     data = { ...data, agentic_config: agenticConfig };
     return super.create(data, params);
   }
 
-  async patch(id: NullableId, data: Partial<GatewayChannel>, params?: Params) {
+  async patch(id: NullableId, data: GatewayChannelData, params?: Params) {
     if (data.agentic_config !== undefined) {
       await this.validateConfig(data.agentic_config);
       data = { ...data, agentic_config: await this.normalizeConfig(data.agentic_config, params) };
@@ -103,7 +101,7 @@ export class GatewayChannelsService extends DrizzleService<
     return super.patch(id, data, params);
   }
 
-  async update(id: string, data: Partial<GatewayChannel>, params?: Params) {
+  async update(id: string, data: GatewayChannelData, params?: Params) {
     return this.patch(id, data, params) as Promise<GatewayChannel>;
   }
 

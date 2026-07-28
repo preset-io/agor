@@ -1,4 +1,9 @@
-import type { CodexApprovalPolicy, CodexSandboxMode, PermissionMode } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  PermissionMode,
+} from '@agor-live/client';
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 import {
   EditOutlined,
@@ -21,7 +26,7 @@ interface ModeOption {
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor';
+  agentic_tool?: AgenticToolName;
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /**

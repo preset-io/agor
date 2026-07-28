@@ -28,8 +28,11 @@ import { BadRequest } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   BranchID,
+  PersistedScheduleAgenticToolConfig,
   QueryParams,
   Schedule,
+  ScheduleAgenticToolConfig,
+  ScheduleData,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -42,7 +45,7 @@ export type ScheduleParams = QueryParams<{
 }> &
   AuthenticatedParams & { schedule?: Schedule };
 
-export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>, ScheduleParams> {
+export class SchedulesService extends DrizzleService<Schedule, ScheduleData, ScheduleParams> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -59,9 +62,9 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
   }
 
   private async validateConfig(
-    config: Schedule['agentic_tool_config'],
+    config: ScheduleAgenticToolConfig,
     userId?: UserID
-  ): Promise<Schedule['agentic_tool_config']> {
+  ): Promise<ScheduleAgenticToolConfig> {
     try {
       if (config.configuration_reference !== undefined) {
         await resolveAgenticConfigurationReference(
@@ -90,9 +93,7 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     }
   }
 
-  private normalizeConfig(
-    config: Schedule['agentic_tool_config']
-  ): Schedule['agentic_tool_config'] {
+  private normalizeConfig(config: PersistedScheduleAgenticToolConfig): ScheduleAgenticToolConfig {
     try {
       return normalizeScheduleAgenticToolConfig(config);
     } catch (error) {
@@ -103,7 +104,7 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     }
   }
 
-  async create(data: Partial<Schedule>, params?: ScheduleParams) {
+  async create(data: ScheduleData, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
       let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
       const creatorId = (data.created_by ?? params?.user?.user_id) as UserID | undefined;
@@ -116,7 +117,7 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     return super.create(data, params);
   }
 
-  async patch(id: string | null, data: Partial<Schedule>, params?: ScheduleParams) {
+  async patch(id: string | null, data: ScheduleData, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
       const current = params?.schedule ?? (await this.get(id, params));
@@ -133,7 +134,7 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     return super.patch(id, data, params);
   }
 
-  async update(id: string, data: Partial<Schedule>, params?: ScheduleParams) {
+  async update(id: string, data: ScheduleData, params?: ScheduleParams) {
     return this.patch(id, data, params) as Promise<Schedule>;
   }
 }

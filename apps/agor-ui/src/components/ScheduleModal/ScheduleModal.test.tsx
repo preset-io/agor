@@ -122,7 +122,7 @@ describe('ScheduleModal agentic configuration payload', () => {
         agentic_tool: 'claude-code-cli',
         permission_mode: 'auto',
       },
-    } as unknown as Schedule;
+    } as Schedule;
 
     renderModal(vi.fn(), vi.fn(), historicalSchedule);
 

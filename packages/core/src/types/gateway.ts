@@ -5,7 +5,12 @@
  * messaging platforms (Slack, Discord, etc.) and Agor sessions.
  */
 
-import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  PersistedAgenticToolName,
+} from './agentic-tool';
 import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
 import type { ScheduleID } from './schedule';
 import type { PermissionMode } from './session';
@@ -267,6 +272,11 @@ export interface GatewayAgenticConfig {
   envVars?: GatewayEnvVar[];
 }
 
+/** Storage-facing gateway configuration, including readable removed identifiers. */
+export type PersistedGatewayAgenticConfig = Omit<GatewayAgenticConfig, 'agent'> & {
+  agent: PersistedAgenticToolName;
+};
+
 // ============================================================================
 // Core Interfaces
 // ============================================================================
@@ -287,7 +297,7 @@ export interface GatewayChannel {
   agor_user_id: UserID;
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
-  agentic_config: GatewayAgenticConfig | null; // Session creation settings
+  agentic_config: PersistedGatewayAgenticConfig | null; // Session creation settings
   /** MCP servers attached independently of the agentic-tool configuration. */
   mcp_server_ids?: string[];
   enabled: boolean;
@@ -295,6 +305,11 @@ export interface GatewayChannel {
   updated_at: string; // ISO 8601
   last_message_at: string | null;
 }
+
+/** Public create/update DTO: persisted legacy tools remain read-only. */
+export type GatewayChannelData = Omit<Partial<GatewayChannel>, 'agentic_config'> & {
+  agentic_config?: GatewayAgenticConfig | null;
+};
 
 /**
  * Thread-Session Mapping - Links a platform thread to an Agor session

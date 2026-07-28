@@ -9,6 +9,7 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
+import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -71,15 +72,8 @@ const GitUrlSchema = z.string().refine(isGitUrl, {
 /**
  * Tool types supported by the prompt command
  */
-export const ToolTypeSchema = z.enum([
-  'claude-code',
-  'gemini',
-  'codex',
-  'opencode',
-  'copilot',
-  'cursor',
-]);
-export type ToolType = z.infer<typeof ToolTypeSchema>;
+export const ToolTypeSchema = z.enum(AGENTIC_TOOL_NAMES);
+export type ToolType = AgenticToolName;
 
 /**
  * Permission modes for agent execution

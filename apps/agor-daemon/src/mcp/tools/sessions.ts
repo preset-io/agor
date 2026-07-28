@@ -19,6 +19,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_CAPABILITIES,
+  AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,
   getSessionType,
@@ -577,7 +578,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Optional title for the session (defaults to first 100 chars of prompt)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini', 'opencode', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Which agent to use for the subsession (defaults to same as parent)'),
         enableCallback: z
@@ -666,7 +667,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'How to route the work: continue (add to existing session), fork (create sibling session), subsession (create child session), btw (ephemeral fork — works even on running sessions, auto-callbacks result to caller, auto-archives when done)'
           ),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe(
             'Agent for subsession (subsession mode only, defaults to parent agent). Fork mode always uses parent agent.'
@@ -919,7 +920,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'Branch ID where the session will run (required)'
         ),
         agenticTool: z
-          .enum(['claude-code', 'codex', 'gemini', 'cursor'])
+          .enum(AGENTIC_TOOL_NAMES)
           .describe('Which agent to use for this session (required)'),
         title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
         description: mcpOptionalString('description', 'Session description (optional)'),

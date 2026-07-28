@@ -1,4 +1,5 @@
 import {
+  type AgenticToolName,
   type AgorClient,
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -35,8 +36,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor';
+  agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: AgenticToolName;
   /**
    * Optional Feathers client. When provided AND the agentic tool supports
    * dynamic model discovery (Copilot/Cursor), the picker fetches the live

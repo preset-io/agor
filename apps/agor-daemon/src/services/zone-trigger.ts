@@ -15,7 +15,15 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
-import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  Branch,
+  PersistedAgenticToolName,
+  Session,
+  Task,
+  User,
+} from '@agor/core/types';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 
@@ -29,7 +37,7 @@ export interface FireAlwaysNewZoneTriggerInput {
   zone: {
     label?: string;
     status?: string;
-    trigger?: { template?: string; agent?: AgenticToolName; behavior?: string };
+    trigger?: { template?: string; agent?: PersistedAgenticToolName; behavior?: string };
   };
   user: User;
   /** Caller's userId; stored on the new session as `created_by`. */
@@ -41,7 +49,12 @@ export interface FireAlwaysNewZoneTriggerResult {
   task: Task;
 }
 
-const VALID_AGENTS: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+/** Resolve a persisted zone preference without ever reinterpreting a removed tool. */
+export function resolveZoneTriggerAgent(
+  agent: PersistedAgenticToolName | undefined
+): AgenticToolName {
+  return agent === undefined ? 'claude-code' : requireActiveAgenticTool(agent);
+}
 
 /**
  * Run the full always_new zone-trigger flow against an already-fetched
@@ -66,8 +79,7 @@ export async function fireAlwaysNewZoneTrigger(
     );
   }
 
-  const agenticTool: AgenticToolName =
-    trigger.agent && VALID_AGENTS.includes(trigger.agent) ? trigger.agent : 'claude-code';
+  const agenticTool = resolveZoneTriggerAgent(trigger.agent);
 
   const templateContext = buildZoneTriggerContext({
     branch,

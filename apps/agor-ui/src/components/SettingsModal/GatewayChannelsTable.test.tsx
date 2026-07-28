@@ -672,6 +672,30 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     });
   });
 
+  it('requires an explicit supported-tool choice before saving a historical channel', async () => {
+    const channel: GatewayChannel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code-cli' },
+    };
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { onUpdate });
+
+    expect(screen.getByText('This channel uses a removed agentic tool')).toBeInTheDocument();
+    expect(queryButton(/^Save$/)).toBeDisabled();
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    expandPanel('Agent Configuration');
+    clickButton(/^codex$/);
+    expect(queryButton(/^Save$/)).toBeEnabled();
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { agent: 'codex' },
+    });
+  });
+
   it('rehydrates and persists a Codex reasoning-effort override', async () => {
     const channel = {
       ...makeSlackChannel(),

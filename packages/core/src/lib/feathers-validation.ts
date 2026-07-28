@@ -8,6 +8,7 @@
 import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
+import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 
 /**
  * Query validator with type coercion enabled
@@ -41,25 +42,10 @@ export const CommonSchemas = {
   ]),
 
   // Active agentic tool enum
-  agenticTool: Type.Union([
-    Type.Literal('claude-code'),
-    Type.Literal('codex'),
-    Type.Literal('gemini'),
-    Type.Literal('opencode'),
-    Type.Literal('copilot'),
-    Type.Literal('cursor'),
-  ]),
+  agenticTool: Type.Union(AGENTIC_TOOL_NAMES.map((tool) => Type.Literal(tool))),
 
   // Session query compatibility: historical rows keep their removed tool id.
-  persistedAgenticTool: Type.Union([
-    Type.Literal('claude-code'),
-    Type.Literal('codex'),
-    Type.Literal('gemini'),
-    Type.Literal('opencode'),
-    Type.Literal('copilot'),
-    Type.Literal('cursor'),
-    Type.Literal('claude-code-cli'),
-  ]),
+  persistedAgenticTool: Type.Union(PERSISTED_AGENTIC_TOOL_NAMES.map((tool) => Type.Literal(tool))),
 
   // Permission mode enum - union of all native SDK modes
   permissionMode: Type.Union([

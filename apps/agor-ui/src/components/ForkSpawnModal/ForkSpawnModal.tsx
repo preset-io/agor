@@ -345,6 +345,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                       form.setFieldsValue(getCustomConfigDefaults(agentTool));
                     }}
                     columns={2}
+                    fallbackToFirstVisibleAgent
                   />
                 </Form.Item>
 

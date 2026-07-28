@@ -199,6 +199,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                         onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
                         variant="select"
                         showComparisonLink
+                        fallbackToFirstVisibleAgent
                       />
                     </Form.Item>
 

@@ -1,5 +1,10 @@
 // src/types/schedule.ts
-import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  PersistedAgenticToolName,
+} from './agentic-tool';
 import type { BranchID, SessionID, UUID } from './id';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
@@ -72,6 +77,17 @@ export interface ScheduleAgenticToolConfig {
   /** Codex-specific: network access (outbound HTTP/HTTPS). */
   codex_network_access?: boolean;
 }
+
+/**
+ * Storage-facing schedule configuration.
+ *
+ * Historical rows may name a removed tool. Readers preserve that identifier;
+ * create/update and runtime boundaries narrow it through
+ * {@link ScheduleAgenticToolConfig} instead of reinterpreting it.
+ */
+export type PersistedScheduleAgenticToolConfig = Omit<ScheduleAgenticToolConfig, 'agentic_tool'> & {
+  agentic_tool: PersistedAgenticToolName;
+};
 
 /**
  * First-class schedule entity.
@@ -149,7 +165,7 @@ export interface Schedule {
    * Agentic-tool configuration selection. Preset references resolve live for each run.
    * See `ScheduleAgenticToolConfig`.
    */
-  agentic_tool_config: ScheduleAgenticToolConfig;
+  agentic_tool_config: PersistedScheduleAgenticToolConfig;
 
   /** MCP servers attached independently of the agentic-tool configuration. */
   mcp_server_ids?: string[];
@@ -219,3 +235,8 @@ export interface Schedule {
    */
   created_by: UUID;
 }
+
+/** Public create/update DTO: removed tools are never accepted for new writes. */
+export type ScheduleData = Omit<Partial<Schedule>, 'agentic_tool_config'> & {
+  agentic_tool_config?: ScheduleAgenticToolConfig;
+};

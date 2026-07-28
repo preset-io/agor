@@ -1,44 +1,83 @@
 import type { BoardObject } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { App as AntdApp } from 'antd';
+import { describe, expect, it, vi } from 'vitest';
 import { ZoneConfigModal } from './ZoneConfigModal';
 
-const zoneData = (label: string): BoardObject => ({
-  type: 'zone',
-  x: 0,
-  y: 0,
-  width: 400,
-  height: 600,
-  label,
-});
+vi.mock('../../../contexts/ConnectionContext', () => ({
+  useMutationGate: () => ({ canMutate: true }),
+}));
 
-describe('ZoneConfigModal', () => {
-  it('does not reset in-progress edits during parent rerenders while open', () => {
-    const { rerender } = render(
-      <ZoneConfigModal
-        open
-        onCancel={() => {}}
-        zoneName="Zone"
-        objectId="zone-1"
-        onUpdate={() => {}}
-        zoneData={zoneData('Zone')}
-      />
+vi.mock('../../AgentSelectionGrid', () => ({
+  AVAILABLE_AGENTS: [
+    { id: 'claude-code', name: 'Claude Code' },
+    { id: 'codex', name: 'Codex' },
+  ],
+  AgentSelectionGrid: ({
+    agents,
+    onSelect,
+  }: {
+    agents: Array<{ id: string; name: string }>;
+    onSelect: (id: string) => void;
+  }) => (
+    <div>
+      {agents.map((agent) => (
+        <button key={agent.id} type="button" onClick={() => onSelect(agent.id)}>
+          {agent.name}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
+function historicalZone(): BoardObject {
+  return {
+    type: 'zone',
+    x: 0,
+    y: 0,
+    width: 200,
+    height: 100,
+    label: 'Review',
+    trigger: {
+      behavior: 'always_new',
+      template: 'Review this branch',
+      agent: 'claude-code-cli',
+    },
+  } as BoardObject;
+}
+
+describe('ZoneConfigModal historical tool migration', () => {
+  it('preserves the removed tool until the operator explicitly selects a supported one', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          zoneData={historicalZone()}
+        />
+      </AntdApp>
     );
 
-    const nameInput = screen.getByLabelText('Zone Name');
-    fireEvent.change(nameInput, { target: { value: 'Draft name' } });
+    expect(await screen.findByText('This zone uses a removed agentic tool')).toBeInTheDocument();
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    expect(onUpdate).not.toHaveBeenCalled();
 
-    rerender(
-      <ZoneConfigModal
-        open
-        onCancel={() => {}}
-        zoneName="Zone"
-        objectId="zone-1"
-        onUpdate={() => {}}
-        zoneData={zoneData('Zone')}
-      />
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
 
-    expect(nameInput).toHaveValue('Draft name');
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      trigger: {
+        behavior: 'always_new',
+        template: 'Review this branch',
+        agent: 'codex',
+      },
+    });
   });
 });

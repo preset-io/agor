@@ -56,7 +56,19 @@ export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
  */
 export const LEGACY_AGENTIC_TOOL_NAMES = ['claude-code-cli'] as const;
 export type LegacyAgenticToolName = (typeof LEGACY_AGENTIC_TOOL_NAMES)[number];
-export type PersistedAgenticToolName = AgenticToolName | LegacyAgenticToolName;
+
+/**
+ * Every identifier that may be encountered while reading persisted history.
+ *
+ * Runtime/input schemas must use {@link AGENTIC_TOOL_NAMES}; storage/query
+ * schemas use this tuple so historical attribution remains readable without
+ * making removed tools executable again.
+ */
+export const PERSISTED_AGENTIC_TOOL_NAMES = [
+  ...AGENTIC_TOOL_NAMES,
+  ...LEGACY_AGENTIC_TOOL_NAMES,
+] as const;
+export type PersistedAgenticToolName = (typeof PERSISTED_AGENTIC_TOOL_NAMES)[number];
 
 export function isAgenticToolName(value: unknown): value is AgenticToolName {
   return typeof value === 'string' && (AGENTIC_TOOL_NAMES as readonly string[]).includes(value);

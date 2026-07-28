@@ -5,12 +5,19 @@
  * Not to be confused with AI agents (internal personas)
  */
 
-import type { ExecutorPulseKind, Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  ExecutorPulseKind,
+  Message,
+  MessageID,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 
 /**
  * Supported tool types
  */
-export type ToolType = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'cursor';
+export type ToolType = AgenticToolName;
 
 /**
  * Streaming callback interface for agents that support real-time streaming

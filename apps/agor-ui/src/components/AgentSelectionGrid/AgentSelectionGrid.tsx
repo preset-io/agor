@@ -17,7 +17,7 @@
 
 import type { TenantAgenticToolName } from '@agor-live/client';
 import { Select, Space, Typography, theme } from 'antd';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from '../AgentSelectionCard';
@@ -48,6 +48,13 @@ export interface AgentSelectionGridProps {
   showComparisonLink?: boolean;
   /** Card density (cards variant only). `small` uses the dense half-height tile. */
   size?: 'default' | 'small';
+  /**
+   * Opt-in fallback for creation flows whose default tool is unavailable.
+   *
+   * Persisted-edit flows must leave this false so opening an old/disabled
+   * value never silently invokes onSelect with a different tool.
+   */
+  fallbackToFirstVisibleAgent?: boolean;
 }
 
 export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
@@ -60,21 +67,25 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   helperText = 'Click on an agent card to select it',
   showComparisonLink = false,
   size = 'default',
+  fallbackToFirstVisibleAgent = false,
 }) => {
   const { token } = theme.useToken();
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
-  const visibleAgents = agents.filter(
-    (agent) => settings.get(agent.id as TenantAgenticToolName)?.enabled !== false
+  const visibleAgents = useMemo(
+    () =>
+      agents.filter((agent) => settings.get(agent.id as TenantAgenticToolName)?.enabled !== false),
+    [agents, settings]
   );
   useEffect(() => {
     if (
+      fallbackToFirstVisibleAgent &&
       selectedAgentId &&
       !visibleAgents.some((agent) => agent.id === selectedAgentId) &&
       visibleAgents[0]
     ) {
       onSelect(visibleAgents[0].id);
     }
-  }, [onSelect, selectedAgentId, visibleAgents]);
+  }, [fallbackToFirstVisibleAgent, onSelect, selectedAgentId, visibleAgents]);
   if (variant === 'select') {
     return (
       <>

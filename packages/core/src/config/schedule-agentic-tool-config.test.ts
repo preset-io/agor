@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ScheduleAgenticToolConfig } from '../types';
+import type { PersistedScheduleAgenticToolConfig, ScheduleAgenticToolConfig } from '../types';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -17,7 +17,7 @@ describe('normalizeScheduleAgenticToolConfig', () => {
       normalizeScheduleAgenticToolConfig({
         agentic_tool: 'claude-code-cli',
         permission_mode: 'auto',
-      } as unknown as ScheduleAgenticToolConfig)
+      })
     ).toThrow(/removed or unsupported schedule agentic tool/i);
   });
 
@@ -74,9 +74,9 @@ describe('normalizeScheduleAgenticToolConfig', () => {
       },
     ],
   ])('rejects %s sources', (_label, config) => {
-    expect(() => normalizeScheduleAgenticToolConfig(config as ScheduleAgenticToolConfig)).toThrow(
-      InvalidScheduleAgenticToolConfigError
-    );
+    expect(() =>
+      normalizeScheduleAgenticToolConfig(config as PersistedScheduleAgenticToolConfig)
+    ).toThrow(InvalidScheduleAgenticToolConfigError);
   });
 
   it('rejects an unknown configuration reference', () => {

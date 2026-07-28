@@ -38,7 +38,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, Branch, BranchID, UserID } from '@agor/core/types';
 import {
   getBranchSymlinkPath,
@@ -47,6 +47,7 @@ import {
   UnixUserNotFoundError,
   validateResolvedUnixUser,
 } from '@agor/core/unix';
+import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 
@@ -83,6 +84,11 @@ interface CreateTerminalData {
   branchId?: BranchID; // Branch context for Zellij integration
   /** Optional Zellij tab name to focus once the executor is up. */
   focusTabName?: string;
+  /**
+   * Compatibility-only input accepted from stale Claude CLI clients.
+   * Any presence is rejected before executor adoption, spawn, or tab focus.
+   */
+  ensureCliSessionId?: string;
 }
 
 /**
@@ -296,6 +302,9 @@ export class TerminalsService {
   }> {
     if (!getCurrentTenantId()) {
       throw new Error('Missing active tenant context for terminal creation');
+    }
+    if (data.ensureCliSessionId !== undefined) {
+      throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
     }
 
     // Check if Zellij is available

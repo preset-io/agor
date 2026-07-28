@@ -102,7 +102,10 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
-import { requireActiveAgenticTool } from './utils/agentic-tool-runtime.js';
+import {
+  REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
+  requireActiveAgenticTool,
+} from './utils/agentic-tool-runtime.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
@@ -124,6 +127,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import {
+  buildPromptTaskMetadata,
+  type PromptTaskMetadataInput,
+} from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
   deferWithSessionQueueTenantScope,
@@ -194,6 +201,11 @@ export interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+}
+
+/** Compatibility tombstone retained for stale Claude CLI restart clients. */
+export function rejectRemovedClaudeCliRestart(): never {
+  throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
 }
 
 function isServiceAccountRoute(params: RouteParams): boolean {
@@ -879,6 +891,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/restart-cli',
+    {
+      async create() {
+        return rejectRemovedClaudeCliRestart();
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'restart sessions' },
+    },
+    requireAuth
+  );
+
   /**
    * Per-session "turn" lock — single source of truth for "who's allowed to
    * spawn an executor for this session right now" mutual exclusion. Shared
@@ -1055,8 +1081,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Prefer task.metadata.source (set when the task was queued) over
         // the request's messageSource — the latter applies only to the
         // current draining tick, the former to where the prompt originated.
-        if (persistedMessageSource) {
-          messageMetadata.source = persistedMessageSource;
+        if (runtimeMessageSource) {
+          messageMetadata.source = runtimeMessageSource;
         }
 
         const userMessage = buildInitialUserMessage({
@@ -1225,10 +1251,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * External callers receive no validation on this field — it's
-           * trusted because the route is RBAC-gated.
+           * Transport provenance (`source`) is daemon-owned and deliberately
+           * excluded/sanitized even for stale or untyped clients.
            */
-          metadata?: Partial<import('@agor/core/types').TaskMetadata>;
+          metadata?: PromptTaskMetadataInput;
         },
         params: RouteParams
       ) {
@@ -1327,11 +1353,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 full_prompt: data.prompt,
                 created_by: createdBy,
                 status: TaskStatus.QUEUED,
-                metadata: {
-                  ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-                  ...(messageSource ? { source: messageSource } : {}),
-                  ...(data.metadata ?? {}),
-                },
+                metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
               });
 
               console.log(
@@ -1370,10 +1392,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // writes the user-message row, and spawns the executor. Both this
             // path and processNextQueuedTask go through that helper so behavior
             // stays in lockstep.
-            const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
-              ...(messageSource ? { source: messageSource } : {}),
-              ...(data.metadata ?? {}),
-            };
+            const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
               full_prompt: data.prompt,
