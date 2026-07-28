@@ -5,12 +5,32 @@ const PREPARED_WRITE_DATA = Symbol('agor.prepared-write-data');
 
 type PreparedParams = Record<PropertyKey, unknown>;
 
+/**
+ * Fields that trusted runtime infrastructure — never the client — owns.
+ *
+ * `tenant_id` is stamped onto tenant-owned create payloads by the tenant
+ * scoping hook (`scopeTenantBefore`) and, authoritatively, applied at the
+ * database layer from ambient tenant context (`withTenantInsertValues`), which
+ * also drops it for dialects that lack the column (SQLite). It is therefore not
+ * a client-supplied field and must not be reported as unsupported: doing so
+ * makes every create on a tenant-owned service that enforces a public-write
+ * allowlist (schedules, gateway channels) fail in multi-tenant mode.
+ *
+ * Ignoring it here cannot weaken tenant isolation — `pickWriteFields` still
+ * omits it (the DB layer stays the single source of truth), so any
+ * client-supplied value is stripped before the insert and overwritten by the
+ * trusted ambient tenant.
+ */
+const SERVER_MANAGED_WRITE_FIELDS: ReadonlySet<string> = new Set(['tenant_id']);
+
 function unsupportedFields(data: unknown, allowedFields: readonly string[]): string[] {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new BadRequest('Write data must be an object');
   }
   const allowed = new Set(allowedFields);
-  return Object.keys(data).filter((key) => !allowed.has(key));
+  return Object.keys(data).filter(
+    (key) => !allowed.has(key) && !SERVER_MANAGED_WRITE_FIELDS.has(key)
+  );
 }
 
 /**
