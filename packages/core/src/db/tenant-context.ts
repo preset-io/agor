@@ -23,7 +23,8 @@ export type SystemDatabaseCapability =
   | 'executor_token_maintenance'
   | 'mcp_oauth_callback'
   | 'mcp_oauth_maintenance'
-  | 'upload_maintenance';
+  | 'upload_maintenance'
+  | 'mcp_catalog_ingestion';
 
 export interface TenantContextScope {
   tenantId: TenantID | string;

@@ -352,6 +352,12 @@
       "import": "./dist/knowledge/index.js",
       "require": "./dist/knowledge/index.cjs"
     },
+    "./mcp-catalog": {
+      "source": "./src/mcp-catalog/index.ts",
+      "types": "./dist/mcp-catalog/index.d.ts",
+      "import": "./dist/mcp-catalog/index.js",
+      "require": "./dist/mcp-catalog/index.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",

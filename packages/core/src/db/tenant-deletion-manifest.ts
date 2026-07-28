@@ -47,14 +47,20 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * This list is intentionally explicit: the exhaustiveness test fails if a schema
  * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
  * a new global table cannot be introduced without a conscious decision recorded
- * in this set. It is currently empty because every application table in the
- * PostgreSQL schema carries a `tenant_id` column.
+ * in this set.
+ *
+ * `mcp_catalog_entries` mirrors the public MCP registry and joins a curated
+ * overlay checked into this repository onto it. Every field originates outside
+ * any tenant, and Agor has no tenant registry to enumerate, so a per-tenant copy
+ * of the mirror could never be kept in sync. Its Postgres RLS policies keep
+ * reads open to all tenants and confine writes to the `mcp_catalog_ingestion`
+ * system capability.
  *
  * Note: Drizzle's own migration bookkeeping table (`drizzle.__drizzle_migrations`)
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
-export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>([]);
+export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_entries']);
 
 /** Full classification of a table, including non-tenant tables. */
 export type TableClassification = 'direct' | 'transitive' | 'global';

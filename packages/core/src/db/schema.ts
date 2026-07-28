@@ -38,6 +38,7 @@ export const users = schema.users;
 export const appVariables = schema.appVariables;
 export const agenticToolPresets = schema.agenticToolPresets;
 export const mcpServers = schema.mcpServers;
+export const mcpCatalogEntries = schema.mcpCatalogEntries;
 export const cardTypes = schema.cardTypes;
 export const cards = schema.cards;
 export const artifacts = schema.artifacts;

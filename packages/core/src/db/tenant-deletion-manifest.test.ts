@@ -40,12 +40,15 @@ describe('tenant deletion manifest classification', () => {
     expect(covered).toEqual(allPostgresTableNames());
   });
 
-  it('treats every current application table as directly tenant-scoped', () => {
+  it('treats every application table except the shared MCP catalog as directly tenant-scoped', () => {
     const { direct, transitive, global } = classifyPostgresTables();
-    // Every table in the PostgreSQL schema currently carries a tenant_id column.
+    // The MCP catalog mirrors a public registry plus a repo-checked-in curation
+    // file, so it deliberately carries no tenant_id. Every other table does.
     expect(transitive).toEqual([]);
-    expect(global).toEqual([]);
-    expect(direct).toEqual(allPostgresTableNames());
+    expect(global).toEqual(['mcp_catalog_entries']);
+    expect(direct).toEqual(
+      allPostgresTableNames().filter((name) => name !== 'mcp_catalog_entries')
+    );
     // Spot-check a few tables spanning the FK hierarchy.
     expect(direct).toContain('sessions');
     expect(direct).toContain('users');
@@ -57,6 +60,11 @@ describe('tenant deletion manifest classification', () => {
     for (const global of GLOBAL_TABLES) {
       expect(names.has(global)).toBe(true);
     }
+  });
+
+  it('excludes the shared MCP catalog from the tenant deletion plan', () => {
+    const planned = new Set(buildTenantDeletionManifest().map((entry) => entry.name));
+    expect(planned.has('mcp_catalog_entries')).toBe(false);
   });
 });
 

@@ -53,6 +53,7 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
@@ -472,6 +473,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // Global catalog: no tenant column to scope, no writes to stamp.
+  'mcp-catalog',
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
@@ -1806,6 +1809,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],
+    },
+  });
+
+  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
+  // file — no tenant data, and no writes through this service. Authentication
+  // still gates it so an unauthenticated visitor cannot enumerate the browse
+  // surface, and query validation is also the SQL-injection boundary because
+  // every catalog filter reaches the database.
+  safeService('mcp-catalog')?.hooks({
+    before: {
+      all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
     },
   });
 

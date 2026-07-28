@@ -138,6 +138,7 @@ import { createKnowledgeSettingsService } from './services/knowledge-settings.js
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createLocalActionsService } from './services/local-actions.js';
+import { createMCPCatalogService } from './services/mcp-catalog.js';
 import {
   classifyMCPOAuthCompletionFailure,
   OAuthFlowAuthorizationChangedError,
@@ -2128,6 +2129,10 @@ async function registerMCPServices(
       update: [invalidateOAuthGrantsAfterServerChange],
     },
   });
+
+  // Read-only marketplace browse surface. Only find/get are exposed; the
+  // catalog's writers are the ingestion job and the curated.yaml seeder.
+  app.use('/mcp-catalog', createMCPCatalogService(db), { methods: ['find', 'get'] });
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {

@@ -246,4 +246,22 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(sources).not.toMatch(/from\s+['"][^'"]*redis/i);
     expect(sources).not.toMatch(/ioredis|redlock|redisClient|redis\.set/i);
   });
+
+  it('opens the shared MCP catalog for reads but confines writes to an explicit capability', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0068_mcp_catalog_entries.sql');
+
+    // No tenant column, therefore no tenant isolation policy to write.
+    expect(migration).not.toContain('"tenant_id"');
+    expect(migration).not.toMatch(/CREATE POLICY "tenant_isolation_/);
+
+    expect(migration).toContain('FORCE ROW LEVEL SECURITY');
+    expect(migration).toMatch(
+      /CREATE POLICY "mcp_catalog_public_read"[\s\S]*?FOR SELECT[\s\S]*?USING \(true\)/
+    );
+    // The write policy must gate both directions: USING alone would let a
+    // tenant-scoped path insert rows it could not then see.
+    expect(migration).toMatch(
+      /CREATE POLICY "mcp_catalog_ingestion_write"[\s\S]*?USING \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)[\s\S]*?WITH CHECK \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)/
+    );
+  });
 });

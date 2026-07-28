@@ -11,6 +11,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  MCPCatalogEntryData,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -1391,6 +1392,89 @@ export const mcpServers = sqliteTable(
 );
 
 /**
+ * MCP Catalog Entries table - browsable index of connectable MCP servers
+ *
+ * A mirror of the official MCP registry (breadth + reverse-DNS identity) with a
+ * curated overlay from `packages/core/src/mcp-catalog/curated.yaml` (category,
+ * capabilities, benefit copy, starter prompt, permission disclosure) joined on
+ * by `name`.
+ *
+ * Holds no tenant data: every field originates from a public unauthenticated
+ * HTTP registry or from a file checked into this repository. See the Postgres
+ * schema for the tenancy rationale and the RLS contract.
+ *
+ * Columns are materialized when the marketplace filters or sorts on them; the
+ * rest lives in `data`, matching `mcp_servers`.
+ */
+export const mcpCatalogEntries = sqliteTable(
+  'mcp_catalog_entries',
+  {
+    // Primary identity
+    catalog_entry_id: text('catalog_entry_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+
+    // Registry identity. `name` is the join key between the registry mirror and
+    // the curated overlay, so it is unique.
+    name: text('name').notNull(),
+    version: text('version'),
+    registry_updated_at: t.timestamp('registry_updated_at'),
+
+    // Registry presentation (materialized for search)
+    title: text('title'),
+    description: text('description'),
+    website_url: text('website_url'),
+    repository_url: text('repository_url'),
+
+    // Connect surface
+    transport: text('transport', {
+      enum: ['streamable-http', 'sse', 'stdio'],
+    }),
+    remote_url: text('remote_url'),
+    has_remote: t.bool('has_remote').notNull().default(false),
+    has_package: t.bool('has_package').notNull().default(false),
+
+    // Curation overlay
+    curated: t.bool('curated').notNull().default(false),
+    category: text('category'),
+    /**
+     * Curated capability tags as a delimiter-wrapped lowercase string
+     * (`|issues|repos|ci|`), matched with `LIKE '%|issues|%'`. See the Postgres
+     * schema for why this is denormalized rather than a join table.
+     */
+    capability_tags: text('capability_tags'),
+    benefit: text('benefit'),
+    starter_prompt: text('starter_prompt'),
+    permission_disclosure: text('permission_disclosure'),
+    icon_url: text('icon_url'),
+    verified: t.bool('verified').notNull().default(false),
+    /** 1 = most popular. Null sorts last. */
+    popularity_rank: integer('popularity_rank'),
+    connect_count: integer('connect_count').notNull().default(0),
+
+    // Auth probe results, cached so the connect UI knows which branch to render
+    // before the user clicks.
+    probed_auth_type: text('probed_auth_type', {
+      enum: ['none', 'oauth', 'unknown'],
+    })
+      .notNull()
+      .default('unknown'),
+    probed_at: t.timestamp('probed_at'),
+    auth_server_origin: text('auth_server_origin'),
+
+    data: t.json<MCPCatalogEntryData>('data').notNull(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex('mcp_catalog_entries_name_unique').on(table.name),
+    categoryIdx: index('mcp_catalog_entries_category_idx').on(table.category),
+    verifiedIdx: index('mcp_catalog_entries_verified_idx').on(table.verified),
+    curatedIdx: index('mcp_catalog_entries_curated_idx').on(table.curated),
+    popularityIdx: index('mcp_catalog_entries_popularity_idx').on(table.popularity_rank),
+    probedAtIdx: index('mcp_catalog_entries_probed_at_idx').on(table.probed_at),
+  })
+);
+
+/**
  * Card Types table - Global card type definitions
  *
  * CardTypes are org-level templates that define a category of cards
@@ -2551,6 +2635,8 @@ export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
+export type MCPCatalogEntryRow = typeof mcpCatalogEntries.$inferSelect;
+export type MCPCatalogEntryInsert = typeof mcpCatalogEntries.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;

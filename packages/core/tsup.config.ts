@@ -68,6 +68,7 @@ export default defineConfig({
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
+    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: registry mirror, curation, probe
   },
   format: ['cjs', 'esm'],
   dts: false,
@@ -103,5 +104,9 @@ export default defineConfig({
     // group-private mode inherited from an ACL-managed development worktree.
     chmodSync('dist/templates/agor-system-prompt.md', 0o644);
     console.log('✅ Copied agor-system-prompt.md template to dist/');
+
+    // The curated catalog overlay is data, not code — tsup would not emit it.
+    cpSync('src/mcp-catalog/curated.yaml', 'dist/mcp-catalog/curated.yaml');
+    console.log('✅ Copied curated.yaml to dist/');
   },
 });
