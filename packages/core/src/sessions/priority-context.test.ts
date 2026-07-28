@@ -6,6 +6,7 @@ import {
   formatPriorityContextMessage,
   isRootSessionGenealogy,
   MAX_FILE_BYTES,
+  MAX_MANIFEST_BYTES,
   MAX_MANIFEST_FILES,
   MAX_TOTAL_BYTES,
   readPriorityContextFiles,
@@ -84,6 +85,16 @@ describe('readPriorityContextManifest', () => {
 
     expect(manifest?.files).toHaveLength(MAX_MANIFEST_FILES);
     expect(manifest?.files).toEqual(files.slice(0, MAX_MANIFEST_FILES));
+  });
+
+  it('rejects a manifest file that exceeds MAX_MANIFEST_BYTES, without fully parsing it', async () => {
+    // Padded with a JSON string value so the file is valid-looking JSON
+    // shape-wise, were it ever parsed -- the size cap must reject it before
+    // JSON.parse runs at all, not because parsing itself fails.
+    const padding = 'x'.repeat(MAX_MANIFEST_BYTES + 1);
+    await writeFile('.agor/priority-context.json', JSON.stringify({ files: [], padding }));
+
+    expect(await readPriorityContextManifest(worktree)).toBeUndefined();
   });
 });
 
@@ -173,6 +184,17 @@ describe('readPriorityContextFiles', () => {
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it('skips a listed path that is not a regular file (e.g. a directory)', async () => {
+    await fs.mkdir(path.join(worktree, 'NOT_A_FILE.md'), { recursive: true });
+    await writeFile('SOUL.md', 'ok');
+
+    const files = await readPriorityContextFiles(worktree, {
+      files: ['NOT_A_FILE.md', 'SOUL.md'],
+    });
+
+    expect(files).toEqual([{ path: 'SOUL.md', content: 'ok' }]);
   });
 
   it('resolves a {today} path to the current date file when it exists', async () => {

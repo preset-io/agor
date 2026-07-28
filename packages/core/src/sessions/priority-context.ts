@@ -20,6 +20,7 @@
  * files instead, not this manifest.
  */
 
+import { Buffer } from 'node:buffer';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -74,6 +75,7 @@ const TODAY_TOKEN = '{today}';
  * agent's discretion.
  */
 export const MAX_MANIFEST_FILES = 20;
+export const MAX_MANIFEST_BYTES = 64 * 1024; // 64 KB for the manifest JSON itself
 export const MAX_FILE_BYTES = 200 * 1024; // 200 KB per file
 export const MAX_TOTAL_BYTES = 512 * 1024; // 512 KB across all injected files
 
@@ -87,24 +89,71 @@ function isValidManifest(value: unknown): value is PriorityContextManifest {
 }
 
 /**
+ * Open `absolutePath` once and read at most `maxBytes` from that single
+ * file descriptor — closes two gaps a separate `stat()` + `readFile()`
+ * pair would leave open:
+ *
+ * - A regular file can grow between an initial size check and a later
+ *   unbounded read; reading a fixed number of bytes from one already-open
+ *   descriptor can't be affected by writes that happen after the open.
+ * - A FIFO/named pipe (or other non-regular file) placed in the worktree
+ *   can report a harmless size via `stat()` yet block indefinitely on
+ *   `readFile()` — fatal here, since this runs inside the daemon's
+ *   per-session prompt lock (`withSessionTurnLock`). `handle.stat()` on
+ *   the open descriptor rejects anything that isn't a regular file before
+ *   any read is attempted.
+ *
+ * Reads `maxBytes + 1` bytes so an over-budget file can be distinguished
+ * from one that exactly fits, without ever holding more than
+ * `maxBytes + 1` bytes in memory. Returns `undefined` for anything that
+ * can't be opened or isn't a regular file (treated the same as a missing
+ * file by callers); `truncated: true` when the real content exceeds
+ * `maxBytes`.
+ */
+async function readBoundedFile(
+  absolutePath: string,
+  maxBytes: number
+): Promise<{ content: string; truncated: boolean } | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(absolutePath, 'r');
+    const stats = await handle.stat();
+    if (!stats.isFile()) return undefined;
+
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0);
+    const truncated = bytesRead > maxBytes;
+    return { content: buffer.toString('utf-8', 0, Math.min(bytesRead, maxBytes)), truncated };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+/**
  * Read and validate `.agor/priority-context.json` from a branch's worktree.
- * Returns `undefined` if the repo hasn't opted in, or the manifest is
- * missing/malformed — this feature is inert by default.
+ * Returns `undefined` if the repo hasn't opted in, the manifest is
+ * missing/malformed, or it exceeds `MAX_MANIFEST_BYTES` — this feature is
+ * inert by default. The size cap is enforced by `readBoundedFile` before
+ * any JSON parsing, so an oversized manifest never gets fully parsed.
  */
 export async function readPriorityContextManifest(
   worktreePath: string
 ): Promise<PriorityContextManifest | undefined> {
   const manifestPath = path.join(worktreePath, MANIFEST_RELATIVE_PATH);
-  let raw: string;
-  try {
-    raw = await fs.readFile(manifestPath, 'utf-8');
-  } catch {
+  const bounded = await readBoundedFile(manifestPath, MAX_MANIFEST_BYTES);
+  if (!bounded) return undefined;
+  if (bounded.truncated) {
+    console.warn(
+      `[priority-context] Ignoring ${manifestPath}: exceeds the ${MAX_MANIFEST_BYTES}-byte manifest size limit`
+    );
     return undefined;
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(bounded.content);
   } catch (error) {
     console.warn(`[priority-context] Failed to parse ${manifestPath}: ${(error as Error).message}`);
     return undefined;
@@ -235,12 +284,15 @@ async function resolveTemplatedPath(
 }
 
 /**
- * Read a manifest's listed files from the worktree. Missing files, and any
- * path that resolves outside the worktree, are silently skipped —
- * `onMissing: 'skip'` is the only supported mode. Stops accepting further
- * files once `MAX_TOTAL_BYTES` is reached; each file is also capped at
- * `MAX_FILE_BYTES` individually. Both limits log a warning when they cause
- * a file to be skipped, so a repo can tell its manifest is being trimmed.
+ * Read a manifest's listed files from the worktree. Missing files, files
+ * that aren't regular files (directories, FIFOs, devices, ...), and any
+ * path that resolves outside the worktree, are all silently skipped —
+ * `onMissing: 'skip'` is the only supported mode. Each file is read through
+ * `readBoundedFile` at `min(MAX_FILE_BYTES, <remaining total budget>)`, so
+ * one file can never consume more than its per-file cap, and the batch as a
+ * whole can never exceed `MAX_TOTAL_BYTES`. Both a truncated (over-budget)
+ * file and reaching the total budget log a warning, so a repo can tell its
+ * manifest is being trimmed.
  */
 export async function readPriorityContextFiles(
   worktreePath: string,
@@ -267,27 +319,18 @@ export async function readPriorityContextFiles(
       continue;
     }
 
-    try {
-      const stats = await fs.stat(safePath);
-      if (stats.size > MAX_FILE_BYTES) {
-        console.warn(
-          `[priority-context] Skipping "${relativePath}": ${stats.size} bytes exceeds the ${MAX_FILE_BYTES}-byte per-file limit`
-        );
-        continue;
-      }
-      if (totalBytes + stats.size > MAX_TOTAL_BYTES) {
-        console.warn(
-          `[priority-context] Skipping "${relativePath}": would exceed the ${MAX_TOTAL_BYTES}-byte total budget`
-        );
-        continue;
-      }
-
-      const content = await fs.readFile(safePath, 'utf-8');
-      results.push({ path: relativePath, content });
-      totalBytes += stats.size;
-    } catch {
-      // onMissing: 'skip' — the only supported mode today.
+    const budget = Math.min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - totalBytes);
+    const bounded = await readBoundedFile(safePath, budget);
+    if (!bounded) continue; // missing, unreadable, or not a regular file — onMissing: 'skip'
+    if (bounded.truncated) {
+      console.warn(
+        `[priority-context] Skipping "${relativePath}": exceeds the ${budget}-byte read budget`
+      );
+      continue;
     }
+
+    results.push({ path: relativePath, content: bounded.content });
+    totalBytes += Buffer.byteLength(bounded.content, 'utf-8');
   }
 
   return results;
