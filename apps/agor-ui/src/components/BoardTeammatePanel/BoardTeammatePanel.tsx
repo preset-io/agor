@@ -4,6 +4,7 @@ import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
+  Badge,
   Button,
   Empty,
   Select,
@@ -71,6 +72,8 @@ interface BoardTeammatePanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
+  unreadCommentsCount?: number;
+  hasUserMentions?: boolean;
   onCollapse?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
@@ -99,6 +102,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
+  unreadCommentsCount = 0,
+  hasUserMentions = false,
   onCollapse,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
@@ -462,7 +467,18 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
           {
             key: 'comments',
-            label: 'Comments',
+            label: (
+              <Badge
+                count={unreadCommentsCount}
+                size="small"
+                offset={[8, 0]}
+                style={{
+                  backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
+                }}
+              >
+                <span>Comments</span>
+              </Badge>
+            ),
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)' }}>
                 <CommentsPanel

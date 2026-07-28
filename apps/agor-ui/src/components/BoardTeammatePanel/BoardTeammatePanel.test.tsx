@@ -1,6 +1,6 @@
 import type { Board } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
-import { App as AntApp } from 'antd';
+import { App as AntApp, theme } from 'antd';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
@@ -28,7 +28,22 @@ describe('BoardTeammatePanel controlled tabs', () => {
 
     renderPanel({ onTabChange });
 
-    expect(screen.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /Comments/ })).toHaveAttribute('aria-selected', 'true');
     expect(onTabChange).not.toHaveBeenCalled();
+  });
+
+  it('shows unread activity on the Comments tab while the panel is expanded', () => {
+    renderPanel({ unreadCommentsCount: 3 });
+
+    expect(screen.getByRole('tab', { name: /Comments/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('3').closest('.ant-badge-count')).not.toBeNull();
+  });
+
+  it('uses mention emphasis for unread comments that mention the current user', () => {
+    renderPanel({ unreadCommentsCount: 1, hasUserMentions: true });
+
+    expect(screen.getByText('1').closest('.ant-badge-count')).toHaveStyle({
+      backgroundColor: theme.getDesignToken().colorError,
+    });
   });
 });

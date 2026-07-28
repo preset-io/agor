@@ -15,9 +15,10 @@ import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
-import { buildThemeMenuItems, SettingsDropdown } from './SettingsDropdown';
+import { SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
 
@@ -183,7 +184,11 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         </a>
       ),
     },
-    buildThemeMenuItems(themeMode, setThemeMode, onThemeEditorClick),
+    {
+      key: 'theme',
+      label: 'Theme',
+      children: buildThemeMenuItems(themeMode, setThemeMode, onThemeEditorClick),
+    },
     { type: 'divider' as const },
     {
       key: 'settings',
