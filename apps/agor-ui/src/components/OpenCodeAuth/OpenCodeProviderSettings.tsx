@@ -498,7 +498,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                     onConfirm={() => disconnect(provider.id)}
                   >
                     <Button danger loading={busyProvider === provider.id}>
-                      Remove saved credential
+                      Remove
                     </Button>
                   </Popconfirm>
                 ) : apiKeyAvailable ? (
@@ -532,7 +532,8 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                     Cancel authorization
                   </Button>
                 ) : null,
-              ]}
+              ].filter(Boolean)}
+              style={apiKeyAvailable && !oauthActive ? { alignItems: 'flex-end' } : undefined}
             >
               <List.Item.Meta
                 title={

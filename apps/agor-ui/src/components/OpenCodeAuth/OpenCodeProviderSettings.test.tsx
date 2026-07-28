@@ -614,7 +614,7 @@ describe('OpenCodeProviderSettings', () => {
     renderSettings(service);
 
     expect(await screen.findByText('GLM')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove saved credential' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
 
     await waitFor(() => expect(service.remove).toHaveBeenCalledWith('zhipuai'));
@@ -645,7 +645,7 @@ describe('OpenCodeProviderSettings', () => {
     expect(await screen.findByText(/available in the OpenCode runtime/i)).toBeInTheDocument();
     expect(screen.queryByLabelText('OpenCode Zen API key')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /remove saved credential/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(service.remove).not.toHaveBeenCalled();
   });
 
@@ -674,7 +674,7 @@ describe('OpenCodeProviderSettings', () => {
     expect(
       await screen.findByText(/saved credential presence could not be determined/i)
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /remove saved credential/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
   });
 
   it('starts and cancels a bounded native OAuth attempt with dynamic inputs', async () => {
@@ -971,7 +971,7 @@ describe('OpenCodeProviderSettings', () => {
       });
       expect(service.get).toHaveBeenCalledOnce();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Remove saved credential' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
       fireEvent.click(screen.getByRole('button', { name: 'OK' }));
       expect(service.remove).toHaveBeenCalledWith(configuredProviderId);
 
@@ -983,9 +983,7 @@ describe('OpenCodeProviderSettings', () => {
 
       expect(screen.getByText('Keep this newer attempt visible.')).toBeInTheDocument();
       expect(screen.queryByText('Saved credential')).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole('button', { name: 'Remove saved credential' })
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
