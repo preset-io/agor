@@ -45,6 +45,7 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
+import { resolvePriorityContextForWorktree } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -1342,6 +1343,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               taskRepo,
               params
             );
+
+            // Priority-context injection (see @agor/core/sessions/priority-context):
+            // a brand-new root session's very first prompt gets the repo's
+            // designated `.agor/priority-context.json` files (if any) prepended
+            // as established context. Root-only and first-task-only so this
+            // never re-fires on later turns, spawned/forked children, or repos
+            // that haven't opted in (the common case — resolves to undefined).
+            let effectivePrompt = data.prompt;
+            const isRootSession =
+              !lockedSession.genealogy?.parent_session_id &&
+              !lockedSession.genealogy?.forked_from_session_id;
+            if (isRootSession && (await taskRepo.countBySession(id as SessionID)) === 0) {
+              try {
+                const branch = await branchRepository.findById(lockedSession.branch_id);
+                const priorityContext = branch
+                  ? await resolvePriorityContextForWorktree(branch.path)
+                  : undefined;
+                if (priorityContext) {
+                  effectivePrompt = `${priorityContext}\n\n${data.prompt}`;
+                }
+              } catch (error) {
+                console.warn(
+                  `[priority-context] Skipping injection for session ${shortId(id)}: ${(error as Error).message}`
+                );
+              }
+            }
+
             const queuedTasks = await taskRepo.findQueued(id as SessionID);
             const shouldQueue =
               !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
@@ -1350,7 +1378,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (shouldQueue) {
               const queuedTask = await taskRepo.createPending({
                 session_id: id as SessionID,
-                full_prompt: data.prompt,
+                full_prompt: effectivePrompt,
                 created_by: createdBy,
                 status: TaskStatus.QUEUED,
                 metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
@@ -1395,7 +1423,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
-              full_prompt: data.prompt,
+              full_prompt: effectivePrompt,
               created_by: createdBy,
               status: TaskStatus.CREATED,
               metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
