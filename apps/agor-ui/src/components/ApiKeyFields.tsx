@@ -132,6 +132,7 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
     },
   ],
   opencode: [],
+  omp: [],
   // Claude Code CLI uses the same Anthropic credentials as the SDK
   // path — surface the same fields so the Defaults panel renders
   // them under the CLI tab too. Backed by the same `user.agentic_tools`

@@ -45,7 +45,8 @@ export type AgenticToolName =
   | 'gemini'
   | 'opencode'
   | 'copilot'
-  | 'cursor';
+  | 'cursor'
+  | 'omp';
 
 export const NON_EXECUTOR_AGENTIC_TOOLS: ReadonlySet<AgenticToolName> = new Set([
   'claude-code-cli',
@@ -176,6 +177,17 @@ export type CopilotPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissio
  * so these mirror the autonomous-provider modes until a richer policy surface exists.
  */
 export type CursorPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
+
+/**
+ * Oh My Pi (OMP) permission modes.
+ *
+ * OMP is driven over its JSONL RPC protocol (`omp --mode rpc`), which has no
+ * per-turn approval handshake: the spawned agent either runs with its normal
+ * tool set or with edits/commands pre-approved. Agor therefore exposes the
+ * same three-way shape used by the other subprocess runtimes and maps it onto
+ * OMP's approval settings at spawn time.
+ */
+export type OmpPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
 
 // ============================================================================
 // Tool Capabilities (static, shared between backend and UI)
@@ -320,6 +332,7 @@ export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
   opencode: 'OpenCode',
   copilot: 'GitHub Copilot',
   cursor: 'Cursor SDK',
+  omp: 'Oh My Pi',
 };
 
 /** Where a user creates a fresh API key for each tool. Keyless tools (opencode) are absent. */
@@ -376,5 +389,19 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+  },
+  omp: {
+    // `switch_session` + `branch` exist over RPC, but Agor-level fork of an
+    // OMP transcript is not wired yet.
+    supportsSessionFork: false,
+    supportsChildSpawn: true,
+    // OMP persists JSONL transcripts under its profile dir; adopting them into
+    // Agor is deferred.
+    supportsSessionImport: false,
+    supportsStatelessFsMode: false,
+    // Mirrors the thinking levels OMP advertises on reasoning models
+    // (`get_state` -> model.thinking.efforts).
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningEffort: 'medium',
   },
 };

@@ -10,6 +10,7 @@
 
 import type { Claude, Codex, Gemini } from '@agor/core/sdk';
 import type { MessageID } from '@agor/core/types';
+import type { OmpSdkResponse } from '../sdk-handlers/omp/normalizer.js';
 
 type SDKResultMessage = Claude.SDKResultMessage;
 type ServerGeminiFinishedEvent = Gemini.ServerGeminiFinishedEvent;
@@ -102,6 +103,16 @@ export type CopilotSdkResponse = import('../sdk-handlers/copilot/normalizer.js')
 export type OpenCodeSdkResponse = unknown;
 
 // ============================================================================
+// Oh My Pi (OMP) SDK Response
+// ============================================================================
+
+/**
+ * OMP turn summary assembled by `OmpTool` from the RPC event stream.
+ * Re-exported from the normalizer, which owns the shape.
+ */
+export type { OmpSdkResponse };
+
+// ============================================================================
 // Union Type - All Raw SDK Responses
 // ============================================================================
 
@@ -114,7 +125,8 @@ export type RawSdkResponse =
   | CodexSdkResponse
   | GeminiSdkResponse
   | CopilotSdkResponse
-  | OpenCodeSdkResponse;
+  | OpenCodeSdkResponse
+  | OmpSdkResponse;
 
 // ============================================================================
 // Legacy/Deprecated Types (for backward compatibility)

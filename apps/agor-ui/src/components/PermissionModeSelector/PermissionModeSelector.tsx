@@ -28,7 +28,8 @@ export interface PermissionModeSelectorProps {
     | 'gemini'
     | 'opencode'
     | 'copilot'
-    | 'cursor';
+    | 'cursor'
+    | 'omp';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /**
@@ -216,6 +217,31 @@ const OPENCODE_MODES: ModeOption[] = [
   },
 ];
 
+// Oh My Pi (OMP) permission modes — mirrors OmpPermissionMode (default/acceptEdits/bypassPermissions).
+const OMP_MODES: ModeOption[] = [
+  {
+    mode: 'default',
+    label: 'Manual',
+    description: 'Asks before each operation · for high-stakes changes',
+    icon: <LockOutlined />,
+    tone: 'danger',
+  },
+  {
+    mode: 'acceptEdits',
+    label: 'Accept edits',
+    description: 'Auto-approves file edits · for code you review in the diff',
+    icon: <EditOutlined />,
+    tone: 'success',
+  },
+  {
+    mode: 'bypassPermissions',
+    label: 'Bypass permissions',
+    description: 'Runs everything without asking · isolated environments only',
+    icon: <UnlockOutlined />,
+    tone: 'warning',
+  },
+];
+
 // Codex sandbox mode options
 export const CODEX_SANDBOX_MODES = [
   {
@@ -268,6 +294,8 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
       return GEMINI_MODES;
     case 'opencode':
       return OPENCODE_MODES;
+    case 'omp':
+      return OMP_MODES;
     case 'copilot':
       return COPILOT_MODES;
     case 'cursor':

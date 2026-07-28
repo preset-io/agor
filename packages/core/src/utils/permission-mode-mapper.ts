@@ -68,6 +68,37 @@ export function mapPermissionMode(
           return 'acceptEdits'; // Safe default
       }
 
+    case 'omp':
+      // OMP accepts default | acceptEdits | bypassPermissions — the same
+      // three-way shape as Copilot/Cursor, but without Claude's plan/dontAsk/auto.
+      switch (mode) {
+        case 'default':
+        case 'acceptEdits':
+        case 'bypassPermissions':
+          return mode;
+        // Claude-only modes → nearest OMP equivalent.
+        case 'plan':
+          return 'default'; // Plan mode → most restrictive available
+        case 'dontAsk':
+          return 'bypassPermissions';
+        case 'auto':
+          return 'acceptEdits';
+        // Gemini modes → OMP equivalents
+        case 'autoEdit':
+          return 'acceptEdits';
+        case 'yolo':
+          return 'bypassPermissions';
+        // Codex modes → OMP equivalents
+        case 'ask':
+          return 'default';
+        case 'on-failure':
+          return 'acceptEdits';
+        case 'allow-all':
+          return 'bypassPermissions';
+        default:
+          return 'acceptEdits'; // Safe default
+      }
+
     case 'gemini':
     case 'opencode':
       // Gemini native modes: default, autoEdit, yolo

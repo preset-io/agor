@@ -19,7 +19,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 /**
  * Tool identifier
  */
-export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
+export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor' | 'omp';
 
 /**
  * Tool runner function - executes via Feathers WebSocket
@@ -127,13 +127,14 @@ export class ToolRegistry {
  */
 export async function initializeToolRegistry(): Promise<void> {
   // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
+  const [claude, codex, gemini, opencode, copilot, cursor, omp] = await Promise.all([
     import('./claude.js'),
     import('./codex.js'),
     import('./gemini.js'),
     import('./opencode.js'),
     import('./copilot.js'),
     import('./cursor.js'),
+    import('./omp.js'),
   ]);
 
   // Register Claude Code
@@ -182,5 +183,13 @@ export async function initializeToolRegistry(): Promise<void> {
     name: 'Cursor SDK',
     apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
     runner: cursor.executeCursorTask,
+  });
+
+  // Register Oh My Pi (driven over its JSONL RPC protocol; no Agor-stored key)
+  ToolRegistry.register({
+    tool: 'omp',
+    name: 'Oh My Pi',
+    apiKeyEnvVar: 'NONE', // OMP resolves credentials from its own profile
+    runner: omp.executeOmpTask,
   });
 }

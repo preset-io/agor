@@ -262,6 +262,12 @@
       "import": "./dist/models/gemini-shared.js",
       "require": "./dist/models/gemini-shared.cjs"
     },
+    "./omp": {
+      "source": "./src/omp/index.ts",
+      "types": "./dist/omp/index.d.ts",
+      "import": "./dist/omp/index.js",
+      "require": "./dist/omp/index.cjs"
+    },
     "./sdk": {
       "source": "./src/sdk/index.ts",
       "types": "./dist/sdk/index.d.ts",

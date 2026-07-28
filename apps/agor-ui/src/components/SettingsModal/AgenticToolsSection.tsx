@@ -29,6 +29,7 @@ const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
   copilot: 'GitHub Copilot',
   cursor: 'Cursor SDK',
   opencode: 'OpenCode',
+  omp: 'Oh My Pi',
 };
 
 const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]> = {
@@ -40,6 +41,8 @@ const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]
   copilot: TOOL_FIELD_CONFIGS.copilot,
   cursor: TOOL_FIELD_CONFIGS.cursor,
   opencode: [],
+  // OMP authenticates through its own CLI profile; no tenant-stored credentials.
+  omp: [],
 };
 
 const RESOLUTION_POLICIES: Array<{

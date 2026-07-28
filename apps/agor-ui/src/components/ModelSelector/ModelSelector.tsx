@@ -42,7 +42,8 @@ export interface ModelSelectorProps {
     | 'gemini'
     | 'opencode'
     | 'copilot'
-    | 'cursor'; // Kept as 'agent' for backwards compat in prop name
+    | 'cursor'
+    | 'omp'; // Kept as 'agent' for backwards compat in prop name
   agentic_tool?:
     | 'claude-code'
     | 'claude-code-cli'
@@ -50,7 +51,8 @@ export interface ModelSelectorProps {
     | 'gemini'
     | 'opencode'
     | 'copilot'
-    | 'cursor';
+    | 'cursor'
+    | 'omp';
   /**
    * Optional Feathers client. When provided AND the agentic tool supports
    * dynamic model discovery (Copilot/Cursor), the picker fetches the live
@@ -268,8 +270,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
         ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // OpenCode doesn't use this list
+        : effectiveTool === 'opencode' || effectiveTool === 'omp'
+          ? [] // OpenCode / OMP resolve their own models — Agor doesn't enumerate them
           : effectiveTool === 'copilot'
             ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
             : effectiveTool === 'cursor'

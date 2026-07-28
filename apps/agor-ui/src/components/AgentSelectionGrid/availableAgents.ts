@@ -48,6 +48,13 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     beta: true,
   },
   {
+    id: 'omp',
+    name: 'Oh My Pi',
+    icon: '🥧',
+    description: 'Oh My Pi terminal coding agent, driven over its RPC protocol',
+    beta: true,
+  },
+  {
     id: 'claude-code-cli',
     name: 'Claude Code CLI',
     icon: '🤖',

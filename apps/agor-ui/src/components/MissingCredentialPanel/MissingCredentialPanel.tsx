@@ -20,6 +20,7 @@ const NATIVE_AUTH_HINT: Partial<Record<AgenticToolName, string>> = {
     'Already on a Claude Pro or Max plan? You can connect that instead of an API key.',
   codex:
     'Already signed in with ChatGPT on this machine? Codex can use that instead of an API key.',
+  omp: 'On the machine Agor runs sessions on, sign in once with the `omp` CLI and Oh My Pi will reuse that instead of an API key.',
 };
 
 const pendingAuthChecks = new WeakMap<
