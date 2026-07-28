@@ -133,6 +133,52 @@ describe('ClaudePromptService background task query lifetime', () => {
     expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
   });
 
+  it('settles an early task_updated completion when no task_notification follows', async () => {
+    const query = fakeQuery([
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'task-1',
+        description: 'Short background Bash',
+        uuid: 'start',
+        session_id: 'sdk-session',
+      },
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'task-1',
+        patch: { status: 'completed', end_time: 1_000 },
+        uuid: 'updated',
+        session_id: 'sdk-session',
+      },
+      sdkResult('terminal-result'),
+    ]);
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderr: () => '',
+    });
+    const activity = vi.fn();
+
+    const events = [];
+    for await (const event of service().promptSessionStreaming(
+      sessionId,
+      'prompt',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      activity
+    )) {
+      events.push(event);
+    }
+
+    expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
+    expect(query.releaseInput).toHaveBeenCalledTimes(1);
+    expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
+    expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+  });
+
   it('releases input and balances watchdog activity when cancellation interrupts a task', async () => {
     const query = fakeQuery(async function* () {
       yield {

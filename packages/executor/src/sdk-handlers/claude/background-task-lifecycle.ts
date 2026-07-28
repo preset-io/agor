@@ -1,6 +1,7 @@
 import type { SDKMessage } from '@agor/core/sdk';
 
 type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped']);
 
 export interface ClaudeQueryLifecycleTransition {
   resultDisposition: ResultDisposition;
@@ -26,10 +27,23 @@ export class ClaudeBackgroundTaskLifecycle {
     }
 
     if (message.type === 'system' && message.subtype === 'task_notification') {
-      return {
-        resultDisposition: 'not-result',
-        taskTransition: this.activeTaskIds.delete(message.task_id) ? 'settled' : undefined,
-      };
+      if (!TERMINAL_TASK_STATUSES.has(message.status)) {
+        return { resultDisposition: 'not-result' };
+      }
+      return this.settleTask(message.task_id);
+    }
+
+    // A task that settles while the model is still handling other tool calls
+    // may be reported only as task_updated. In that ordering the SDK does not
+    // necessarily emit a later task_notification, so both documented terminal
+    // signals must reconcile the same query-scoped task ID.
+    if (
+      message.type === 'system' &&
+      message.subtype === 'task_updated' &&
+      typeof message.patch.status === 'string' &&
+      TERMINAL_TASK_STATUSES.has(message.patch.status)
+    ) {
+      return this.settleTask(message.task_id);
     }
 
     if (message.type !== 'result') return { resultDisposition: 'not-result' };
@@ -51,5 +65,13 @@ export class ClaudeBackgroundTaskLifecycle {
     const count = this.activeTaskIds.size;
     this.activeTaskIds.clear();
     return count;
+  }
+
+  private settleTask(taskId: string): ClaudeQueryLifecycleTransition {
+    const settled = this.activeTaskIds.delete(taskId);
+    return {
+      resultDisposition: 'not-result',
+      taskTransition: settled ? 'settled' : undefined,
+    };
   }
 }
