@@ -9,7 +9,6 @@ import {
 describe('SDK activity mapping', () => {
   it.each([
     ['claude-code', 'assistant'],
-    ['codex', 'item.started'],
     ['gemini', 'content'],
     ['copilot', 'assistant.message_delta'],
     ['opencode', 'message.part.updated'],
@@ -17,16 +16,8 @@ describe('SDK activity mapping', () => {
     expect(mapSdkActivity(adapter, event)).toEqual({ kind: 'progress', detail: event });
   });
 
-  it('does not treat the observed Codex initialization signature as progress', () => {
-    expect(mapSdkActivity('codex', 'event_msg.turn_context')).toEqual({
-      kind: 'sdk_started',
-      detail: 'event_msg.turn_context',
-    });
-  });
-
   it.each([
     ['claude-code', 'future.event'],
-    ['codex', 'future.event'],
     ['gemini', 'future.event'],
     ['copilot', 'future.event'],
     ['opencode', 'future.event'],
@@ -39,7 +30,7 @@ describe('SDK activity mapping', () => {
 
   it('ignores OpenCode transport heartbeats and bounds diagnostic detail', () => {
     expect(mapSdkActivity('opencode', 'server.heartbeat')).toBeUndefined();
-    const pulse = mapSdkActivity('codex', `bad secret ${'x'.repeat(200)}`);
+    const pulse = mapSdkActivity('claude-code', `bad secret ${'x'.repeat(200)}`);
     expect(pulse?.detail).toMatch(/^[a-zA-Z0-9._-]+$/);
     expect(pulse?.detail.length).toBe(128);
   });

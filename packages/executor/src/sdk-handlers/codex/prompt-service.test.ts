@@ -38,7 +38,7 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
-import { CodexPromptService } from './prompt-service.js';
+import { CodexPromptService, reportCodexActivity } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
@@ -1762,6 +1762,60 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     }
 
     expect(emitted.some((e) => e.type === 'complete')).toBe(true);
+  });
+
+  it.each([
+    'agent_message',
+    'command_execution',
+    'file_change',
+    'mcp_tool_call',
+    'reasoning',
+    'web_search',
+    'future_operation',
+  ])('normalizes %s item lifecycle as a generic active operation', (itemType) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, { type: 'item.started', item: { type: itemType } });
+    reportCodexActivity(onActivity, { type: 'item.updated', item: { type: itemType } });
+    reportCodexActivity(onActivity, { type: 'item.completed', item: { type: itemType } });
+    expect(onActivity.mock.calls).toEqual([
+      ['progress', 'operation.start'],
+      ['progress'],
+      ['progress', 'operation.complete'],
+    ]);
+  });
+
+  it('keeps todo lifecycle as progress without suspending supervision', () => {
+    const onActivity = vi.fn();
+    for (const type of ['item.started', 'item.updated', 'item.completed']) {
+      reportCodexActivity(onActivity, { type, item: { type: 'todo_list' } });
+    }
+    expect(onActivity.mock.calls).toEqual([['progress'], ['progress'], ['progress']]);
+  });
+
+  it.each([
+    [{ type: 'thread.started' }, 'sdk_started'],
+    [{ type: 'turn.started' }, 'sdk_started'],
+    [{ type: 'event_msg', payload: { type: 'turn_context' } }, 'sdk_started'],
+    [{ type: 'turn.completed' }, 'progress'],
+    [{ type: 'turn.failed' }, 'progress'],
+    [{ type: 'error' }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'agent_message' } }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'task_complete' } }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'turn_complete' } }, 'progress'],
+  ])('normalizes known startup and terminal activity %#', (event, expected) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, event);
+    expect(onActivity).toHaveBeenCalledWith(expected);
+  });
+
+  it.each([
+    { type: 'future.event' },
+    { type: 'event_msg', payload: { type: 'future_payload' } },
+    { type: 'event_msg', payload: { type: 'token_count' } },
+  ])('fails open for unknown activity %#', (event) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, event);
+    expect(onActivity).toHaveBeenCalledWith('unknown_activity');
   });
 });
 

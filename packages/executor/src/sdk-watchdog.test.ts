@@ -1,4 +1,3 @@
-import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { SdkHealthFailureInput } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -8,20 +7,23 @@ import {
   SdkWatchdog,
 } from './sdk-watchdog.js';
 
-const baseConfig: ResolvedSdkWatchdogConfig = {
+const baseConfig: {
+  mode: 'disabled' | 'observe' | 'enforce';
+  firstProgressTimeoutMs: number;
+  idleTimeoutMs: number | null;
+} = {
   mode: 'observe',
-  first_progress_timeout_ms: 1_000,
-  abort_grace_ms: 100,
-  claude_idle_timeout_ms: 2_000,
+  firstProgressTimeoutMs: 1_000,
+  idleTimeoutMs: 2_000,
 };
 
 type Evidence = Omit<SdkHealthFailureInput, 'task_id'>;
 
-function harness(overrides: Partial<ResolvedSdkWatchdogConfig> = {}, tool = 'codex') {
+function harness(overrides: Partial<typeof baseConfig> = {}) {
   const decisions: Evidence[] = [];
   const watchdog = new SdkWatchdog({
-    tool,
-    config: { ...baseConfig, ...overrides },
+    ...baseConfig,
+    ...overrides,
     sdkVersion: 'sdk@1.0.0',
     now: Date.now,
     onDecision: (evidence) => decisions.push(evidence),
@@ -55,22 +57,106 @@ describe('SdkWatchdog', () => {
   });
 
   it('does not rearm observe mode after late progress', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
+    const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(1_000);
     expect(decisions).toHaveLength(1);
-    watchdog.record('progress', 'item.started');
+    watchdog.record('progress');
     vi.advanceTimersByTime(10_000);
     expect(decisions.map(({ reason }) => reason)).toEqual(['no_first_progress']);
   });
 
-  it('disarms first-progress policy after meaningful progress', () => {
-    const { watchdog, decisions } = harness();
+  it('disarms first-progress policy after meaningful progress when idle supervision is off', () => {
+    const { watchdog, decisions } = harness({ idleTimeoutMs: null });
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(999);
-    watchdog.record('progress', 'item.started');
+    watchdog.record('progress');
     vi.advanceTimersByTime(10_000);
     expect(decisions).toEqual([]);
+  });
+
+  it.each([
+    ['observe', 'would_fire'],
+    ['enforce', 'enforced'],
+  ] as const)('detects post-progress silence exactly once in %s mode', (mode, watchdogAction) => {
+    const { watchdog, decisions } = harness({ mode });
+    watchdog.record('sdk_started');
+    watchdog.record('progress');
+
+    vi.advanceTimersByTime(1_999);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions).toMatchObject([
+      {
+        reason: 'progress_stalled',
+        watchdog_action: watchdogAction,
+      },
+    ]);
+
+    vi.advanceTimersByTime(10_000);
+    expect(decisions).toHaveLength(1);
+  });
+
+  it('resets the post-progress deadline only for later SDK progress', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    watchdog.record('progress');
+    vi.advanceTimersByTime(1_500);
+    watchdog.record('progress');
+
+    vi.advanceTimersByTime(1_999);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('progress_stalled');
+  });
+
+  it('preserves the remaining post-progress timeout across an explicit wait', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    watchdog.record('progress');
+    vi.advanceTimersByTime(800);
+    watchdog.record('waiting', 'permission.request');
+    vi.advanceTimersByTime(10_000);
+    expect(decisions).toEqual([]);
+
+    watchdog.record('sdk_started', 'permission.resolved');
+    vi.advanceTimersByTime(1_199);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('progress_stalled');
+  });
+
+  it('keeps enforced post-progress supervision fail-open while unknown activity continues', () => {
+    const { watchdog, decisions } = harness({ mode: 'enforce' });
+    watchdog.record('sdk_started');
+    watchdog.record('progress');
+    vi.advanceTimersByTime(1_500);
+    watchdog.record('unknown_activity');
+    vi.advanceTimersByTime(500);
+    expect(decisions).toMatchObject([
+      { reason: 'unknown_activity', watchdog_action: 'would_fire' },
+    ]);
+
+    watchdog.record('unknown_activity');
+    for (let index = 0; index < 3; index++) {
+      vi.advanceTimersByTime(1_999);
+      watchdog.record('unknown_activity');
+    }
+    expect(decisions).toHaveLength(1);
+  });
+
+  it('pauses post-progress supervision while an operation is active', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    watchdog.record('progress', 'operation.start');
+    vi.advanceTimersByTime(20_000);
+    expect(decisions).toEqual([]);
+
+    watchdog.record('progress', 'operation.complete');
+    vi.advanceTimersByTime(1_999);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 
   it('fails open while unknown vocabulary remains active, then fires after silence', () => {
@@ -92,7 +178,7 @@ describe('SdkWatchdog', () => {
     });
   });
 
-  it('preserves the remaining timeout across a permission wait', () => {
+  it('preserves the remaining first-progress timeout across a permission wait', () => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(400);
@@ -142,8 +228,8 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.reason).toBe('no_first_progress');
   });
 
-  it('pauses Claude idle policy while a known tool is active', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
+  it('pauses idle policy while a known tool is active', () => {
+    const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     watchdog.record('progress', 'assistant');
     vi.advanceTimersByTime(1_000);
@@ -157,8 +243,8 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 
-  it('pauses Claude idle policy while an SDK background task is active', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
+  it('pauses idle policy while an SDK background task is active', () => {
+    const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     watchdog.record('progress', 'assistant');
     watchdog.record('progress', 'background_task.start');
@@ -171,8 +257,8 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 
-  it('keeps Claude idle policy paused until every parallel tool completes', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
+  it('keeps idle policy paused until every parallel tool completes', () => {
+    const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     watchdog.record('progress', 'assistant');
     watchdog.record('progress', 'tool.start');
@@ -183,21 +269,6 @@ describe('SdkWatchdog', () => {
     watchdog.record('progress', 'tool.complete');
     vi.advanceTimersByTime(2_000);
     expect(decisions[0]?.reason).toBe('progress_stalled');
-  });
-
-  it('does not enforce Claude idle while unknown SDK activity continues', () => {
-    const { watchdog, decisions } = harness({ mode: 'enforce' }, 'claude-code');
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    vi.advanceTimersByTime(1_500);
-    watchdog.record('unknown_activity', 'future.delta');
-    vi.advanceTimersByTime(500);
-    expect(decisions).toMatchObject([
-      { reason: 'unknown_activity', watchdog_action: 'would_fire' },
-    ]);
-    watchdog.record('unknown_activity', 'future.delta');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toHaveLength(1);
   });
 
   it('does nothing when disabled or stopped', () => {

@@ -46,7 +46,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -54,6 +54,52 @@ import type { TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
+
+export function reportCodexActivity(
+  callback: SdkActivityCallback | undefined,
+  event: {
+    type: string;
+    item?: { type?: string };
+    payload?: { type?: string };
+  }
+): void {
+  if (event.type === 'item.started' || event.type === 'item.completed') {
+    // Codex todo_list is turn-long progress state. Every other known or
+    // future item type has a bounded lifecycle and suspends supervision.
+    if (event.item?.type === 'todo_list') {
+      callback?.('progress');
+      return;
+    }
+    callback?.(
+      'progress',
+      event.type === 'item.started' ? 'operation.start' : 'operation.complete'
+    );
+    return;
+  }
+  if (event.type === 'item.updated') {
+    callback?.('progress');
+    return;
+  }
+  if (
+    event.type === 'thread.started' ||
+    event.type === 'turn.started' ||
+    (event.type === 'event_msg' && event.payload?.type === 'turn_context')
+  ) {
+    callback?.('sdk_started');
+    return;
+  }
+  if (
+    event.type === 'turn.completed' ||
+    event.type === 'turn.failed' ||
+    event.type === 'error' ||
+    (event.type === 'event_msg' &&
+      ['agent_message', 'task_complete', 'turn_complete'].includes(event.payload?.type ?? ''))
+  ) {
+    callback?.('progress');
+    return;
+  }
+  callback?.('unknown_activity');
+}
 
 /**
  * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
@@ -1244,13 +1290,13 @@ export class CodexPromptService {
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
-        const activityEvent = event as { type: string; payload?: { type?: string } };
-        const activityPayloadType =
-          activityEvent.type === 'event_msg' ? activityEvent.payload?.type : undefined;
-        reportSdkActivity(
+        reportCodexActivity(
           onActivity,
-          'codex',
-          activityPayloadType ? `${activityEvent.type}.${activityPayloadType}` : activityEvent.type
+          event as {
+            type: string;
+            item?: { type?: string };
+            payload?: { type?: string };
+          }
         );
 
         // Check if stop was requested

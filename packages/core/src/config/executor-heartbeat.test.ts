@@ -56,6 +56,7 @@ describe('resolveSdkWatchdogConfig', () => {
       first_progress_timeout_ms: 180_000,
       abort_grace_ms: 15_000,
       claude_idle_timeout_ms: 3_600_000,
+      codex_idle_timeout_ms: null,
     });
   });
 
@@ -70,10 +71,18 @@ describe('resolveSdkWatchdogConfig', () => {
     ).toBeNull();
   });
 
+  it('supports opt-in Codex post-progress supervision', () => {
+    expect(
+      resolveSdkWatchdogConfig({ sdk_watchdog: { codex_idle_timeout_ms: 7_200_000 } })
+        .codex_idle_timeout_ms
+    ).toBe(7_200_000);
+  });
+
   it.each([
     'first_progress_timeout_ms',
     'abort_grace_ms',
     'claude_idle_timeout_ms',
+    'codex_idle_timeout_ms',
   ] as const)('rejects invalid %s rather than silently changing policy', (key) => {
     expect(() => resolveSdkWatchdogConfig({ sdk_watchdog: { [key]: 0 } })).toThrow(
       'positive safe integer'

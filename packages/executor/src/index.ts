@@ -266,9 +266,16 @@ export class AgorExecutor {
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
     if (this.config.tool !== 'cursor') {
+      const idleTimeoutMs =
+        this.config.tool === 'claude-code'
+          ? watchdogConfig.claude_idle_timeout_ms
+          : this.config.tool === 'codex'
+            ? watchdogConfig.codex_idle_timeout_ms
+            : null;
       this.watchdog = new SdkWatchdog({
-        tool: this.config.tool,
-        config: watchdogConfig,
+        mode: watchdogConfig.mode,
+        firstProgressTimeoutMs: watchdogConfig.first_progress_timeout_ms,
+        idleTimeoutMs,
         sdkVersion: getSdkActivityVersion(this.config.tool),
         onDecision: (evidence) => this.handleWatchdogDecision(evidence),
       });

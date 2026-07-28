@@ -1043,22 +1043,38 @@ execution:
     first_progress_timeout_ms: 180000
     abort_grace_ms: 15000
     claude_idle_timeout_ms: 3600000 # null disables Claude's post-progress check
+    codex_idle_timeout_ms: null # set a positive value to opt in for Codex
 ```
 
 `enforce` records the diagnosis and begins the existing executor containment
 path. Set `mode: observe` explicitly to record and display the diagnosis while
 leaving the executor running, or use `disabled` to turn off SDK watchdog
 diagnosis. Unknown SDK events continue to fail open, permission/input waits
-pause the applicable deadline, and known active Claude tools pause the
-post-progress deadline.
+pause the applicable deadline, and known active Claude tools, background tasks,
+or lifecycle-bound Codex items pause the post-progress deadline.
 
 An active diagnosis is shown separately from the executor heartbeat: a current
 heartbeat means the wrapper is communicating, not that the agent is making
 progress. For an actionable observe-only diagnosis, a later meaningful progress
 pulse clears only the active UI warning while preserving the recorded diagnosis.
 It does not rearm the first-progress deadline. Provider post-progress detection
-is currently Claude-only through `claude_idle_timeout_ms`; Codex
-post-first-progress detection remains deferred.
+is enabled for Claude by default through `claude_idle_timeout_ms`. Codex
+post-progress detection is opt-in and backward-compatible:
+`codex_idle_timeout_ms` defaults to `null`, and a positive value enables the
+deadline.
+
+The Codex adapter normalizes SDK item lifecycles into progress and generic
+active-operation facts. Commands, MCP calls, web searches, file changes,
+reasoning, and agent messages pause the deadline between their started and
+completed events so legitimate long operations are not contained. New item
+kinds inherit that conservative lifecycle pause until reviewed. Todo-list items
+are turn-long state rather than blocking operations, so their lifecycle events
+reset the deadline without pausing it.
+`event_msg.agent_message`, `event_msg.task_complete`,
+`event_msg.turn_complete`, and `turn.completed` are also progress or terminal
+facts. Thread/turn startup and `event_msg.turn_context` only establish SDK
+startup; `event_msg.token_count` and unrecognized future vocabulary normalize
+to unknown activity that fails open instead of authorizing containment.
 
 SDK activity facts share the existing executor heartbeat transport. Disabling
 `execution.executor_heartbeat.enabled` therefore disables persisted pulse

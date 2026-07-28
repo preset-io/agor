@@ -99,5 +99,13 @@ export function resolveSdkWatchdogConfig(
             3_600_000,
             'execution.sdk_watchdog.claude_idle_timeout_ms'
           ),
+    codex_idle_timeout_ms:
+      raw?.codex_idle_timeout_ms == null
+        ? null
+        : positiveSafeInteger(
+            raw.codex_idle_timeout_ms,
+            3_600_000,
+            'execution.sdk_watchdog.codex_idle_timeout_ms'
+          ),
   };
 }

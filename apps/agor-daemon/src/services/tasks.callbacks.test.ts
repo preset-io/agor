@@ -265,6 +265,19 @@ describe('TasksService completion callbacks', () => {
     );
   });
 
+  it('uses the same terminal callback for a failed task', async () => {
+    const { service, createPending } = makeService();
+
+    await service.patch(taskId, {
+      status: TaskStatus.FAILED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+      error_message: 'SDK activity stalled (progress_stalled).',
+    });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    expect(createPending.mock.calls[0][0].full_prompt).toContain('failed');
+  });
+
   it('includeOriginalPrompt=false queues one templated callback without an original prompt section', async () => {
     const { service, createPending } = makeService({
       childSession: {

@@ -50,6 +50,7 @@ export const ResolvedConfigSliceSchema = z.object({
           first_progress_timeout_ms: z.number().int().positive(),
           abort_grace_ms: z.number().int().positive(),
           claude_idle_timeout_ms: z.number().int().positive().nullable(),
+          codex_idle_timeout_ms: z.number().int().positive().nullable().default(null),
         })
         .optional(),
     })

@@ -5,6 +5,7 @@ const runtime = vi.hoisted(() => ({
   initialize: vi.fn().mockResolvedValue(undefined),
   recordPulse: vi.fn(),
   stopHeartbeat: vi.fn(),
+  watchdogOptions: [] as Array<Record<string, unknown>>,
 }));
 vi.mock('./executor-heartbeat.js', () => ({
   startExecutorHeartbeat: () => ({
@@ -16,8 +17,21 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
   initializeToolRegistry: runtime.initialize,
   ToolRegistry: { execute: runtime.execute },
 }));
+vi.mock('./sdk-watchdog.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sdk-watchdog.js')>();
+  return {
+    ...actual,
+    SdkWatchdog: class {
+      constructor(options: Record<string, unknown>) {
+        runtime.watchdogOptions.push(options);
+      }
+      record() {}
+      stop() {}
+    },
+  };
+});
 
-import { AgorExecutor } from './index.js';
+import { AgorExecutor, type ExecutorConfig } from './index.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
@@ -25,13 +39,20 @@ const evidence = {
   watchdog_action: 'enforced' as const,
 };
 
-function harness(reportSdkHealthFailure: () => Promise<unknown>) {
+function harness(
+  reportSdkHealthFailure: () => Promise<unknown>,
+  tool: ExecutorConfig['tool'] = 'codex',
+  idleTimeouts: { claude: number | null; codex: number | null } = {
+    claude: null,
+    codex: null,
+  }
+) {
   const executor = new AgorExecutor({
     sessionToken: 'token',
     sessionId: 'session-1',
     taskId: 'task-1',
     prompt: 'prompt',
-    tool: 'codex',
+    tool,
     daemonUrl: 'http://daemon',
     resolvedConfig: {
       execution: {
@@ -39,7 +60,8 @@ function harness(reportSdkHealthFailure: () => Promise<unknown>) {
           mode: 'enforce',
           first_progress_timeout_ms: 1_000,
           abort_grace_ms: 100,
-          claude_idle_timeout_ms: null,
+          claude_idle_timeout_ms: idleTimeouts.claude,
+          codex_idle_timeout_ms: idleTimeouts.codex,
         },
       },
     },
@@ -47,6 +69,7 @@ function harness(reportSdkHealthFailure: () => Promise<unknown>) {
     client: { service: () => { reportSdkHealthFailure: typeof reportSdkHealthFailure } };
     heartbeat: { stop: ReturnType<typeof vi.fn> } | null;
     abortController: AbortController;
+    executeTask(): Promise<void>;
     handleWatchdogDecision(input: typeof evidence): Promise<void>;
   };
   executor.client = { service: () => ({ reportSdkHealthFailure }) };
@@ -59,6 +82,7 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    runtime.watchdogOptions.length = 0;
   });
 
   it('starts SDK observation before invoking the tool', async () => {
@@ -76,6 +100,7 @@ describe('AgorExecutor watchdog handoff', () => {
             first_progress_timeout_ms: 60_000,
             abort_grace_ms: 100,
             claude_idle_timeout_ms: null,
+            codex_idle_timeout_ms: null,
           },
         },
       },
@@ -91,6 +116,24 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(runtime.recordPulse.mock.invocationCallOrder[0]).toBeLessThan(
       runtime.execute.mock.invocationCallOrder[0]!
     );
+  });
+
+  it.each([
+    ['claude-code', 2_000],
+    ['codex', 3_000],
+    ['gemini', null],
+  ] as const)('selects only the generic idle timeout for %s', async (tool, idleTimeoutMs) => {
+    const executor = harness(() => Promise.resolve(), tool, { claude: 2_000, codex: 3_000 });
+
+    await executor.executeTask();
+
+    expect(runtime.watchdogOptions.at(-1)).toMatchObject({
+      mode: 'enforce',
+      firstProgressTimeoutMs: 1_000,
+      idleTimeoutMs,
+    });
+    expect(runtime.watchdogOptions.at(-1)).not.toHaveProperty('tool');
+    expect(runtime.watchdogOptions.at(-1)).not.toHaveProperty('config');
   });
 
   it('stops liveness and exits for containment when the daemon does not acknowledge', async () => {

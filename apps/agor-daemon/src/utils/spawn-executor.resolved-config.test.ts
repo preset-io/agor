@@ -85,6 +85,7 @@ describe('buildResolvedConfigSlice', () => {
           first_progress_timeout_ms: 180_000,
           abort_grace_ms: 15_000,
           claude_idle_timeout_ms: 3_600_000,
+          codex_idle_timeout_ms: null,
         },
       },
     });
@@ -173,6 +174,19 @@ describe('buildResolvedConfigSlice', () => {
       future_section: { anything: true },
     };
     expect(() => ResolvedConfigSliceSchema.parse(fromNewerDaemon)).not.toThrow();
+
+    const fromOlderDaemon = {
+      execution: {
+        sdk_watchdog: {
+          mode: 'enforce',
+          first_progress_timeout_ms: 180_000,
+          abort_grace_ms: 15_000,
+          claude_idle_timeout_ms: 3_600_000,
+        },
+      },
+    };
+    const parsed = ResolvedConfigSliceSchema.parse(fromOlderDaemon);
+    expect(parsed.execution?.sdk_watchdog?.codex_idle_timeout_ms).toBeNull();
   });
 });
 

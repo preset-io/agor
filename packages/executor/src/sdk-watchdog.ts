@@ -1,11 +1,11 @@
-import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
 import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
-export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot' | 'opencode';
+export type SdkActivityAdapter = 'claude-code' | 'gemini' | 'copilot' | 'opencode';
+type SdkVersionAdapter = SdkActivityAdapter | 'codex';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
 
-export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> = {
+export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkVersionAdapter, string> = {
   'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.197',
   codex: '@openai/codex-sdk@0.144.0',
   gemini: '@google/gemini-cli-core@0.31.0',
@@ -14,14 +14,11 @@ export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> =
 };
 
 export function getSdkActivityVersion(adapter: string): string | undefined {
-  return SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkActivityAdapter];
+  return SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkVersionAdapter];
 }
 
 const STARTED = new Set([
   'claude-code:system',
-  'codex:thread.started',
-  'codex:turn.started',
-  'codex:event_msg.turn_context',
   'gemini:model_info',
   'copilot:assistant.turn_start',
 ]);
@@ -39,13 +36,6 @@ const PROGRESS = new Set([
   'claude-code:stream_event',
   'claude-code:user',
   'claude-code:result',
-  'codex:item.started',
-  'codex:item.updated',
-  'codex:item.completed',
-  'codex:turn.completed',
-  'codex:event_msg.agent_message',
-  'codex:event_msg.task_complete',
-  'codex:event_msg.turn_complete',
   'gemini:content',
   'gemini:thought',
   'gemini:tool_call_request',
@@ -106,7 +96,7 @@ interface WatchdogState {
   firstProgressAt?: number;
   idleAnchor?: number;
   pausedAt?: number;
-  activeToolCount: number;
+  activeOperationCount: number;
   unknownCount: number;
   unknownReported: boolean;
 }
@@ -116,20 +106,21 @@ type WatchdogReason = 'no_first_progress' | 'progress_stalled' | 'unknown_activi
 function inspectSdkWatchdog(
   state: Readonly<WatchdogState>,
   now: number,
-  tool: string,
-  config: ResolvedSdkWatchdogConfig
+  mode: 'disabled' | 'observe' | 'enforce',
+  firstProgressTimeoutMs: number,
+  idleTimeoutMs: number | null
 ): { reason?: WatchdogReason; nextCheckAt?: number } {
   if (
-    config.mode === 'disabled' ||
+    mode === 'disabled' ||
     state.startedAt === undefined ||
     state.pausedAt !== undefined ||
-    state.activeToolCount > 0
+    state.activeOperationCount > 0
   ) {
     return {};
   }
   if (state.firstProgressAt === undefined) {
-    const firstDeadline = state.startedAt + config.first_progress_timeout_ms;
-    const silenceDeadline = (state.lastRawAt ?? state.startedAt) + config.first_progress_timeout_ms;
+    const firstDeadline = state.startedAt + firstProgressTimeoutMs;
+    const silenceDeadline = (state.lastRawAt ?? state.startedAt) + firstProgressTimeoutMs;
     if (now >= firstDeadline) {
       if (now >= silenceDeadline) return { reason: 'no_first_progress' };
       if (!state.unknownReported && state.unknownCount > 0) {
@@ -141,11 +132,9 @@ function inspectSdkWatchdog(
     };
   }
 
-  if (tool === 'claude-code' && config.claude_idle_timeout_ms !== null) {
-    const idleDeadline =
-      (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
-    const silenceDeadline =
-      (state.lastRawAt ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
+  if (idleTimeoutMs !== null) {
+    const idleDeadline = (state.idleAnchor ?? state.firstProgressAt) + idleTimeoutMs;
+    const silenceDeadline = (state.lastRawAt ?? state.firstProgressAt) + idleTimeoutMs;
     if (now >= idleDeadline) {
       if (now >= silenceDeadline) return { reason: 'progress_stalled' };
       if (!state.unknownReported && state.unknownCount > 0) {
@@ -161,7 +150,7 @@ function inspectSdkWatchdog(
 
 export class SdkWatchdog {
   private state: WatchdogState = {
-    activeToolCount: 0,
+    activeOperationCount: 0,
     unknownCount: 0,
     unknownReported: false,
   };
@@ -170,8 +159,9 @@ export class SdkWatchdog {
 
   constructor(
     private readonly options: {
-      tool: string;
-      config: ResolvedSdkWatchdogConfig;
+      mode: 'disabled' | 'observe' | 'enforce';
+      firstProgressTimeoutMs: number;
+      idleTimeoutMs: number | null;
       sdkVersion?: string;
       onDecision(evidence: WatchdogEvidence): void | Promise<void>;
       now?: () => number;
@@ -179,7 +169,7 @@ export class SdkWatchdog {
   ) {}
 
   record(kind: ExecutorPulseKind, detail?: string): void {
-    if (this.decided || this.options.config.mode === 'disabled') return;
+    if (this.decided || this.options.mode === 'disabled') return;
     const now = this.now();
     if (kind === 'waiting') {
       if (this.state.startedAt !== undefined && this.state.pausedAt === undefined) {
@@ -207,11 +197,19 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (detail === 'tool.start' || detail === 'background_task.start') {
-        this.state.activeToolCount++;
+      if (
+        detail === 'tool.start' ||
+        detail === 'operation.start' ||
+        detail === 'background_task.start'
+      ) {
+        this.state.activeOperationCount++;
       }
-      if (detail === 'tool.complete' || detail === 'background_task.complete') {
-        this.state.activeToolCount = Math.max(0, this.state.activeToolCount - 1);
+      if (
+        detail === 'tool.complete' ||
+        detail === 'operation.complete' ||
+        detail === 'background_task.complete'
+      ) {
+        this.state.activeOperationCount = Math.max(0, this.state.activeOperationCount - 1);
       }
     }
     this.check();
@@ -229,15 +227,19 @@ export class SdkWatchdog {
   private check(): void {
     if (this.decided) return;
     const now = this.now();
-    const { reason } = inspectSdkWatchdog(this.state, now, this.options.tool, this.options.config);
+    const { reason } = inspectSdkWatchdog(
+      this.state,
+      now,
+      this.options.mode,
+      this.options.firstProgressTimeoutMs,
+      this.options.idleTimeoutMs
+    );
     if (!reason) {
       this.schedule();
       return;
     }
     const action =
-      reason === 'unknown_activity' || this.options.config.mode !== 'enforce'
-        ? 'would_fire'
-        : 'enforced';
+      reason === 'unknown_activity' || this.options.mode !== 'enforce' ? 'would_fire' : 'enforced';
     const evidence: WatchdogEvidence = {
       reason,
       elapsed_ms: Math.max(0, Math.round(now - (this.state.startedAt ?? now))),
@@ -262,8 +264,9 @@ export class SdkWatchdog {
     const { nextCheckAt } = inspectSdkWatchdog(
       this.state,
       now,
-      this.options.tool,
-      this.options.config
+      this.options.mode,
+      this.options.firstProgressTimeoutMs,
+      this.options.idleTimeoutMs
     );
     if (nextCheckAt === undefined) return;
     this.timer = setTimeout(() => this.check(), Math.max(0, nextCheckAt - now));
