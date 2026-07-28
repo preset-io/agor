@@ -55,14 +55,30 @@ import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
+function isCodexReconnectEvent(event: {
+  type: string;
+  message?: unknown;
+}): event is { type: string; message: string } {
+  return (
+    event.type === 'error' &&
+    typeof event.message === 'string' &&
+    /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+\b/.test(event.message)
+  );
+}
+
 export function reportCodexActivity(
   callback: SdkActivityCallback | undefined,
   event: {
     type: string;
+    message?: unknown;
     item?: { type?: string };
     payload?: { type?: string };
   }
 ): void {
+  // Reconnect warnings are continuation bookkeeping, not SDK work. Reporting
+  // any pulse would defer both first-progress and post-progress supervision.
+  if (isCodexReconnectEvent(event)) return;
+
   if (event.type === 'item.started' || event.type === 'item.completed') {
     // Codex todo_list is turn-long progress state. Every other known or
     // future item type has a bounded lifecycle and suspends supervision.
@@ -1590,12 +1606,8 @@ export class CodexPromptService {
           }
 
           case 'error': {
-            const streamErrorMessage = (event as { message?: unknown }).message;
-            if (
-              typeof streamErrorMessage === 'string' &&
-              /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+\b/.test(streamErrorMessage)
-            ) {
-              console.warn(`⚠️  [Codex] ${streamErrorMessage}`);
+            if (isCodexReconnectEvent(event)) {
+              console.warn(`⚠️  [Codex] ${event.message}`);
               break;
             }
 

@@ -2077,6 +2077,16 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     expect(onActivity.mock.calls).toEqual([['progress'], ['progress'], ['progress']]);
   });
 
+  it('does not report reconnect continuation warnings as SDK activity', () => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, {
+      type: 'error',
+      message:
+        'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server)',
+    });
+    expect(onActivity).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ type: 'thread.started' }, 'sdk_started'],
     [{ type: 'turn.started' }, 'sdk_started'],
