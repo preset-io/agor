@@ -61,6 +61,7 @@ export function isOpenCodeSessionEvent(event: OpenCodeEvent, sessionId: string):
 export interface OpenCodeConfig {
   enabled: boolean;
   serverUrl: string;
+  permissionTimeoutMs?: number;
 }
 
 /**
@@ -569,6 +570,25 @@ export class OpenCodeTool implements ITool {
       const allParts: Array<{ id: string; type: string; data: unknown }> = []; // Store all parts for later processing
       let currentTextMessageId: string | null = null;
       let currentReasoningMessageId: string | null = null;
+      let pendingPermissionId: string | undefined;
+      let permissionTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const resolvePermission = (permissionId: string, detail: string): boolean => {
+        if (pendingPermissionId !== permissionId) return false;
+        pendingPermissionId = undefined;
+        if (permissionTimer) clearTimeout(permissionTimer);
+        permissionTimer = undefined;
+        streamingCallbacks.onPulse?.('sdk_started', detail);
+        return true;
+      };
+      const awaitPermission = (permissionId: string): void => {
+        pendingPermissionId = permissionId;
+        if (permissionTimer) clearTimeout(permissionTimer);
+        permissionTimer = setTimeout(() => {
+          resolvePermission(permissionId, 'permission.timeout');
+        }, this.config.permissionTimeoutMs ?? 600_000);
+        permissionTimer.unref?.();
+      };
 
       // IMPORTANT: Subscribe to event stream BEFORE sending prompt
       // Events are emitted in real-time as prompt executes
@@ -606,6 +626,13 @@ export class OpenCodeTool implements ITool {
 
           // Log event type (skip noisy heartbeats)
           const eventType = event.type as string;
+          if (eventType === 'permission.replied') {
+            const properties = event.properties as Record<string, unknown>;
+            if (typeof properties.permissionID === 'string') {
+              resolvePermission(properties.permissionID, 'permission.resolved');
+            }
+            continue;
+          }
           reportSdkActivity(streamingCallbacks.onPulse, 'opencode', eventType);
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
@@ -629,8 +656,9 @@ export class OpenCodeTool implements ITool {
               console.log(
                 `[OpenCodeTool] Auto-granting permission: id=${permId}, type=${permType}`
               );
+              awaitPermission(permId);
               try {
-                await client.postSessionIdPermissionsPermissionId({
+                const grant = await client.postSessionIdPermissionsPermissionId({
                   path: {
                     id: context.opencodeSessionId,
                     permissionID: permId,
@@ -638,7 +666,12 @@ export class OpenCodeTool implements ITool {
                   body: { response: 'always' },
                   query: branchPath ? { directory: branchPath } : undefined,
                 });
+                if (grant.error) {
+                  console.error('[OpenCodeTool] Failed to auto-grant permission:', grant.error);
+                  continue;
+                }
                 console.log(`[OpenCodeTool] Permission auto-granted (always): id=${permId}`);
+                resolvePermission(permId, 'permission.resolved');
               } catch (permErr) {
                 console.error('[OpenCodeTool] Failed to auto-grant permission:', permErr);
               }
@@ -767,6 +800,7 @@ export class OpenCodeTool implements ITool {
           }
         }
       } finally {
+        if (permissionTimer) clearTimeout(permissionTimer);
         // Clean up event stream
         console.log('[OpenCodeTool] Closing event stream...');
         // Note: The SDK's async generator should clean up automatically when we break/return

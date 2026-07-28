@@ -497,13 +497,16 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const sdkFailure = task.sdk_failure;
     const isActionableSdkFailure =
       sdkFailure?.reason === 'no_first_progress' || sdkFailure?.reason === 'progress_stalled';
+    const latestExecutorProgress =
+      task.latest_executor_progress ??
+      (task.latest_executor_pulse?.kind === 'progress' ? task.latest_executor_pulse : undefined);
     const laterObserveProgress =
       task.status === TaskStatus.RUNNING &&
       isActionableSdkFailure &&
       sdkFailure?.watchdog_action === 'would_fire' &&
       sdkFailure.termination === 'not_requested' &&
-      task.latest_executor_pulse?.kind === 'progress' &&
-      Date.parse(task.latest_executor_pulse.observed_at) > Date.parse(sdkFailure.detected_at);
+      latestExecutorProgress &&
+      Date.parse(latestExecutorProgress.observed_at) > Date.parse(sdkFailure.detected_at);
     const activeSdkFailure =
       sdkFailure &&
       isActionableSdkFailure &&

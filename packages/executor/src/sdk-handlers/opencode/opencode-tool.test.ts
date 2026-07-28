@@ -18,6 +18,8 @@ const createdClients: Array<{ baseUrl: string; directory?: string }> = [];
 // Mock MCP add calls per client
 const mockMcpAddCalls: Array<{ name: string; config: unknown }> = [];
 const mockSessionAbort = vi.fn();
+const mockPermissionGrant = vi.fn();
+let mockEventStream: Iterable<unknown> | AsyncIterable<unknown> = [];
 
 // Create a mock client factory
 function createMockClient(opts: { baseUrl: string; directory?: string }) {
@@ -34,8 +36,9 @@ function createMockClient(opts: { baseUrl: string; directory?: string }) {
       abort: mockSessionAbort,
     },
     event: {
-      subscribe: vi.fn().mockResolvedValue({ stream: [] }),
+      subscribe: vi.fn().mockImplementation(async () => ({ stream: mockEventStream })),
     },
+    postSessionIdPermissionsPermissionId: mockPermissionGrant,
     mcp: {
       add: vi
         .fn()
@@ -76,13 +79,60 @@ const mockMCPServerRepo = {
   findAll: vi.fn().mockResolvedValue([]),
 } as any;
 
+const permissionUpdated = () => ({
+  type: 'permission.updated',
+  properties: {
+    id: 'permission-1',
+    sessionID: 'oc-session-permission',
+    type: 'external_directory',
+  },
+});
+
+const permissionReplied = (permissionID: string) => ({
+  type: 'permission.replied',
+  properties: {
+    sessionID: 'oc-session-permission',
+    permissionID,
+    response: 'always',
+  },
+});
+
+const permissionSessionIdle = () => ({
+  type: 'session.status',
+  properties: {
+    sessionID: 'oc-session-permission',
+    status: { type: 'idle' },
+  },
+});
+
+function permissionTool() {
+  const onPulse = vi.fn();
+  const tool = new OpenCodeTool(
+    { enabled: true, serverUrl: 'http://localhost:4096', permissionTimeoutMs: 100 },
+    mockMessagesService
+  );
+  tool.setSessionContext('session-permission', 'oc-session-permission');
+  return {
+    onPulse,
+    execute: () =>
+      tool.executeTask?.('session-permission', 'test prompt', 'task-permission', {
+        onPulse,
+        onStreamStart: vi.fn(),
+        onStreamChunk: vi.fn(),
+        onStreamEnd: vi.fn(),
+      }),
+  };
+}
+
 describe('OpenCodeTool', () => {
   beforeEach(() => {
     clientCreateCount = 0;
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;
+    mockEventStream = [];
     vi.clearAllMocks();
     mockSessionAbort.mockResolvedValue({ data: true });
+    mockPermissionGrant.mockResolvedValue({ data: true });
   });
 
   describe('Event session ownership', () => {
@@ -119,7 +169,7 @@ describe('OpenCodeTool', () => {
 
     it('should work without optional MCP repos (backward compat)', () => {
       const tool = new OpenCodeTool(
-        { enabled: true, serverUrl: 'http://localhost:4096' },
+        { enabled: true, serverUrl: 'http://localhost:4096', permissionTimeoutMs: 100 },
         mockMessagesService
       );
 
@@ -569,6 +619,91 @@ describe('OpenCodeTool', () => {
   });
 
   describe('executeTask Integration', () => {
+    it('keeps permission supervision paused until auto-grant succeeds', async () => {
+      let finishGrant!: () => void;
+      mockPermissionGrant.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishGrant = () => resolve({ data: true });
+          })
+      );
+      mockEventStream = [permissionUpdated(), permissionSessionIdle()];
+      const { onPulse, execute } = permissionTool();
+
+      const execution = execute();
+      await vi.waitFor(() => expect(mockPermissionGrant).toHaveBeenCalledOnce());
+
+      expect(onPulse.mock.calls).toEqual([['waiting', 'permission.updated']]);
+
+      finishGrant();
+      await execution;
+
+      expect(onPulse.mock.calls).toEqual([
+        ['waiting', 'permission.updated'],
+        ['sdk_started', 'permission.resolved'],
+        ['progress', 'session.status'],
+      ]);
+    });
+
+    it('resolves only a matching permission reply and ignores stale and duplicate replies', async () => {
+      mockPermissionGrant.mockResolvedValueOnce({ error: { message: 'grant failed' } });
+      mockEventStream = [
+        permissionUpdated(),
+        permissionReplied('stale-permission'),
+        permissionReplied('permission-1'),
+        permissionReplied('permission-1'),
+        permissionSessionIdle(),
+      ];
+      const { onPulse, execute } = permissionTool();
+
+      await execute();
+
+      expect(onPulse.mock.calls).toEqual([
+        ['waiting', 'permission.updated'],
+        ['sdk_started', 'permission.resolved'],
+        ['progress', 'session.status'],
+      ]);
+    });
+
+    it('keeps a failed grant paused until the configured permission timeout', async () => {
+      vi.useFakeTimers();
+      let releaseStream: (() => void) | undefined;
+      mockPermissionGrant.mockRejectedValueOnce(new Error('grant failed'));
+      mockEventStream = (async function* () {
+        yield permissionUpdated();
+        await new Promise<void>((resolve) => {
+          releaseStream = resolve;
+        });
+        yield permissionSessionIdle();
+      })();
+      const { onPulse, execute } = permissionTool();
+      const execution = execute();
+
+      try {
+        for (
+          let attempt = 0;
+          attempt < 20 && mockPermissionGrant.mock.calls.length === 0;
+          attempt++
+        ) {
+          await Promise.resolve();
+        }
+        expect(mockPermissionGrant).toHaveBeenCalledOnce();
+        expect(onPulse.mock.calls).toEqual([['waiting', 'permission.updated']]);
+
+        await vi.advanceTimersByTimeAsync(99);
+        expect(onPulse.mock.calls).toEqual([['waiting', 'permission.updated']]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(onPulse.mock.calls).toEqual([
+          ['waiting', 'permission.updated'],
+          ['sdk_started', 'permission.timeout'],
+        ]);
+      } finally {
+        releaseStream?.();
+        await execution;
+        vi.useRealTimers();
+      }
+    });
+
     it('should use directory-scoped client based on session branch path', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },

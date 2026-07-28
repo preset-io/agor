@@ -32,6 +32,7 @@ const WAITING = new Set([
   'copilot:user_input.request',
   'gemini:tool_call_confirmation',
   'opencode:permission.asked',
+  'opencode:permission.updated',
 ]);
 const PROGRESS = new Set([
   'claude-code:assistant',
@@ -75,9 +76,6 @@ export function mapSdkActivity(
   const detail = boundedDetail(discriminator);
   const key = `${adapter}:${detail}`;
   if (WAITING.has(key)) return { kind: 'waiting', detail };
-  if (adapter === 'opencode' && detail === 'permission.updated') {
-    return { kind: 'sdk_started', detail: 'permission.resolved' };
-  }
   if (STARTED.has(key)) return { kind: 'sdk_started', detail };
   if (PROGRESS.has(key)) return { kind: 'progress', detail };
   return { kind: 'unknown_activity', detail };

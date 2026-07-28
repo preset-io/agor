@@ -58,6 +58,30 @@ describe('startExecutorHeartbeat', () => {
       expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
         task_id: 'task-1',
         pulse: { sequence: 100, kind: 'progress', detail: 'event.100' },
+        progress: { sequence: 100, kind: 'progress', detail: 'event.100' },
+      });
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains progress when later activity arrives before the next heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({ client, taskId: 'task-1', intervalMs: 1000 });
+      await Promise.resolve();
+
+      handle.recordPulse('progress', 'item.completed');
+      handle.recordPulse('waiting', 'permission.request');
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
+        task_id: 'task-1',
+        pulse: { sequence: 2, kind: 'waiting', detail: 'permission.request' },
+        progress: { sequence: 1, kind: 'progress', detail: 'item.completed' },
       });
       handle.stop();
     } finally {

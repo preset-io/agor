@@ -42,6 +42,9 @@ export interface ExecutorPulse {
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
+  progress?: Omit<ExecutorPulse, 'observed_at'> & {
+    kind: typeof ExecutorPulseKind.PROGRESS;
+  };
 }
 
 export const SDK_WATCHDOG_FAILURE_REASONS = [
@@ -349,6 +352,8 @@ export interface Task {
   executor_mode?: ExecutorMode;
   /** Latest bounded SDK activity fact; this is not an event history. */
   latest_executor_pulse?: ExecutorPulse;
+  /** Latest accepted meaningful-progress pulse, retained across later non-progress activity. */
+  latest_executor_progress?: ExecutorPulse & { kind: typeof ExecutorPulseKind.PROGRESS };
   /** Bounded SDK/process health diagnosis. */
   sdk_failure?: SdkFailure;
   /** Durable intent while verified local containment is pending. */

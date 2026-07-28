@@ -1253,8 +1253,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
-    if (data.pulse) {
-      const { sequence, kind, detail } = data.pulse;
+    for (const pulse of [data.pulse, data.progress]) {
+      if (!pulse) continue;
+      const { sequence, kind, detail } = pulse;
       if (!Number.isSafeInteger(sequence) || sequence <= 0) {
         throw new BadRequest('pulse sequence must be a positive safe integer');
       }
@@ -1268,8 +1269,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         throw new BadRequest('pulse detail must be a bounded identifier');
       }
     }
+    if (data.progress && data.progress.kind !== ExecutorPulseKind.PROGRESS) {
+      throw new BadRequest('retained progress pulse must have progress kind');
+    }
 
-    const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
+    const task = await this.taskRepo.reportRuntimeTelemetry(
+      data.task_id,
+      data.pulse,
+      data.progress
+    );
     if (!task) throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     analyticsLogger.track(
       'executor.heartbeat',

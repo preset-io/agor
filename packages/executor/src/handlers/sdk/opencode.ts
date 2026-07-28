@@ -84,6 +84,7 @@ export async function executeOpenCodeTask(params: {
       {
         enabled: true,
         serverUrl,
+        permissionTimeoutMs: params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000,
       },
       repos.messagesService,
       repos.sessionMCP,

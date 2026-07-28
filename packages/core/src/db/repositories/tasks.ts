@@ -5,8 +5,8 @@
  */
 
 import type {
-  ExecutorPulse,
   ExecutorTerminationCompleteInput,
+  RuntimeTelemetryInput,
   SdkFailure,
   SessionID,
   Task,
@@ -14,7 +14,7 @@ import type {
   TerminationCause,
   UUID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import { ExecutorPulseKind, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -246,6 +246,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
         executor_mode: task.executor_mode,
         latest_executor_pulse: task.latest_executor_pulse,
+        latest_executor_progress: task.latest_executor_progress,
         sdk_failure: task.sdk_failure,
         termination_request: task.termination_request,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
@@ -554,21 +555,44 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
-  /** Atomically stamp heartbeat time and advance the latest pulse fact. */
+  /** Atomically stamp heartbeat time and advance the latest general/progress pulse facts. */
   async reportRuntimeTelemetry(
     id: string,
-    pulse?: Omit<ExecutorPulse, 'observed_at'>,
+    pulse?: RuntimeTelemetryInput['pulse'],
+    progress?: RuntimeTelemetryInput['progress'],
     observedAt = new Date()
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       if (!executorOwnsTask(row)) return null;
 
       const previous = row.data.latest_executor_pulse;
-      const latest =
+      const accepted =
         pulse && (!previous || pulse.sequence > previous.sequence)
           ? { ...pulse, observed_at: observedAt.toISOString() }
-          : previous;
-      const data = { ...row.data, latest_executor_pulse: latest };
+          : undefined;
+      const previousProgress: Task['latest_executor_progress'] =
+        row.data.latest_executor_progress ??
+        (previous?.kind === ExecutorPulseKind.PROGRESS
+          ? { ...previous, kind: ExecutorPulseKind.PROGRESS }
+          : undefined);
+      const pulseProgress =
+        pulse?.kind === ExecutorPulseKind.PROGRESS
+          ? { ...pulse, kind: ExecutorPulseKind.PROGRESS }
+          : undefined;
+      const incomingProgress =
+        pulseProgress && (!progress || pulseProgress.sequence > progress.sequence)
+          ? pulseProgress
+          : progress;
+      const latestProgress: Task['latest_executor_progress'] =
+        incomingProgress &&
+        (!previousProgress || incomingProgress.sequence > previousProgress.sequence)
+          ? { ...incomingProgress, observed_at: observedAt.toISOString() }
+          : previousProgress;
+      const data = {
+        ...row.data,
+        latest_executor_pulse: accepted ?? previous,
+        latest_executor_progress: latestProgress,
+      };
       await update(txDb, tasks)
         .set({ last_executor_heartbeat_at: observedAt, data })
         .where(eq(tasks.task_id, fullId))

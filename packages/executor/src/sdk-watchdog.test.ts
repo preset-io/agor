@@ -109,16 +109,22 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.reason).toBe('no_first_progress');
   });
 
-  it('resumes supervision after an OpenCode permission update', () => {
+  it('keeps an OpenCode permission update paused until the matching reply', () => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(400);
     watchdog.record('waiting', 'permission.asked');
     vi.advanceTimersByTime(5_000);
 
-    const resumed = mapSdkActivity('opencode', 'permission.updated');
-    expect(resumed).toEqual({ kind: 'sdk_started', detail: 'permission.resolved' });
-    if (resumed) watchdog.record(resumed.kind, resumed.detail);
+    const updated = mapSdkActivity('opencode', 'permission.updated');
+    expect(updated).toEqual({ kind: 'waiting', detail: 'permission.updated' });
+    if (updated) watchdog.record(updated.kind, updated.detail);
+    vi.advanceTimersByTime(5_000);
+    expect(decisions).toEqual([]);
+
+    const genericReply = mapSdkActivity('opencode', 'permission.replied');
+    expect(genericReply).toEqual({ kind: 'unknown_activity', detail: 'permission.replied' });
+    watchdog.record('sdk_started', 'permission.resolved');
 
     vi.advanceTimersByTime(599);
     expect(decisions).toEqual([]);

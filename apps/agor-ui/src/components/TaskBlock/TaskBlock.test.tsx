@@ -368,6 +368,34 @@ describe('TaskBlock SDK failure presentation', () => {
     expectRunningPresentation(true);
   });
 
+  it.each([
+    ['waiting', 'permission.request'],
+    ['sdk_started', 'turn.started'],
+    ['unknown_activity', 'future.event'],
+  ] as const)('does not resurrect a recovered diagnosis after later %s activity', (kind, detail) => {
+    renderTaskBlock(
+      makeTask({
+        sdk_failure: observedSdkFailure,
+        latest_executor_progress: {
+          sequence: 2,
+          kind: 'progress',
+          observed_at: '2026-07-23T20:03:01.000Z',
+        },
+        latest_executor_pulse: {
+          sequence: 3,
+          kind,
+          detail,
+          observed_at: '2026-07-23T20:03:02.000Z',
+        },
+      }),
+      true,
+      [pendingToolMessage()]
+    );
+
+    expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
+    expectRunningPresentation(true);
+  });
+
   it('keeps unknown activity in ordinary running presentation', () => {
     renderTaskBlock(
       makeTask({
@@ -418,6 +446,37 @@ describe('TaskBlock SDK failure presentation', () => {
 
     expect(screen.getByText(/Stopping executor/)).toBeInTheDocument();
     expect(screen.getByText(/until process absence is verified/)).toBeInTheDocument();
+  });
+
+  it('keeps an in-progress TODO neutral while stopping is unverified', () => {
+    renderTaskBlock(
+      makeTask({
+        status: TaskStatus.STOPPING,
+        sdk_failure: {
+          ...observedSdkFailure,
+          watchdog_action: 'enforced',
+          termination: 'unverified',
+        },
+      }),
+      true,
+      [todoMessage()]
+    );
+
+    expect(screen.getByLabelText('Unknown task state')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Stopped task')).not.toBeInTheDocument();
+  });
+
+  it('keeps an in-progress TODO stopped after terminal stop verification', () => {
+    renderTaskBlock(makeTask({ status: TaskStatus.STOPPED }), true, [todoMessage()]);
+
+    expect(screen.getByLabelText('Stopped task')).toBeInTheDocument();
+  });
+
+  it('describes incomplete compaction as inactive after task completion', () => {
+    renderTaskBlock(makeTask({ status: TaskStatus.COMPLETED }), true, [compactionMessage()]);
+
+    expect(screen.getByText('Context compaction did not complete')).toBeInTheDocument();
+    expect(screen.queryByText('Compacting conversation context...')).not.toBeInTheDocument();
   });
 
   it('keeps ordinary running presentation when there is no SDK failure', () => {

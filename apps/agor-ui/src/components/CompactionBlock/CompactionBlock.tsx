@@ -98,15 +98,17 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({
     }
   }
 
-  // Otherwise, show in-progress state without implying progress after a stall.
+  const statusText =
+    taskProgressState === 'running'
+      ? 'Compacting conversation context...'
+      : taskProgressState === 'stalled'
+        ? 'Context compaction stalled'
+        : 'Context compaction did not complete';
+
   const inProgressContent = (
     <Space>
       {taskProgressState === 'running' && <Spin size="small" />}
-      <Text type="secondary">
-        {taskProgressState === 'stalled'
-          ? 'Context compaction stalled'
-          : 'Compacting conversation context...'}
-      </Text>
+      <Text type="secondary">{statusText}</Text>
     </Space>
   );
 

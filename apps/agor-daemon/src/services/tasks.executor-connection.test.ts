@@ -118,14 +118,23 @@ describe('TasksService runtime telemetry', () => {
     const result = await service.reportRuntimeTelemetry({
       task_id: task.task_id,
       pulse: { sequence: 1, kind: 'progress', detail: 'tool.start' },
+      progress: { sequence: 1, kind: 'progress', detail: 'tool.start' },
     });
 
     expect(result).toBe(task);
-    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(task.task_id, {
-      sequence: 1,
-      kind: 'progress',
-      detail: 'tool.start',
-    });
+    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(
+      task.task_id,
+      {
+        sequence: 1,
+        kind: 'progress',
+        detail: 'tool.start',
+      },
+      {
+        sequence: 1,
+        kind: 'progress',
+        detail: 'tool.start',
+      }
+    );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
 
@@ -138,6 +147,18 @@ describe('TasksService runtime telemetry', () => {
     Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry: vi.fn() });
     await expect(
       service.reportRuntimeTelemetry({ task_id: task.task_id, pulse })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a non-progress value in the retained progress slot', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry: vi.fn() });
+
+    await expect(
+      service.reportRuntimeTelemetry({
+        task_id: task.task_id,
+        progress: { sequence: 1, kind: 'waiting' },
+      } as never)
     ).rejects.toThrow();
   });
 });

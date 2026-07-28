@@ -34,6 +34,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
   let timer: ReturnType<typeof setInterval> | undefined;
   let sequence = 0;
   let latestPulse: { sequence: number; kind: ExecutorPulseKind; detail?: string } | undefined;
+  let latestProgress: { sequence: number; kind: 'progress'; detail?: string } | undefined;
 
   const emit = async () => {
     if (stopped || inFlight) return;
@@ -42,6 +43,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       await options.client.service('tasks').reportRuntimeTelemetry({
         task_id: options.taskId,
         ...(latestPulse ? { pulse: latestPulse } : {}),
+        ...(latestProgress ? { progress: latestProgress } : {}),
       });
     } catch (error) {
       warn(
@@ -63,6 +65,9 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     recordPulse(kind, detail) {
       sequence += 1;
       latestPulse = { sequence, kind, ...(detail ? { detail } : {}) };
+      if (kind === 'progress') {
+        latestProgress = { sequence, kind, ...(detail ? { detail } : {}) };
+      }
     },
     stop() {
       stopped = true;

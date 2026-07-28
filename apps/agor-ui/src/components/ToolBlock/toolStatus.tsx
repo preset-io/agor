@@ -58,6 +58,31 @@ export function deriveToolStatus({
   return taskProgressState === 'stalled' ? 'stalled' : 'stale';
 }
 
+function renderNeutralStatus(label: string): React.ReactNode {
+  return (
+    <Tooltip title={label} trigger={['hover', 'focus']}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
+        style={{
+          display: 'inline-flex',
+          padding: 0,
+          color: 'inherit',
+          lineHeight: 1,
+          background: 'none',
+          border: 0,
+          cursor: 'help',
+        }}
+      >
+        <ClockCircleOutlined aria-hidden style={{ fontSize: 14 }} />
+      </button>
+    </Tooltip>
+  );
+}
+
 /** Render the icon for a given tool status. */
 export function renderToolStatusIcon(status: ToolStatus): React.ReactNode {
   switch (status) {
@@ -68,16 +93,8 @@ export function renderToolStatusIcon(status: ToolStatus): React.ReactNode {
     case 'pending':
       return <Spin size="small" />;
     case 'stalled':
-      return (
-        <Tooltip title="Agent progress stalled">
-          <ClockCircleOutlined style={{ fontSize: 14 }} />
-        </Tooltip>
-      );
+      return renderNeutralStatus('Agent progress stalled');
     case 'stale':
-      return (
-        <Tooltip title="Agent moved on — result not captured">
-          <ClockCircleOutlined style={{ fontSize: 14 }} />
-        </Tooltip>
-      );
+      return renderNeutralStatus('Agent moved on — result not captured');
   }
 }

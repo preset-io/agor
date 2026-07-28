@@ -380,6 +380,7 @@ export const tasks = pgTable(
         metadata?: Task['metadata'];
         executor_mode?: Task['executor_mode'];
         latest_executor_pulse?: Task['latest_executor_pulse'];
+        latest_executor_progress?: Task['latest_executor_progress'];
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];

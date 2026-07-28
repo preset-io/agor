@@ -900,12 +900,20 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const first = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
       { sequence: 2, kind: 'progress', detail: 'tool.start' },
+      { sequence: 2, kind: 'progress', detail: 'tool.start' },
       new Date('2026-01-01T00:00:02.000Z')
     );
     const retry = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
       { sequence: 2, kind: 'waiting' },
+      { sequence: 2, kind: 'progress', detail: 'tool.start' },
       new Date('2026-01-01T00:00:03.000Z')
+    );
+    const laterWait = await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      { sequence: 3, kind: 'waiting' },
+      { sequence: 2, kind: 'progress', detail: 'tool.start' },
+      new Date('2026-01-01T00:00:04.000Z')
     );
 
     expect(first).toMatchObject({
@@ -916,12 +924,116 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
         detail: 'tool.start',
         observed_at: '2026-01-01T00:00:02.000Z',
       },
+      latest_executor_progress: {
+        sequence: 2,
+        kind: 'progress',
+        detail: 'tool.start',
+        observed_at: '2026-01-01T00:00:02.000Z',
+      },
     });
     expect(retry).toMatchObject({
       last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
       latest_executor_pulse: first?.latest_executor_pulse,
+      latest_executor_progress: first?.latest_executor_pulse,
+    });
+    expect(laterWait).toMatchObject({
+      last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
+      latest_executor_pulse: {
+        sequence: 3,
+        kind: 'waiting',
+        observed_at: '2026-01-01T00:00:04.000Z',
+      },
+      latest_executor_progress: first?.latest_executor_pulse,
     });
   });
+
+  dbTest(
+    'persists general and progress pulses independently across ordering and reload',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+      await taskRepo.connectExecutor(task.task_id);
+
+      await taskRepo.reportRuntimeTelemetry(
+        task.task_id,
+        { sequence: 3, kind: 'waiting', detail: 'permission.request' },
+        { sequence: 2, kind: 'progress', detail: 'item.completed' },
+        new Date('2026-01-01T00:00:03.000Z')
+      );
+      await taskRepo.reportRuntimeTelemetry(
+        task.task_id,
+        { sequence: 1, kind: 'sdk_started', detail: 'turn.started' },
+        { sequence: 1, kind: 'progress', detail: 'item.started' },
+        new Date('2026-01-01T00:00:04.000Z')
+      );
+      await taskRepo.reportRuntimeTelemetry(
+        task.task_id,
+        { sequence: 4, kind: 'unknown_activity', detail: 'future.event' },
+        { sequence: 2, kind: 'progress', detail: 'item.completed' },
+        new Date('2026-01-01T00:00:05.000Z')
+      );
+
+      expect(await taskRepo.findById(task.task_id)).toMatchObject({
+        latest_executor_pulse: {
+          sequence: 4,
+          kind: 'unknown_activity',
+          detail: 'future.event',
+          observed_at: '2026-01-01T00:00:05.000Z',
+        },
+        latest_executor_progress: {
+          sequence: 2,
+          kind: 'progress',
+          detail: 'item.completed',
+          observed_at: '2026-01-01T00:00:03.000Z',
+        },
+      });
+    }
+  );
+
+  dbTest(
+    'seeds legacy progress from the previous progress-valued general pulse',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-01-01T00:00:01.000Z',
+          latest_executor_pulse: {
+            sequence: 5,
+            kind: 'progress',
+            detail: 'item.completed',
+            observed_at: '2026-01-01T00:00:05.000Z',
+          },
+        })
+      );
+
+      await taskRepo.reportRuntimeTelemetry(
+        task.task_id,
+        { sequence: 6, kind: 'waiting', detail: 'permission.request' },
+        undefined,
+        new Date('2026-01-01T00:00:06.000Z')
+      );
+
+      expect(await taskRepo.findById(task.task_id)).toMatchObject({
+        latest_executor_pulse: {
+          sequence: 6,
+          kind: 'waiting',
+          observed_at: '2026-01-01T00:00:06.000Z',
+        },
+        latest_executor_progress: {
+          sequence: 5,
+          kind: 'progress',
+          detail: 'item.completed',
+          observed_at: '2026-01-01T00:00:05.000Z',
+        },
+      });
+    }
+  );
 
   dbTest('rejects telemetry before connect and after terminality', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
@@ -1196,6 +1308,7 @@ describe('TaskRepository.update', () => {
     );
     await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      undefined,
       undefined,
       new Date('2026-07-10T20:00:05Z')
     );

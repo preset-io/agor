@@ -30,7 +30,7 @@ interface StickyTodoRendererProps {
 
   /**
    * Status of the parent task. Used to decide whether items still marked
-   * `in_progress` should be displayed as `stopped` (user halted the task) or
+   * `in_progress` should be displayed as `stopped` (verified user halt) or
    * `unknown` (task ended without the agent updating this item).
    */
   taskStatus: TaskStatus;
@@ -45,7 +45,8 @@ interface StickyTodoRendererProps {
  * display-only status that conveys what we actually know:
  *
  * - Durable RUNNING with an active stall diagnosis: state is unknown
- * - User halted (STOPPED/STOPPING): we know the work didn't finish → 'stopped'
+ * - Stop requested but unverified (STOPPING): state is unknown
+ * - User halt verified (STOPPED): we know the work didn't finish → 'stopped'
  * - Task ended otherwise (COMPLETED/FAILED/TIMED_OUT) without the agent
  *   updating this item: we don't know if it finished → 'unknown'
  * - Other active/waiting states: leave as-is
@@ -58,8 +59,8 @@ function inProgressOverrideFor(
 
   switch (taskStatus) {
     case TaskStatus.STOPPED:
-    case TaskStatus.STOPPING:
       return 'stopped';
+    case TaskStatus.STOPPING:
     case TaskStatus.COMPLETED:
     case TaskStatus.FAILED:
     case TaskStatus.TIMED_OUT:
