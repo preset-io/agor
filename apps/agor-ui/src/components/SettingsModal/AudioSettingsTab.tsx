@@ -209,7 +209,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
           {() => (
             <FieldRow
               label="Only play for tasks longer than"
-              help="Set to 0 to always play. Chimes never play for tasks you stop manually."
+              tooltip="Set to 0 to always play. Chimes never play for tasks you stop manually."
             >
               <Form.Item name="minDurationSeconds" noStyle>
                 <InputNumber

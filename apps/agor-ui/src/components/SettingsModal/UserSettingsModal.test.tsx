@@ -469,4 +469,29 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByRole('menuitem', { name: /api tokens/i })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^profile$/i })).not.toBeInTheDocument();
   });
+
+  it('surfaces a panel-content setting via global search and navigates on click', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // "Volume" is a Preferences control, not a nav name — global search must find it.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'volume' },
+    });
+    const hit = await screen.findByRole('menuitem', { name: /volume/i });
+    fireEvent.click(hit);
+
+    // Clicking the hit lands on the hosting panel and clears the query.
+    await screen.findByRole('heading', { name: 'Preferences' });
+    expect(screen.getByPlaceholderText('Search settings')).toHaveValue('');
+  });
 });

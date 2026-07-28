@@ -1,3 +1,4 @@
+import { InfoCircleOutlined } from '@ant-design/icons';
 import type { FormItemProps } from 'antd';
 import { Divider, Flex, Form, Space, Typography, theme } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
@@ -53,6 +54,8 @@ export interface FieldRowProps {
   required?: boolean;
   /** Inline node after the label (e.g. a BETA tag). */
   badge?: ReactNode;
+  /** On-hover detail behind an info icon next to the label (keeps panels clean). */
+  tooltip?: ReactNode;
   name?: FormItemProps['name'];
   rules?: FormItemProps['rules'];
   valuePropName?: FormItemProps['valuePropName'];
@@ -69,6 +72,7 @@ export const FieldRow: React.FC<FieldRowProps> = ({
   help,
   required,
   badge,
+  tooltip,
   name,
   rules,
   valuePropName,
@@ -81,6 +85,7 @@ export const FieldRow: React.FC<FieldRowProps> = ({
       name={name}
       rules={rules}
       valuePropName={valuePropName}
+      tooltip={tooltip != null ? { title: tooltip, icon: <InfoCircleOutlined /> } : undefined}
       style={{ marginBottom: 22, ...style }}
       label={
         <Space size={4} align="center">

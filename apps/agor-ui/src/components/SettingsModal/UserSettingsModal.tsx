@@ -52,6 +52,7 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
+import { filterBySettingsSearch } from '../../utils/settingsSearch';
 import {
   buildConfigFromFormValues,
   getClearedFormValues,
@@ -61,6 +62,7 @@ import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFie
 import { CodexAuthSettings } from '../CodexAuth';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
+import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
 import { ToolIcon } from '../ToolIcon';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
@@ -138,6 +140,30 @@ const normalizeInitialKey = (tab?: string): string => {
   if (isAgenticToolTab(tab)) return providerKeyFor(tab);
   return LEGACY_KEY_MAP[tab] ?? tab;
 };
+
+// Flat index powering the modal's global search: every setting maps to the
+// panel that hosts it. Provider rows are appended per enabled tool at runtime.
+// NOTE: when adding a new setting to any panel, add an entry here (with search
+// keywords) so it stays findable.
+interface SettingIndexEntry {
+  label: string;
+  keywords?: string;
+  panelKey: string;
+}
+
+const STATIC_PANEL_TITLES: Record<string, string> = {
+  profile: 'Profile',
+  security: 'Security',
+  preferences: 'Preferences',
+  tokens: 'API tokens',
+  'env-vars': 'Environment variables',
+  access: 'Groups & access',
+};
+
+const panelTitleForKey = (key: string): string =>
+  key.startsWith(PROVIDER_KEY_PREFIX)
+    ? AGENTIC_TOOL_DISPLAY_NAMES[toolFromProviderKey(key)]
+    : (STATIC_PANEL_TITLES[key] ?? key);
 
 export interface UserSettingsModalProps {
   open: boolean;
@@ -918,20 +944,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     return groups;
   }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
 
-  const filteredGroups = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return navGroups;
-    return navGroups
-      .map((group) => ({
-        ...group,
-        children: group.children.filter((child) => child.title.toLowerCase().includes(query)),
-      }))
-      .filter((group) => group.children.length > 0);
-  }, [navGroups, search]);
-
   const menuItems: MenuProps['items'] = useMemo(
     () =>
-      filteredGroups.map((group) => ({
+      navGroups.map((group) => ({
         key: group.key,
         type: 'group' as const,
         label: group.label,
@@ -949,15 +964,129 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ),
         })),
       })),
-    [filteredGroups, statusDotColor]
+    [navGroups, statusDotColor]
   );
 
-  // A search that hides the active item only de-highlights it in the menu — the
-  // panel keeps rendering so in-progress edits are never silently swapped out
-  // (and lost) for a different panel. Clearing the search restores the nav row.
-  const activeVisible = filteredGroups.some((group) =>
+  const activeInNav = navGroups.some((group) =>
     group.children.some((child) => child.key === activeKey)
   );
+
+  // Global search index across every panel's contents (not just nav names).
+  const settingsIndex = useMemo<SettingIndexEntry[]>(() => {
+    const entries: SettingIndexEntry[] = [
+      { label: 'Profile', keywords: 'account identity', panelKey: 'profile' },
+      { label: 'Name', panelKey: 'profile' },
+      { label: 'Emoji', keywords: 'avatar icon', panelKey: 'profile' },
+      { label: 'Email', panelKey: 'profile' },
+      { label: 'Use Slack avatar', keywords: 'profile image picture', panelKey: 'profile' },
+      { label: 'Role', keywords: 'permission admin member viewer', panelKey: 'profile' },
+      { label: 'Preferences', keywords: 'audio interface sound', panelKey: 'preferences' },
+      { label: 'Enable chimes', keywords: 'sound audio notification', panelKey: 'preferences' },
+      { label: 'Volume', keywords: 'sound audio loudness', panelKey: 'preferences' },
+      { label: 'Chime sound', keywords: 'audio notification tone', panelKey: 'preferences' },
+      {
+        label: 'Minimum task duration',
+        keywords: 'chime audio seconds threshold',
+        panelKey: 'preferences',
+      },
+      {
+        label: 'Live event stream',
+        keywords: 'websocket debug beta navbar',
+        panelKey: 'preferences',
+      },
+      { label: 'Security', keywords: 'account', panelKey: 'security' },
+      { label: 'Password', keywords: 'credentials security', panelKey: 'security' },
+      { label: 'Unix username', keywords: 'impersonation os process user', panelKey: 'security' },
+      { label: 'Environment variables', keywords: 'env vars secrets', panelKey: 'env-vars' },
+    ];
+    if (isSelf && onRestartOnboarding) {
+      entries.push({
+        label: 'Restart onboarding',
+        keywords: 'wizard setup teammate',
+        panelKey: 'profile',
+      });
+    }
+    if (!isEditingOther) {
+      entries.push(
+        { label: 'API tokens', keywords: 'agor api key ci pipeline', panelKey: 'tokens' },
+        { label: 'Create API token', keywords: 'new key agor', panelKey: 'tokens' }
+      );
+    }
+    if (isAdmin) {
+      entries.push(
+        { label: 'Groups & access', keywords: 'admin permissions', panelKey: 'access' },
+        { label: 'Groups', keywords: 'membership branch permissions', panelKey: 'access' }
+      );
+    }
+    if (isAdmin && isEditingOther) {
+      entries.push({
+        label: 'Force password change',
+        keywords: 'security reset next login',
+        panelKey: 'access',
+      });
+    }
+    for (const tool of visibleAgenticToolTabs) {
+      const name = AGENTIC_TOOL_DISPLAY_NAMES[tool];
+      const providerKey = providerKeyFor(tool);
+      entries.push(
+        { label: name, keywords: `${tool} provider ai model`, panelKey: providerKey },
+        {
+          label: 'Authentication',
+          keywords: `${name} ${tool} api key credentials sign in oauth`,
+          panelKey: providerKey,
+        },
+        {
+          label: 'Session defaults',
+          keywords: `${name} ${tool} permission mode model mcp effort`,
+          panelKey: providerKey,
+        }
+      );
+    }
+    return entries;
+  }, [visibleAgenticToolTabs, isAdmin, isEditingOther, isSelf, onRestartOnboarding]);
+
+  const searchActive = search.trim().length > 0;
+
+  const searchResults = useMemo(
+    () =>
+      searchActive
+        ? filterBySettingsSearch(settingsIndex, search, [(e) => e.label, (e) => e.keywords])
+        : [],
+    [settingsIndex, search, searchActive]
+  );
+
+  const searchMenuItems: MenuProps['items'] = useMemo(
+    () =>
+      searchResults.map((entry, index) => {
+        const panelTitle = panelTitleForKey(entry.panelKey);
+        return {
+          key: String(index),
+          label: (
+            <Space size={6}>
+              <span>
+                <HighlightMatch text={entry.label} query={search} />
+              </span>
+              {panelTitle !== entry.label && (
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  · {panelTitle}
+                </Typography.Text>
+              )}
+            </Space>
+          ),
+        };
+      }),
+    [searchResults, search, token.fontSizeSM]
+  );
+
+  // A search that hides the active panel from the nav keeps the panel rendering
+  // (renderContent reads activeKey, not the search) so in-progress edits are
+  // never dropped; clicking a hit navigates and clears the query.
+  const handleSearchResultClick = (key: string) => {
+    const entry = searchResults[Number(key)];
+    if (!entry) return;
+    setActiveKey(entry.panelKey);
+    setSearch('');
+  };
 
   const isInlineSavePanel =
     activeKey === 'env-vars' ||
@@ -1039,7 +1168,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          help="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
+          tooltip="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
         >
           <Switch />
         </FieldRow>
@@ -1049,7 +1178,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
-          help={isAdmin ? undefined : 'Maintained by administrators'}
+          tooltip={isAdmin ? undefined : 'Maintained by administrators.'}
         >
           <Select
             disabled={!isAdmin}
@@ -1110,7 +1239,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         <FieldRow
           label="Unix username"
           name="unix_username"
-          help={
+          tooltip={
             isAdmin
               ? 'Unix user for process impersonation (lowercase letters, numbers, hyphens, underscores).'
               : 'Maintained by administrators.'
@@ -1147,7 +1276,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           }
           name="eventStreamEnabled"
           valuePropName="checked"
-          help="Adds an icon to the navbar to inspect live WebSocket events for debugging."
+          tooltip="Adds an icon to the navbar to inspect live WebSocket events for debugging."
         >
           <Switch />
         </FieldRow>
@@ -1193,7 +1322,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         <FieldRow
           label="Groups"
           name="groupIds"
-          help="Group memberships affect group-aware branch permissions."
+          tooltip="Group memberships affect group-aware branch permissions."
         >
           <Select
             mode="multiple"
@@ -1388,7 +1517,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             {canonicalTool === 'claude-code' && (
               <FieldRow
                 label="Sign-in method"
-                help="Choose one — Agor uses whichever is selected, the other is ignored."
+                tooltip="Choose one — Agor uses whichever is selected, the other is ignored."
               >
                 <Radio.Group
                   buttonStyle="solid"
@@ -1536,13 +1665,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         )}
       </div>
       <ConfigProvider theme={scopedTheme}>
-        <Layout style={{ height: '100%', background: 'transparent' }}>
-          <Sider width={232} style={{ background: 'transparent', overflow: 'auto' }}>
-            <div
-              style={{
-                padding: `${token.marginXXS}px ${token.marginXXS}px ${token.marginSM}px`,
-              }}
-            >
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <Sider
+            width={220}
+            style={{
+              background: token.colorBgElevated,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              overflow: 'auto',
+              padding: '20px 0',
+            }}
+          >
+            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
               <Input
                 allowClear
                 placeholder="Search settings"
@@ -1551,17 +1684,27 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
-            {filteredGroups.length === 0 ? (
-              <div style={{ padding: '8px 16px' }}>
-                <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
-              </div>
+            {searchActive ? (
+              searchResults.length === 0 ? (
+                <div style={{ padding: '8px 16px' }}>
+                  <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+                </div>
+              ) : (
+                <Menu
+                  mode="inline"
+                  selectedKeys={[]}
+                  onClick={({ key }) => handleSearchResultClick(key)}
+                  items={searchMenuItems}
+                  style={{ borderInlineEnd: 'none', background: 'transparent' }}
+                />
+              )
             ) : (
               <Menu
                 mode="inline"
-                selectedKeys={activeVisible ? [activeKey] : []}
+                selectedKeys={activeInNav ? [activeKey] : []}
                 onClick={({ key }) => setActiveKey(key)}
                 items={menuItems}
-                style={{ borderInlineEnd: 'none' }}
+                style={{ borderInlineEnd: 'none', background: 'transparent' }}
               />
             )}
           </Sider>
