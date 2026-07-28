@@ -336,9 +336,6 @@ export interface Task {
     approved_at?: string;
   };
 
-  /** MD5 of the SDK session file at task completion (only populated when stateless_fs_mode is enabled) */
-  session_md5?: string;
-
   created_at: string;
   started_at?: string; // When task execution was dispatched (UTC ISO string)
   /** Server timestamp recorded when the authenticated executor claims the task. */

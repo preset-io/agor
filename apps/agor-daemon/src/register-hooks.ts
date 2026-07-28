@@ -486,8 +486,7 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'agent_session_id',
   'error_message',
   'report',
-  'permission_request',
-  'session_md5'
+  'permission_request'
 );
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');

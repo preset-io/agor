@@ -194,8 +194,6 @@ export interface AgenticToolCapabilities {
   supportsChildSpawn: boolean;
   /** Can import historical sessions from tool's storage */
   supportsSessionImport: boolean;
-  /** Supports stateless filesystem mode (session state serialized to DB) */
-  supportsStatelessFsMode: boolean;
   /**
    * Supported reasoning-effort overrides. Absent when the runtime has no
    * effort control.
@@ -339,7 +337,6 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: true,
-    supportsStatelessFsMode: true,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     defaultReasoningEffort: 'high',
   },
@@ -351,9 +348,6 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     // v1: false. The on-disk JSONL is ingestable but the "adopt existing
     // session" UI flow is deferred to v2 (see analysis doc § Phased delivery).
     supportsSessionImport: false,
-    // CLI sessions live in long-running PTYs; state is on disk in the JSONL,
-    // not a serializable filesystem snapshot the daemon manages.
-    supportsStatelessFsMode: false,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     defaultReasoningEffort: 'high',
   },
@@ -361,31 +355,26 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: true,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
   },
   gemini: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   opencode: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   copilot: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   cursor: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
 };

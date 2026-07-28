@@ -19,17 +19,29 @@ function postgresSchemaTenantTables(): string[] {
   return [...tables].sort();
 }
 
+function retiredTenantTables(): Set<string> {
+  const migration = readRepoFile(
+    'packages/core/drizzle/postgres/0067_drop_serialized_sessions.sql'
+  );
+  return new Set(
+    [...migration.matchAll(/DROP TABLE(?: IF EXISTS)? "([^"]+)"/g)].map((match) => match[1])
+  );
+}
+
 function migrationTenantTables(): string[] {
   const migration = readRepoFile('packages/core/drizzle/postgres/0054_app_level_multitenancy.sql');
   const presetsMigration = readRepoFile(
     'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
   );
+  const retiredTables = retiredTenantTables();
   return [
     ...new Set(
       [
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
-      ].map((m) => m[1])
+      ]
+        .map((m) => m[1])
+        .filter((table) => !retiredTables.has(table))
     ),
   ].sort();
 }
@@ -39,17 +51,18 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
   ].join('\n');
+  const retiredTables = retiredTenantTables();
   return [
     ...new Set(
-      [...migration.matchAll(/CREATE POLICY "tenant_isolation_([^"]+)" ON "([^"]+)"/g)].map(
-        (m) => m[2]
-      )
+      [...migration.matchAll(/CREATE POLICY "tenant_isolation_([^"]+)" ON "([^"]+)"/g)]
+        .map((m) => m[2])
+        .filter((table) => !retiredTables.has(table))
     ),
   ].sort();
 }
 
 describe('Postgres multitenancy schema coverage', () => {
-  it('keeps tenant columns, tenant migration, and RLS policies in sync', () => {
+  it('keeps active tenant columns, tenant migrations, and RLS policies in sync', () => {
     const schemaTables = postgresSchemaTenantTables();
     const migrationTables = migrationTenantTables();
     const rlsTables = rlsPolicyTables();

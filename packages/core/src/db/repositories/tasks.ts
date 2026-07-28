@@ -183,7 +183,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? new Date(row.last_executor_heartbeat_at).toISOString()
         : undefined,
       created_by: row.created_by,
-      session_md5: row.session_md5 ?? undefined,
       ...row.data,
     };
   }
@@ -223,7 +222,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
-      session_md5: task.session_md5 ?? null,
       data: {
         full_prompt: task.full_prompt ?? '',
         message_range: task.message_range ?? {
@@ -858,7 +856,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             executor_connected_at: insertData.executor_connected_at,
             completed_at: insertData.completed_at,
             last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-            session_md5: insertData.session_md5,
             data: insertData.data,
           })
           .where(eq(tasks.task_id, fullId))

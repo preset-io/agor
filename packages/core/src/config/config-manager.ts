@@ -385,7 +385,6 @@ function validateConfig(config: AgorConfig): void {
     'sync_unix_passwords',
     'daemon_writes_user_message',
     'permission_timeout_ms',
-    'stateless_fs_mode',
     'executor_command_template',
     'executor_command_nonzero_may_have_dispatched',
     'required_user_env_vars',

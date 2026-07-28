@@ -440,17 +440,6 @@ export interface AgorExecutionSettings {
   permission_timeout_ms?: number;
 
   /**
-   * Stateless filesystem mode for headless/k8s deployments without persistent volumes.
-   *
-   * When enabled, the agent SDK's session state (JSONL transcript file) is serialized
-   * into the Agor database after each turn and restored on demand when a new pod picks
-   * up a session. This allows sessions to survive pod restarts/rescheduling.
-   *
-   * Default: false (session files are expected to persist on the local filesystem)
-   */
-  stateless_fs_mode?: boolean;
-
-  /**
    * Executor command template for remote/containerized execution.
    *
    * When null/undefined (default), executors are spawned as local subprocesses.

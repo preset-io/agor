@@ -63,14 +63,7 @@ import type {
   User,
   UUID,
 } from '@agor/core/types';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  hasMinimumRole,
-  MessageRole,
-  ROLES,
-  SessionStatus,
-  TaskStatus,
-} from '@agor/core/types';
+import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -1497,21 +1490,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           data.permissionMode !== session.permission_config?.mode
         ) {
           throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
-        }
-
-        // Early validation: reject unsupported tools when stateless_fs_mode is enabled
-        if (config.execution?.stateless_fs_mode) {
-          const toolName = session.agentic_tool as import('@agor/core/types').AgenticToolName;
-          const capabilities = AGENTIC_TOOL_CAPABILITIES[toolName];
-          if (capabilities && !capabilities.supportsStatelessFsMode) {
-            const supported = Object.entries(AGENTIC_TOOL_CAPABILITIES)
-              .filter(([, caps]) => caps.supportsStatelessFsMode)
-              .map(([name]) => name)
-              .join(', ');
-            throw new Error(
-              `stateless_fs_mode is enabled but tool '${toolName}' does not support it. Supported tools: ${supported}`
-            );
-          }
         }
 
         // Auto-unarchive on prompt

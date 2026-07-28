@@ -334,9 +334,6 @@ export const tasks = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
-    // MD5 of SDK session file at task completion (only populated when stateless_fs_mode is enabled)
-    session_md5: text('session_md5'),
-
     data: t
       .json<unknown>('data')
       .$type<{
@@ -390,41 +387,6 @@ export const tasks = sqliteTable(
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
-  })
-);
-
-/**
- * Serialized Sessions table - SDK session file snapshots for stateless_fs_mode
- *
- * When stateless_fs_mode is enabled, the SDK session file (JSONL transcript) is
- * serialized to this table after each turn. This allows sessions to survive pod
- * restarts/rescheduling in k8s environments without persistent volumes.
- */
-export const serializedSessions = sqliteTable(
-  'serialized_sessions',
-  {
-    id: text('id', { length: 36 }).primaryKey(),
-    session_id: text('session_id', { length: 36 })
-      .notNull()
-      .references(() => sessions.session_id, { onDelete: 'cascade' }),
-    branch_id: text('branch_id', { length: 36 })
-      .notNull()
-      .references(() => branches.branch_id, { onDelete: 'cascade' }),
-    task_id: text('task_id', { length: 36 }).references(() => tasks.task_id, {
-      onDelete: 'set null',
-    }),
-    turn_index: integer('turn_index').notNull().default(0),
-    created_at: t.timestamp('created_at').notNull(),
-    md5: text('md5').notNull(),
-    status: text('status').notNull(), // 'processing' | 'done' — validated at app layer
-    payload: blob('payload', { mode: 'buffer' }), // gzipped; NULL while status='processing'
-  },
-  (table) => ({
-    sessionTurnIdx: index('serialized_sessions_session_turn_idx').on(
-      table.session_id,
-      table.turn_index
-    ),
-    branchIdx: index('serialized_sessions_branch_idx').on(table.branch_id),
   })
 );
 
@@ -2400,8 +2362,6 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
-export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
-export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
 export type KBNamespaceInsert = typeof kbNamespaces.$inferInsert;
 export type KBNamespaceAclRow = typeof kbNamespaceAcl.$inferSelect;
