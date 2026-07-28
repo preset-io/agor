@@ -4,6 +4,9 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   formatPriorityContextMessage,
+  MAX_FILE_BYTES,
+  MAX_MANIFEST_FILES,
+  MAX_TOTAL_BYTES,
   readPriorityContextFiles,
   readPriorityContextManifest,
   resolvePriorityContextForWorktree,
@@ -49,6 +52,21 @@ describe('readPriorityContextManifest', () => {
   it('returns undefined and does not throw when `files` is missing or the wrong shape', async () => {
     await writeManifest({ onMissing: 'skip' });
     expect(await readPriorityContextManifest(worktree)).toBeUndefined();
+  });
+
+  it('rejects an unsupported `onMissing` value instead of silently ignoring it', async () => {
+    await writeManifest({ files: ['SOUL.md'], onMissing: 'fail' });
+    expect(await readPriorityContextManifest(worktree)).toBeUndefined();
+  });
+
+  it('caps the file list at MAX_MANIFEST_FILES and warns', async () => {
+    const files = Array.from({ length: MAX_MANIFEST_FILES + 5 }, (_, i) => `file-${i}.md`);
+    await writeManifest({ files });
+
+    const manifest = await readPriorityContextManifest(worktree);
+
+    expect(manifest?.files).toHaveLength(MAX_MANIFEST_FILES);
+    expect(manifest?.files).toEqual(files.slice(0, MAX_MANIFEST_FILES));
   });
 });
 
@@ -105,6 +123,41 @@ describe('readPriorityContextFiles', () => {
     }
   });
 
+  it('refuses to follow a final-component symlink pointing outside the worktree', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-priority-context-symlink-'));
+    try {
+      await fs.writeFile(path.join(outside, 'secret.md'), 'top secret', 'utf-8');
+      await fs.symlink(path.join(outside, 'secret.md'), path.join(worktree, 'LINK.md'));
+
+      const files = await readPriorityContextFiles(worktree, { files: ['LINK.md'] });
+
+      expect(files).toEqual([]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to follow a symlinked ancestor directory pointing outside the worktree, even for a not-yet-existing file', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-priority-context-ancestor-'));
+    try {
+      // The target file doesn't exist yet -- this is the "dangling target"
+      // case: fs.realpath fails on the full path, so containment must be
+      // checked by walking up to the symlinked ancestor, not by falling
+      // back to the lexical (pre-symlink) path.
+      await fs.symlink(outside, path.join(worktree, 'notes'));
+
+      const files = await readPriorityContextFiles(worktree, { files: ['notes/today.md'] });
+      expect(files).toEqual([]);
+
+      // Now create the target after the fact and confirm it's still refused.
+      await fs.writeFile(path.join(outside, 'today.md'), 'leaked', 'utf-8');
+      const filesAfter = await readPriorityContextFiles(worktree, { files: ['notes/today.md'] });
+      expect(filesAfter).toEqual([]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('resolves a {today} path to the current date file when it exists', async () => {
     await writeFile('memory/2026-07-28.md', "today's log");
 
@@ -137,6 +190,28 @@ describe('readPriorityContextFiles', () => {
     );
 
     expect(files).toEqual([]);
+  });
+
+  it('skips a single file that exceeds the per-file byte limit', async () => {
+    await writeFile('SOUL.md', 'ok');
+    await writeFile('HUGE.md', 'x'.repeat(MAX_FILE_BYTES + 1));
+
+    const files = await readPriorityContextFiles(worktree, { files: ['SOUL.md', 'HUGE.md'] });
+
+    expect(files).toEqual([{ path: 'SOUL.md', content: 'ok' }]);
+  });
+
+  it('stops once the total byte budget is reached, keeping earlier files', async () => {
+    const chunk = 'x'.repeat(MAX_FILE_BYTES);
+    await writeFile('A.md', chunk);
+    await writeFile('B.md', chunk);
+    await writeFile('C.md', chunk);
+
+    const files = await readPriorityContextFiles(worktree, { files: ['A.md', 'B.md', 'C.md'] });
+    const totalBytes = files.reduce((sum, f) => sum + Buffer.byteLength(f.content), 0);
+
+    expect(files.map((f) => f.path)).toEqual(['A.md', 'B.md']);
+    expect(totalBytes).toBeLessThanOrEqual(MAX_TOTAL_BYTES);
   });
 });
 

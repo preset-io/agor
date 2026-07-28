@@ -43,10 +43,25 @@ export interface PriorityContextFile {
 const MANIFEST_RELATIVE_PATH = path.join('.agor', 'priority-context.json');
 const TODAY_TOKEN = '{today}';
 
+/**
+ * Bounds on what a manifest can pull into the first prompt of every fresh
+ * root session. Without these, a manifest (accidentally oversized, or in a
+ * cloned/untrusted repo) could balloon request latency, token cost, or
+ * model context on the very first turn — before the agent has any chance to
+ * push back, since this is injected unconditionally, not read at the
+ * agent's discretion.
+ */
+export const MAX_MANIFEST_FILES = 20;
+export const MAX_FILE_BYTES = 200 * 1024; // 200 KB per file
+export const MAX_TOTAL_BYTES = 512 * 1024; // 512 KB across all injected files
+
 function isValidManifest(value: unknown): value is PriorityContextManifest {
   if (!value || typeof value !== 'object') return false;
-  const files = (value as Record<string, unknown>).files;
-  return Array.isArray(files) && files.every((entry) => typeof entry === 'string');
+  const record = value as Record<string, unknown>;
+  const { files, onMissing } = record;
+  if (!Array.isArray(files) || !files.every((entry) => typeof entry === 'string')) return false;
+  if (onMissing !== undefined && onMissing !== 'skip') return false;
+  return true;
 }
 
 /**
@@ -74,8 +89,18 @@ export async function readPriorityContextManifest(
   }
 
   if (!isValidManifest(parsed)) {
-    console.warn(`[priority-context] Ignoring ${manifestPath}: expected { files: string[] }`);
+    console.warn(
+      `[priority-context] Ignoring ${manifestPath}: expected { files: string[], onMissing?: 'skip' }`
+    );
     return undefined;
+  }
+
+  if (parsed.files.length > MAX_MANIFEST_FILES) {
+    console.warn(
+      `[priority-context] ${manifestPath} lists ${parsed.files.length} files, ` +
+        `only reading the first ${MAX_MANIFEST_FILES}`
+    );
+    return { ...parsed, files: parsed.files.slice(0, MAX_MANIFEST_FILES) };
   }
 
   return parsed;
@@ -85,14 +110,39 @@ function formatDateToken(date: Date): string {
   return date.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+function isContained(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return !(relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
+}
+
 /**
  * Resolve `relativePath` against `worktreePath` and confirm the result
- * doesn't escape the worktree (`../`, an absolute path, a symlink pointing
- * outside, etc.). The manifest is repo-authored, but it's still read as
- * plain untrusted-ish data — a typo'd or malicious `../../.ssh/id_rsa`
- * entry must never turn into an arbitrary host-file read. Returns
- * `undefined` for anything outside the worktree, which callers treat the
- * same as a missing file (`onMissing: 'skip'`).
+ * doesn't escape the worktree (`../`, an absolute path, a symlinked
+ * ancestor directory, etc.), returning the *canonicalized* path that was
+ * actually validated — never the unresolved lexical join — so a caller
+ * that reads exactly this path isn't relying on a second, unvalidated
+ * resolution.
+ *
+ * The manifest is repo-authored, but it's still read as plain
+ * untrusted-ish data — a typo'd or malicious `../../.ssh/id_rsa` entry (or
+ * a symlink swapped in under the worktree) must never turn into an
+ * arbitrary host-file read.
+ *
+ * This walks up to the nearest ancestor that actually exists and
+ * canonicalizes *that*, then re-appends the missing remainder — otherwise
+ * a not-yet-existing file beneath a symlinked ancestor directory would
+ * skip containment checking entirely (`fs.realpath` simply fails for a
+ * path that doesn't exist, which is the common case for most manifest
+ * entries). This closes the straightforward cases (final component is a
+ * symlink; an ancestor directory is a symlink to outside the worktree).
+ * It cannot fully close a filesystem that's concurrently and adversarially
+ * modified between this check and the subsequent read (no descriptor-
+ * relative/openat-style API is available via plain `node:fs/promises`) —
+ * that residual TOCTOU window is accepted here, matching the trust model
+ * of a manifest that already lives inside the branch's own worktree.
+ *
+ * Returns `undefined` for anything outside the worktree, which callers
+ * treat the same as a missing file (`onMissing: 'skip'`).
  */
 async function resolveWithinWorktree(
   worktreePath: string,
@@ -101,14 +151,26 @@ async function resolveWithinWorktree(
   if (path.isAbsolute(relativePath)) return undefined;
 
   const root = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
-  const candidate = path.resolve(root, relativePath);
-  const real = await fs.realpath(candidate).catch(() => candidate);
+  const lexicalCandidate = path.resolve(root, relativePath);
+  if (!isContained(root, lexicalCandidate)) return undefined;
 
-  const relativeToRoot = path.relative(root, real);
-  const escapesRoot = relativeToRoot === '' ? false : relativeToRoot.startsWith('..');
-  if (escapesRoot || path.isAbsolute(relativeToRoot)) return undefined;
+  let existingAncestor = lexicalCandidate;
+  const remainder: string[] = [];
+  for (;;) {
+    try {
+      existingAncestor = await fs.realpath(existingAncestor);
+      break;
+    } catch {
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) return undefined; // reached filesystem root
+      remainder.unshift(path.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
 
-  return candidate;
+  const resolved =
+    remainder.length > 0 ? path.join(existingAncestor, ...remainder) : existingAncestor;
+  return isContained(root, resolved) ? resolved : undefined;
 }
 
 async function fileExistsWithinWorktree(
@@ -153,7 +215,10 @@ async function resolveTemplatedPath(
 /**
  * Read a manifest's listed files from the worktree. Missing files, and any
  * path that resolves outside the worktree, are silently skipped —
- * `onMissing: 'skip'` is the only supported mode.
+ * `onMissing: 'skip'` is the only supported mode. Stops accepting further
+ * files once `MAX_TOTAL_BYTES` is reached; each file is also capped at
+ * `MAX_FILE_BYTES` individually. Both limits log a warning when they cause
+ * a file to be skipped, so a repo can tell its manifest is being trimmed.
  */
 export async function readPriorityContextFiles(
   worktreePath: string,
@@ -161,8 +226,16 @@ export async function readPriorityContextFiles(
   now: Date = new Date()
 ): Promise<PriorityContextFile[]> {
   const results: PriorityContextFile[] = [];
+  let totalBytes = 0;
 
   for (const rawPath of manifest.files) {
+    if (totalBytes >= MAX_TOTAL_BYTES) {
+      console.warn(
+        `[priority-context] Reached ${MAX_TOTAL_BYTES}-byte total budget, skipping remaining files`
+      );
+      break;
+    }
+
     const relativePath = await resolveTemplatedPath(worktreePath, rawPath, now);
     const safePath = await resolveWithinWorktree(worktreePath, relativePath);
     if (!safePath) {
@@ -171,9 +244,25 @@ export async function readPriorityContextFiles(
       console.warn(`[priority-context] Skipping "${rawPath}": resolves outside the worktree`);
       continue;
     }
+
     try {
+      const stats = await fs.stat(safePath);
+      if (stats.size > MAX_FILE_BYTES) {
+        console.warn(
+          `[priority-context] Skipping "${relativePath}": ${stats.size} bytes exceeds the ${MAX_FILE_BYTES}-byte per-file limit`
+        );
+        continue;
+      }
+      if (totalBytes + stats.size > MAX_TOTAL_BYTES) {
+        console.warn(
+          `[priority-context] Skipping "${relativePath}": would exceed the ${MAX_TOTAL_BYTES}-byte total budget`
+        );
+        continue;
+      }
+
       const content = await fs.readFile(safePath, 'utf-8');
       results.push({ path: relativePath, content });
+      totalBytes += stats.size;
     } catch {
       // onMissing: 'skip' — the only supported mode today.
     }
