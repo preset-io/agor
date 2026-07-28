@@ -1538,7 +1538,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <ConfigProvider theme={scopedTheme}>
         <Layout style={{ height: '100%', background: 'transparent' }}>
           <Sider width={232} style={{ background: 'transparent', overflow: 'auto' }}>
-            <div style={{ padding: '4px 16px 12px' }}>
+            <div
+              style={{
+                padding: `${token.marginXXS}px ${token.marginXXS}px ${token.marginSM}px`,
+              }}
+            >
               <Input
                 allowClear
                 placeholder="Search settings"
