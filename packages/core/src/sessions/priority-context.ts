@@ -67,17 +67,26 @@ export function isRootSessionGenealogy(genealogy: PriorityContextGenealogy): boo
 /**
  * The daemon reads manifest-listed files with its own (broader) filesystem
  * privileges, not the session creator's. That's fine for branch owners, but
- * for non-owners it would otherwise bypass `others_fs_access` — the same
- * setting that decides whether that user's own executor can read the
- * worktree at all under `insulated`/`strict` Unix isolation. Gate injection
- * on it so a non-owner denied filesystem access can't receive file contents
- * through the injected prompt instead.
+ * for non-owners it would otherwise bypass filesystem access control — the
+ * same effective grant that decides whether that user's own executor can
+ * read the worktree at all under `insulated`/`strict` Unix isolation. Gate
+ * injection on it so a non-owner denied filesystem access can't receive
+ * file contents through the injected prompt instead.
+ *
+ * Takes the shape of `BranchRepository.resolveUserAccess(...)`'s return
+ * value (deliberately duck-typed rather than importing that type, to keep
+ * this module dependency-free) so callers pass its result directly — not
+ * the branch's raw `others_fs_access` column. A user's effective access can
+ * differ from that raw fallback via branch/board group grants or
+ * board-aligned defaults, so passing the raw column here would both leak
+ * (when a grant lowers access below the raw fallback) and over-deny (when a
+ * grant raises it above).
  */
-export function canInjectPriorityContextForBranch(args: {
-  isOwner: boolean;
-  othersFsAccess: 'none' | 'read' | 'write' | undefined;
+export function canInjectPriorityContextForBranch(access: {
+  is_owner: boolean;
+  fs_access?: 'none' | 'read' | 'write';
 }): boolean {
-  return args.isOwner || args.othersFsAccess !== 'none';
+  return access.is_owner || access.fs_access !== 'none';
 }
 
 const MANIFEST_RELATIVE_PATH = path.join('.agor', 'priority-context.json');

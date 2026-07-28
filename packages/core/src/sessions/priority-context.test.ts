@@ -33,33 +33,32 @@ describe('isRootSessionGenealogy', () => {
 });
 
 describe('canInjectPriorityContextForBranch', () => {
-  it('always allows injection for the branch owner, regardless of others_fs_access', () => {
-    expect(canInjectPriorityContextForBranch({ isOwner: true, othersFsAccess: 'none' })).toBe(true);
-    expect(canInjectPriorityContextForBranch({ isOwner: true, othersFsAccess: undefined })).toBe(
-      true
-    );
+  it('always allows injection for the branch owner, regardless of fs_access', () => {
+    expect(canInjectPriorityContextForBranch({ is_owner: true, fs_access: 'none' })).toBe(true);
+    expect(canInjectPriorityContextForBranch({ is_owner: true, fs_access: undefined })).toBe(true);
   });
 
-  it('denies injection for a non-owner when others_fs_access is none', () => {
-    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'none' })).toBe(
-      false
-    );
+  it('denies injection for a non-owner when effective fs_access is none', () => {
+    expect(canInjectPriorityContextForBranch({ is_owner: false, fs_access: 'none' })).toBe(false);
   });
 
-  it('allows injection for a non-owner when others_fs_access grants read or write', () => {
-    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'read' })).toBe(
-      true
-    );
-    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: 'write' })).toBe(
-      true
-    );
+  it('allows injection for a non-owner when effective fs_access grants read or write', () => {
+    expect(canInjectPriorityContextForBranch({ is_owner: false, fs_access: 'read' })).toBe(true);
+    expect(canInjectPriorityContextForBranch({ is_owner: false, fs_access: 'write' })).toBe(true);
   });
 
-  it('defaults to allowed for a non-owner when others_fs_access is unset (open-access mode)', () => {
-    expect(canInjectPriorityContextForBranch({ isOwner: false, othersFsAccess: undefined })).toBe(
-      true
-    );
+  it('defaults to allowed for a non-owner when fs_access is unset (open-access mode)', () => {
+    expect(canInjectPriorityContextForBranch({ is_owner: false, fs_access: undefined })).toBe(true);
   });
+
+  // The predicate only sees the already-resolved `{ is_owner, fs_access }`
+  // pair — it can't distinguish "the raw branch column" from "a group grant
+  // that overrode it", so it correctly denies/allows based on whatever
+  // resolveUserAccess decided, whether that raises or lowers access relative
+  // to the branch's raw others_fs_access fallback. The combinatorics of how
+  // resolveUserAccess itself picks a winning candidate across direct
+  // ownership, branch/board group grants, and board-aligned defaults are
+  // covered in `db/repositories/branches.test.ts` ("resolveUserAccess").
 });
 
 let worktree: string;

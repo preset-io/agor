@@ -1356,12 +1356,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // that haven't opted in (the common case — resolves to undefined).
             //
             // The daemon reads these files with its own (broader) privileges, so
-            // for non-owner sessions we gate injection on the branch's
-            // `others_fs_access` — the same signal that decides whether that
-            // user's own executor is allowed to read the worktree at all in
-            // insulated/strict Unix modes. Without this, a non-owner denied
-            // filesystem access via `others_fs_access: 'none'` could still
-            // receive file contents through the injected prompt.
+            // for non-owner sessions we gate injection on the session creator's
+            // *effective* filesystem access to the branch — the same resolved
+            // grant (owner / group / board-aligned defaults) that decides
+            // whether that user's own executor is allowed to read the worktree
+            // at all in insulated/strict Unix modes. This must go through
+            // `resolveUserAccess` rather than the raw `others_fs_access`
+            // column: group and board grants can raise or lower a specific
+            // user's effective access relative to that column's fallback.
             let effectivePrompt = data.prompt;
             const isRootSession = isRootSessionGenealogy(lockedSession.genealogy);
             if (isRootSession && (await taskRepo.countBySession(id as SessionID)) === 0) {
@@ -1369,13 +1371,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 const branch = await branchRepository.findById(lockedSession.branch_id);
                 const canReadWorktreeFiles =
                   !!branch &&
-                  canInjectPriorityContextForBranch({
-                    isOwner: await branchRepository.isOwner(
-                      branch.branch_id,
+                  canInjectPriorityContextForBranch(
+                    await branchRepository.resolveUserAccess(
+                      branch,
                       lockedSession.created_by as UUID
-                    ),
-                    othersFsAccess: branch.others_fs_access,
-                  });
+                    )
+                  );
                 const priorityContext =
                   branch && canReadWorktreeFiles
                     ? await resolvePriorityContextForWorktree(branch.path)
