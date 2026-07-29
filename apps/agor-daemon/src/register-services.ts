@@ -979,7 +979,7 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
-        unix_user: executorUnixUser || undefined,
+        unix_user: sessionUnixUser || executorUnixUser || undefined,
       },
       onSpawn: (child, spawnContext) => {
         if (spawnContext.mode === 'local' && child.pid) {
