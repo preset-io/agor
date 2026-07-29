@@ -205,6 +205,59 @@ describe('probeRemoteAuthType', () => {
     expect(result.auth_server_origin).toBeUndefined();
   });
 
+  it.each([
+    ['well-known', 'Bearer realm="OAuth"'],
+    [
+      'header-named',
+      'Bearer realm="OAuth", resource_metadata="https://example.com/.well-known/oauth-protected-resource"',
+    ],
+  ])('never follows a %s discovery redirect into a private host', async (_label, challenge) => {
+    // The candidate URL is derived from an origin that passes the filter, so
+    // only the redirect is hostile. Discovery makes these fetches itself, so
+    // guarding the URLs the probe sees directly is not enough.
+    const spy = mockFetch(async (input) => {
+      if (String(input).endsWith('/mcp')) {
+        return jsonResponse(401, { 'www-authenticate': challenge });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+      });
+    });
+
+    const result = await probeRemoteAuthType('https://example.com/mcp', { now });
+
+    expect(result.probed_auth_type).toBe('oauth');
+    expect(result.auth_server_origin).toBeUndefined();
+    // Every request the probe made must have used manual redirect handling,
+    // and none may have reached the metadata host.
+    for (const call of spy.mock.calls) {
+      expect(String(call[0])).not.toContain('169.254.169.254');
+      if (!String(call[0]).endsWith('/mcp')) {
+        expect((call[1] as RequestInit | undefined)?.redirect).toBe('manual');
+      }
+    }
+  });
+
+  it('refuses an oversized discovery response instead of buffering it', async () => {
+    // 1 MiB against a 256 KiB cap, with a Content-Length that lies about it.
+    const oversized = 'x'.repeat(1024 * 1024);
+    mockFetch(async (input) => {
+      if (String(input).endsWith('/mcp')) {
+        return jsonResponse(401, {
+          'www-authenticate':
+            'Bearer realm="OAuth", resource_metadata="https://example.com/.well-known/oauth-protected-resource"',
+        });
+      }
+      return new Response(oversized, { status: 200, headers: { 'content-length': '10' } });
+    });
+
+    const result = await probeRemoteAuthType('https://example.com/mcp', { now });
+
+    expect(result.probed_auth_type).toBe('oauth');
+    expect(result.auth_server_origin).toBeUndefined();
+  });
+
   it('does not follow redirects when reading resource metadata either', async () => {
     const spy = mockFetch(async (input) => {
       if (String(input).endsWith('/mcp')) {

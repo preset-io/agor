@@ -15,6 +15,7 @@
 import type { MCPCatalogProbedAuthType, MCPCatalogProbeResult } from '@agor/core/types';
 import { isOAuthRequired, resolveMCPOAuthDiscovery } from '../tools/mcp/oauth-mcp-transport';
 import { isPublicHttpUrl } from '../utils/url';
+import { readCappedBody } from './capped-body';
 
 /** Protocol version sent in the probe handshake. */
 const PROBE_PROTOCOL_VERSION = '2025-06-18';
@@ -32,33 +33,42 @@ export interface AuthProbeOptions {
 }
 
 /**
- * Read RFC 9728 protected-resource metadata under probe rules.
+ * The fetch every probe request goes through, including the ones the shared
+ * discovery cascade makes on the probe's behalf.
  *
- * `oauth-mcp-transport` has its own fetch for this, used by the interactive
- * connect flow, where the user chose the server and a redirect is benign. The
- * probe's input is a URL an anonymous stranger published to a public registry,
- * echoed back through a `WWW-Authenticate` header, so it refuses redirects
- * outright rather than re-validating a `Location` the daemon never sees, and
- * caps the body. Only the fetch differs; the discovery cascade that produced
- * this URL is the shared one.
+ * The interactive connect flow's default fetch is deliberately more permissive:
+ * the user chose that server. Here the input is whatever an anonymous stranger
+ * published to a public registry, so every request — the initial handshake, the
+ * `.well-known` probes discovery derives from the origin, and the metadata URL
+ * a `WWW-Authenticate` header names — is held to the same three rules: a public
+ * destination, no redirect following, and a bounded body.
+ *
+ * Rejecting by throwing is deliberate. Discovery already treats a thrown fetch
+ * as "this candidate failed" and moves on, so a refused host degrades to no
+ * discovery rather than needing new error plumbing.
  */
-async function fetchProbeResourceMetadata(
-  metadataUrl: string,
+function createProbeFetch(
   timeoutMs: number
-): Promise<{ authorization_servers?: string[] } | null> {
-  const response = await fetch(metadataUrl, {
-    headers: { accept: 'application/json' },
-    redirect: 'manual',
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) return null;
+): (input: string, init?: RequestInit) => Promise<Response> {
+  return async (input, init) => {
+    if (!isPublicHttpUrl(input)) {
+      throw new Error(`Refusing to fetch non-public URL: ${input}`);
+    }
+    const response = await fetch(input, {
+      ...init,
+      // A redirect is not re-validated by re-entering this function, so refuse
+      // it outright rather than trusting a `Location` the daemon never sees.
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
 
-  const length = Number(response.headers.get('content-length'));
-  if (Number.isFinite(length) && length > MAX_METADATA_BYTES) return null;
-  const body = await response.text();
-  if (body.length > MAX_METADATA_BYTES) return null;
-
-  return JSON.parse(body) as { authorization_servers?: string[] };
+    const capped = await readCappedBody(response, MAX_METADATA_BYTES);
+    if (capped === null) {
+      throw new Error(`Response exceeded ${MAX_METADATA_BYTES} bytes: ${input}`);
+    }
+    // Re-wrap so downstream `.json()` sees the bounded body, not the socket.
+    return new Response(capped, { status: response.status, headers: response.headers });
+  };
 }
 
 /**
@@ -76,16 +86,17 @@ function parseChallengeScheme(header: string | null): string | undefined {
  * Origin of the first authorization server the discovery cascade found.
  *
  * Every URL reached here is third-party-controlled, and not only at the first
- * hop: `resource_metadata="..."` is read verbatim out of the probed server's
- * own `WWW-Authenticate` header, and the authorization server list comes out of
- * whatever that URL returns. Each is re-checked against `isPublicHttpUrl`
- * before it is fetched or persisted, so a hostile registry entry cannot walk
- * the daemon into its private network one hop at a time.
+ * hop: discovery derives `.well-known` candidates from the probed origin,
+ * `resource_metadata="..."` is read verbatim out of that server's own
+ * `WWW-Authenticate` header, and the authorization server list comes out of
+ * whatever those return. The cascade guards its own requests — it resolves and
+ * pins every destination and revalidates each redirect — so only the metadata
+ * URL this function fetches directly needs the probe's own transport.
  */
 async function resolveAuthServerOrigin(
   wwwAuthenticate: string | null,
   remoteUrl: string,
-  timeoutMs: number
+  probeFetch: (input: string, init?: RequestInit) => Promise<Response>
 ): Promise<string | undefined> {
   const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, remoteUrl);
   if (!discovery) return undefined;
@@ -95,8 +106,14 @@ async function resolveAuthServerOrigin(
       const issuer = discovery.authServerMetadata.issuer;
       return isPublicHttpUrl(issuer) ? new URL(issuer).origin : undefined;
     }
+    // `probeFetch` re-checks this, but returning early keeps a refused host out
+    // of the logs discovery would otherwise emit for a thrown candidate.
     if (!isPublicHttpUrl(discovery.metadataUrl)) return undefined;
-    const metadata = await fetchProbeResourceMetadata(discovery.metadataUrl, timeoutMs);
+    const response = await probeFetch(discovery.metadataUrl, {
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) return undefined;
+    const metadata = (await response.json()) as { authorization_servers?: string[] };
     const [authServer] = metadata?.authorization_servers ?? [];
     if (!authServer || !isPublicHttpUrl(authServer)) return undefined;
     return new URL(authServer).origin;
@@ -159,7 +176,7 @@ export async function probeRemoteAuthType(
     const origin = await resolveAuthServerOrigin(
       response.headers.get('www-authenticate'),
       remoteUrl,
-      timeoutMs
+      createProbeFetch(timeoutMs)
     );
     return {
       probed_auth_type: 'oauth',

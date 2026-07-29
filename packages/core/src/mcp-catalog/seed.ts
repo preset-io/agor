@@ -36,21 +36,22 @@ export async function seedCuratedCatalog(
   // Read and validate the file before opening any database unit.
   const entries = options.entries ?? (await loadCuratedCatalog(options.filePath));
 
+  // One database unit per entry: on Postgres a failed statement aborts the
+  // enclosing transaction, so a shared unit would turn one bad row into a
+  // rollback of every row seeded before it while still counting them.
   const result: SeedCuratedCatalogResult = { created: 0, updated: 0, failed: 0 };
-  await withRepository(async (repository) => {
-    for (const entry of entries) {
-      try {
-        const outcome = await repository.upsertCuration(entry);
-        result[outcome] += 1;
-      } catch (error) {
-        result.failed += 1;
-        log(
-          `Failed to seed curated catalog entry ${entry.name}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
+  for (const entry of entries) {
+    try {
+      const outcome = await withRepository((repository) => repository.upsertCuration(entry));
+      result[outcome] += 1;
+    } catch (error) {
+      result.failed += 1;
+      log(
+        `Failed to seed curated catalog entry ${entry.name}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
-  });
+  }
   return result;
 }

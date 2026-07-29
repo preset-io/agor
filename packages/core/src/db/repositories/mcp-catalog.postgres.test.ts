@@ -36,6 +36,7 @@ const suffix = `${process.pid}-${Math.trunc(performance.now())}`;
 const CAPABILITY_WRITE = `test.capability-${suffix}/mcp`;
 const UNSCOPED_WRITE = `test.unscoped-${suffix}/mcp`;
 const TENANT_WRITE = `test.tenant-${suffix}/mcp`;
+const TX_PREFIX = `test.tx-${suffix}`;
 
 describePostgres('mcp_catalog_entries row-level security', () => {
   let db: Database;
@@ -130,6 +131,70 @@ describePostgres('mcp_catalog_entries row-level security', () => {
     expect(await readAs('tenant-b')).not.toBeNull();
     // And with no tenant scope at all, since the catalog belongs to no tenant.
     expect(await repository.findByName(CAPABILITY_WRITE)).not.toBeNull();
+  });
+
+  it('isolates a failing row so its neighbours still commit', async () => {
+    // The reason ingestion opens one database unit per entry. On Postgres a
+    // failed statement aborts the enclosing transaction: sharing a unit across
+    // a page would make every later row fail with 25P02 and would roll back the
+    // rows already written, while the counters still reported them as created.
+    // SQLite has no such behaviour, so no SQLite test can catch a regression.
+    //
+    // The poison statement must run on the SCOPED handle. Issued on the outer
+    // pool it would fail harmlessly on another connection and prove nothing.
+    const poison = (scoped: unknown) =>
+      executeRaw(
+        scoped as Database,
+        sql`INSERT INTO mcp_catalog_entries (catalog_entry_id) VALUES (NULL)`
+      );
+
+    const perEntry = [`${TX_PREFIX}-first`, `${TX_PREFIX}-poison`, `${TX_PREFIX}-last`];
+    const outcomes: string[] = [];
+    for (const name of perEntry) {
+      try {
+        await runWithSystemDatabaseScope(
+          db,
+          'mcp catalog per-entry isolation test',
+          async (scoped) => {
+            if (name.endsWith('-poison')) await poison(scoped);
+            await new MCPCatalogRepository(scoped as never).upsertRegistryEntry({
+              name,
+              version: '1',
+            });
+          },
+          { capability: 'mcp_catalog_ingestion' }
+        );
+        outcomes.push('ok');
+      } catch {
+        outcomes.push('failed');
+      }
+    }
+
+    expect(outcomes).toEqual(['ok', 'failed', 'ok']);
+    expect(await repository.findByName(perEntry[0])).not.toBeNull();
+    expect(await repository.findByName(perEntry[1])).toBeNull();
+    expect(await repository.findByName(perEntry[2])).not.toBeNull();
+
+    // The counterfactual, so the assertions above are not vacuous: the same
+    // writes sharing ONE unit lose the row committed before the failure.
+    const shared = [`${TX_PREFIX}-shared-first`, `${TX_PREFIX}-shared-last`];
+    await expect(
+      runWithSystemDatabaseScope(
+        db,
+        'mcp catalog shared-unit counterfactual',
+        async (scoped) => {
+          const repo = new MCPCatalogRepository(scoped as never);
+          await repo.upsertRegistryEntry({ name: shared[0], version: '1' });
+          await poison(scoped).catch(() => {});
+          // Postgres has aborted the transaction; nothing else can succeed.
+          await repo.upsertRegistryEntry({ name: shared[1], version: '1' });
+        },
+        { capability: 'mcp_catalog_ingestion' }
+      )
+    ).rejects.toThrow();
+
+    expect(await repository.findByName(shared[0])).toBeNull();
+    expect(await repository.findByName(shared[1])).toBeNull();
   });
 
   it('pushes filters into Postgres, not just SQLite', async () => {

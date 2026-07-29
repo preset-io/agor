@@ -23,7 +23,7 @@ import type {
 import { and, asc, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MCPCatalogEntryInsert, type MCPCatalogEntryRow, mcpCatalogEntries } from '../schema';
 import { RepositoryError } from './base';
 
@@ -281,6 +281,7 @@ export class MCPCatalogRepository {
           registry_icons: entry.registry_icons,
           registry_status: entry.registry_status,
           repository_source: entry.repository_source,
+          ...(entry.remote_url ? { connect_surface_source: 'registry' as const } : {}),
         },
         ...registryColumns,
       };
@@ -336,6 +337,9 @@ export class MCPCatalogRepository {
           registry_icons: entry.registry_icons,
           registry_status: entry.registry_status,
           repository_source: entry.repository_source,
+          // The registry owns the surface whenever it published one; otherwise
+          // whatever owned it before still does.
+          ...(entry.remote_url ? { connect_surface_source: 'registry' as const } : {}),
         },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
@@ -376,12 +380,30 @@ export class MCPCatalogRepository {
           transport: entry.transport ?? null,
           remote_url: entry.remote_url ?? null,
           has_remote: Boolean(entry.remote_url),
-          data: { capabilities: entry.capabilities },
+          data: {
+            capabilities: entry.capabilities,
+            ...(entry.remote_url ? { connect_surface_source: 'curation' as const } : {}),
+          },
           ...curationColumns,
         } satisfies MCPCatalogEntryInsert)
         .run();
       return 'created';
     }
+
+    // `transport` describes `remote_url`, so the pair moves as a unit from one
+    // source or the other, never mixed: a registry package-only row (`stdio`,
+    // no remote) keeping its `stdio` while curation supplies an HTTPS remote
+    // would describe the row as unconnectable over HTTP when it is not.
+    //
+    // Ownership is read from recorded provenance rather than inferred from the
+    // column being non-null. Inferring it would pin the first curated URL
+    // forever, because an edited `curated.yaml` would see its own earlier value
+    // sitting there and defer to it.
+    const registryOwnsSurface =
+      existing.data?.connect_surface_source === 'registry' && Boolean(existing.remote_url);
+    const connectSurface = registryOwnsSurface
+      ? { remote_url: existing.remote_url, transport: existing.transport }
+      : { remote_url: entry.remote_url ?? null, transport: entry.transport ?? null };
 
     await update(this.db, mcpCatalogEntries)
       .set({
@@ -389,16 +411,56 @@ export class MCPCatalogRepository {
         title: entry.title ?? existing.title,
         description: entry.description ?? existing.description,
         website_url: entry.website_url ?? existing.website_url,
-        // The registry is authoritative for the connect surface once it knows
-        // the server; curation only supplies it for entries the registry lacks.
-        transport: existing.transport ?? entry.transport ?? null,
-        remote_url: existing.remote_url ?? entry.remote_url ?? null,
-        has_remote: Boolean(existing.remote_url ?? entry.remote_url),
-        data: { ...(existing.data ?? {}), capabilities: entry.capabilities },
+        transport: connectSurface.transport,
+        remote_url: connectSurface.remote_url,
+        has_remote: Boolean(connectSurface.remote_url),
+        data: {
+          ...(existing.data ?? {}),
+          capabilities: entry.capabilities,
+          ...(registryOwnsSurface ? {} : { connect_surface_source: 'curation' as const }),
+        },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
     return 'updated';
+  }
+
+  /**
+   * Retire a row the registry has withdrawn.
+   *
+   * An uncurated row is deleted outright: it exists only to mirror a registry
+   * record that no longer exists. A curated row is kept but has its
+   * registry-owned connect surface cleared, so it stops being offered without
+   * silently destroying hand-written curation — the curator is told through the
+   * returned outcome and decides whether to remove the entry from
+   * `curated.yaml`.
+   */
+  async retireWithdrawnEntry(name: string): Promise<'deleted' | 'retired-curated' | 'absent'> {
+    const existing = await this.rawByName(name);
+    if (!existing) return 'absent';
+
+    if (!existing.curated) {
+      await deleteFrom(this.db, mcpCatalogEntries)
+        .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
+        .run();
+      return 'deleted';
+    }
+
+    await update(this.db, mcpCatalogEntries)
+      .set({
+        remote_url: null,
+        has_remote: false,
+        transport: null,
+        // The verdict described an endpoint that is no longer offered.
+        probed_auth_type: 'unknown',
+        probed_at: null,
+        auth_server_origin: null,
+        updated_at: new Date(),
+        data: { ...(existing.data ?? {}), registry_status: 'deleted' },
+      })
+      .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
+      .run();
+    return 'retired-curated';
   }
 
   /** Cache an auth probe verdict on the row. */

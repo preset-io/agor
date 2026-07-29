@@ -80,6 +80,83 @@ describe('seedCuratedCatalog', () => {
     });
   });
 
+  dbTest('never mixes a registry transport with a curated remote URL', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    // The registry knows this server but publishes only a package: stdio, no
+    // remote. Curation then supplies an HTTPS remote.
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      transport: 'stdio',
+    });
+
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [
+        entry('com.example/mcp', {
+          remote_url: 'https://mcp.example.com/mcp',
+          transport: 'streamable-http',
+        }),
+      ],
+    });
+
+    // Keeping `stdio` beside an HTTPS remote would describe the row as
+    // unconnectable over HTTP when it is not.
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      remote_url: 'https://mcp.example.com/mcp',
+      transport: 'streamable-http',
+      has_remote: true,
+    });
+  });
+
+  dbTest('lets curation correct a remote URL it supplied earlier', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [
+        entry('io.sentry/mcp', {
+          remote_url: 'https://old.sentry.dev/mcp',
+          transport: 'streamable-http',
+        }),
+      ],
+    });
+
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [
+        entry('io.sentry/mcp', {
+          remote_url: 'https://mcp.sentry.dev/mcp',
+          transport: 'streamable-http',
+        }),
+      ],
+    });
+
+    // Deferring to whatever is already stored would pin the first curated URL
+    // forever, because curation would be deferring to its own earlier value.
+    expect(await repository.findByName('io.sentry/mcp')).toMatchObject({
+      remote_url: 'https://mcp.sentry.dev/mcp',
+    });
+  });
+
+  dbTest('still defers to a registry-published remote over a curated one', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.notion/mcp',
+      remote_url: 'https://mcp.notion.com/mcp',
+      transport: 'streamable-http',
+    });
+
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [
+        entry('com.notion/mcp', {
+          remote_url: 'https://guessed.example.com/mcp',
+          transport: 'sse',
+        }),
+      ],
+    });
+
+    expect(await repository.findByName('com.notion/mcp')).toMatchObject({
+      remote_url: 'https://mcp.notion.com/mcp',
+      transport: 'streamable-http',
+    });
+  });
+
   dbTest('is idempotent across restarts', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
     const entries = [entry('a.example/one'), entry('b.example/two')];

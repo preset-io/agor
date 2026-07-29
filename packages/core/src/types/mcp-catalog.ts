@@ -147,6 +147,15 @@ export interface MCPCatalogEntryData {
   repository_source?: string;
   /** Challenge scheme from a `credentials` probe verdict, e.g. `Basic`. */
   probed_auth_scheme?: string;
+  /**
+   * Which writer owns the stored `remote_url` / `transport` pair.
+   *
+   * Without it the two writers cannot tell "curation supplied this" from
+   * "the registry supplied this", so neither can safely update it: curation
+   * could not correct its own URL, and the registry could not tell a gap it
+   * should fill from a value it must not clobber.
+   */
+  connect_surface_source?: 'registry' | 'curation';
 }
 
 /**

@@ -12,6 +12,7 @@ import type {
   MCPCatalogRemote,
   MCPCatalogTransport,
 } from '@agor/core/types';
+import { readCappedBody } from './capped-body';
 
 export const DEFAULT_MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io';
 
@@ -40,6 +41,12 @@ interface RegistryPage {
 /** A page of registry records already normalized onto the catalog's shape. */
 export interface RegistryFetchPage {
   entries: MCPCatalogRegistryUpsert[];
+  /**
+   * Names the registry has withdrawn. Reported separately from `entries`
+   * because dropping them at normalization only stops a withdrawn server being
+   * inserted — a row mirrored while it was active would stay browsable forever.
+   */
+  withdrawn: string[];
   /** Records the registry returned that could not be normalized. */
   skipped: number;
   nextCursor?: string;
@@ -135,11 +142,32 @@ function normalizeIcons(value: unknown): string[] | undefined {
 }
 
 /**
- * Registry lifecycle states worth mirroring. The registry also publishes
- * `deleted` and `deprecated`; those are dropped rather than stored, so a
- * withdrawn server stops being offered instead of staying connectable forever.
+ * Registry lifecycle states worth mirroring. Anything else — `deleted`,
+ * `deprecated` — is a withdrawal: not ingested, and actively removed if a
+ * previous run mirrored it while it was still active.
  */
 const INGESTIBLE_STATUSES = new Set(['active', undefined]);
+
+/** Read the registry's lifecycle status for a record. */
+function recordStatus(record: unknown): string | undefined {
+  if (!record || typeof record !== 'object') return undefined;
+  const meta = (record as Record<string, unknown>)._meta as Record<string, unknown> | undefined;
+  const official = meta?.[OFFICIAL_META_KEY] as Record<string, unknown> | undefined;
+  return asString(official?.status, 32);
+}
+
+/**
+ * Name of a server the registry has withdrawn, or null when the record is
+ * active or unusable. Callers delete or retire the matching row.
+ */
+export function normalizeRegistryWithdrawal(record: unknown): string | null {
+  if (!record || typeof record !== 'object') return null;
+  const server = (record as Record<string, unknown>).server as Record<string, unknown> | undefined;
+  if (!server || typeof server !== 'object') return null;
+  const name = asString(server.name);
+  if (!name) return null;
+  return INGESTIBLE_STATUSES.has(recordStatus(record)) ? null : name;
+}
 
 /**
  * Convert one registry record into the columns ingestion owns.
@@ -159,7 +187,7 @@ export function normalizeRegistryServer(record: unknown): MCPCatalogRegistryUpse
 
   const meta = envelope._meta as Record<string, unknown> | undefined;
   const official = meta?.[OFFICIAL_META_KEY] as Record<string, unknown> | undefined;
-  const status = asString(official?.status, 32);
+  const status = recordStatus(record);
   if (!INGESTIBLE_STATUSES.has(status)) return null;
 
   const remotes = normalizeRemotes(server.remotes);
@@ -220,25 +248,28 @@ export class MCPRegistryClient {
       throw new Error(`MCP registry responded ${response.status} for ${url.pathname}`);
     }
 
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-      throw new Error(`MCP registry page exceeded ${MAX_RESPONSE_BYTES} bytes`);
-    }
-    const body = await response.text();
-    if (body.length > MAX_RESPONSE_BYTES) {
+    const body = await readCappedBody(response, MAX_RESPONSE_BYTES);
+    if (body === null) {
       throw new Error(`MCP registry page exceeded ${MAX_RESPONSE_BYTES} bytes`);
     }
     const page = JSON.parse(body) as RegistryPage;
     const records = Array.isArray(page.servers) ? page.servers : [];
 
     const entries: MCPCatalogRegistryUpsert[] = [];
+    const withdrawn: string[] = [];
     let skipped = 0;
     for (const record of records) {
       const normalized = normalizeRegistryServer(record);
-      if (normalized) entries.push(normalized);
+      if (normalized) {
+        entries.push(normalized);
+        continue;
+      }
+      // A withdrawal is a real instruction, not a malformed record.
+      const retired = normalizeRegistryWithdrawal(record);
+      if (retired) withdrawn.push(retired);
       else skipped += 1;
     }
 
-    return { entries, skipped, nextCursor: page.metadata?.nextCursor };
+    return { entries, withdrawn, skipped, nextCursor: page.metadata?.nextCursor };
   }
 }

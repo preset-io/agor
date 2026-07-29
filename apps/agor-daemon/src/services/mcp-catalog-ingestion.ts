@@ -111,8 +111,8 @@ export class MCPCatalogIngestionWorker {
    * Reapply curation, then sync the registry.
    *
    * Curation runs first so a fresh install has recognizable, connectable cards
-   * before the multi-minute registry walk finishes. Each half opens its own
-   * short system database unit rather than holding one across the whole run.
+   * before the multi-minute registry walk finishes. Neither half holds a
+   * database unit across the run; both open one per row they write.
    */
   async runOnce(): Promise<IngestionResult | null> {
     if (this.running) return null;
@@ -139,7 +139,7 @@ export class MCPCatalogIngestionWorker {
       this.lastResult = result;
       this.lastError = null;
       console.log(
-        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated})`
+        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, withdrawn: ${result.withdrawn}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated})`
       );
       return result;
     } catch (error) {
@@ -152,14 +152,16 @@ export class MCPCatalogIngestionWorker {
   }
 
   /**
-   * Build the factory ingestion uses to open one short system database unit per
-   * page and per probe write.
+   * Build the factory the catalog writers use to open one short system database
+   * unit per row.
    *
-   * Returning a factory rather than wrapping the whole run is the point: a full
-   * sync spans minutes of registry pagination and probe requests, and holding
-   * one Postgres transaction across that would pin a pooled connection, hold
-   * back autovacuum database-wide, and discard every upsert if the connection
-   * dropped near the end.
+   * Returning a factory rather than wrapping the whole run is the point. A full
+   * sync spans minutes of registry pagination and probe requests; holding one
+   * Postgres transaction across that would pin a pooled connection, hold back
+   * autovacuum database-wide, and discard every upsert if the connection
+   * dropped near the end. Per row rather than per page because a failed
+   * statement aborts a Postgres transaction outright — a shared unit would turn
+   * one bad row into a rollback of every row written before it.
    */
   private withSystemScope(reason: string): WithCatalogRepository {
     return <T>(work: (repository: MCPCatalogRepository) => Promise<T>): Promise<T> =>

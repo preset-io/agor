@@ -10,9 +10,9 @@
  * The caller supplies a `withRepository` factory rather than a repository,
  * because a run lasts minutes and must never hold one database transaction
  * across it. Every HTTP call — registry pages and auth probes alike — happens
- * outside any database scope; each database unit spans one page of upserts or
- * one probe write. A run that dies halfway leaves the pages it already
- * committed in place.
+ * outside any database scope, and each database unit spans a single row. A run
+ * that dies halfway leaves everything it already committed in place, and one
+ * row the database rejects costs only itself.
  */
 
 import type { MCPCatalogProbeResult } from '@agor/core/types';
@@ -53,6 +53,8 @@ export interface IngestionResult {
   unchanged: number;
   /** Registry records that could not be normalized onto a catalog row. */
   skipped: number;
+  /** Rows removed or retired because the registry withdrew the server. */
+  withdrawn: number;
   pagesFetched: number;
   pageFailures: number;
   probed: number;
@@ -104,6 +106,7 @@ export async function runCatalogIngestion(
     updated: 0,
     unchanged: 0,
     skipped: 0,
+    withdrawn: 0,
     pagesFetched: 0,
     pageFailures: 0,
     probed: 0,
@@ -158,23 +161,47 @@ export async function runCatalogIngestion(
       return true;
     });
 
-    await withRepository(async (repository) => {
-      for (const entry of fresh) {
-        try {
-          const outcome = await repository.upsertRegistryEntry(entry);
-          result[outcome] += 1;
-        } catch (error) {
-          // A single poisoned entry (oversized blob, constraint violation) must
-          // not cost the rest of the page its update.
-          result.skipped += 1;
-          log(
-            `Skipped registry entry ${entry.name}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
+    // One database unit per entry, not per page. On Postgres a failed statement
+    // aborts the whole transaction: catching the error inside a page-wide unit
+    // would leave every later statement failing with 25P02 and would roll back
+    // the rows already written, while the counters still reported them as
+    // created. SQLite does not behave that way, so no SQLite test can show it.
+    // The extra begin/commit per row is affordable — this is a background job
+    // whose inter-page sleeps already dominate its wall clock.
+    for (const entry of fresh) {
+      try {
+        const outcome = await withRepository((repository) => repository.upsertRegistryEntry(entry));
+        result[outcome] += 1;
+      } catch (error) {
+        result.skipped += 1;
+        log(
+          `Skipped registry entry ${entry.name}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
-    });
+    }
+
+    // A withdrawal must reach the database, not just be declined at parse:
+    // a row mirrored while the server was active would otherwise stay
+    // browsable and connectable indefinitely.
+    for (const name of fetched.withdrawn) {
+      try {
+        const outcome = await withRepository((repository) => repository.retireWithdrawnEntry(name));
+        if (outcome !== 'absent') {
+          result.withdrawn += 1;
+          if (outcome === 'retired-curated') {
+            log(`Registry withdrew curated entry ${name}; cleared its connect surface`);
+          }
+        }
+      } catch (error) {
+        log(
+          `Failed to retire withdrawn entry ${name}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
 
     const nextCursor = fetched.nextCursor;
     if (!nextCursor) break;

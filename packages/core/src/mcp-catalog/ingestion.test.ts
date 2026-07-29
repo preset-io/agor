@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { MCPCatalogRepository } from '../db/repositories/mcp-catalog';
 import { dbTest } from '../db/test-helpers';
 import { runCatalogIngestion } from './ingestion';
-import { MCPRegistryClient, normalizeRegistryServer } from './registry-client';
+import {
+  MCPRegistryClient,
+  normalizeRegistryServer,
+  normalizeRegistryWithdrawal,
+} from './registry-client';
 
 /**
  * The production callers open a fresh database unit per page and per probe.
@@ -50,6 +54,19 @@ function registryRecord(
   };
 }
 
+/** A registry envelope the registry has withdrawn. */
+function withdrawnRecord(name: string, status: 'deleted' | 'deprecated') {
+  return {
+    ...registryRecord(name),
+    _meta: {
+      'io.modelcontextprotocol.registry/official': {
+        status,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+      },
+    },
+  };
+}
+
 /** A registry client backed by fixed pages rather than the network. */
 function stubRegistry(pages: Array<{ records: unknown[]; nextCursor?: string }>) {
   let call = 0;
@@ -58,13 +75,19 @@ function stubRegistry(pages: Array<{ records: unknown[]; nextCursor?: string }>)
       const page = pages[call] ?? { records: [], nextCursor: undefined };
       call += 1;
       const entries: MCPCatalogRegistryUpsert[] = [];
+      const withdrawn: string[] = [];
       let skipped = 0;
       for (const record of page.records) {
         const normalized = normalizeRegistryServer(record);
-        if (normalized) entries.push(normalized);
+        if (normalized) {
+          entries.push(normalized);
+          continue;
+        }
+        const retired = normalizeRegistryWithdrawal(record);
+        if (retired) withdrawn.push(retired);
         else skipped += 1;
       }
-      return { entries, skipped, nextCursor: page.nextCursor };
+      return { entries, withdrawn, skipped, nextCursor: page.nextCursor };
     }),
   } as unknown as MCPRegistryClient;
 }
@@ -407,11 +430,64 @@ describe('runCatalogIngestion', () => {
         log: silent,
       });
 
-      expect(result).toMatchObject({ created: 1, skipped: 2 });
+      expect(result).toMatchObject({ created: 1, withdrawn: 0 });
       expect(await repository.findByName('a.example/gone')).toBeNull();
       expect(await repository.findByName('c.example/active')).not.toBeNull();
     }
   );
+
+  dbTest('removes an already-mirrored row once the registry withdraws it', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const opts = { probeBudget: 0, sleep: noSleep, log: silent };
+
+    // Mirrored while active...
+    await runCatalogIngestion(withRepository(repository), {
+      ...opts,
+      registry: stubRegistry([{ records: [registryRecord('a.example/one')] }]),
+    });
+    expect(await repository.findByName('a.example/one')).not.toBeNull();
+
+    // ...then withdrawn. Declining it at parse alone would leave the row.
+    const second = await runCatalogIngestion(withRepository(repository), {
+      ...opts,
+      registry: stubRegistry([{ records: [withdrawnRecord('a.example/one', 'deleted')] }]),
+    });
+
+    expect(second.withdrawn).toBe(1);
+    expect(await repository.findByName('a.example/one')).toBeNull();
+  });
+
+  dbTest('retires a withdrawn curated entry without destroying its curation', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertCuration({
+      name: 'io.sentry/mcp',
+      category: 'dev-tools',
+      capabilities: ['logs'],
+      benefit: 'Hand-written benefit',
+      starter_prompt: 'Prompt',
+      permission_disclosure: 'Disclosure',
+      verified: true,
+      remote_url: 'https://mcp.sentry.dev/mcp',
+      transport: 'streamable-http',
+    });
+
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([{ records: [withdrawnRecord('io.sentry/mcp', 'deprecated')] }]),
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    expect(result.withdrawn).toBe(1);
+    // The card survives with its curation; only the connect surface is gone.
+    expect(await repository.findByName('io.sentry/mcp')).toMatchObject({
+      benefit: 'Hand-written benefit',
+      curated: true,
+      has_remote: false,
+      remote_url: undefined,
+      transport: undefined,
+    });
+  });
 
   dbTest('stops when the registry hands back a cursor it already gave out', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
@@ -423,6 +499,7 @@ describe('runCatalogIngestion', () => {
           entries: [normalizeRegistryServer(registryRecord(`a.example/${calls}`))].filter(
             (entry): entry is MCPCatalogRegistryUpsert => Boolean(entry)
           ),
+          withdrawn: [],
           skipped: 0,
           // Always the same cursor: a naive loop would burn the whole page cap.
           nextCursor: 'stuck-cursor',
@@ -468,6 +545,7 @@ describe('runCatalogIngestion', () => {
             entries: [normalizeRegistryServer(registryRecord('a.example/one'))].filter(
               (entry): entry is MCPCatalogRegistryUpsert => Boolean(entry)
             ),
+            withdrawn: [],
             skipped: 0,
             nextCursor: 'c1',
           };
@@ -546,6 +624,7 @@ describe('runCatalogIngestion', () => {
           entries: [normalizeRegistryServer(registryRecord(`a.example/${call}`))].filter(
             (entry): entry is MCPCatalogRegistryUpsert => Boolean(entry)
           ),
+          withdrawn: [],
           skipped: 0,
           nextCursor: `cursor-${call}`,
         };
@@ -573,6 +652,7 @@ describe('runCatalogIngestion', () => {
           entries: [normalizeRegistryServer(registryRecord(`a.example/${clock}`))].filter(
             (entry): entry is MCPCatalogRegistryUpsert => Boolean(entry)
           ),
+          withdrawn: [],
           skipped: 0,
           nextCursor: `cursor-${clock}`,
         };
