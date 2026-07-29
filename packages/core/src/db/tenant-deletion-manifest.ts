@@ -56,11 +56,69 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * reads open to all tenants and confine writes to the `mcp_catalog_ingestion`
  * system capability.
  *
+ * **The invariant is per column, not per table.** A table qualifies only while
+ * every one of its columns is sourced from outside every tenant — a public
+ * registry, or a file in this repository. Adding a column derived from tenant
+ * activity (a connect counter, a rating, a last-used timestamp) silently breaks
+ * the justification above even though the table stays in this set: the value
+ * aggregates across tenants on read, and its only writer would be a tenant
+ * request path, which the write policy correctly refuses. Such a column belongs
+ * in its own tenant-scoped table. `GLOBAL_TABLE_COLUMN_SOURCES` records the
+ * per-column decision so the companion test can hold a reviewer to it.
+ *
  * Note: Drizzle's own migration bookkeeping table (`drizzle.__drizzle_migrations`)
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
 export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_entries']);
+
+/**
+ * Where each column of each global table gets its value.
+ *
+ * `registry` — mirrored from the public MCP registry.
+ * `repo` — supplied by a file checked into this repository.
+ * `derived` — computed by Agor from the two above (row identity, timestamps),
+ *   never from tenant activity.
+ * `probe` — discovered by Agor probing a public endpoint the registry named.
+ *
+ * There is deliberately no value meaning "derived from tenant activity". A
+ * column that would need one does not belong on a global table, and the
+ * exhaustiveness test fails until every column is classified, so adding one
+ * forces the decision into review rather than letting it land as a default.
+ */
+export const GLOBAL_TABLE_COLUMN_SOURCES: Readonly<
+  Record<string, Readonly<Record<string, 'registry' | 'repo' | 'derived' | 'probe'>>>
+> = {
+  mcp_catalog_entries: {
+    catalog_entry_id: 'derived',
+    created_at: 'derived',
+    updated_at: 'derived',
+    name: 'registry',
+    version: 'registry',
+    registry_updated_at: 'registry',
+    title: 'registry',
+    description: 'registry',
+    website_url: 'registry',
+    repository_url: 'registry',
+    transport: 'registry',
+    remote_url: 'registry',
+    has_remote: 'derived',
+    has_package: 'derived',
+    curated: 'derived',
+    category: 'repo',
+    capability_tags: 'repo',
+    benefit: 'repo',
+    starter_prompt: 'repo',
+    permission_disclosure: 'repo',
+    icon_url: 'repo',
+    verified: 'repo',
+    popularity_rank: 'repo',
+    probed_auth_type: 'probe',
+    probed_at: 'probe',
+    auth_server_origin: 'probe',
+    data: 'derived',
+  },
+};
 
 /** Full classification of a table, including non-tenant tables. */
 export type TableClassification = 'direct' | 'transitive' | 'global';

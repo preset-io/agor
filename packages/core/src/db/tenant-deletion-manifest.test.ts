@@ -5,6 +5,7 @@ import * as postgresSchema from './schema.postgres';
 import {
   buildTenantDeletionManifest,
   classifyPostgresTables,
+  GLOBAL_TABLE_COLUMN_SOURCES,
   GLOBAL_TABLES,
   TENANT_SCOPE_COLUMN,
 } from './tenant-deletion-manifest';
@@ -65,6 +66,31 @@ describe('tenant deletion manifest classification', () => {
   it('excludes the shared MCP catalog from the tenant deletion plan', () => {
     const planned = new Set(buildTenantDeletionManifest().map((entry) => entry.name));
     expect(planned.has('mcp_catalog_entries')).toBe(false);
+  });
+
+  it('classifies the source of every column on every global table', () => {
+    // A global table is only justified while every column comes from outside
+    // every tenant. A column derived from tenant activity aggregates across
+    // tenants on read and has no legal writer, so it belongs in its own
+    // tenant-scoped table. Failing here is the prompt to make that call.
+    for (const tableName of GLOBAL_TABLES) {
+      const table = Object.values(postgresSchema).find(
+        (value) => is(value, PgTable) && getTableConfig(value).name === tableName
+      );
+      expect(
+        table,
+        `${tableName} is in GLOBAL_TABLES but not exported by the schema`
+      ).toBeDefined();
+
+      const columns = getTableConfig(table as PgTable)
+        .columns.map((column) => column.name)
+        .sort();
+      const classified = Object.keys(GLOBAL_TABLE_COLUMN_SOURCES[tableName] ?? {}).sort();
+
+      expect(classified, `GLOBAL_TABLE_COLUMN_SOURCES is out of sync with ${tableName}`).toEqual(
+        columns
+      );
+    }
   });
 });
 
