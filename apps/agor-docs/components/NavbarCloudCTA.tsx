@@ -14,7 +14,7 @@ export function NavbarCloudCTA() {
       <button type="button" className="navbar-cloud-cta" onClick={() => setIsOpen(true)}>
         Agor Cloud
       </button>
-      <HubSpotFormModal isOpen={isOpen} onClose={() => setIsOpen(false)} />
+      <HubSpotFormModal isOpen={isOpen} onClose={() => setIsOpen(false)} sourceCta="navbar" />
     </>
   );
 }

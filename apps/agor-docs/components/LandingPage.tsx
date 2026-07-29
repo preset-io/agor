@@ -546,6 +546,13 @@ const liveCards = [
 export function LandingPage() {
   const landingRef = useRef<HTMLElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
+  // Which on-page CTA opened the (single, shared) beta form modal — stamped
+  // into the form's hidden source_page field for attribution.
+  const [betaCtaSource, setBetaCtaSource] = useState('landing-hero');
+  const openBetaForm = (source: string) => {
+    setBetaCtaSource(source);
+    setIsBetaFormOpen(true);
+  };
   const [isDemoFormOpen, setIsDemoFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
@@ -788,7 +795,7 @@ export function LandingPage() {
               <button
                 type="button"
                 className={styles.primaryButton}
-                onClick={() => setIsBetaFormOpen(true)}
+                onClick={() => openBetaForm('landing-hero')}
               >
                 Sign up for Agor Cloud
               </button>
@@ -1295,7 +1302,7 @@ export function LandingPage() {
                     <button
                       type="button"
                       className={styles.busBetaLink}
-                      onClick={() => setIsBetaFormOpen(true)}
+                      onClick={() => openBetaForm('landing-bus-item')}
                     >
                       Register for the Agor Cloud beta
                     </button>
@@ -1494,7 +1501,7 @@ export function LandingPage() {
             <button
               type="button"
               className={styles.primaryButton}
-              onClick={() => setIsBetaFormOpen(true)}
+              onClick={() => openBetaForm('landing-final-cta')}
             >
               Sign up for Agor Cloud
             </button>
@@ -1549,7 +1556,7 @@ export function LandingPage() {
             <button
               type="button"
               className={styles.footerLinkButton}
-              onClick={() => setIsBetaFormOpen(true)}
+              onClick={() => openBetaForm('landing-footer')}
             >
               Sign up for Agor Cloud
             </button>
@@ -1581,6 +1588,7 @@ export function LandingPage() {
         isOpen={isBetaFormOpen}
         onClose={() => setIsBetaFormOpen(false)}
         title="Join the Agor Cloud private beta"
+        sourceCta={betaCtaSource}
       />
       <HubSpotMeetingModal isOpen={isDemoFormOpen} onClose={() => setIsDemoFormOpen(false)} />
     </main>

@@ -6,6 +6,10 @@ import { HubSpotFormModal } from './HubSpotFormModal';
 
 interface JoinBetaCTAProps {
   label?: string;
+  /** Attribution tag for the hidden `source_page` field — identify the
+   * specific spot this instance renders (e.g. `blog-agor-cloud`), since this
+   * component can appear in more than one place. */
+  sourceCta: string;
 }
 
 /**
@@ -14,7 +18,7 @@ interface JoinBetaCTAProps {
  * inline-embedded (blog/agor-cloud) and anywhere a beta CTA should keep the
  * reader on the page. Reuses CloudInviteCTA's primary-pill styling.
  */
-export function JoinBetaCTA({ label = 'Sign up for Agor Cloud' }: JoinBetaCTAProps) {
+export function JoinBetaCTA({ label = 'Sign up for Agor Cloud', sourceCta }: JoinBetaCTAProps) {
   const [isOpen, setIsOpen] = useState(false);
   return (
     <div className={styles.wrapper}>
@@ -30,6 +34,7 @@ export function JoinBetaCTA({ label = 'Sign up for Agor Cloud' }: JoinBetaCTAPro
         isOpen={isOpen}
         onClose={() => setIsOpen(false)}
         title="Join the Agor Cloud private beta"
+        sourceCta={sourceCta}
       />
     </div>
   );
