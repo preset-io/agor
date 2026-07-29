@@ -283,7 +283,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
-        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         <Tooltip title="Knowledge Base">
           <Button
             type="text"
