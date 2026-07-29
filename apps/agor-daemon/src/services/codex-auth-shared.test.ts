@@ -9,8 +9,8 @@
  * simple-mode behavior (daemon home) but still requires a unix_username.
  */
 import { loadConfigSync } from '@agor/core/config';
-import { UsersRepository } from '@agor/core/db';
-import type { TenantScopedDatabase, UserID } from '@agor/core/types';
+import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
