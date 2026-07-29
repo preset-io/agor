@@ -60,9 +60,15 @@ If correct handling changes approved behavior, architecture, scope, or proof,
 revise the task instead of preserving a single-tenant assumption or inventing
 speculative infrastructure.
 
-For tenant-owned creates, keep resolved tenant identity in params and ambient
-context through public DTO validation. Persistence adapters materialize
-`tenant_id` only after that validation succeeds.
+For tenant-owned writes, keep resolved tenant identity in params and ambient
+context through public DTO validation. External create, update, and patch DTOs
+with an own enumerable `tenant_id` are rejected; request hooks do not stamp or
+strip ordinary DTOs. The insert helpers in
+`packages/core/src/db/database-wrapper.ts` materialize ambient `tenant_id` for
+tenant-aware inserts after validation, while ordinary updates preserve existing
+ownership. An ownership change is exceptional cross-tenant work and must use a
+narrow, explicit system ownership path rather than an ordinary tenant-owned
+service write.
 
 ## Existing code owners
 

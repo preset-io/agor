@@ -18,7 +18,7 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
-import { TaskStatus } from '@agor/core/types';
+import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
@@ -27,10 +27,11 @@ import {
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
+  type RegisterHooksContext,
+  registerHooks,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
-  stripTenantIdFromMutation,
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
@@ -218,6 +219,87 @@ describe('protectServerManagedTaskWrites', () => {
 });
 
 describe('tenant-owned service registration', () => {
+  type WriteMethod = 'create' | 'update' | 'patch';
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'all' | WriteMethod, RegisteredHook[]>>;
+  };
+
+  const captureCardsRegistrations = (dialect: 'postgresql' | 'sqlite'): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'cards') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      branchRbacEnabled: false,
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    });
+
+    return registrations;
+  };
+
+  const runRegisteredWriteBeforeHooks = async (
+    registrations: RegisteredHooks[],
+    method: WriteMethod
+  ): Promise<void> => {
+    const context = {
+      path: 'cards',
+      method,
+      data: { title: 'Caller data', tenant_id: 'caller-tenant' },
+      params: {
+        provider: 'rest',
+        user: { user_id: 'registration-test-user', role: 'member' },
+      },
+    } as HookContext;
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.all ?? []) {
+        await hook(context);
+      }
+    }
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.[method] ?? []) {
+        await hook(context);
+      }
+    }
+  };
+
+  it.each([
+    'postgresql',
+    'sqlite',
+  ] as const)('rejects caller tenant_id through registered cards write chains in %s mode', async (dialect) => {
+    const registrations = captureCardsRegistrations(dialect);
+    for (const method of ['create', 'update', 'patch'] as const) {
+      await expect(runRegisteredWriteBeforeHooks(registrations, method)).rejects.toThrow(
+        'tenant_id cannot be supplied on tenant-owned writes'
+      );
+    }
+  });
+
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
   });
@@ -248,27 +330,6 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining(['kb/settings', 'kb/indexing/status', 'kb/indexing/reindex'])
     );
-  });
-});
-
-describe('tenant-owned write data', () => {
-  it('leaves create DTOs unchanged until persistence stamps the resolved tenant', () => {
-    const data = { name: 'Nightly', tenant_id: 'caller-supplied-tenant' };
-
-    expect(stripTenantIdFromMutation('create', data)).toBe(data);
-    expect(data.tenant_id).toBe('caller-supplied-tenant');
-  });
-
-  it.each([
-    'update',
-    'patch',
-  ] as const)('continues stripping tenant identity from %s data', (method) => {
-    expect(
-      stripTenantIdFromMutation(method, [
-        { name: 'first', tenant_id: 'tenant-b' },
-        { name: 'second', tenant_id: 'tenant-c' },
-      ])
-    ).toEqual([{ name: 'first' }, { name: 'second' }]);
   });
 });
 
