@@ -12,8 +12,7 @@
  * chime, every subsequent terminal event for the same task returns false
  * (entry already gone) and is a no-op. This handles the normal-path
  * duplicate emits — the daemon's executor-double-catch path (also fixed
- * at the source in `packages/executor/src/terminal-task.ts`), the
- * stateless_fs_mode post-completion `session_md5` patch, and similar
+ * at the source in `packages/executor/src/terminal-task.ts`) and similar
  * tail emits.
  *
  * Known edge case we explicitly accept: if the seed `findAll` resolves

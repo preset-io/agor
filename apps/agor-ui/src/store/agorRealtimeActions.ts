@@ -39,6 +39,7 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
+import { removeCollapsedBranchNode } from '../utils/collapsedBranchNodes';
 import { bumpRevision } from './agorHydration';
 import {
   applySessionPatchToMaps,
@@ -222,6 +223,8 @@ export function branchRemoved(branch: Branch) {
   // still track on that branch (and bump `sessions` for the cascade).
   bumpRevision('sessions');
   evictBranchAndSessions(branch.branch_id);
+  // Collapse exceptions survive archive/move but not a hard delete.
+  removeCollapsedBranchNode(branch.branch_id);
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────--

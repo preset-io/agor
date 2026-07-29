@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
+import { readCollapsedBranchNode } from '../../utils/collapsedBranchNodes';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -64,7 +65,6 @@ interface BranchCardProps {
   isPinned?: boolean;
   zoneName?: string;
   zoneColor?: string;
-  defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   progressiveMountKey?: string | number | null;
@@ -100,7 +100,6 @@ const BranchCardComponent = ({
   isPinned = false,
   zoneName,
   zoneColor,
-  defaultExpanded = true,
   inPopover = false,
   panelMode = false,
   progressiveMountKey,
@@ -120,10 +119,14 @@ const BranchCardComponent = ({
     priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 2 : 0,
     resetKey: progressiveMountKey ?? branchBoardId ?? 'unassigned',
   });
-  const sessionShellMinHeight = useMemo(
-    () => estimateBranchSessionSectionsHeight(sessions, { defaultExpanded }),
-    [defaultExpanded, sessions]
-  );
+  const sessionShellMinHeight = useMemo(() => {
+    // The shell should reserve the height the sections will actually take,
+    // which depends on the persisted per-branch collapse exceptions.
+    const collapsedNode = readCollapsedBranchNode(branch.branch_id);
+    return estimateBranchSessionSectionsHeight(sessions, {
+      sessionsExpanded: !collapsedNode.sections?.includes('sessions'),
+    });
+  }, [branch.branch_id, sessions]);
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -594,7 +597,6 @@ const BranchCardComponent = ({
             onOpenSessionSettings={onOpenSessionSettings}
             peekedSessionIds={peekedSessionIdSet}
             onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
-            defaultExpanded={defaultExpanded}
             mode="card"
             client={client}
           />

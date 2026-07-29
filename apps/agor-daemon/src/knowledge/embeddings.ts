@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  DEFAULT_KNOWLEDGE_SEMANTIC_POLICY,
+  KNOWLEDGE_OPENAI_EMBEDDING_MODELS,
+} from '@agor/core/types';
 
 export interface EmbeddingInput {
   id: string;
@@ -26,32 +30,9 @@ export interface EmbeddingProvider {
   embed(inputs: EmbeddingInput[], options: EmbeddingOptions): Promise<EmbeddingResult[]>;
 }
 
-export const KNOWLEDGE_EMBEDDINGS_NAMESPACE = 'knowledge.embeddings';
-export const KNOWLEDGE_EMBEDDINGS_API_KEY = 'api_key';
-export const DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
-export const DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = 1536;
-export const SUPPORTED_OPENAI_EMBEDDING_MODELS = new Set([
-  'text-embedding-3-small',
-  'text-embedding-3-large',
-]);
-
-export const DEFAULT_KNOWLEDGE_CHUNKING = {
-  target_tokens: 850,
-  max_tokens: 1200,
-  overlap_tokens: 100,
-  min_tokens: 80,
-};
-
-export const DEFAULT_KNOWLEDGE_INDEXING = {
-  paused: false,
-  batch_size: 32,
-  concurrency: 1,
-};
-
-export function normalizeKnowledgeEmbeddingApiKey(value: string | null | undefined): string | null {
-  const trimmed = value?.trim() ?? '';
-  return trimmed.length > 0 ? trimmed : null;
-}
+export const DEFAULT_OPENAI_EMBEDDING_MODEL = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY.model;
+export const DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = DEFAULT_KNOWLEDGE_SEMANTIC_POLICY.dimensions;
+export const SUPPORTED_OPENAI_EMBEDDING_MODELS = new Set<string>(KNOWLEDGE_OPENAI_EMBEDDING_MODELS);
 
 export function isUsableOpenAIEmbeddingConfig(
   semantic: {

@@ -1,5 +1,6 @@
 export default {
   index: 'Overview',
+  'first-teammate': 'Your First AI Teammate',
   'getting-started': 'Getting Started',
   'extended-install': 'Extended Installation',
   '--- Features': {
@@ -29,7 +30,6 @@ export default {
   architecture: 'Architecture',
   'typescript-client': 'TypeScript Client',
   'sdk-comparison': 'SDK Comparison',
-  'api-proxies': 'API Proxies (CORS bypass)',
   'one-time-launch-auth': 'One-Time Launch Auth',
   '--- Development': {
     type: 'separator',
@@ -40,6 +40,7 @@ export default {
     type: 'separator',
     title: 'Deployment',
   },
+  'multi-tenant-filesystem': 'Multi-Tenant Filesystem',
   'multiplayer-unix-isolation': 'Full Multiplayer Mode',
   'containerized-execution': 'Containerized Execution',
 };

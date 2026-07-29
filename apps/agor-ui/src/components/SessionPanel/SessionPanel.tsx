@@ -15,6 +15,7 @@ import type {
 import {
   AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
+  isAgenticToolName,
   mapToCodexPermissionConfig,
   SessionStatus,
   shortId,
@@ -391,9 +392,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [titleStateSessionId]);
 
   // Tool capabilities — drives which buttons are shown
-  const toolCaps = session?.agentic_tool
-    ? AGENTIC_TOOL_CAPABILITIES[session.agentic_tool]
-    : undefined;
+  const activeAgenticTool =
+    session && isAgenticToolName(session.agentic_tool) ? session.agentic_tool : undefined;
+  const hasActiveAgenticTool = Boolean(activeAgenticTool);
+  const toolCaps = activeAgenticTool ? AGENTIC_TOOL_CAPABILITIES[activeAgenticTool] : undefined;
 
   // Compute which session MCP servers need authentication
   const unauthedMcpServers = React.useMemo(() => {
@@ -446,7 +448,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const initialPermissionMode: PermissionMode =
     session?.permission_config?.mode ??
-    (session?.agentic_tool
+    (session?.agentic_tool && isAgenticToolName(session.agentic_tool)
       ? getDefaultPermissionMode(session.agentic_tool)
       : getDefaultPermissionMode('claude-code'));
   const initialCodexDefaults = mapToCodexPermissionConfig(initialPermissionMode);
@@ -457,20 +459,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [codexApprovalPolicy, setCodexApprovalPolicy] = React.useState<CodexApprovalPolicy>(
     session?.permission_config?.codex?.approvalPolicy ?? initialCodexDefaults.approvalPolicy
   );
-  const [effortLevel, setEffortLevel] = React.useState<EffortLevel>(
-    session?.model_config?.effort || 'high'
+  const [effortLevel, setEffortLevel] = React.useState<EffortLevel | undefined>(
+    session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort
   );
-  /**
-   * Claude Code CLI view toggle: 'terminal' shows the embedded `claude`
-   * REPL full-height (with the Agor textarea hidden, since `claude` has
-   * its own input prompt); 'conversation' shows Agor's standard message
-   * feed rebuilt from the JSONL by the daemon watcher.
-   *
-   * Only meaningful when `session.agentic_tool === 'claude-code-cli'`.
-   * Defaults to 'terminal' so users see the live REPL on first open.
-   * Persisting this per-session as a UI preference is a v1.5 follow-up.
-   */
-  const [cliViewMode, setCliViewMode] = React.useState<'terminal' | 'conversation'>('terminal');
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
@@ -706,7 +697,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useEffect(() => {
     if (session?.permission_config?.mode) {
       setPermissionMode(session.permission_config.mode);
-    } else if (session?.agentic_tool) {
+    } else if (session?.agentic_tool && isAgenticToolName(session.agentic_tool)) {
       setPermissionMode(getDefaultPermissionMode(session.agentic_tool));
     }
 
@@ -716,10 +707,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, [session?.permission_config?.mode, session?.permission_config?.codex, session?.agentic_tool]);
 
-  // Update effort level when session changes (default to 'high' for sessions without effort config)
+  // Keep explicit overrides distinct from runtime-owned defaults (for example Codex config.toml).
   React.useEffect(() => {
-    setEffortLevel(session?.model_config?.effort || 'high');
-  }, [session?.model_config?.effort]);
+    setEffortLevel(session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort);
+  }, [session?.model_config?.effort, toolCaps?.defaultReasoningEffort]);
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -769,7 +760,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onSpawnOpen: () => void;
     onAttachFiles: () => void;
     onUploadOpen: () => void;
-    onEffortChange: (v: EffortLevel) => void;
+    onEffortChange: (v: EffortLevel | undefined) => void;
     onPermissionModeChange: (v: PermissionMode) => void;
     onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   } | null>(null);
@@ -784,7 +775,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onSpawnOpen: () => footerHandlersRef.current?.onSpawnOpen(),
       onAttachFiles: () => footerHandlersRef.current?.onAttachFiles(),
       onUploadOpen: () => footerHandlersRef.current?.onUploadOpen(),
-      onEffortChange: (v: EffortLevel) => footerHandlersRef.current?.onEffortChange(v),
+      onEffortChange: (v: EffortLevel | undefined) => footerHandlersRef.current?.onEffortChange(v),
       onPermissionModeChange: (v: PermissionMode) =>
         footerHandlersRef.current?.onPermissionModeChange(v),
       onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) =>
@@ -914,6 +905,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   if (!session) {
     return null;
   }
+  const activeSession = isAgenticToolName(session.agentic_tool)
+    ? (session as Session & { agentic_tool: AgenticToolName })
+    : null;
 
   const handleArchive = () => {
     if (!client || connectionDisabled) {
@@ -939,7 +933,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const hasBranchActions = !!branch;
-  const canSwitchTool = !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
+  const canSwitchTool =
+    hasActiveAgenticTool && !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
   const handleSwitchTool = async (tool: string) => {
     if (!branch || !onChooseAgenticTool || switchingTool) return;
     setSwitchingTool(tool);
@@ -977,7 +972,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           {
             key: 'settings',
             icon: <SettingOutlined />,
-            label: 'Session Settings',
+            label: 'Session settings',
             onClick: () => onOpenSettings(session.session_id),
           },
         ]
@@ -1274,18 +1269,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleEffortChange = (newEffort: EffortLevel) => {
+  const handleEffortChange = (newEffort: EffortLevel | undefined) => {
     setEffortLevel(newEffort);
 
-    if (session && onUpdateSession) {
-      if (session.model_config) {
-        onUpdateSession(session.session_id, {
-          model_config: {
-            ...session.model_config,
-            effort: newEffort,
-          },
-        });
-      }
+    if (session?.model_config && onUpdateSession) {
+      const nextModelConfig = {
+        ...session.model_config,
+        updated_at: new Date().toISOString(),
+      };
+      if (newEffort) nextModelConfig.effort = newEffort;
+      else delete nextModelConfig.effort;
+      onUpdateSession(session.session_id, { model_config: nextModelConfig });
     }
   };
 
@@ -1343,9 +1337,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onCodexPermissionChange: handleCodexPermissionChange,
   };
 
-  const sessionFooter = (
+  const sessionFooter = activeSession ? (
     <SessionFooter
-      session={session}
+      session={activeSession}
       footerTimerTask={footerTimerTask}
       tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}
@@ -1384,7 +1378,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
       promptInputSlot={promptInputSlot}
     />
-  );
+  ) : null;
 
   return (
     <div
@@ -1641,6 +1635,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             overflow: 'hidden',
           }}
         >
+          {!hasActiveAgenticTool && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Historical session — runtime removed"
+              description="This session used the removed experimental Claude Code CLI integration. Its stored conversation remains readable, but it cannot be prompted, resumed, forked, spawned from, or restarted."
+              style={{ marginBottom: token.marginSM }}
+            />
+          )}
           <SessionPanelContent
             client={client}
             session={session}
@@ -1658,20 +1661,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
-            cliViewMode={cliViewMode}
-            setCliViewMode={setCliViewMode}
             forceExpandAll={searchOpen && query.trim().length > 0}
           />
         </div>
 
-        {/* Footer — rendered outside SessionPanelContent so that
-            keystroke-driven re-renders don't propagate to ConversationView.
-            Hidden for CLI sessions in 'terminal' view because the embedded
-            `claude` REPL has its own input prompt; the Agor textarea is
-            redundant (and would inject via PTY anyway, racy with whatever
-            the user is typing into the REPL directly). */}
-        {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
-          sessionFooter}
+        {/* Footer is unavailable for historical sessions whose runtime was removed. */}
+        {sessionFooter}
 
         {/* Advanced upload modal preserves the existing file upload flow for
             non-image files and notify-agent options. */}

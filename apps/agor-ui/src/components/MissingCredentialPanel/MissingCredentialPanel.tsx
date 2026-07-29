@@ -16,8 +16,6 @@ const { Text, Link } = Typography;
 /** Tools where an existing subscription/CLI login is a real alternative to an API key. */
 const NATIVE_AUTH_HINT: Partial<Record<AgenticToolName, string>> = {
   'claude-code': 'Already on a Claude Pro or Max plan? You can connect that instead of an API key.',
-  'claude-code-cli':
-    'Already on a Claude Pro or Max plan? You can connect that instead of an API key.',
   codex:
     'Already signed in with ChatGPT on this machine? Codex can use that instead of an API key.',
 };

@@ -18,7 +18,7 @@ import { slugify } from '@/utils/repoSlug';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
-import { getFormValuesFromConfig } from '../../AgenticToolConfigForm';
+import { buildConfigFromFormValues, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
@@ -111,6 +111,18 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
 
+      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const inlineAgentConfig = isInline
+        ? buildConfigFromFormValues(selectedAgent, {
+            modelConfig: values.modelConfig,
+            effort: values.effort,
+            permissionMode: values.permissionMode,
+            codexSandboxMode: values.codexSandboxMode,
+            codexApprovalPolicy: values.codexApprovalPolicy,
+            codexNetworkAccess: values.codexNetworkAccess,
+          })
+        : undefined;
+
       const result: TeammateTabResult = {
         displayName: values.displayName.trim(),
         description: values.description || undefined,
@@ -119,12 +131,13 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
         agent: selectedAgent,
-        agenticToolPresetId:
-          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
-            ? undefined
-            : values.agenticToolPresetId,
-        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
-        effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
+        agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
+        modelConfig: isInline
+          ? inlineAgentConfig?.modelConfig
+          : (values.modelConfig ?? agentDefaults?.modelConfig),
+        effort: isInline
+          ? undefined
+          : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
         mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
         permissionMode,
       };
@@ -186,6 +199,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                         onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
                         variant="select"
                         showComparisonLink
+                        fallbackToFirstVisibleAgent
                       />
                     </Form.Item>
 

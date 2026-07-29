@@ -174,16 +174,16 @@ docker compose -f docker-compose.prod.yml build
 
 Each git branch can run its own isolated Docker environment with:
 
-- **Separate images** (tagged per project name)
+- **A shared development image** (`agor-dev:latest`)
 - **Separate volumes** (node_modules, database, config)
 - **Separate ports** (using unique_id offset)
-- **Automatic dependency sync** (based on each branch's pnpm-lock.yaml)
+- **Prebuilt dependencies** from the image
 
 This is configured in `.agor.yml`:
 
 ```yaml
 environment:
-  start: DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000 branch.unique_id}} docker compose -p agor-{{branch.name}} up -d
+  start: DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000 branch.unique_id}} docker compose -p agor-{{branch.name}} up -d --build
   stop: docker compose -p agor-{{branch.name}} down
 ```
 
@@ -201,16 +201,15 @@ DAEMON_PORT=3002 UI_PORT=5002 docker compose -p agor-main up -d
 
 **How it works:**
 
-1. **Image isolation**: `${COMPOSE_PROJECT_NAME}-agor-dev` means each `-p` project builds its own image
+1. **Shared image**: all branch projects reuse `agor-dev:latest`; the managed `.agor.yml` workflow rebuilds it from the current checkout
 2. **Volume isolation**: Docker Compose creates separate volumes per project (named volumes + anonymous volumes for node_modules)
-3. **Dependency sync**: Entrypoint runs `pnpm install` on startup, syncing to the mounted branch's `pnpm-lock.yaml`
-4. **No conflicts**: Branch A with PostgreSQL deps won't conflict with Branch B without them
+3. **Prebuilt dependencies**: the image build runs `pnpm install`; startup uses those dependencies without reinstalling
+4. **Non-interactive startup**: Compose and the entrypoint disable pnpm's workspace verification/purge prompts
 
 **Benefits:**
 
 - Work on multiple branches simultaneously
-- Each branch has correct dependencies (even if branches diverge)
-- No manual dependency management needed
+- Rebuild explicitly with `docker compose up --build` when the Dockerfile or lockfile changes
 - Clean separation of databases and configs
 
 ### SSH Key Authentication (Dev)

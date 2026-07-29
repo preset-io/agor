@@ -1,7 +1,7 @@
 import type { Branch, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 
 vi.mock('antd', async (importOriginal) => {
@@ -134,7 +134,21 @@ function renderSections(props: Partial<React.ComponentProps<typeof BranchSession
   );
 }
 
+const COLLAPSED_BRANCH_NODES_STORAGE_KEY = 'agor:board:collapsed-branch-nodes';
+
+function readStoredCollapsedNodes(): Record<
+  string,
+  { sections?: string[]; sessionIds?: string[] }
+> | null {
+  const stored = window.localStorage.getItem(COLLAPSED_BRANCH_NODES_STORAGE_KEY);
+  return stored ? JSON.parse(stored) : null;
+}
+
 describe('BranchSessionSections', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('keeps the new-session affordance visible when only scheduled runs remain', () => {
     renderSections();
 
@@ -305,6 +319,98 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Nested parent')).toBeInTheDocument();
     expect(screen.queryByText('Nested child')).not.toBeInTheDocument();
     expect(getSessionTreeToggle('Nested parent')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('persists a collapsed Sessions section as an exception across remounts in card mode', async () => {
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    const { unmount } = renderSections({ sessions: [manualSession] });
+
+    expect(screen.getByText('Manual session')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    await waitFor(() => {
+      expect(readStoredCollapsedNodes()?.['branch-1']?.sections).toContain('sessions');
+    });
+
+    unmount();
+    renderSections({ sessions: [manualSession] });
+
+    expect(screen.queryByText('Manual session')).not.toBeInTheDocument();
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
+  });
+
+  it('restores a persisted collapsed exception and drops it on re-expand', async () => {
+    window.localStorage.setItem(
+      COLLAPSED_BRANCH_NODES_STORAGE_KEY,
+      JSON.stringify({ 'branch-1': { sections: ['sessions'] } })
+    );
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    renderSections({ sessions: [manualSession] });
+
+    expect(screen.queryByText('Manual session')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    await waitFor(() => expect(screen.getByText('Manual session')).toBeInTheDocument());
+    // Expanded is the default, so re-expanding removes the exception entirely.
+    expect(readStoredCollapsedNodes()?.['branch-1']).toBeUndefined();
+  });
+
+  it('persists a manually collapsed parent session across remounts in card mode', async () => {
+    const parentSession = makeManualSession({
+      session_id: 'session-parent',
+      title: 'Parent session',
+      genealogy: { children: ['session-child'] },
+    });
+    const childSession = makeManualSession({
+      session_id: 'session-child',
+      title: 'Child session',
+      genealogy: { parent_session_id: 'session-parent', children: [] },
+    });
+    const sessions = [parentSession, childSession];
+
+    const { unmount } = renderSections({ sessions });
+
+    expect(screen.getByText('Child session')).toBeInTheDocument();
+
+    fireEvent.click(getSessionTreeToggle('Parent session'));
+
+    await waitFor(() => {
+      expect(readStoredCollapsedNodes()?.['branch-1']?.sessionIds).toContain('session-parent');
+    });
+
+    unmount();
+    renderSections({ sessions });
+
+    expect(screen.getByText('Parent session')).toBeInTheDocument();
+    expect(screen.queryByText('Child session')).not.toBeInTheDocument();
+
+    fireEvent.click(getSessionTreeToggle('Parent session'));
+
+    await waitFor(() => expect(screen.getByText('Child session')).toBeInTheDocument());
+    expect(readStoredCollapsedNodes()?.['branch-1']).toBeUndefined();
+  });
+
+  it('does not persist section state in panel mode', () => {
+    const manualSession = makeManualSession({
+      session_id: 'session-manual',
+      title: 'Manual session',
+    });
+
+    renderSections({ sessions: [manualSession], mode: 'panel' });
+
+    fireEvent.click(screen.getByText('Sessions'));
+
+    expect(window.localStorage.getItem(COLLAPSED_BRANCH_NODES_STORAGE_KEY)).toBeNull();
   });
 
   it('expands a session when it newly gains children', () => {

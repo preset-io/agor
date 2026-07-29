@@ -21,7 +21,13 @@ import { SessionsService } from './sessions';
 const STUB_APP = {} as Application;
 const ACTOR_ID = '00000000-0000-7000-8000-000000000001' as UserID;
 
-async function seedPresetSession(db: Database) {
+async function seedPresetSession(
+  db: Database,
+  modelConfig: { mode: 'alias' | 'exact'; model: string } = {
+    mode: 'exact',
+    model: 'gpt-5.4',
+  }
+) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId(),
     slug: `repo-${generateId()}`,
@@ -46,7 +52,7 @@ async function seedPresetSession(db: Database) {
     {
       tool: 'codex',
       name: 'Task start preset',
-      configuration: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+      configuration: { modelConfig },
     },
     ACTOR_ID
   );
@@ -66,6 +72,24 @@ async function seedPresetSession(db: Database) {
 }
 
 describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
+  dbTest(
+    'rejects a preset alias that is no longer selectable before executor startup',
+    async ({ db }) => {
+      const session = await seedPresetSession(db, {
+        mode: 'alias',
+        model: 'gpt-5.6-codex',
+      });
+      const service = new SessionsService(db, STUB_APP);
+      const sessionRepo = (service as unknown as { sessionRepo: SessionRepository }).sessionRepo;
+      const update = vi.spyOn(sessionRepo, 'update');
+
+      await expect(
+        runWithTenantContext('tenant-x', () => service.materializeAgenticToolPreset(session))
+      ).rejects.toThrow('agor_models_list');
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
   dbTest('opens a tenant unit of work from identity-only context', async ({ db }) => {
     const session = await seedPresetSession(db);
     const guardedDb = createTenantScopedDatabaseProxy(db, {

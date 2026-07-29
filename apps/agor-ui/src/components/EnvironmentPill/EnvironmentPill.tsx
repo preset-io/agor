@@ -57,6 +57,18 @@ export function EnvironmentPill({
   // Get static app_url (user-editable, initialized from template)
   const environmentUrl = branch.app_url;
 
+  // Surface the active environment variant name on the pill instead of the
+  // generic "env" label — but only when the repo actually defines more than one
+  // variant to distinguish. Single-variant repos (and v1 configs, whose lone
+  // variant is named "default") stay quiet as "env" to avoid noise, mirroring
+  // the StorageModePill "quiet default" philosophy.
+  const variantCount = repo.environment ? Object.keys(repo.environment.variants ?? {}).length : 0;
+  const activeVariant = branch.environment_variant;
+  const envLabel = activeVariant && variantCount > 1 ? activeVariant : 'env';
+  // When a specific variant is surfaced, prefix tooltips with its name so the
+  // hover text still explains what the (now variant-named) label represents.
+  const variantPrefix = envLabel !== 'env' ? `${envLabel} · ` : '';
+
   // Case 1: No config at all - show grayed discovery pill
   if (!hasConfig) {
     return (
@@ -179,7 +191,7 @@ export function EnvironmentPill({
       >
         {/* Left section - clickable to open URL (when running) */}
         {env?.status === 'running' && environmentUrl ? (
-          <Tooltip title={`Open environment - ${environmentUrl}`}>
+          <Tooltip title={`${variantPrefix}Open environment - ${environmentUrl}`}>
             <a
               href={environmentUrl}
               target="_blank"
@@ -192,27 +204,29 @@ export function EnvironmentPill({
                 padding: '0 7px',
                 textDecoration: 'none',
                 height: '22px',
+                cursor: 'pointer',
               }}
             >
               <Space size={4} align="center">
                 <EnvironmentStatusIcon state={inferredState} size={12} />
-                <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>env</span>
+                <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{envLabel}</span>
               </Space>
             </a>
           </Tooltip>
         ) : (
-          <Tooltip title={getTooltipText()}>
+          <Tooltip title={`${variantPrefix}${getTooltipText()}`}>
             <div
               style={{
                 padding: '0 7px',
                 height: '22px',
                 display: 'inline-flex',
                 alignItems: 'center',
+                cursor: 'default',
               }}
             >
               <Space size={4} align="center">
                 <EnvironmentStatusIcon state={inferredState} size={12} />
-                <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>env</span>
+                <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{envLabel}</span>
               </Space>
             </div>
           </Tooltip>

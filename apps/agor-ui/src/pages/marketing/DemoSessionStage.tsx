@@ -74,7 +74,7 @@ const BASE_SESSION = {
   archived: false,
   genealogy: { children: [] },
   tasks: [],
-} as unknown as Session;
+} as unknown as Session & { agentic_tool: 'claude-code' };
 
 // ---------------------------------------------------------------------------
 // Stage variants — the same staged panel tells three stories: the direct
@@ -251,7 +251,7 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
   }, [queuedShown, config]);
 
   const session = useMemo(
-    () => ({ ...BASE_SESSION, status: sessionStatus }) as Session,
+    () => ({ ...BASE_SESSION, status: sessionStatus }) as Session & { agentic_tool: 'claude-code' },
     [sessionStatus]
   );
 

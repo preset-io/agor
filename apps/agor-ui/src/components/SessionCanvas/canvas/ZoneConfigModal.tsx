@@ -3,7 +3,8 @@
  */
 
 import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor-live/client';
-import { Form, Input, Modal, Select } from 'antd';
+import { isAgenticToolName } from '@agor-live/client';
+import { Alert, Form, Input, Modal, Select } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
@@ -41,7 +42,7 @@ export const ZoneConfigModal = ({
   zoneData,
 }: ZoneConfigModalProps) => {
   const [form] = Form.useForm<ZoneFormValues>();
-  const [triggerAgent, setTriggerAgent] = useState<AgenticToolName>('claude-code');
+  const [triggerAgent, setTriggerAgent] = useState<AgenticToolName | null>('claude-code');
   const isInitializingRef = useRef(false);
   const mutationGate = useMutationGate();
 
@@ -52,6 +53,9 @@ export const ZoneConfigModal = ({
   const zoneTriggerBehavior = zoneTrigger?.behavior;
   const zoneTriggerTemplate = zoneTrigger?.template;
   const zoneTriggerAgent = zoneTrigger?.agent;
+  const requiresSupportedToolSelection = Boolean(
+    zoneTriggerAgent && !isAgenticToolName(zoneTriggerAgent) && triggerAgent === null
+  );
 
   // Reset form when modal opens (prevent WebSocket updates from erasing user input).
   // Keep dependencies to stable primitive fields: ZoneNode re-renders often, and
@@ -66,7 +70,13 @@ export const ZoneConfigModal = ({
           triggerBehavior: zoneTriggerBehavior,
           triggerTemplate: zoneTriggerTemplate,
         });
-        setTriggerAgent(zoneTriggerAgent || 'claude-code');
+        setTriggerAgent(
+          zoneTriggerAgent === undefined
+            ? 'claude-code'
+            : isAgenticToolName(zoneTriggerAgent)
+              ? zoneTriggerAgent
+              : null
+        );
       } else {
         form.setFieldsValue({
           name: zoneName,
@@ -90,6 +100,7 @@ export const ZoneConfigModal = ({
 
   const handleSave = async () => {
     if (!mutationGate.canMutate) return;
+    if (requiresSupportedToolSelection || triggerAgent === null) return;
     try {
       const values = await form.validateFields();
 
@@ -130,7 +141,7 @@ export const ZoneConfigModal = ({
       onOk={handleSave}
       okText="Save"
       okButtonProps={{
-        disabled: !mutationGate.canMutate,
+        disabled: !mutationGate.canMutate || requiresSupportedToolSelection,
       }}
       cancelText="Cancel"
       width={600}
@@ -157,7 +168,17 @@ export const ZoneConfigModal = ({
           />
         </Form.Item>
 
-        {triggerBehavior === 'always_new' && (
+        {requiresSupportedToolSelection && (
+          <Alert
+            type="warning"
+            showIcon
+            title="This zone uses a removed agentic tool"
+            description="Its saved trigger is preserved, but it cannot create a session. Choose a supported tool to migrate the zone explicitly."
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
+        {(triggerBehavior === 'always_new' || requiresSupportedToolSelection) && (
           <Form.Item
             label="Agent"
             help="New sessions will use the dropping user's default configuration for this agent."

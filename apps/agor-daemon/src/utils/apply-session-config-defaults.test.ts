@@ -111,6 +111,40 @@ describe('applySessionConfigDefaults', () => {
     await expect(hook(ctx)).rejects.toThrow('gpt-5-codex');
   });
 
+  it('rejects an unknown Codex alias before create', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+        model_config: { mode: 'alias', model: 'gpt-5.6-codex', updated_at: 'now' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await expect(hook(ctx)).rejects.toThrow('agor_models_list');
+  });
+
+  it('allows an explicit exact Codex provider model ID', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+        model_config: { mode: 'exact', model: 'account-preview-model', updated_at: 'now' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await expect(hook(ctx)).resolves.toBe(ctx);
+  });
+
   it('does not reapply user defaults after an internal caller fully resolves configuration', async () => {
     const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
     const ctx = makeContext({
@@ -242,6 +276,30 @@ describe('applySessionConfigDefaults', () => {
       mode: 'alias',
       model: 'claude-sonnet-5',
       effort: 'max',
+    });
+  });
+
+  it('normalizes a partial model-only model_config', async () => {
+    const hook = applySessionConfigDefaults({ warnOnExternalDefaultFill: false });
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: {
+        agentic_tool: 'codex',
+        created_by: ALICE,
+        permission_config: { mode: 'acceptEdits' },
+        model_config: { model: 'gpt-5.6-sol', notes: 'Use this model for consistency' },
+      },
+      users: { [ALICE]: { user_id: ALICE } },
+    });
+
+    await hook(ctx);
+
+    expect(ctx.data?.model_config).toMatchObject({
+      mode: 'alias',
+      model: 'gpt-5.6-sol',
+      notes: 'Use this model for consistency',
+      updated_at: expect.any(String),
     });
   });
 

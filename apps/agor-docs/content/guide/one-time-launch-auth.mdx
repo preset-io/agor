@@ -43,6 +43,18 @@ external_launch:
   # Optional: primary action shown when launch sign-in cannot continue.
   # Must be http:// or https://.
   login_redirect_url: https://workspace.example.com/open
+
+  # Optional host-bound launch for a single daemon that serves several hosts.
+  # When enabled, the daemon forwards the normalized inbound browser Host to the
+  # exchange endpoint as an opaque `request_host`, letting the issuer bind a code
+  # to the exact route the browser entered.
+  forward_request_host: false
+  # Header the daemon reads the browser Host from. The trusted proxy / edge owns
+  # host normalization and must overwrite it. Default: host.
+  trusted_host_header: host
+  # Query param appended to login_redirect_url carrying the current host as an
+  # opaque return context for direct-host entry. Default: return_host.
+  return_host_param: return_host
 ```
 
 For local development only, a symmetric assertion secret can be used:
@@ -72,6 +84,19 @@ fallback.
 
 If `login_redirect_url` is omitted, the normal local login screen is unchanged.
 
+### Direct-host entry
+
+A browser can also navigate straight to a workspace host. If a valid session
+already exists for that host it opens immediately with no new code. Runtime
+sessions are stored in origin-scoped `localStorage` — never a `Domain`-wide
+cookie — so a session on one host is never sent to another. If there is no
+host-local session, the unauthenticated screen sends the browser to
+`login_redirect_url` with `return_to` (the current relative Agor route) and, when
+`return_host_param` is configured, the current host. The issuer allow-lists that
+host, mints a fresh code and returns to the same host for the normal exchange.
+Agor only ever redirects to the operator-configured URL, so it adds no open
+redirect.
+
 ## Exchange contract
 
 The daemon sends a JSON `POST` to `exchange_url`:
@@ -80,12 +105,26 @@ The daemon sends a JSON `POST` to `exchange_url`:
 {
   "launch_code": "opaque-one-time-code",
   "audience": "agor-runtime:my-instance",
-  "instance_id": "my-instance"
+  "instance_id": "my-instance",
+  "request_host": "primary.workspace.example.com"
 }
 ```
 
+`request_host` is included only when `forward_request_host` is enabled; it is the
+normalized inbound Host read from the trusted `trusted_host_header` (default
+`Host`), never a client-supplied body field or arbitrary forwarded header.
+`audience` and `instance_id` are compatibility echoes — a correct issuer derives
+authority from its own records and the authenticated exchange credential.
+
 If `service_credential` or `service_credential_env` is configured, the daemon
-also sends `Authorization: Bearer <credential>`.
+also sends `Authorization: Bearer <credential>`. This server-to-server exchange
+credential is never returned to the browser, exposed in the public `/health`
+settings, or written to logs.
+
+Production verification fails closed: the `none` algorithm is always rejected;
+`jwks_url` / `public_key` verification defaults to an `RS256` allow-list to
+prevent algorithm confusion; and a missing issuer, audience, `exp`, `sub`, or
+required tenant claim creates no session.
 
 The exchange endpoint should consume the launch code exactly once and return:
 
@@ -114,6 +153,21 @@ Optional claims:
 Required when `external_launch.instance_id` is configured:
 
 - `instance_id` or `runtime_instance_id`: must match configured `instance_id`
+
+## Compatibility and upgrade notes
+
+- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
+  verification (`jwks_url` / `public_key`) defaults to an `RS256`-only allow-list
+  and refuses HS\* algorithms. If your issuer signs assertions with another
+  asymmetric algorithm (`RS384`, `ES256`, `PS256`, …) and previously relied on
+  library defaults, set `algorithms` explicitly to the intended asymmetric
+  algorithm **before** upgrading, or assertions will stop verifying.
+- **`login_redirect_url` deployments begin receiving a return-host parameter.**
+  When `login_redirect_url` is enabled, direct-host entry appends the configured
+  `return_host_param` (default `return_host`) to that URL. Existing deployments
+  are therefore not unchanged: the issuer's launch-init endpoint will start
+  receiving this query parameter and should tolerate and/or consume it. Leave
+  `login_redirect_url` unset if the issuer should not receive it.
 
 ## Security notes
 

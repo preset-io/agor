@@ -4,6 +4,27 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
+vi.mock('../../utils/executor-read-impersonation.js', () => ({
+  resolveExecutorReadAsUser: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/spawn-executor.js')>();
+  return {
+    ...actual,
+    generateScopedServiceToken: vi.fn(() => 'service-token'),
+    runExecutorCommand: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
+      success: true,
+      data: {
+        statuses: (payload.params?.branchIds ?? []).map((branchId) => ({
+          branchId,
+          exists: !branchId.startsWith('missing-'),
+        })),
+      },
+    })),
+  };
+});
+
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -953,6 +974,52 @@ describe('agor_branches_list', () => {
       },
     };
   }
+
+  it('uses a bounded default page and supports offsets', async () => {
+    const findFn = vi.fn(async () => ({
+      data: [],
+      total: 596,
+      limit: 50,
+      skip: 0,
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { find: findFn };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const list = registerAndCaptureHandler('agor_branches_list', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await list({});
+    await list({ limit: 25, offset: 50 });
+
+    expect(findFn).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        query: expect.objectContaining({ archived: false, $limit: 50, $skip: 0 }),
+      })
+    );
+    expect(findFn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        query: expect.objectContaining({ archived: false, $limit: 25, $skip: 50 }),
+      })
+    );
+  });
+
+  it('rejects branch list pages above 100 rows', () => {
+    const config = registerAndCaptureConfig('agor_branches_list', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(config.inputSchema?.safeParse({ limit: 100 }).success).toBe(true);
+    expect(config.inputSchema?.safeParse({ limit: 101 }).success).toBe(false);
+  });
 
   it('includes zone_id and zone_label from enriched branches', async () => {
     const enrichedBranches = {

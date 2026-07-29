@@ -169,6 +169,27 @@ describe('resolveSessionDefaults', () => {
       expect(r.model_config).toBeUndefined();
     });
 
+    it('leaves Codex effort unset when no Agor override is configured', () => {
+      const r = resolveSessionDefaults({ agenticTool: 'codex', now });
+      expect(r.model_config).toMatchObject({
+        mode: 'alias',
+        model: 'gpt-5.6-sol',
+      });
+      expect(r.model_config).not.toHaveProperty('effort');
+    });
+
+    it('preserves an explicit Codex effort override', () => {
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        overrides: { modelConfig: { effort: 'xhigh' } },
+        now,
+      });
+      expect(r.model_config).toMatchObject({
+        model: 'gpt-5.6-sol',
+        effort: 'xhigh',
+      });
+    });
+
     it("uses the user's tool default model when present", () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',

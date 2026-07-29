@@ -53,12 +53,6 @@ describe('stripProviderCredentialEnvironment', () => {
     expect(result.GEMINI_API_KEY).toBe('user-gemini');
   });
 
-  it('claude-code-cli canonicalizes to the claude-code surface', () => {
-    const result = stripProviderCredentialEnvironment(baseEnv, 'claude-code-cli');
-    expect(result).not.toHaveProperty('ANTHROPIC_API_KEY');
-    expect(result.GITHUB_TOKEN).toBe('ghp_user');
-  });
-
   it('codex strips only OpenAI fields', () => {
     const result = stripProviderCredentialEnvironment(baseEnv, 'codex');
     expect(result).not.toHaveProperty('OPENAI_API_KEY');

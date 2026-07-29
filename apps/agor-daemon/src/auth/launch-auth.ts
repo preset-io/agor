@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
@@ -40,6 +41,9 @@ const DEFAULT_EXCHANGE_URL_ENV = 'AGOR_EXTERNAL_LAUNCH_EXCHANGE_URL';
 const DEFAULT_ISSUER_ENV = 'AGOR_EXTERNAL_LAUNCH_ISSUER';
 const DEFAULT_AUDIENCE_ENV = 'AGOR_EXTERNAL_LAUNCH_AUDIENCE';
 const DEFAULT_INSTANCE_ID_ENV = 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID';
+const DEFAULT_FORWARD_REQUEST_HOST_ENV = 'AGOR_EXTERNAL_LAUNCH_FORWARD_REQUEST_HOST';
+const DEFAULT_TRUSTED_HOST_HEADER = 'host';
+const DEFAULT_RETURN_HOST_PARAM = 'return_host';
 
 interface ResolvedLaunchSettings {
   enabled: boolean;
@@ -56,11 +60,15 @@ interface ResolvedLaunchSettings {
   trustVerifiedEmailForLinking: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
+  forwardRequestHost: boolean;
+  trustedHostHeader: string;
 }
 
 export interface PublicLaunchAuthSettings {
   enabled: boolean;
   loginRedirectUrl?: string;
+  /** Query parameter the UI uses to carry the current host to launch-init. */
+  returnHostParam?: string;
 }
 
 interface LaunchExchangeResponse {
@@ -134,16 +142,26 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
+    forwardRequestHost:
+      envFlag(process.env[DEFAULT_FORWARD_REQUEST_HOST_ENV]) ?? raw?.forward_request_host === true,
+    trustedHostHeader: (raw?.trusted_host_header || DEFAULT_TRUSTED_HOST_HEADER).toLowerCase(),
   };
 }
 
 export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunchAuthSettings {
   const raw = config.external_launch;
   const enabled = envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true;
+  // Only advertise a return-host param when a launch-init redirect exists to
+  // append it to; the param name itself is public routing metadata, not a secret.
+  const returnHostParam =
+    enabled && raw?.login_redirect_url
+      ? raw?.return_host_param || DEFAULT_RETURN_HOST_PARAM
+      : undefined;
 
   return {
     enabled,
     ...(enabled && raw?.login_redirect_url ? { loginRedirectUrl: raw.login_redirect_url } : {}),
+    ...(returnHostParam ? { returnHostParam } : {}),
   };
 }
 
@@ -172,6 +190,15 @@ function assertConfigured(settings: ResolvedLaunchSettings): void {
   }
   if (configuredKeyCount > 1) {
     rejectConfig('multiple assertion verification methods configured');
+  }
+  // Asymmetric verification (jwks_url/public_key) must never be paired with a
+  // symmetric HS* algorithm. Pinning this makes the algorithm-confusion defense
+  // independent of the jsonwebtoken default allow-list: even if an operator
+  // overrides `algorithms`, an asymmetric public key can never be coerced into
+  // an HMAC secret. The RS256 default for asymmetric methods is preserved.
+  const usesAsymmetricKey = Boolean(settings.jwksUrl || settings.publicKey);
+  if (usesAsymmetricKey && settings.algorithms?.some((alg) => /^hs/i.test(alg))) {
+    rejectConfig('asymmetric verification cannot be configured with HS* algorithms');
   }
 }
 
@@ -403,9 +430,51 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
   }
 }
 
+/**
+ * Read the normalized inbound browser Host from the trusted local request
+ * context. The value comes from a single configured request header that the
+ * trusted proxy / edge owns and overwrites — never from a client-supplied body
+ * field. Multiple, array or comma-joined host values are treated as ambiguous
+ * and rejected so a caller cannot smuggle a second host past the edge.
+ *
+ * Returns `undefined` when host forwarding is disabled. Throws (fail closed)
+ * when forwarding is enabled but no unambiguous host is available.
+ */
+export function resolveRequestHost(
+  settings: ResolvedLaunchSettings,
+  headers: Record<string, unknown> | undefined
+): string | undefined {
+  if (!settings.forwardRequestHost) return undefined;
+
+  const wanted = settings.trustedHostHeader;
+  let raw: unknown;
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() === wanted) {
+      raw = value;
+      break;
+    }
+  }
+
+  if (Array.isArray(raw)) {
+    if (raw.length !== 1) {
+      throw new NotAuthenticated('Ambiguous launch request host');
+    }
+    raw = raw[0];
+  }
+  if (typeof raw !== 'string') {
+    throw new NotAuthenticated('Missing launch request host');
+  }
+  const host = raw.trim().toLowerCase();
+  if (!host || host.includes(',') || /\s/.test(host)) {
+    throw new NotAuthenticated('Invalid launch request host');
+  }
+  return host;
+}
+
 async function exchangeLaunchCode(
   launchCode: string,
-  settings: ResolvedLaunchSettings
+  settings: ResolvedLaunchSettings,
+  requestHost: string | undefined
 ): Promise<LaunchExchangeResponse> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -417,6 +486,9 @@ async function exchangeLaunchCode(
     launch_code: launchCode,
     audience: settings.audience,
     instance_id: settings.instanceId,
+    // Host-bound launch: the issuer binds the code to the exact route the
+    // browser entered. Only sent when configured; kept opaque to the daemon.
+    ...(settings.forwardRequestHost && requestHost ? { request_host: requestHost } : {}),
   };
 
   const json = await fetchJson(
@@ -464,12 +536,21 @@ async function verifyLaunchAssertion(
     throw new NotAuthenticated('Invalid one-time launch assertion');
   }
 
+  // Fail closed on the unsigned `none` algorithm regardless of configuration.
+  if (!decoded.header.alg || decoded.header.alg.toLowerCase() === 'none') {
+    throw new NotAuthenticated('Launch assertion verification failed');
+  }
+
   const key = await resolveVerificationKey(decoded.header, settings);
-  const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : undefined);
+  // Production verification is asymmetric and must pin an explicit algorithm
+  // allow-list. Defaulting to RS256 for the non-dev path prevents algorithm
+  // confusion (e.g. a public key coerced into HS256). The dev symmetric path
+  // stays HS256-only. An operator may still narrow/extend via `algorithms`.
+  const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : ['RS256']);
   const claims = jwt.verify(assertion, key, {
     issuer: settings.issuer,
     audience: settings.audience,
-    algorithms: algorithms as jwt.Algorithm[] | undefined,
+    algorithms: algorithms as jwt.Algorithm[],
   }) as LaunchClaims;
 
   validateLaunchClaims(claims, settings);
@@ -498,6 +579,71 @@ function validateLaunchClaims(claims: LaunchClaims, settings: ResolvedLaunchSett
   if (claims.nonce !== undefined && typeof claims.nonce !== 'string') {
     throw new NotAuthenticated('Invalid one-time launch assertion nonce');
   }
+}
+
+/**
+ * Closed, reviewed set of secret-safe launch-failure reason codes. These are
+ * the ONLY strings ever written to the operator log for a failed launch. An
+ * error's free-text `message` is never logged: an unexpected error (a fetch/DNS
+ * failure, a driver/DB error, a dependency exception, a re-thrown assertion or
+ * verification detail) can embed a credential-bearing URL such as
+ * `?access_token=…`, cookie/header text or connection strings, none of which
+ * the structural redactor is guaranteed to catch. Classifying to a static code
+ * gives operators useful differentiation while keeping arbitrary text out of
+ * logs entirely.
+ */
+const LAUNCH_FAILURE_REASONS = {
+  BAD_REQUEST: 'bad_request',
+  EXCHANGE_REJECTED: 'exchange_rejected',
+  EXCHANGE_RESPONSE_INVALID: 'exchange_response_invalid',
+  ASSERTION_INVALID: 'assertion_invalid',
+  ASSERTION_VERIFICATION_FAILED: 'assertion_verification_failed',
+  ASSERTION_CLAIMS_INVALID: 'assertion_claims_invalid',
+  REQUEST_HOST_INVALID: 'request_host_invalid',
+  TENANT_RESOLUTION_FAILED: 'tenant_resolution_failed',
+  LAUNCH_REJECTED: 'launch_rejected',
+  UNEXPECTED: 'unexpected_error',
+} as const;
+
+/**
+ * Strict allow-list mapping the module's own static rejection messages to a
+ * differentiated reason code. Membership is tested only to SELECT a code — the
+ * message itself is never emitted — so this stays a closed enum-like lookup and
+ * degrades safely (to the coarse class-based code below) if a message drifts.
+ */
+const KNOWN_LAUNCH_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
+  ['launchCode is required', LAUNCH_FAILURE_REASONS.BAD_REQUEST],
+  ['launchCode is too long', LAUNCH_FAILURE_REASONS.BAD_REQUEST],
+  ['Invalid or expired one-time launch code', LAUNCH_FAILURE_REASONS.EXCHANGE_REJECTED],
+  ['Invalid one-time launch exchange response', LAUNCH_FAILURE_REASONS.EXCHANGE_RESPONSE_INVALID],
+  ['Invalid one-time launch assertion', LAUNCH_FAILURE_REASONS.ASSERTION_INVALID],
+  ['Launch assertion verification failed', LAUNCH_FAILURE_REASONS.ASSERTION_VERIFICATION_FAILED],
+  ['Invalid one-time launch assertion issuer', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion subject', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion expiration', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion instance', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion id', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion nonce', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Ambiguous launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],
+  ['Missing launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],
+  ['Invalid launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],
+]);
+
+/**
+ * Map any launch failure to a static, secret-safe reason code. The raw message
+ * is used ONLY as an allow-list lookup key and is never returned or logged; the
+ * result is always a compile-time constant from {@link LAUNCH_FAILURE_REASONS}.
+ */
+export function classifyLaunchFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  const known = KNOWN_LAUNCH_FAILURE_REASONS.get(message);
+  if (known) return known;
+  if (error instanceof BadRequest) return LAUNCH_FAILURE_REASONS.BAD_REQUEST;
+  if (error instanceof TenantResolutionError) {
+    return LAUNCH_FAILURE_REASONS.TENANT_RESOLUTION_FAILED;
+  }
+  if (error instanceof NotAuthenticated) return LAUNCH_FAILURE_REASONS.LAUNCH_REJECTED;
+  return LAUNCH_FAILURE_REASONS.UNEXPECTED;
 }
 
 function issueRuntimeTokens(
@@ -542,16 +688,28 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
       assertConfigured(settings);
 
       try {
-        const exchange = await exchangeLaunchCode(launchCode, settings);
+        // Resolve the browser Host from the trusted local request context BEFORE
+        // the exchange network call so a code minted for one host cannot be
+        // presented through another, and a missing/ambiguous/invalid host fails
+        // closed with no launch code ever leaving the daemon. Kept inside the
+        // try so a host failure also yields a static, secret-safe diagnostic.
+        const requestHost = resolveRequestHost(
+          settings,
+          params?.headers as Record<string, unknown> | undefined
+        );
+
+        const exchange = await exchangeLaunchCode(launchCode, settings, requestHost);
         if (!exchange.assertion) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
-        const tenant = resolveTenantContext(multiTenancy, {
-          params,
-          authPayload: claims,
-          headers: params?.headers as Record<string, unknown> | undefined,
-        });
+        // Tenant scope for the runtime DB/RLS must derive ONLY from the
+        // verified, signed assertion — never from params, params.tenant, or
+        // request headers, all of which are attacker-influenced on the launch
+        // request. We deliberately pass just the signed claims to the generic
+        // resolver so `required_from_auth` cannot fall back to a trusted_header
+        // or an explicit params tenant; an absent claim fails closed below.
+        const tenant = resolveTenantContext(multiTenancy, { authPayload: claims });
         return await runWithTenantDatabaseScope(options.db, tenant.tenant_id, async () => {
           const user = await upsertLaunchUser(options, claims, tenant);
           return issueRuntimeTokens(
@@ -564,6 +722,20 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           );
         });
       } catch (error) {
+        // Every launch failure — expected or unexpected — emits exactly one
+        // coarse operator diagnostic before rethrowing. Only a static reason
+        // code from the closed classification is logged; the raw error message
+        // is never emitted, so a credential-bearing URL (e.g. ?access_token=…),
+        // assertion/verification text, cookies, DB URLs or dependency exception
+        // text can never reach logs/telemetry. safeLaunchDiagnostic additionally
+        // scrubs the per-request code/credential as defense in depth.
+        console.warn(
+          safeLaunchDiagnostic(classifyLaunchFailure(error), [
+            launchCode,
+            settings.serviceCredential,
+            settings.devSharedSecret,
+          ])
+        );
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {
           throw error;
         }

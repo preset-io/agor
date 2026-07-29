@@ -2,21 +2,11 @@
  * buildInitialUserMessage
  *
  * Constructs the canonical "first message of a task" row written by
- * both:
- *
- *   - `/sessions/:id/prompt` (the textarea / MCP entry point) when
- *     the `daemon_writes_user_message` kill switch is enabled. Each
- *     turn opens a new task and the user prompt is its first message.
- *   - The Claude Code CLI watcher's terminal-direct branch
- *     (`buildCliEventSink`) when claude's JSONL transcript fires a
- *     `user_message` event for a turn that didn't come through
- *     `/prompt`. The watcher mints a task on the fly and writes the
- *     user row itself.
- *
- * Without this helper the two call sites would drift independently —
- * `content_preview` length, metadata shape, type discriminator, etc.
- * Keep the row shape here; the caller picks `type` ('user' vs the
- * 'system' callback variant) and supplies `metadata`.
+ * `/sessions/:id/prompt` (the textarea / MCP entry point) when the
+ * `daemon_writes_user_message` kill switch is enabled. Each turn opens a
+ * new task and the user prompt is its first message. Keep the canonical row
+ * shape here; the caller picks `type` ('user' vs the 'system' callback
+ * variant) and supplies `metadata`.
  *
  * Pure function — no DB write, no service call. Caller does
  * `app.service('messages').create(buildInitialUserMessage(...))`.

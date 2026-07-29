@@ -1,6 +1,8 @@
-import type { ScheduleAgenticToolConfig } from '../types';
 import {
+  isAgenticToolName,
   normalizeAgenticToolDefaultConfigurationReference,
+  type PersistedScheduleAgenticToolConfig,
+  type ScheduleAgenticToolConfig,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '../types';
 
@@ -23,7 +25,7 @@ function normalizeDefaultReference(reference: string) {
   );
 }
 
-function hasDefinedInlineFields(config: ScheduleAgenticToolConfig): boolean {
+function hasDefinedInlineFields(config: PersistedScheduleAgenticToolConfig): boolean {
   return Object.entries(config).some(
     ([key, value]) => !SOURCE_FIELDS.has(key) && value !== undefined
   );
@@ -31,8 +33,17 @@ function hasDefinedInlineFields(config: ScheduleAgenticToolConfig): boolean {
 
 /** Canonicalize and enforce the exactly-one-source schedule configuration contract. */
 export function normalizeScheduleAgenticToolConfig(
-  config: ScheduleAgenticToolConfig
+  config: PersistedScheduleAgenticToolConfig
 ): ScheduleAgenticToolConfig {
+  if (!isAgenticToolName(config.agentic_tool)) {
+    throw new InvalidScheduleAgenticToolConfigError(
+      `Removed or unsupported schedule agentic tool: ${String(config.agentic_tool)}`
+    );
+  }
+  const activeConfig: ScheduleAgenticToolConfig = {
+    ...config,
+    agentic_tool: config.agentic_tool,
+  };
   const hasReference = config.configuration_reference !== undefined;
   const hasPreset = config.preset_id !== undefined;
   const hasInline = hasDefinedInlineFields(config);
@@ -52,13 +63,13 @@ export function normalizeScheduleAgenticToolConfig(
     return { agentic_tool: config.agentic_tool, configuration_reference: reference };
   }
 
-  if (!hasPreset) return config;
+  if (!hasPreset) return activeConfig;
   if (hasInline) {
     throw new InvalidScheduleAgenticToolConfigError(
       'Preset-backed schedules cannot contain inline overrides'
     );
   }
   const reference = normalizeDefaultReference(config.preset_id as string);
-  if (!reference) return config;
+  if (!reference) return activeConfig;
   return { agentic_tool: config.agentic_tool, configuration_reference: reference };
 }

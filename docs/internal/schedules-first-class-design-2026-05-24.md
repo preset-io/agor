@@ -97,7 +97,7 @@ Plus the JSON `schedule` blob nested inside `branches.data` ([`schema.sqlite.ts:
 schedule?: {
   timezone: string;                  // STORED BUT IGNORED — see 2b
   prompt_template: string;
-  agentic_tool: 'claude-code'|'claude-code-cli'|'codex'|'gemini'|'opencode'|'copilot';
+  agentic_tool: 'claude-code'|'codex'|'gemini'|'opencode'|'copilot'|'cursor';
   retention: number;
   permission_mode?: string;
   model_config?: { mode: 'default'|'custom'; model?: string };
@@ -438,9 +438,7 @@ app.service('schedules').hooks({
 });
 
 // Custom verb (mirrors /branches/:id/execute-schedule-now at register-routes.ts:2866)
-app.use('/schedules/:id/run-now', {
-  /* ... */
-});
+app.use('/schedules/:id/run-now', {/* ... */});
 app.service('/schedules/:id/run-now').hooks({
   before: {
     create: [

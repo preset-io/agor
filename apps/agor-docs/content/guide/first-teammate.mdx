@@ -1,0 +1,90 @@
+---
+title: Raising Your First AI Teammate
+description: The short path to succeeding with Agor — raise one named AI teammate, give it a real job, and let it guide the rest.
+ogImage: '/screenshots/first-teammate-og.png'
+imageWidth: 1200
+imageHeight: 630
+---
+
+import { ScreenshotGallery } from '../../components/ScreenshotGallery';
+
+# Raising Your First AI Teammate
+
+Picture the teammate your team keeps wishing for: one who captures decisions before they evaporate, keeps an eye on the work systems everyone forgets to update, drafts the weekly report nobody wants to write, and owns the follow-through that always slips. Now imagine it has a name, a memory, and a visible place on your team.
+
+That is the practical center of Agor. Not "adopt an AI platform" — raise **one useful AI teammate**, and let everything else follow from it.
+
+## Don't learn Agor. Meet it.
+
+Agor has a lot of surface area: boards, repos, branches, Knowledge, cards, artifacts, gateway channels, schedules. You don't need to understand any of that today.
+
+The [onboarding wizard](/guide/getting-started) starts by helping you create a [teammate](/guide/teammates) and give it a name. A few quick steps and you have a colleague to work with:
+
+<div style={{ maxWidth: '480px' }}>
+<ScreenshotGallery
+  shots={[
+    {
+      src: '/screenshots/onboarding-persona.png',
+      alt: 'Onboarding: persona cards — I write code, I manage projects, I lead a team, Building solo',
+      caption: 'Tell it how you work',
+    },
+    {
+      src: '/screenshots/onboarding-connect-ai.png',
+      alt: 'Onboarding: Connect your AI — Claude, GPT, or Gemini via your own key or subscription',
+      caption: 'Connect your own model',
+    },
+    {
+      src: '/screenshots/onboarding-name-teammate.png',
+      alt: 'Onboarding: Name your AI teammate — a name and emoji, with its own board',
+      caption: 'Give it a name',
+    },
+    {
+      src: '/screenshots/onboarding-ready.png',
+      alt: "Onboarding: You're ready to build — AI connected, workspace ready",
+      caption: 'Meet your teammate',
+    },
+  ]}
+/>
+</div>
+
+That name matters more than it sounds. Your teammate can drive Agor the same way you can — anything you could click through, it can do over the [Agor MCP server](/guide/internal-mcp) — so it becomes your portal into the product. Want a repo registered, a board organized, a schedule set up? Ask it, in plain language.
+
+This is why setup is one-time leverage: once a model is connected, boards, Knowledge, and channels become things your teammate helps configure as the need arises — not prerequisites you study up front.
+
+## Bring your own model
+
+Agor doesn't resell model access: you connect your own API key or an existing subscription (like Claude Pro/Max, or your Codex login) and pick the agent per session — Claude Code, Codex, Gemini, and [others](/guide/sdk-comparison).
+
+That control is a strength, not setup friction. You choose which models handle which work, you can [see what each costs](/guide/rich-chat-ux#-per-prompt-cost--token-accounting), and you're never locked to one vendor. Details live in [Authentication](/guide/extended-install#authentication).
+
+## The takeoff sequence
+
+1. **Connect a model.** An API key or supported subscription; the wizard walks you through it.
+2. **Name your first teammate.** A name turns "a session" into a colleague with identity and memory — something your team can address, correct, and trust over time.
+3. **Give it a real outcome.** Not "explore the codebase" — something true: keep release notes current, triage incoming issues, prep the Monday status draft. Connect only the tools and context that job needs, via [MCP servers](/guide/internal-mcp) and [Knowledge](/guide/knowledge).
+4. **Decide where to reach it, and where results land.** A [gateway channel](/guide/message-gateway) lets your team mention the teammate in Slack, Microsoft Teams, or on a GitHub PR — no new app for the rest of the team, and each message is matched to a real Agor user before it runs. Replies flow back into the same thread, and recurring output (reports, digests, nudges about stalled work) is delivered to the channels you've wired up.
+5. **Turn demonstrated value into recurring workflows.** When something works twice, [schedule it](/guide/scheduler): a morning brief, a Friday report, a weekly cleanup. This is how the teammate goes from answering to acting.
+6. **Expand deliberately.** A second teammate, or broader access for the first, comes after the first one proves useful — not before.
+
+## Give it exactly the trust it has earned
+
+A teammate is only as valuable as it is accountable. Agor treats that as product surface, not fine print:
+
+- **Scoped access.** The teammate reaches only the repos, tools, and channels you connect; in multiplayer setups, [branch permissions](/guide/multiplayer-unix-isolation) control who can prompt it.
+- **Explicit approval.** Permission modes keep a human on tool calls until a routine is proven. Anything that posts outside Agor should draft first and act after review.
+- **Everything reviewable.** Sessions record every step and tool call, visible to the whole team. The teammate's memory is plain markdown you can read, edit, and version.
+- **Nothing hidden.** It acts when someone prompts it or when a schedule you wrote fires — never by roaming on its own.
+
+Match oversight to impact: a read-only summarizer can run routinely; anything touching external systems earns autonomy gradually.
+
+## Where this can go
+
+Zoom out a year. Several thoughtfully scoped teammates — one tracking product work, one handling engineering chores, one assembling competitive intel, one supporting sales enablement. Each has a name, the system access its job requires, channels where people reach it, and oversight proportional to what it touches. With the right integrations connected, decisions from meeting notes get captured, stalled work gets a nudge in the channel the team already reads, and context stops living in one person's head.
+
+That's the transformation we've begun experiencing at Preset — begun, not completed, and not something we'd promise every installation on day one. What we can say: it starts the same way every time, with one named teammate that genuinely helps. Someone on your team gets to be the person who brings it. It might as well be you.
+
+## Your next step
+
+Install Agor and let the wizard introduce you — your teammate takes it from there.
+
+**[Get started →](/guide/getting-started)**

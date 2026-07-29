@@ -99,6 +99,46 @@ describe('GeminiPromptService', () => {
   describe('Task Management', () => {
     const sessionId = 'test-session-id-123' as SessionID;
 
+    it('does not start a provider request when stopped during initialization', async () => {
+      const sendMessageStream = vi.fn();
+      let finishInitialization!: (client: { sendMessageStream: typeof sendMessageStream }) => void;
+      const initialization = new Promise<{ sendMessageStream: typeof sendMessageStream }>(
+        (resolve) => {
+          finishInitialization = resolve;
+        }
+      );
+      const getOrCreateClient = vi.fn().mockReturnValue(initialization);
+      (
+        service as unknown as {
+          getOrCreateClient: typeof getOrCreateClient;
+        }
+      ).getOrCreateClient = getOrCreateClient;
+      vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
+        created_by: 'user-1',
+        model_config: null,
+      } as never);
+
+      const outerAbortController = new AbortController();
+      const nextEvent = service
+        .promptSessionStreaming(
+          sessionId,
+          'test prompt',
+          undefined,
+          undefined,
+          undefined,
+          outerAbortController.signal
+        )
+        .next();
+
+      await vi.waitFor(() => expect(getOrCreateClient).toHaveBeenCalledOnce());
+      outerAbortController.abort();
+      expect(service.stopTask(sessionId)).toEqual({ success: true });
+      finishInitialization({ sendMessageStream });
+
+      await expect(nextEvent).resolves.toMatchObject({ done: true });
+      expect(sendMessageStream).not.toHaveBeenCalled();
+    });
+
     it('should return failure when stopping non-existent task', () => {
       const result = service.stopTask(sessionId);
       expect(result.success).toBe(false);

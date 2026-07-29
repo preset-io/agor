@@ -360,7 +360,17 @@ execution:
 | `{unix_user_uid}` | Target Unix UID                         | `1001`                |
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
-| `{branch_id}`   | Branch ID (if available)              | `01xyz789...`         |
+| `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
+| `{tenant_id}`     | Trusted ambient tenant ID                | `tenant-abc`          |
+
+`{tenant_id}` comes from the authenticated operation's ambient tenant context
+and is rendered as one shell-escaped argument because tenant identity may
+originate in an external authentication claim. Use the placeholder unquoted,
+for example `launcher --tenant-id {tenant_id}`. If a template references
+`{tenant_id}` but no tenant context is active, Agor refuses to execute the
+template instead of passing a literal or empty tenant value. In
+`required_from_auth` mode, every executor launch requires an active tenant
+context, whether or not its template uses the placeholder.
 
 ### How It Works
 
@@ -1045,13 +1055,23 @@ SDK activity facts share the existing executor heartbeat transport. Disabling
 diagnostics and the stale-wrapper backstop, but the executor-local watchdog and
 its direct failure report remain active.
 
-For locally spawned executors, enforced failures and user Stop wait for bounded
-process-group termination and absence verification before the session becomes
-promptable. This can add the configured grace and signal-escalation latency.
-Templated/remote execution that cannot prove absence remains visible and blocked
-until a branch owner or administrator explicitly force-fails it. After an abrupt
-daemon restart, Agor keeps its existing orphan cleanup behavior; diagnostics
-disclose that logical release does not prove remote process termination.
+User Stop first persists the Task's `stopping` state. That normal realtime Task
+patch travels over the executor's authenticated WebSocket, so the executor can
+abort its SDK and run provider cleanup regardless of which host or pod runs the
+daemon. Reconnecting executors read the durable Task state instead of relying on
+an ephemeral cancellation event. The executor reports quiescence only after its
+SDK and stop hooks return.
+
+For locally spawned executors, Agor additionally verifies process-group absence
+before the session becomes promptable; a short cooperative grace is followed by
+SIGTERM/SIGKILL only when the wrapper does not exit itself. A scoped remote
+executor's quiescence report is the authoritative cooperative result because
+the daemon cannot inspect a process group on another host. Missing reports still
+flow through the heartbeat supervisor and remain visible and blocked rather
+than being treated as proof of termination. OpenCode server-side execution also
+remains unverified. After an abrupt daemon restart, Agor keeps its existing
+orphan cleanup behavior; diagnostics disclose that logical release does not
+prove remote process termination.
 
 ### Step 5: Test Single Executor
 

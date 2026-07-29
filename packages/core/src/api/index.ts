@@ -17,9 +17,11 @@ import type {
   CardType,
   CardWithType,
   CloneRepositoryResult,
-  ContextFileDetail,
-  ContextFileListItem,
   CreateAgenticToolPreset,
+  CreateSessionInput,
+  GatewayChannel,
+  GatewayChannelCreateData,
+  GatewayChannelPatchData,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -29,6 +31,7 @@ import type {
   KnowledgeNamespace,
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
+  KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
@@ -37,8 +40,11 @@ import type {
   Repo,
   RuntimeTelemetryInput,
   Schedule,
+  ScheduleCreateData,
+  SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionUpdate,
   Task,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
@@ -154,11 +160,11 @@ export interface TasksClientHelpers {
   /**
    * Trigger executor pickup for an already-created task. Pure-REST harnesses
    * use this after `POST /tasks` to avoid needing an MCP client. Returns the
-   * Task with `status: 'dispatching'` for non-CLI executors (or `'running'`
-   * for `claude-code-cli`). Only `'created'` tasks on idle sessions
-   * are accepted — `'queued'` tasks drain automatically in queue-position
-   * order via the queue processor, and busy sessions should be prompted via
-   * `client.sessions.prompt()` (which creates and queues the task atomically).
+   * Task with `status: 'dispatching'`; the authenticated executor claims it
+   * as `running`. Only `'created'` tasks on idle sessions are accepted —
+   * `'queued'` tasks drain automatically in queue-position order, and busy
+   * sessions should be prompted via `client.sessions.prompt()` (which creates
+   * and queues the task atomically).
    */
   run(taskId: string, options?: TaskRunOptions): Promise<Task>;
 }
@@ -190,6 +196,7 @@ export interface ServiceTypes {
   'repos/local': Repo;
   branches: Branch;
   schedules: Schedule;
+  'gateway-channels': GatewayChannel;
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
@@ -200,7 +207,6 @@ export interface ServiceTypes {
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
-  context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
   'kb/versions': KnowledgeDocumentVersion;
@@ -252,6 +258,24 @@ export interface AgorService<
   emit(event: string, data: unknown): void;
 }
 
+/** Schedules return storage-facing rows but accept active-only public write data. */
+export interface SchedulesService
+  extends AgorService<
+    Schedule,
+    ClientInput<ScheduleCreateData>,
+    never,
+    ClientInput<SchedulePatchData> | null
+  > {}
+
+/** Gateway channels return storage-facing rows but accept active-only public write data. */
+export interface GatewayChannelsService
+  extends AgorService<
+    GatewayChannel,
+    ClientInput<GatewayChannelCreateData>,
+    never,
+    ClientInput<GatewayChannelPatchData> | null
+  > {}
+
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
   never,
@@ -266,10 +290,43 @@ export type AgenticToolPresetsService = AgorService<
   PatchAgenticToolPreset
 >;
 
+/** Singleton workspace Knowledge semantic-search settings endpoint. */
+export interface KnowledgeSettingsService {
+  find(params?: Params): Promise<KnowledgeSemanticSettingsPublic>;
+  create(
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+  patch(
+    id: null,
+    data: KnowledgeSemanticSettingsPatch,
+    params?: Params
+  ): Promise<KnowledgeSemanticSettingsPublic>;
+}
+
+/** Singleton workspace Knowledge indexing status endpoint. */
+export interface KnowledgeIndexingStatusService {
+  find(params?: Params): Promise<KnowledgeIndexingStatus>;
+}
+
+/** Workspace-wide Knowledge reindex command endpoint. */
+export interface KnowledgeReindexService {
+  create(
+    data?: Record<string, never>,
+    params?: Params
+  ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
+}
+
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
  */
-export interface SessionsService extends AgorService<Session> {
+export interface SessionsService
+  extends AgorService<
+    Session,
+    CreatePayload<CreateSessionInput>,
+    ClientInput<SessionUpdate>,
+    ClientInput<SessionUpdate>
+  > {
   /**
    * Fork a session at a decision point
    * Creates a new session branching from the parent at a specific task
@@ -299,6 +356,11 @@ export interface SessionsService extends AgorService<Session> {
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Report that a requested cooperative stop has fully quiesced SDK work. */
+  reportTerminationComplete(
+    data: import('../types/task').ExecutorTerminationCompleteInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
@@ -596,6 +658,11 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'schedules'): SchedulesService;
+  service(path: 'gateway-channels'): GatewayChannelsService;
+  service(path: 'kb/settings'): KnowledgeSettingsService;
+  service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
+  service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 
@@ -608,7 +675,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
-  service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths
@@ -886,7 +952,12 @@ function extendTasksService(client: AgorClient): void {
   };
   if (tasksService[TASKS_SERVICE_EXTENDED]) return;
   if (typeof tasksService.methods === 'function') {
-    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry', 'reportSdkHealthFailure');
+    tasksService.methods(
+      'connectExecutor',
+      'reportTerminationComplete',
+      'reportRuntimeTelemetry',
+      'reportSdkHealthFailure'
+    );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }
@@ -1036,6 +1107,8 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
+    /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
+    ackTimeout?: number;
     /** Explicit authentication storage for non-browser clients. */
     authStorage?: {
       getItem(key: string): string | null | Promise<string | null>;
@@ -1061,6 +1134,7 @@ export function createClient(
       options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
     timeout: 20000, // 20s timeout for initial connection
+    ...(options?.ackTimeout === undefined ? {} : { ackTimeout: options.ackTimeout }),
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

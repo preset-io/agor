@@ -14,6 +14,7 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  isAgenticToolName,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
@@ -26,7 +27,7 @@ import { Bubble } from '@ant-design/x';
 import { Button, Tooltip, theme } from 'antd';
 
 import React, { useState } from 'react';
-import { BRAND, brandMarkHref } from '../../branding/brand';
+import { BRAND, brandBadgeHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -220,8 +221,10 @@ function getAgentAvatar({
   if (isCallback) {
     return (
       <img
-        src={brandMarkHref()}
-        alt={BRAND.name}
+        src={brandBadgeHref()}
+        alt={`${BRAND.name} callback`}
+        width={32}
+        height={32}
         style={{ width: 32, height: 32, borderRadius: '50%' }}
       />
     );
@@ -497,7 +500,11 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   }
 
   // Missing-credential failure — show the Connect-AI panel, not the raw error.
-  if (isSystem && message.metadata?.error_kind === 'missing_credential' && message.metadata?.tool) {
+  if (
+    isSystem &&
+    message.metadata?.error_kind === 'missing_credential' &&
+    isAgenticToolName(message.metadata?.tool)
+  ) {
     return (
       <MissingCredentialPanel
         tool={message.metadata.tool}
@@ -728,6 +735,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 }
                 variant={isUser || isCallback ? 'filled' : 'outlined'}
                 styles={{
+                  // Bubble.body defaults to min-width:auto. A wide intrinsic
+                  // child (notably Streamdown's max-content code <pre>) can
+                  // therefore make an end-aligned user bubble wider than the
+                  // conversation viewport and push its left edge off-screen.
+                  // Bound the whole row (including avatar) and allow the body
+                  // to shrink; the code body then owns horizontal scrolling.
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
                   content: {
                     backgroundColor: isCallback
                       ? token.colorWarningBg
@@ -856,15 +871,17 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   </CopyableContent>
                 }
                 variant={isCallback ? 'filled' : 'outlined'}
-                styles={
-                  isCallback
+                styles={{
+                  root: { maxWidth: '100%' },
+                  body: { minWidth: 0 },
+                  ...(isCallback
                     ? {
                         content: {
                           backgroundColor: token.colorWarningBg,
                         },
                       }
-                    : undefined
-                }
+                    : {}),
+                }}
               />
             </div>
           );

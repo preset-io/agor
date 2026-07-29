@@ -115,6 +115,9 @@ describe('executeToolTask credential preflight', () => {
         if (name === 'sessions') {
           return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
         }
+        if (name === 'messages' || name === 'tasks' || name === '/tasks/streaming') {
+          return {};
+        }
         throw new Error(`unexpected service ${name}`);
       },
     } as never;
@@ -143,6 +146,54 @@ describe('executeToolTask credential preflight', () => {
         },
       })
     );
+  });
+
+  it('does not launch provider work when cancellation arrives before tool execution', async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const stopTask = vi.fn().mockResolvedValue({ success: true });
+    const executePromptWithStreaming = vi.fn();
+    const createTool = vi.fn(() => ({
+      stopTask,
+      executePromptWithStreaming,
+    }));
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
+        }
+        if (name === 'messages' || name === 'tasks' || name === '/tasks/streaming') {
+          return {};
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        toolName: 'gemini',
+        createTool,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(createTool).toHaveBeenCalledOnce();
+    expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
+    expect(executePromptWithStreaming).not.toHaveBeenCalled();
   });
 });
 

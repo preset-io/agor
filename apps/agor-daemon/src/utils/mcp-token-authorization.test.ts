@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canControlCliSession, canReceiveMcpTokenForSession } from './mcp-token-authorization';
+import { canReceiveMcpTokenForSession } from './mcp-token-authorization';
 
 const creatorId = 'user-creator';
 
@@ -49,44 +49,6 @@ describe('session actor authorization', () => {
       canReceiveMcpTokenForSession({
         callerUserId: creatorId,
         callerRole: undefined,
-      })
-    ).toBe(false);
-  });
-
-  it('keeps CLI control limited to the creator, superadmin, or service identity', () => {
-    expect(
-      canControlCliSession({
-        callerUserId: creatorId,
-        callerRole: 'member',
-        sessionCreatedBy: creatorId,
-      })
-    ).toBe(true);
-    expect(
-      canControlCliSession({
-        callerUserId: 'user-collaborator',
-        callerRole: 'member',
-        sessionCreatedBy: creatorId,
-      })
-    ).toBe(false);
-    expect(
-      canControlCliSession({
-        callerUserId: 'user-admin',
-        callerRole: 'superadmin',
-        sessionCreatedBy: creatorId,
-      })
-    ).toBe(true);
-    expect(
-      canControlCliSession({
-        callerUserId: undefined,
-        callerRole: 'service',
-        sessionCreatedBy: creatorId,
-      })
-    ).toBe(true);
-    expect(
-      canControlCliSession({
-        callerUserId: creatorId,
-        callerRole: undefined,
-        sessionCreatedBy: creatorId,
       })
     ).toBe(false);
   });

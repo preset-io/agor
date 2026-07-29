@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
@@ -24,6 +23,12 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
+import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -32,6 +37,7 @@ import {
 } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonNegativeInt,
   mcpOptionalPositiveInt,
@@ -46,6 +52,8 @@ import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const BRANCH_LIST_DEFAULT_LIMIT = 50;
+const BRANCH_LIST_MAX_LIMIT = 100;
 const CLEANUP_CANDIDATE_DEFAULT_OLDER_THAN_DAYS = 7;
 const CLEANUP_CANDIDATE_SOURCE_PAGE_LIMIT = 10000;
 type CleanupCandidateFilesystemStatus = NonNullable<Branch['filesystem_status']>;
@@ -194,14 +202,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_list',
     {
       description:
-        'List all branches in a repository. Each branch includes zone_id and zone_label when ' +
+        'List a paginated set of branches, optionally filtered by repository. Inspect total, ' +
+        'limit, and skip in the response, then advance offset until all desired pages have been read. ' +
+        'Each branch includes zone_id and zone_label when ' +
         'the branch is assigned to a board zone — use these fields directly to identify which ' +
         'zone a branch is in without extra agor_branches_get calls. Also includes ' +
         'pull_request_url, issue_url, board_object_id, and position when set.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(BRANCH_LIST_DEFAULT_LIMIT, BRANCH_LIST_MAX_LIMIT),
+        offset: mcpOffset(0),
         includeArchived: z
           .boolean()
           .optional()
@@ -224,7 +235,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const query: Record<string, unknown> = {};
       if (args.repoId) query.repo_id = await resolveRepoId(ctx, args.repoId);
-      if (args.limit) query.$limit = args.limit;
+      // Prevent no-argument MCP calls from inheriting the service's intentional
+      // 10,000-row UI default. On large installations that aggregate response
+      // can cross the Socket.IO 1 MB frame limit when Codex persists the tool
+      // completion through the executor.
+      query.$limit = args.limit ?? BRANCH_LIST_DEFAULT_LIMIT;
+      query.$skip = args.offset ?? 0;
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
@@ -338,9 +354,48 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
+      const statusResult = await runExecutorCommand(
+        {
+          command: 'branch.filesystem.status',
+          sessionToken: generateScopedServiceToken(
+            ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
+          ),
+          daemonUrl: getDaemonUrl(),
+          params: { branchIds: branches.map((branch) => branch.branch_id) },
+        },
+        {
+          logPrefix: '[MCP branches.cleanupCandidates.status]',
+          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+          ),
+        }
+      );
+      if (!statusResult.success) {
+        throw new Error(
+          `Failed to inspect archived branch filesystems: ${statusResult.error?.message ?? 'unknown executor error'}`
+        );
+      }
+      const statusEntries =
+        statusResult.data && typeof statusResult.data === 'object'
+          ? (statusResult.data as { statuses?: unknown }).statuses
+          : undefined;
+      const pathExistsByBranch = new Map<string, boolean>(
+        Array.isArray(statusEntries)
+          ? statusEntries
+              .filter(
+                (entry): entry is { branchId: string; exists: boolean } =>
+                  !!entry &&
+                  typeof entry === 'object' &&
+                  typeof (entry as { branchId?: unknown }).branchId === 'string' &&
+                  typeof (entry as { exists?: unknown }).exists === 'boolean'
+              )
+              .map((entry) => [entry.branchId, entry.exists])
+          : []
+      );
+
       const filtered = branches
         .map((branch) => {
-          const pathExists = branch.path ? existsSync(branch.path) : false;
+          const pathExists = pathExistsByBranch.get(branch.branch_id) ?? false;
           return {
             branch,
             pathExists,

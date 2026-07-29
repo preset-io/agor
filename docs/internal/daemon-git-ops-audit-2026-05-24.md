@@ -59,9 +59,7 @@ Daemon `child_process` usage that is **not** a git shell-out:
 
 - `apps/agor-daemon/src/utils/spawn-executor.ts:24` — spawns the executor itself (correct).
 - `apps/agor-daemon/src/services/terminals.ts:21,654` — Zellij PTY spawn for the web terminal.
-- `apps/agor-daemon/src/services/claude-cli-integration.ts:37` — Claude-CLI spawn helpers.
 - `apps/agor-daemon/src/utils/unix-group-init.ts:14` — `groupadd` / `chgrp` / `setfacl` via sudoers.
-- `apps/agor-daemon/src/register-routes.ts:760` — `pkill -f` against stale Claude processes (not a git op).
 
 None of these are git ops; they're all listed for completeness so a future "grep `child_process` in daemon" doesn't re-litigate them.
 

@@ -1,7 +1,7 @@
 import type { AgenticToolName } from './agentic-tool';
 import type { AgenticToolConfigField, AgenticToolsConfig } from './user';
 
-/** Tenant-configurable tools. Claude CLI shares the Claude Code provider policy. */
+/** Tenant-configurable tools. */
 export const TENANT_AGENTIC_TOOL_NAMES = [
   'claude-code',
   'codex',
@@ -86,7 +86,7 @@ export interface TenantAgenticToolSettingsPatch {
 }
 
 export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgenticToolName {
-  return tool === 'claude-code-cli' ? 'claude-code' : tool;
+  return tool;
 }
 
 export function isProviderConnectionTool(

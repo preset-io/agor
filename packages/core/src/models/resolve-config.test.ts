@@ -108,7 +108,6 @@ describe('resolveModelConfigPrecedence', () => {
 describe('getDefaultModelForTool', () => {
   it('returns the static default for tools that have one', () => {
     expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-5');
-    expect(getDefaultModelForTool('claude-code-cli')).toBe('claude-sonnet-5');
     expect(getDefaultModelForTool('codex')).toBe('gpt-5.6-sol');
     expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
     expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
@@ -155,11 +154,16 @@ describe('resolveModelConfigWithFallback', () => {
     });
   });
 
-  it('merges effort-only input onto the tool fallback when no source has a model', () => {
-    const result = resolveModelConfigWithFallback('claude-code', [{ effort: 'max' }], { now });
+  it('merges model-less input onto the tool fallback when no source has a model', () => {
+    const result = resolveModelConfigWithFallback(
+      'claude-code',
+      [{ notes: 'Keep the default model', effort: 'max' }],
+      { now }
+    );
     expect(result).toEqual({
       mode: 'alias',
       model: 'claude-sonnet-5',
+      notes: 'Keep the default model',
       effort: 'max',
       updated_at: '2026-04-23T00:00:00.000Z',
     });

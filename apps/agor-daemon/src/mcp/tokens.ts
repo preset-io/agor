@@ -6,6 +6,7 @@
  *
  * - `sub`  — session id
  * - `uid`  — user id
+ * - `tid`  — tenant id
  * - `aud`  — `agor:mcp:internal`
  * - `iss`  — `agor`
  * - `iat`  — unix seconds, standard JWT "issued at"
@@ -13,7 +14,7 @@
  * - `jti`  — per-issuance UUID (useful for log correlation)
  *
  * No revocation mechanics. Tokens are minted lazily and cached briefly per
- * `(session,user)` so high-frequency `session.get` calls don't perform
+ * `(tenant,session,user)` so high-frequency `session.get` calls don't perform
  * redundant JWT signing and session-existence probes. Tokens carry a short
  * `exp` (default 24h); any suspected
  * compromise is addressed by rotating the JWT signing secret or letting the
@@ -24,9 +25,17 @@
  * for deleted sessions are rejected even if they haven't yet hit their `exp`.
  */
 
-import { MCP_TOKEN } from '@agor/core/config';
+import {
+  MCP_TOKEN,
+  type ResolvedMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
 import {
   generateId,
+  getCurrentTenantId,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
@@ -36,6 +45,7 @@ import {
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
   type SessionID,
+  type TenantID,
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -59,6 +69,7 @@ export { MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from '@agor/core/types';
 interface McpTokenPayload {
   sub: SessionID;
   uid: UserID;
+  tid: TenantID;
   aud: string;
   iss?: string;
   iat?: number;
@@ -69,11 +80,17 @@ interface McpTokenPayload {
 export interface McpTokenContext {
   sessionId: SessionID;
   userId: UserID;
+  tenantId: TenantID;
   jti: string;
 }
 
 export interface McpTokenInitOptions {
   db: TenantScopeAwareDatabase;
+  /**
+   * Resolved daemon tenant policy. Issuance may use the configured tenant only
+   * in static mode; required_from_auth still needs an ambient tenant identity.
+   */
+  multiTenancy: ResolvedMultiTenancyConfig;
   /** Token lifetime in ms. Falls back to `MCP_TOKEN.DEFAULT_EXPIRATION_MS` (24h). */
   expirationMs?: number;
   /** Override `Date.now()` for tests. */
@@ -85,7 +102,9 @@ export interface McpTokenInitOptions {
 // ============================================================================
 
 interface ModuleState {
+  db: TenantScopeAwareDatabase;
   sessionRepo: SessionRepository;
+  multiTenancy: ResolvedMultiTenancyConfig;
   expirationMs: number;
   now: () => number;
   tokenCache: Map<string, CachedMcpToken>;
@@ -121,7 +140,9 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
   const now = options.now ?? (() => Date.now());
 
   _state = {
+    db: options.db,
     sessionRepo: new SessionRepository(options.db),
+    multiTenancy: options.multiTenancy,
     expirationMs,
     now,
     tokenCache: new Map(),
@@ -143,6 +164,44 @@ export function shutdownMcpTokens(): void {
 // ============================================================================
 
 /**
+ * Resolve the tenant binding for a new token through the canonical config
+ * resolver. Ambient identity is passed as an explicit trusted daemon signal:
+ *
+ * - static mode falls back to its configured tenant when ambient identity is
+ *   absent;
+ * - an ambient identity must agree with the configured static tenant;
+ * - required_from_auth accepts an ambient identity but fails closed without
+ *   one.
+ */
+function resolveIssuanceTenantId(state: ModuleState): TenantID {
+  const ambientTenantId = getCurrentTenantId();
+  try {
+    if (
+      ambientTenantId !== undefined &&
+      (!ambientTenantId.trim() || ambientTenantId.trim() !== ambientTenantId)
+    ) {
+      throw new TenantResolutionError('Invalid ambient tenant identity');
+    }
+    return resolveTenantContext(
+      state.multiTenancy,
+      ambientTenantId
+        ? {
+            params: { tenant_id: ambientTenantId },
+          }
+        : undefined
+    ).tenant_id;
+  } catch (error) {
+    if (error instanceof TenantResolutionError) {
+      const message = error.message.startsWith('Missing tenant context')
+        ? 'missing active tenant context'
+        : error.message;
+      throw new Error(`MCP token generation failed: ${message}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/**
  * Mint or reuse an MCP token for a session.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
@@ -160,6 +219,7 @@ export async function generateSessionToken(
   }
 
   const nowMs = s.now();
+  const tenantId = resolveIssuanceTenantId(s);
   if (nowMs - s.lastCachePruneAtMs > 5 * 60 * 1000) {
     for (const [key, entry] of s.tokenCache) {
       if (entry.expiresAtMs <= nowMs) {
@@ -169,7 +229,7 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${sessionId}:${userId}`;
+  const cacheKey = `${tenantId}:${sessionId}:${userId}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -178,7 +238,9 @@ export async function generateSessionToken(
     return cached.token;
   }
 
-  const sessionExists = await s.sessionRepo.exists(sessionId);
+  const sessionExists = await runWithTenantDatabaseScope(s.db, tenantId, () =>
+    s.sessionRepo.exists(sessionId)
+  );
   if (!sessionExists) {
     s.tokenCache.delete(cacheKey);
     throw new Error(
@@ -194,6 +256,7 @@ export async function generateSessionToken(
   const payload: McpTokenPayload = {
     sub: sessionId,
     uid: userId,
+    tid: tenantId,
     aud: MCP_TOKEN_AUDIENCE,
     iss: MCP_TOKEN_ISSUER,
     iat: nowSec,
@@ -219,20 +282,18 @@ export const getTokenForSession = generateSessionToken;
 // ============================================================================
 
 /**
- * Validate an MCP token and extract `{ sessionId, userId, jti }`.
+ * Cryptographically verify an MCP token without touching tenant-owned data.
+ * Callers can use the signed tenant binding to establish the tenant scope
+ * before validating session/user existence.
  *
  * Rejection reasons:
  *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
- *  - missing `jti`/`exp` claims (pre-rollout tokens are rejected outright)
- *  - session no longer exists
+ *  - missing `tid`/`jti`/`exp` claims (pre-rollout tokens are rejected outright)
  *
  * Returns `null` on any failure.
  */
-export async function validateSessionToken(
-  app: Application,
-  token: string
-): Promise<McpTokenContext | null> {
-  const s = requireState();
+export function verifySessionToken(app: Application, token: string): McpTokenContext | null {
+  requireState();
   const jwtSecret = app.settings.authentication?.secret;
   if (!jwtSecret) {
     console.error('[mcp-tokens] JWT secret not configured in app settings');
@@ -259,8 +320,16 @@ export async function validateSessionToken(
 
   const sessionId = payload.sub;
   const userId = payload.uid;
-  if (!sessionId || !userId) {
-    console.warn('[mcp-tokens] token rejected: missing sub/uid');
+  const tenantId = payload.tid;
+  if (
+    typeof sessionId !== 'string' ||
+    !sessionId ||
+    typeof userId !== 'string' ||
+    !userId ||
+    typeof tenantId !== 'string' ||
+    !tenantId.trim()
+  ) {
+    console.warn('[mcp-tokens] token rejected: missing sub/uid/tid');
     return null;
   }
 
@@ -273,13 +342,48 @@ export async function validateSessionToken(
     return null;
   }
 
-  // Reject tokens whose session has been deleted — protects against stale
-  // tokens outliving their session until `exp`.
-  const sessionExists = await s.sessionRepo.exists(sessionId);
+  return { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti };
+}
+
+/**
+ * Validate the tenant-owned state referenced by an already verified token.
+ * The signed tenant is entered before the session lookup, and the transaction
+ * lasts only for that lookup.
+ */
+export async function validateVerifiedSessionToken(
+  context: McpTokenContext
+): Promise<McpTokenContext | null> {
+  const s = requireState();
+  const sessionExists = await runWithTenantContext(context.tenantId, () =>
+    runWithTenantDatabaseScope(s.db, context.tenantId, () =>
+      s.sessionRepo.exists(context.sessionId)
+    )
+  );
   if (!sessionExists) {
-    console.warn(`[mcp-tokens] token rejected: session ${shortId(sessionId)} not found`);
+    console.warn(
+      `[mcp-tokens] token rejected: session ${shortId(context.sessionId)} not found in bound tenant`
+    );
     return null;
   }
 
-  return { sessionId, userId, jti: payload.jti };
+  return context;
+}
+
+/**
+ * Verify a token and validate its session inside the signed tenant.
+ * `expectedTenantId` lets an HTTP boundary require agreement with a static or
+ * trusted-header tenant before any database lookup occurs.
+ */
+export async function validateSessionToken(
+  app: Application,
+  token: string,
+  expectedTenantId?: TenantID | string
+): Promise<McpTokenContext | null> {
+  const context = verifySessionToken(app, token);
+  if (!context) return null;
+  if (expectedTenantId && expectedTenantId !== context.tenantId) {
+    console.warn('[mcp-tokens] token rejected: tenant binding mismatch');
+    return null;
+  }
+  return validateVerifiedSessionToken(context);
 }

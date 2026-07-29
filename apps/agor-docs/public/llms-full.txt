@@ -107,7 +107,6 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 - [Architecture](https://agor.live/guide/architecture): System design, data flow, typed TypeScript client
 - [TypeScript Client](https://agor.live/guide/typescript-client): @agor-live/client — REST, real-time Socket.IO, reactive session API
 - [SDK Comparison](https://agor.live/guide/sdk-comparison): Claude Code vs Codex vs Gemini vs Copilot vs OpenCode feature matrix
-- [API Proxies](https://agor.live/guide/api-proxies): Daemon HTTP proxy for CORS-less enterprise APIs
 - [One-Time Launch Auth](https://agor.live/guide/one-time-launch-auth): Launch-code handoff from trusted external apps
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor
 - [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix isolation

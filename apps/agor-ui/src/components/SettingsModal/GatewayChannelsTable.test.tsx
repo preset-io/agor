@@ -47,13 +47,45 @@ vi.mock('../AgentSelectionGrid', () => ({
     </div>
   ),
 }));
-vi.mock('../AgenticToolConfigForm', () => ({
-  AgenticToolConfigForm: () => <div data-testid="agent-config" />,
-}));
-vi.mock('../AgenticToolConfigurationPicker', () => ({
-  INLINE_AGENTIC_CONFIGURATION: '__inline__',
-  AgenticToolConfigurationPicker: () => <div data-testid="agent-config" />,
-}));
+vi.mock('../AgenticToolConfigForm', async () => {
+  const actual = await vi.importActual<typeof import('../AgenticToolConfigForm')>(
+    '../AgenticToolConfigForm'
+  );
+  return {
+    ...actual,
+    AgenticToolConfigForm: () => <div data-testid="agent-config" />,
+  };
+});
+vi.mock('../AgenticToolConfigurationPicker', async () => {
+  const { Form } = await vi.importActual<typeof import('antd')>('antd');
+  const EffortField = ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string | undefined) => void;
+  }) => (
+    <select
+      aria-label="gateway-effort"
+      value={value ?? ''}
+      onChange={(event) => onChange?.(event.target.value || undefined)}
+    >
+      <option value="">Inherited</option>
+      <option value="medium">Medium</option>
+      <option value="xhigh">X-High</option>
+    </select>
+  );
+  return {
+    INLINE_AGENTIC_CONFIGURATION: '__inline__',
+    AgenticToolConfigurationPicker: () => (
+      <div data-testid="agent-config">
+        <Form.Item name="effort" noStyle>
+          <EffortField />
+        </Form.Item>
+      </div>
+    ),
+  };
+});
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -638,6 +670,80 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
       mcp_server_ids: ['mcp-server-1'],
     });
+  });
+
+  it('requires an explicit supported-tool choice before saving a historical channel', async () => {
+    const channel: GatewayChannel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code-cli' },
+    };
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { onUpdate });
+
+    expect(screen.getByText('This channel uses a removed agentic tool')).toBeInTheDocument();
+    expect(queryButton(/^Save$/)).toBeDisabled();
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    expandPanel('Agent Configuration');
+    clickButton(/^codex$/);
+    expect(queryButton(/^Save$/)).toBeEnabled();
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { agent: 'codex' },
+    });
+  });
+
+  it('rehydrates and persists a Codex reasoning-effort override', async () => {
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { onUpdate });
+    expandPanel('Agent Configuration');
+
+    const effort = screen.getByLabelText('gateway-effort');
+    expect(effort).toHaveValue('medium');
+    fireEvent.change(effort, { target: { value: 'xhigh' } });
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+      },
+    });
+  });
+
+  it('clears stale model and effort fields when switching to an agent without defaults', async () => {
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: {
+        agent: 'codex',
+        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+      mcp_server_ids: ['mcp-server-1'],
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser: makeUser(), onUpdate });
+    expandPanel('Agent Configuration');
+    clickButton(/^claude-code$/);
+    await waitFor(() => expect(screen.getByLabelText('gateway-effort')).toHaveValue(''));
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    const update = onUpdate.mock.calls[0][1];
+    expect(update.agentic_config).not.toHaveProperty('modelConfig');
+    expect(update.mcp_server_ids).toEqual(['mcp-server-1']);
   });
 
   it("applies the target agent's defaults when switching agents and back, instead of silently keeping stale fields", async () => {

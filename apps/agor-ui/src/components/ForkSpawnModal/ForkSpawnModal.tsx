@@ -13,17 +13,20 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode } from '@agor-live/client';
-import { DownOutlined } from '@ant-design/icons';
-import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
+import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
+import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
+import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
-  AgenticToolConfigurationPicker,
-  INLINE_AGENTIC_CONFIGURATION,
-} from '../AgenticToolConfigurationPicker';
+  getUserAgenticToolDefault,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { CodexSettingsForm } from '../CodexSettingsForm';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 
 export type ForkSpawnAction = 'fork' | 'spawn';
@@ -56,19 +59,38 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   userById,
 }) => {
   const [form] = Form.useForm();
+  const { token } = theme.useToken();
   const [loading, setLoading] = useState(false);
   const [configPreset, setConfigPreset] = useState<'parent' | 'custom'>('parent');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>(
-    session?.agentic_tool || 'claude-code'
+    isAgenticToolName(session?.agentic_tool) ? session.agentic_tool : 'claude-code'
   );
+  const hasActiveParentTool = isAgenticToolName(session?.agentic_tool);
+
+  const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
+  const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
+
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
 
   const getCustomConfigDefaults = useCallback(
     (agentTool: AgenticToolName) => {
-      const userDefaults = currentUser?.default_agentic_config?.[agentTool];
+      const { selection: userSelection, configuration: userDefaults } = getUserAgenticToolDefault(
+        currentUser,
+        agentTool
+      );
       const sameToolAsParent = agentTool === session?.agentic_tool;
+      const modelConfig =
+        userDefaults?.modelConfig ?? (sameToolAsParent ? session?.model_config : undefined);
       return {
         agent: agentTool,
+        // Seed the config source from the parent (same tool): the parent's preset
+        // if it used one, else inline — so the chip row's Select reflects the
+        // parent's actual config, mirroring SessionSettingsModal.
+        agenticToolPresetId: sameToolAsParent
+          ? (session?.agentic_tool_preset_id ?? INLINE_AGENTIC_CONFIGURATION)
+          : userSelection || userDefaults
+            ? USER_DEFAULT_AGENTIC_CONFIGURATION
+            : undefined,
         permissionMode:
           userDefaults?.permissionMode ||
           (sameToolAsParent ? session?.permission_config?.mode : undefined) ||
@@ -76,9 +98,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         // Existing user defaults are sent as explicit form values. If the user
         // has no saved model default and the child keeps the same tool, leaving
         // this undefined would inherit the parent model in resolveChildSessionConfig;
-        // initialize that effective value so the picker doesn't imply a different default.
-        modelConfig:
-          userDefaults?.modelConfig ?? (sameToolAsParent ? session?.model_config : undefined),
+        // initialize that effective value so the chips don't imply a different default.
+        modelConfig,
+        // Surfaced as its own field (the effort chip binds to it), folded back
+        // into model_config on submit.
+        effort: modelConfig?.effort,
         codexSandboxMode: userDefaults?.codexSandboxMode,
         codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
         codexNetworkAccess: userDefaults?.codexNetworkAccess,
@@ -92,7 +116,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     if (open && session) {
       setConfigPreset('parent');
       setEnvVarNames([]);
-      const agentTool = session.agentic_tool || 'claude-code';
+      const agentTool = isAgenticToolName(session.agentic_tool)
+        ? session.agentic_tool
+        : 'claude-code';
       form.setFieldsValue({
         prompt: initialPrompt,
         enableCallback: session.callback_config?.enabled,
@@ -107,7 +133,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   // effective if the user submits without touching individual fields.
   useEffect(() => {
     if (!open || !session || configPreset !== 'custom') return;
-    const agentTool = session.agentic_tool || 'claude-code';
+    if (!isAgenticToolName(session.agentic_tool)) return;
+    const agentTool = session.agentic_tool;
     form.setFieldsValue({
       ...getCustomConfigDefaults(agentTool),
       mcpServerIds: currentUser?.default_mcp_server_ids || [],
@@ -123,6 +150,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   ]);
 
   const handleOk = async () => {
+    if (!hasActiveParentTool) return;
+
     // Validate fields first. If validation fails, bail out WITHOUT clearing
     // the form — the user's prompt text must be preserved.
     try {
@@ -158,12 +187,17 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             spawnConfig.presetId = values.agenticToolPresetId;
           } else {
             spawnConfig.permissionMode = values.permissionMode;
-            spawnConfig.modelConfig = values.modelConfig;
+            spawnConfig.modelConfig = buildModelConfigFromFormValues({
+              modelConfig: values.modelConfig,
+              effort: values.effort,
+            });
             spawnConfig.codexSandboxMode = values.codexSandboxMode;
             spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
             spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
-            spawnConfig.mcpServerIds = values.mcpServerIds;
           }
+          // MCP attachments are session-scoped and remain editable regardless
+          // of whether the agent configuration comes from a preset or inline.
+          spawnConfig.mcpServerIds = values.mcpServerIds;
           spawnConfig.extraInstructions = values.extraInstructions;
           // Always send envVarNames in custom preset so the user can
           // explicitly clear inherited selections (empty array = explicit
@@ -226,6 +260,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       afterClose={afterClose}
       okText={`${actionLabel} Session`}
       confirmLoading={loading}
+      okButtonProps={{ disabled: !hasActiveParentTool }}
       width={700}
       forceRender
     >
@@ -235,7 +270,29 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         </Typography.Text>
       </div>
 
-      <Form form={form} layout="vertical">
+      {!hasActiveParentTool && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This historical session cannot be continued"
+          description="The session uses a removed agentic tool. Its transcript remains readable, but fork and spawn are disabled."
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      <Form
+        form={form}
+        layout="vertical"
+        // Suffix-style required mark ("Label *"), matching NewSessionModal.
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && (
+              <span style={{ color: token.colorError, marginInlineStart: token.marginXXS }}>*</span>
+            )}
+          </>
+        )}
+      >
         {/* Prompt */}
         <Form.Item
           name="prompt"
@@ -262,8 +319,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         {/* Spawn-only options */}
         {action === 'spawn' && (
           <>
-            {/* Configuration Preset */}
-            <Form.Item label="Configuration">
+            {/* Start-from preset vs a custom configuration */}
+            <Form.Item label="Start from">
               <Radio.Group
                 value={configPreset}
                 onChange={(e) => setConfigPreset(e.target.value)}
@@ -274,7 +331,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               </Radio.Group>
             </Form.Item>
 
-            {/* Custom config: agent selection + agentic tool config + extra instructions */}
+            {/* Custom config: agent selection + config chip row + extra instructions */}
             {configPreset === 'custom' && (
               <>
                 {/* Agent Selection */}
@@ -288,34 +345,29 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                       form.setFieldsValue(getCustomConfigDefaults(agentTool));
                     }}
                     columns={2}
+                    fallbackToFirstVisibleAgent
                   />
                 </Form.Item>
 
-                {/* Agentic Tool Configuration (Collapsible) */}
-                <Collapse
-                  ghost
-                  destroyOnHidden={false}
-                  expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                  items={[
-                    {
-                      key: 'agentic-tool-config',
-                      label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-                      children: (
-                        <AgenticToolConfigurationPicker
-                          tool={selectedAgent}
-                          mcpServerById={mcpServerById}
-                          showHelpText={false}
-                          client={client}
-                        />
-                      ),
-                    },
-                  ]}
+                {/* Configuration source Select + resolved chips — parity with NewSessionModal */}
+                <AgenticConfigChipRow
+                  tool={selectedAgent}
+                  mcpServerById={mcpServerById}
+                  currentUser={currentUser}
+                  client={client}
                 />
+
+                {selectedAgent === 'codex' && isInlineConfig && (
+                  <CodexSettingsForm showHelpText={false} />
+                )}
 
                 {/* Session-scope env var selections (only the creator / admin
                     can actually persist these; backend silently ignores for others). */}
                 {currentUser && client && (
-                  <Form.Item label="Environment Variables" style={{ marginTop: 16 }}>
+                  <Form.Item
+                    label="Environment Variables"
+                    tooltip="Exported into the spawned session's executor process."
+                  >
                     <SessionEnvVarsSelector
                       ownerUserId={currentUser.user_id}
                       client={client}
@@ -329,9 +381,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 {/* Extra Instructions */}
                 <Form.Item
                   name="extraInstructions"
-                  label="Extra Instructions (optional)"
-                  help="Append additional context or constraints to the spawn prompt"
-                  style={{ marginTop: 16 }}
+                  label="Extra Instructions"
+                  tooltip="Appended as additional context or constraints to the spawn prompt."
                 >
                   <AutocompleteTextarea
                     value={form.getFieldValue('extraInstructions') || ''}

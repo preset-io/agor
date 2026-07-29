@@ -1,6 +1,7 @@
 // src/types/agentic-tool.ts
 
 import type { AgenticToolID } from './id';
+import type { EffortLevel } from './session';
 
 /**
  * The set of credential env-var names the resolver knows how to look up.
@@ -25,9 +26,6 @@ export type ApiKeyName =
  *   Renaming to 'claude-agent-sdk' is staged for a follow-up commit; the
  *   string value stays 'claude-code' for backward compatibility with
  *   existing DB rows until a coordinated DB+UI migration ships.
- * - claude-code-cli: The `claude` shell binary running interactively in a
- *   Zellij pane, JSONL-tailed by the daemon. Subscription-auth friendly.
- *   See docs/internal/claude-code-cli-integration-analysis-2026-05-14.md.
  * - codex: OpenAI's Codex CLI
  * - gemini: Google's Gemini Code Assist
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
@@ -37,21 +35,49 @@ export type ApiKeyName =
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName =
-  | 'claude-code'
-  | 'claude-code-cli'
-  | 'codex'
-  | 'gemini'
-  | 'opencode'
-  | 'copilot'
-  | 'cursor';
+export const AGENTIC_TOOL_NAMES = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'opencode',
+  'copilot',
+  'cursor',
+] as const;
 
-export const NON_EXECUTOR_AGENTIC_TOOLS: ReadonlySet<AgenticToolName> = new Set([
-  'claude-code-cli',
-]);
+export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
 
-export function usesExecutorRuntime(tool: AgenticToolName): boolean {
-  return !NON_EXECUTOR_AGENTIC_TOOLS.has(tool);
+/**
+ * Removed tool identifiers that may still exist on persisted historical rows.
+ *
+ * They are intentionally excluded from {@link AgenticToolName}: no creation,
+ * configuration, or executor boundary may accept them. Session/task/message
+ * readers use {@link PersistedAgenticToolName} so history remains attributable
+ * without reinterpreting it as another runtime.
+ */
+export const LEGACY_AGENTIC_TOOL_NAMES = ['claude-code-cli'] as const;
+export type LegacyAgenticToolName = (typeof LEGACY_AGENTIC_TOOL_NAMES)[number];
+
+/**
+ * Every identifier that may be encountered while reading persisted history.
+ *
+ * Runtime/input schemas must use {@link AGENTIC_TOOL_NAMES}; storage/query
+ * schemas use this tuple so historical attribution remains readable without
+ * making removed tools executable again.
+ */
+export const PERSISTED_AGENTIC_TOOL_NAMES = [
+  ...AGENTIC_TOOL_NAMES,
+  ...LEGACY_AGENTIC_TOOL_NAMES,
+] as const;
+export type PersistedAgenticToolName = (typeof PERSISTED_AGENTIC_TOOL_NAMES)[number];
+
+export function isAgenticToolName(value: unknown): value is AgenticToolName {
+  return typeof value === 'string' && (AGENTIC_TOOL_NAMES as readonly string[]).includes(value);
+}
+
+export function isLegacyAgenticToolName(value: unknown): value is LegacyAgenticToolName {
+  return (
+    typeof value === 'string' && (LEGACY_AGENTIC_TOOL_NAMES as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -193,8 +219,16 @@ export interface AgenticToolCapabilities {
   supportsChildSpawn: boolean;
   /** Can import historical sessions from tool's storage */
   supportsSessionImport: boolean;
-  /** Supports stateless filesystem mode (session state serialized to DB) */
-  supportsStatelessFsMode: boolean;
+  /**
+   * Supported reasoning-effort overrides. Absent when the runtime has no
+   * effort control.
+   */
+  reasoningEffortLevels?: readonly EffortLevel[];
+  /**
+   * Effective effort when Agor does not store an override. Absent means the
+   * underlying runtime owns the default.
+   */
+  defaultReasoningEffort?: EffortLevel;
 }
 
 /**
@@ -227,6 +261,67 @@ export interface AuthCheckResult {
 }
 
 /**
+ * Result of importing a Codex `auth.json` via the daemon's `/codex-auth/import`
+ * endpoint. Carries ONLY non-secret metadata — token material stays on the
+ * daemon/filesystem side and never transits back to callers.
+ */
+export interface CodexAuthImportResult {
+  status: 'authenticated';
+  /** Whether the imported file carries ChatGPT login tokens or a bare API key. */
+  authMode: 'chatgpt' | 'api_key';
+  /** ChatGPT plan type parsed from the id_token claims (e.g. "plus", "pro"), when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
+ * Result of removing a Codex login via the daemon's `/codex-auth/logout`
+ * endpoint. Delete-only and Agor-scoped: it removes the login from THIS server
+ * (deletes auth.json + clears the stored method) and does NOT revoke the OAuth
+ * tokens — the account stays signed in on other machines.
+ */
+export interface CodexAuthLogoutResult {
+  status: 'removed';
+}
+
+/**
+ * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
+ * `/codex-auth/device` endpoints.
+ * - `idle`: no attempt exists for this user.
+ * - `pending`: a code was issued; the daemon is polling for approval.
+ * - `success`: tokens were exchanged and persisted to the user's Codex home.
+ * - `expired`: the code's 15-minute window elapsed without approval.
+ * - `unavailable`: OpenAI's server refused to issue a code — device-code
+ *   authorization is disabled for this account/workspace (a common, first-class
+ *   state, not an edge case).
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type CodexDeviceAuthPhase =
+  | 'idle'
+  | 'pending'
+  | 'success'
+  | 'expired'
+  | 'unavailable'
+  | 'error';
+
+/**
+ * Non-secret status of a device-code sign-in attempt. The user code and
+ * verification URL are meant to be displayed; tokens never appear here.
+ */
+export interface CodexDeviceAuthStatus {
+  phase: CodexDeviceAuthPhase;
+  /** One-time code the user enters on the verification page (pending only). */
+  userCode?: string;
+  /** Page where the user approves the code (pending only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the pending code stops working. */
+  expiresAt?: string;
+  /** ChatGPT plan type parsed from the id_token after success, when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
  * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
  * Tools that authenticate without a key (opencode) are intentionally absent.
  *
@@ -242,9 +337,9 @@ export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = 
 };
 
 /** Human-readable display name for each agentic tool (user-facing copy). */
-export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
+export const AGENTIC_TOOL_DISPLAY_NAMES: Record<PersistedAgenticToolName, string> = {
   'claude-code': 'Claude Code',
-  'claude-code-cli': 'Claude Code CLI',
+  'claude-code-cli': 'Claude Code CLI (removed)',
   codex: 'Codex',
   gemini: 'Gemini',
   opencode: 'OpenCode',
@@ -255,7 +350,6 @@ export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
 /** Where a user creates a fresh API key for each tool. Keyless tools (opencode) are absent. */
 export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> = {
   'claude-code': 'https://platform.claude.com/settings/keys',
-  'claude-code-cli': 'https://platform.claude.com/settings/keys',
   codex: 'https://platform.openai.com/api-keys',
   gemini: 'https://aistudio.google.com/app/apikey',
   copilot: 'https://github.com/settings/tokens',
@@ -267,48 +361,33 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: true,
-    supportsStatelessFsMode: true,
-  },
-  'claude-code-cli': {
-    // First-class CLI flag: `claude --resume <id> --fork-session`
-    supportsSessionFork: true,
-    // New `claude --session-id <new uuid>` in a fresh Zellij pane
-    supportsChildSpawn: true,
-    // v1: false. The on-disk JSONL is ingestable but the "adopt existing
-    // session" UI flow is deferred to v2 (see analysis doc § Phased delivery).
-    supportsSessionImport: false,
-    // CLI sessions live in long-running PTYs; state is on disk in the JSONL,
-    // not a serializable filesystem snapshot the daemon manages.
-    supportsStatelessFsMode: false,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningEffort: 'high',
   },
   codex: {
     supportsSessionFork: true,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: true,
+    reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
   },
   gemini: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   opencode: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   copilot: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
   cursor: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
-    supportsStatelessFsMode: false,
   },
 };

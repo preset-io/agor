@@ -24,12 +24,14 @@ import type {
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
   HookContext as CoreHookContext,
+  CreateSessionInput,
   Params as FeathersParams,
   Message,
   Repo,
   RuntimeTelemetryInput,
   SdkHealthFailureInput,
   Session,
+  SessionUpdate,
   Task,
 } from '@agor/core/types';
 import type {
@@ -53,7 +55,17 @@ export type Application = ExpressApplication;
  * Sessions service with custom methods (server-side implementation)
  * This matches the SessionRepository methods exposed via the service adapter
  */
-export interface SessionsServiceImpl extends Service<Session, Partial<Session>, FeathersParams> {
+export interface SessionsServiceImpl
+  extends Omit<
+    Service<Session, CreateSessionInput, FeathersParams, SessionUpdate>,
+    'patch' | 'update'
+  > {
+  patch(
+    id: import('@agor/core/types').NullableId,
+    data: SessionUpdate,
+    params?: FeathersParams
+  ): Promise<Session | Session[]>;
+  update(id: string, data: SessionUpdate, params?: FeathersParams): Promise<Session>;
   fork(
     id: string,
     data: { prompt: string; task_id?: string },
@@ -129,6 +141,10 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  reportTerminationComplete(
+    data: import('@agor/core/types').ExecutorTerminationCompleteInput,
+    params?: FeathersParams
+  ): Promise<Task>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,

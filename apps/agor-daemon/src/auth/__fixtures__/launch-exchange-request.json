@@ -1,0 +1,10 @@
+{
+  "$comment": "One-time launch-code exchange request body the daemon POSTs to the configured issuer exchange endpoint. Daemon-side contract tripwire: this fixture pins the request shape the daemon emits so an accidental daemon-side change is caught in review. It does not and cannot mechanically prevent the issuer from drifting — the issuer's canonical exchange schema is the source of truth and must be kept in sync out of band. `request_host` is present only when host-bound launch is configured. `audience` and `instance_id` are compatibility fields; a correct issuer derives authority from its own records and the authenticated exchange credential, never from these caller-supplied values.",
+  "required": ["launch_code"],
+  "properties": {
+    "launch_code": "opaque one-time code captured from the browser URL",
+    "audience": "configured runtime audience (compatibility echo)",
+    "instance_id": "configured runtime instance id (compatibility echo, optional)",
+    "request_host": "normalized inbound browser host, only when forward_request_host is enabled"
+  }
+}

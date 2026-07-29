@@ -112,7 +112,8 @@ describe('artifact MCP tool input schemas', () => {
 
   it('rejects empty requiredEnvVars entries', () => {
     const parsed = captureConfig('agor_artifacts_publish').inputSchema?.safeParse({
-      folderPath: '/tmp/artifact',
+      branchId: 'branch-1',
+      subpath: 'artifact',
       requiredEnvVars: [''],
     });
 
@@ -125,7 +126,8 @@ describe('artifact MCP tool input schemas', () => {
 
   it('accepts waitForStatus publish options', () => {
     const parsed = captureConfig('agor_artifacts_publish').inputSchema?.safeParse({
-      folderPath: '/tmp/artifact',
+      branchId: 'branch-1',
+      subpath: 'artifact',
       waitForStatus: true,
       waitTimeoutMs: 15000,
     });
@@ -135,7 +137,8 @@ describe('artifact MCP tool input schemas', () => {
 
   it('registers validate_folder as the clearer build-check alias', () => {
     const parsed = captureConfig('agor_artifacts_validate_folder').inputSchema?.safeParse({
-      folderPath: '/tmp/artifact',
+      branchId: 'branch-1',
+      subpath: 'artifact',
     });
 
     expect(parsed?.success).toBe(true);
@@ -160,7 +163,11 @@ describe('artifact MCP transaction boundaries', () => {
     const ctx = {
       app: {
         service: vi.fn((name: string) =>
-          name === 'boards' ? { get: async () => ({ board_id: 'board-1' }) } : service
+          name === 'boards'
+            ? { get: async () => ({ board_id: 'board-1' }) }
+            : name === 'branches'
+              ? { get: async () => ({ branch_id: 'branch-1' }) }
+              : service
         ),
       },
       db: {},
@@ -175,7 +182,8 @@ describe('artifact MCP transaction boundaries', () => {
       'agor_artifacts_publish',
       ctx
     )({
-      folderPath: '/tmp/artifact',
+      branchId: 'branch-1',
+      subpath: 'artifact',
       boardId: 'board-1',
       name: 'Artifact',
       waitForStatus: true,

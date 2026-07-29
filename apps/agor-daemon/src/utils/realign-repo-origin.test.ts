@@ -11,7 +11,6 @@ vi.mock('./spawn-executor.js', () => ({
   generateSessionToken: vi.fn(() => 'service-token'),
   generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://localhost:3030'),
-  serviceTokenScopeForParams: vi.fn(() => ({})),
   spawnExecutorFireAndForget: vi.fn(),
 }));
 

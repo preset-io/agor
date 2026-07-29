@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
@@ -51,7 +49,13 @@ import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
-import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
+import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
+import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../../utils/spawn-executor.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -694,20 +698,48 @@ async function fetchKnowledgeDocument(
   throw new Error('kb/documents.getDocument is not available');
 }
 
-function materializationSidecarSubpath(markdownSubpath: string): string {
-  return `${markdownSubpath}.agor-kb.json`;
-}
-
-async function writeKnowledgeMaterializationSidecar(
-  sidecarPath: string,
-  sidecar: Record<string, unknown>
-): Promise<void> {
-  await writeFile(
-    sidecarPath,
-    `${JSON.stringify(sidecar, null, 2)}
-`,
-    'utf-8'
+async function runBranchKnowledgeCommand(
+  ctx: McpContext,
+  command: 'branch.knowledge.write' | 'branch.knowledge.read',
+  params: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const branchId = typeof params.branchId === 'string' ? params.branchId : undefined;
+  if (!branchId) throw new Error('branchId is required');
+  await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const branchRepo = new BranchRepository(db);
+    const branch = await branchRepo.findById(branchId);
+    if (!branch) throw new Error(`Branch not found: ${branchId}`);
+    await ensureBranchWorkspaceAccess(
+      branchRepo,
+      branch,
+      ctx.userId,
+      ctx.authenticatedUser.role as UserRole,
+      'session'
+    );
+  });
+  const result = await runExecutorCommand(
+    {
+      command,
+      sessionToken: generateScopedServiceToken(
+        ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
+      ),
+      daemonUrl: getDaemonUrl(),
+      params,
+    },
+    {
+      logPrefix: `[Knowledge ${command}]`,
+      asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+      ),
+    }
   );
+  if (!result.success) {
+    throw new Error(`${command} failed: ${result.error?.message ?? 'unknown executor error'}`);
+  }
+  if (!result.data || typeof result.data !== 'object') {
+    throw new Error(`${command} returned an invalid result`);
+  }
+  return result.data as Record<string, unknown>;
 }
 
 function renderTeammateMemoryPath(template: string | undefined, date: string): string {
@@ -1841,37 +1873,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         throw new Error('subpath is required when the document namespace/path cannot be inferred');
       }
       const branchId = (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID;
-      const { sidecarWorkspace, workspace } = await runWithMcpTenantDatabaseScope(
-        ctx,
-        async (db) => {
-          const branchRepo = new BranchRepository(db);
-          const workspace = await resolveBranchWorkspacePath({
-            branchRepo,
-            branchId,
-            subpath: requestedSubpath,
-            userId: ctx.userId,
-            userRole: ctx.authenticatedUser.role as UserRole,
-            requiredPermission: 'session',
-          });
-          const sidecarWorkspace = await resolveBranchWorkspacePath({
-            branchRepo,
-            branchId: workspace.branchId,
-            subpath: materializationSidecarSubpath(workspace.relative),
-            userId: ctx.userId,
-            userRole: ctx.authenticatedUser.role as UserRole,
-            requiredPermission: 'session',
-          });
-          return { sidecarWorkspace, workspace };
-        }
-      );
-      const sidecarPath = sidecarWorkspace.canonical;
-      if (!args.overwrite && (fs.existsSync(workspace.absolute) || fs.existsSync(sidecarPath))) {
-        throw new Error(
-          `Destination already exists: ${workspace.relative} (pass overwrite=true to replace)`
-        );
-      }
-      await mkdir(path.dirname(workspace.absolute), { recursive: true });
-      await writeFile(workspace.absolute, content, 'utf-8');
       const doc = (result.document ?? result) as Record<string, unknown>;
       const sidecar = {
         $schema: 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
@@ -1885,16 +1886,21 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         materialized_at: new Date().toISOString(),
         materialized_by: ctx.userId,
       };
-      await writeKnowledgeMaterializationSidecar(sidecarPath, sidecar);
+      const materialized = await runBranchKnowledgeCommand(ctx, 'branch.knowledge.write', {
+        branchId,
+        subpath: requestedSubpath,
+        content,
+        sidecar,
+        overwrite: args.overwrite,
+      });
       return textResult(
         enrichWithReferenceUri({
           document: doc,
           version: versionToken(result.current_version),
-          branchId: workspace.branchId,
-          subpath: workspace.relative,
-          destinationPath: workspace.absolute,
-          sidecarPath,
-          bytesWritten: Buffer.byteLength(content, 'utf-8'),
+          branchId,
+          subpath: materialized.subpath,
+          sidecarSubpath: materialized.sidecarSubpath,
+          bytesWritten: materialized.bytesWritten,
           instructions:
             'Edit the markdown file, then call agor_kb_publish_from_worktree with the same branchId/subpath. The sidecar preserves the source document and expected version.',
         })
@@ -1947,46 +1953,17 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     },
     async (args) => {
       const branchId = (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID;
-      const { sidecarWorkspace, workspace } = await runWithMcpTenantDatabaseScope(
-        ctx,
-        async (db) => {
-          const branchRepo = new BranchRepository(db);
-          const workspace = await resolveBranchWorkspacePath({
-            branchRepo,
-            branchId,
-            subpath: coerceString(args.subpath),
-            userId: ctx.userId,
-            userRole: ctx.authenticatedUser.role as UserRole,
-            requiredPermission: 'session',
-          });
-          const sidecarWorkspace = await resolveBranchWorkspacePath({
-            branchRepo,
-            branchId: workspace.branchId,
-            subpath: materializationSidecarSubpath(workspace.relative),
-            userId: ctx.userId,
-            userRole: ctx.authenticatedUser.role as UserRole,
-            requiredPermission: 'session',
-          });
-          return { sidecarWorkspace, workspace };
-        }
-      );
-      if (!fs.existsSync(workspace.absolute)) {
-        throw new Error(`File not found in branch worktree: ${workspace.relative}`);
-      }
-      const content = await readFile(workspace.absolute, 'utf-8');
-      const sidecarPath = sidecarWorkspace.canonical;
-      let sidecar: Record<string, unknown> = {};
-      if (fs.existsSync(sidecarPath)) {
-        try {
-          sidecar = JSON.parse(await readFile(sidecarPath, 'utf-8')) as Record<string, unknown>;
-        } catch (error) {
-          throw new Error(
-            `Failed to parse KB sidecar ${path.relative(workspace.branchRoot, sidecarPath)}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      }
+      const requestedSubpath = coerceString(args.subpath)!;
+      const readResult = await runBranchKnowledgeCommand(ctx, 'branch.knowledge.read', {
+        branchId,
+        subpath: requestedSubpath,
+      });
+      const content = typeof readResult.content === 'string' ? readResult.content : '';
+      const sidecar =
+        readResult.sidecar && typeof readResult.sidecar === 'object'
+          ? (readResult.sidecar as Record<string, unknown>)
+          : {};
+      const workspace = { branchId, relative: requestedSubpath };
 
       const documentId = coerceString(args.documentId) ?? coerceString(sidecar.document_id);
       const uri = coerceString(args.uri) ?? coerceString(sidecar.uri);
@@ -2054,27 +2031,33 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         const newVersion = editResult.newVersion as Record<string, unknown> | undefined;
         const editedDocument = editResult.document as Record<string, unknown> | undefined;
         if (!dryRun && newVersion) {
-          await writeKnowledgeMaterializationSidecar(sidecarPath, {
-            ...sidecar,
-            $schema:
-              sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
-            document_id: editedDocument?.document_id ?? sidecar.document_id ?? documentId,
-            uri: editedDocument?.uri ?? sidecar.uri ?? uri,
-            namespace,
-            path: docPath,
-            version_id: newVersion.version_id,
-            version_number: newVersion.version_number,
-            content_sha256: newVersion.content_sha256 ?? null,
-            materialized_at: sidecar.materialized_at ?? null,
-            materialized_by: sidecar.materialized_by ?? null,
-            published_at: new Date().toISOString(),
-            published_by: ctx.userId,
+          await runBranchKnowledgeCommand(ctx, 'branch.knowledge.write', {
+            branchId,
+            subpath: requestedSubpath,
+            content,
+            overwrite: true,
+            sidecar: {
+              ...sidecar,
+              $schema:
+                sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
+              document_id: editedDocument?.document_id ?? sidecar.document_id ?? documentId,
+              uri: editedDocument?.uri ?? sidecar.uri ?? uri,
+              namespace,
+              path: docPath,
+              version_id: newVersion.version_id,
+              version_number: newVersion.version_number,
+              content_sha256: newVersion.content_sha256 ?? null,
+              materialized_at: sidecar.materialized_at ?? null,
+              materialized_by: sidecar.materialized_by ?? null,
+              published_at: new Date().toISOString(),
+              published_by: ctx.userId,
+            },
           });
         }
         return textResult({
           ...editResult,
           sidecarUpdated: !dryRun && Boolean(newVersion),
-          sidecarPath: !dryRun && newVersion ? sidecarPath : undefined,
+          sidecarSubpath: !dryRun && newVersion ? readResult.sidecarSubpath : undefined,
         });
       }
 
@@ -2121,27 +2104,33 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           includeContent: true,
         });
         const doc = (hydrated.document ?? hydrated) as Record<string, unknown>;
-        await writeKnowledgeMaterializationSidecar(sidecarPath, {
-          ...sidecar,
-          $schema:
-            sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
-          document_id: doc.document_id,
-          uri: doc.uri,
-          namespace,
-          path: docPath,
-          version_id: hydrated.current_version?.version_id ?? null,
-          version_number: hydrated.current_version?.version_number ?? null,
-          content_sha256: hydrated.current_version?.content_sha256 ?? null,
-          materialized_at: sidecar.materialized_at ?? null,
-          materialized_by: sidecar.materialized_by ?? null,
-          published_at: new Date().toISOString(),
-          published_by: ctx.userId,
+        await runBranchKnowledgeCommand(ctx, 'branch.knowledge.write', {
+          branchId,
+          subpath: requestedSubpath,
+          content,
+          overwrite: true,
+          sidecar: {
+            ...sidecar,
+            $schema:
+              sidecar.$schema ?? 'https://agor.live/schemas/kb-materialization/2026-06-06.json',
+            document_id: doc.document_id,
+            uri: doc.uri,
+            namespace,
+            path: docPath,
+            version_id: hydrated.current_version?.version_id ?? null,
+            version_number: hydrated.current_version?.version_number ?? null,
+            content_sha256: hydrated.current_version?.content_sha256 ?? null,
+            materialized_at: sidecar.materialized_at ?? null,
+            materialized_by: sidecar.materialized_by ?? null,
+            published_at: new Date().toISOString(),
+            published_by: ctx.userId,
+          },
         });
         return textResult(
           enrichWithReferenceUri({
             result: customResult,
             sidecarUpdated: true,
-            sidecarPath,
+            sidecarSubpath: readResult.sidecarSubpath,
             version: versionToken(hydrated.current_version),
           })
         );

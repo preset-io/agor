@@ -232,7 +232,6 @@ interface BranchNodeData {
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   onUnpin?: (branchId: string) => void;
-  compact?: boolean;
   isPinned?: boolean;
   parentZoneId?: string;
   zoneName?: string;
@@ -313,7 +312,6 @@ const BranchNode = React.memo(
           zoneName={data.zoneName}
           client={data.client}
           zoneColor={data.zoneColor}
-          defaultExpanded={!data.compact}
         />
       </div>
     );
@@ -335,7 +333,6 @@ const BranchNode = React.memo(
       p.isPinned === n.isPinned &&
       p.zoneName === n.zoneName &&
       p.zoneColor === n.zoneColor &&
-      p.compact === n.compact &&
       p.client === n.client &&
       p.onTaskClick === n.onTaskClick &&
       p.onSessionClick === n.onSessionClick &&
@@ -839,7 +836,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onNukeEnvironment,
             onExecuteScheduleNow,
             onUnpin: handleUnpinBranch,
-            compact: false,
             isPinned: !!validZoneParentId,
             zoneName,
             zoneColor,
@@ -1024,27 +1020,125 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // logical `artifact_id` on `data.artifactId`). Rather than thread a
     // boardObjectById lookup through every caller, we accept the logical
     // id and fall back to a `data.artifactId` scan when `getNode` misses.
-    const recenterOnNode = useCallback((nodeId: string): boolean => {
-      const instance = reactFlowInstanceRef.current;
-      if (!instance) return false;
-      const allNodes = instance.getNodes();
-      let node = instance.getNode(nodeId);
-      if (!node) {
-        // Logical-id fallback: artifact callers pass artifact_id; find
-        // the node whose data references it. Extendable to other
-        // logical-id mismatches in the future.
-        node = allNodes.find((n) => n.data?.artifactId === nodeId);
-      }
-      if (!node) return false;
-      const absPos = getNodeAbsolutePosition(node, allNodes);
-      const width = node.width ?? 500;
-      const height = node.height ?? 200;
-      instance.setCenter(absPos.x + width / 2, absPos.y + height / 2, {
-        zoom: instance.getZoom(),
-        duration: 400,
-      });
-      return true;
-    }, []);
+    const recenterOnNode = useCallback(
+      (nodeId: string, subTarget?: { sessionId?: string; ensureVisible?: boolean }): boolean => {
+        const instance = reactFlowInstanceRef.current;
+        if (!instance) return false;
+        const allNodes = instance.getNodes();
+        let node = instance.getNode(nodeId);
+        if (!node) {
+          // Logical-id fallback: artifact callers pass artifact_id; find
+          // the node whose data references it. Extendable to other
+          // logical-id mismatches in the future.
+          node = allNodes.find((n) => n.data?.artifactId === nodeId);
+        }
+        if (!node) return false;
+        const absPos = getNodeAbsolutePosition(node, allNodes);
+        const width = node.width ?? 500;
+        const height = node.height ?? 200;
+        const zoom = instance.getZoom() || 1;
+        const centerX = absPos.x + width / 2;
+        let centerY = absPos.y + height / 2;
+        // Session sub-target: aim at the session row inside the card
+        // instead of the card center, so selecting a session lands the
+        // camera on that item rather than the card head. Measured from
+        // the DOM (row offset within the node wrapper, screen px → flow
+        // units via zoom); falls back to card center when the row isn't
+        // rendered (collapsed tree, session not on this card).
+        if (subTarget?.sessionId) {
+          const nodeEl = document.querySelector(
+            `.react-flow__node[data-id="${CSS.escape(node.id)}"]`
+          );
+          const rowEl = nodeEl?.querySelector(
+            `[data-session-id="${CSS.escape(subTarget.sessionId)}"]`
+          );
+          if (nodeEl && rowEl) {
+            const nodeRect = nodeEl.getBoundingClientRect();
+            const rowRect = rowEl.getBoundingClientRect();
+            centerY = absPos.y + (rowRect.top - nodeRect.top + rowRect.height / 2) / zoom;
+
+            // Ensure-visible mode (session selection): don't move the
+            // camera when the row is already fully on screen — a pan on
+            // every click is disorienting and costs the user their
+            // context. When the row is off screen or cut off, pan just
+            // enough to bring it into view (with a small margin) rather
+            // than re-centering. See CanvasNavigationContext for why
+            // deliberate gestures skip this.
+            if (subTarget.ensureVisible) {
+              const paneEl = nodeEl.closest('.react-flow');
+              if (paneEl) {
+                // The canvas root defaults to `height: 100vh` (see the
+                // `height` prop) but sits below the app header inside an
+                // overflow-clipped panel, so the pane element extends past
+                // the bottom of the window by the header's height. Clamp
+                // the pane rect to the window so "visible" means what the
+                // user can actually see — unclamped, rows panned to the
+                // pane's bottom edge land hidden below the fold, and rows
+                // already in that phantom strip are wrongly treated as
+                // on-screen.
+                const paneRect = paneEl.getBoundingClientRect();
+                const viewLeft = Math.max(paneRect.left, 0);
+                const viewTop = Math.max(paneRect.top, 0);
+                const viewRight = Math.min(paneRect.right, document.documentElement.clientWidth);
+                const viewBottom = Math.min(paneRect.bottom, document.documentElement.clientHeight);
+                const margin = 32;
+                let shiftX = 0;
+                let shiftY = 0;
+                if (rowRect.left < viewLeft + margin) {
+                  shiftX = viewLeft + margin - rowRect.left;
+                } else if (rowRect.right > viewRight - margin) {
+                  shiftX = viewRight - margin - rowRect.right;
+                }
+                if (rowRect.top < viewTop + margin) {
+                  shiftY = viewTop + margin - rowRect.top;
+                } else if (rowRect.bottom > viewBottom - margin) {
+                  shiftY = viewBottom - margin - rowRect.bottom;
+                }
+                // Already fully visible — leave the camera where it is.
+                if (shiftX === 0 && shiftY === 0) return true;
+                // Pan by the screen-space delta (viewport transform is in
+                // screen px), keeping zoom unchanged.
+                const vp = instance.getViewport();
+                instance.setViewport(
+                  { x: vp.x + shiftX, y: vp.y + shiftY, zoom: vp.zoom },
+                  { duration: 400 }
+                );
+                return true;
+              }
+            }
+          }
+        }
+        instance.setCenter(centerX, centerY, {
+          zoom: instance.getZoom(),
+          duration: 400,
+        });
+        return true;
+      },
+      []
+    );
+
+    // Click-to-pan on the minimap: a plain click re-centers the main
+    // viewport on the clicked point. React Flow hands us `position` already
+    // in flow (board) coordinates — the same viewBox transform that drives
+    // the draggable mask — so there's no coordinate math to reinvent here.
+    //
+    // Drag-vs-click is handled for us: with `pannable`, React Flow drives the
+    // mask via d3-zoom, which calls d3's `dragEnable(view, moved)` on mouseup.
+    // A real drag (pointer moved) installs a capture-phase click suppressor,
+    // so this `onClick` fires only for a genuine click and never as the tail
+    // of a drag. Zoom is preserved and we reuse the same animated recenter as
+    // `recenterOnNode`.
+    const handleMiniMapClick = useCallback(
+      (_event: React.MouseEvent, position: { x: number; y: number }) => {
+        const instance = reactFlowInstanceRef.current;
+        if (!instance) return;
+        instance.setCenter(position.x, position.y, {
+          zoom: instance.getZoom(),
+          duration: 400,
+        });
+      },
+      []
+    );
 
     useRegisterRecenter(recenterOnNode);
 
@@ -1480,8 +1574,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // lives on this (newly-loaded) board, honor it instead of fitView.
         // Falls back to fitView when the pending target isn't on this board
         // either (stale/unknown id).
-        const pendingId = consumePendingRecenter();
-        if (pendingId && recenterOnNode(pendingId)) {
+        const pending = consumePendingRecenter();
+        if (
+          pending &&
+          recenterOnNode(pending.nodeId, {
+            sessionId: pending.sessionId,
+            ensureVisible: pending.ensureVisible,
+          })
+        ) {
           lastFitBoardIdRef.current = board?.board_id ?? null;
           return;
         }
@@ -2731,6 +2831,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             </Controls>
             <MiniMap
               nodeColor={miniMapNodeColor}
+              onClick={handleMiniMapClick}
               pannable
               zoomable
               style={{
@@ -2926,8 +3027,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   const newSession = await client.service('sessions').create({
                     branch_id: branchTriggerModal.branchId,
                     agentic_tool: (agent || 'claude-code') as AgenticToolName,
-                    agentic_tool_preset_id:
-                      agenticToolPresetId as Session['agentic_tool_preset_id'],
+                    agentic_tool_preset_id: agenticToolPresetId,
                     description: `Session from zone "${branchTriggerModal.zoneName}"`,
                     status: 'idle',
                     model_config: modelConfig

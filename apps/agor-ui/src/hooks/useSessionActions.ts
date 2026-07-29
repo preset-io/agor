@@ -84,7 +84,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       const newSession = await client.service('sessions').create({
         agentic_tool: agenticTool,
-        agentic_tool_preset_id: config.agenticToolPresetId as Session['agentic_tool_preset_id'],
+        agentic_tool_preset_id: config.agenticToolPresetId,
         status: SessionStatus.IDLE,
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
@@ -99,7 +99,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
             ? { effort: config.effort, updated_at: new Date().toISOString() }
             : undefined,
         permission_config: permissionConfig,
-      } as Partial<Session>);
+      });
 
       return newSession;
     } catch (err) {
