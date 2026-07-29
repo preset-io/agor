@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     resolveUserEnvironment: vi.fn(async () => ({})),
     createUserProcessEnvironment: vi.fn(async () => ({})),
     loadConfig: vi.fn(async () => ({ daemon: { port: 3030 }, execution: { branch_rbac: false } })),
+    loadConfigSync: vi.fn(() => ({ daemon: { port: 3030 }, execution: { branch_rbac: false } })),
   };
 });
 
@@ -38,6 +39,7 @@ vi.mock('node:child_process', () => ({
 vi.mock('@agor/core/config', () => ({
   createUserProcessEnvironment: mocks.createUserProcessEnvironment,
   loadConfig: mocks.loadConfig,
+  loadConfigSync: mocks.loadConfigSync,
   resolveUserEnvironment: mocks.resolveUserEnvironment,
 }));
 
@@ -173,6 +175,42 @@ describe('TerminalsService tenant database units of work', () => {
       'Missing active tenant context for terminal creation'
     );
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalsService Zellij availability by topology', () => {
+  beforeEach(() => {
+    mocks.branchesById.clear();
+    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
+    mocks.resolveUserEnvironment.mockResolvedValue({});
+    mocks.createUserProcessEnvironment.mockResolvedValue({});
+    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
+    // No Zellij on the daemon host.
+    mocks.execSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith('sudo -n chown ')) return Buffer.from('');
+      throw new Error('not found');
+    });
+  });
+
+  it('rejects creation when Zellij is absent on the host and execution is not offloaded', async () => {
+    mocks.loadConfigSync.mockReturnValue({ daemon: { port: 3030 }, execution: {} });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create({ branchId: mocks.branch.branch_id }, params as never)
+    ).rejects.toThrow('Zellij is not installed');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('treats Zellij as available when execution is offloaded, without host Zellij', async () => {
+    mocks.loadConfigSync.mockReturnValue({
+      daemon: { port: 3030 },
+      execution: { executor_command_template: 'run {tenant_id}' },
+    });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await service.create({ branchId: mocks.branch.branch_id }, params as never);
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
   });
 });
 
