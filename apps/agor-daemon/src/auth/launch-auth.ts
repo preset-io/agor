@@ -86,6 +86,7 @@ interface LaunchClaims extends JwtPayload {
   picture?: string;
   avatar?: string;
   role?: string;
+  unix_username?: string | null;
   provider?: string;
   instance_id?: string;
   runtime_instance_id?: string;
@@ -336,6 +337,7 @@ async function upsertLaunchUser(
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
   const name = claims.name?.trim() || undefined;
+  const unixUsername = claims.unix_username?.trim() || null;
   const avatar = claims.avatar || claims.picture;
   const identity: StoredExternalIdentity = {
     key,
@@ -370,6 +372,7 @@ async function upsertLaunchUser(
       .set({
         name: name ?? existing.name,
         role,
+        unix_username: unixUsername ?? existing.unix_username,
         updated_at: now,
         data: {
           ...data,
@@ -398,6 +401,7 @@ async function upsertLaunchUser(
       name,
       emoji: '👤',
       role,
+      unix_username: unixUsername,
       created_at: now,
       updated_at: now,
       onboarding_completed: false,

@@ -83,6 +83,7 @@ function makeUsersService(db: Database) {
         name: row.name ?? undefined,
         emoji: row.emoji ?? undefined,
         role: row.role as User['role'],
+        unix_username: row.unix_username ?? undefined,
         onboarding_completed: row.onboarding_completed,
         must_change_password: row.must_change_password,
         tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
@@ -268,6 +269,19 @@ describe('one-time launch auth service', () => {
       external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
     }).create({ launchCode: 'admin-role' });
     expect(allowedResult.user.role).toBe('admin');
+  });
+
+  it('applies the launch claim unix_username to the runtime user', async () => {
+    mockExchange(
+      signClaims({ sub: 'unix-user', email: 'unix@example.test', unix_username: 'jose_garcia' })
+    );
+    const created = await service().create({ launchCode: 'unix-code' });
+    expect(created.user.unix_username).toBe('jose_garcia');
+
+    // A repeat launch keeps it in sync, and never nulls it when the claim omits it.
+    mockExchange(signClaims({ sub: 'unix-user', email: 'unix@example.test' }));
+    const relaunched = await service().create({ launchCode: 'unix-code-2' });
+    expect(relaunched.user.unix_username).toBe('jose_garcia');
   });
 
   it('repeat login maps the same external identity to the same local user', async () => {
