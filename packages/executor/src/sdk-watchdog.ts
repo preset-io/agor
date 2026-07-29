@@ -55,11 +55,8 @@ const PROGRESS = new Set([
   'cursor:assistant',
   'cursor:thinking',
   'cursor:tool_call',
-  'cursor:status',
-  'cursor:system',
-  'cursor:request',
   'cursor:task',
-  'cursor:user',
+  'cursor:usage',
 ]);
 
 function boundedDetail(value: string): string {

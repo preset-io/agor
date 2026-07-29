@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCursorAssistantContent,
   normalizeCursorToolInput,
   normalizeCursorToolName,
+  reportCursorActivity,
 } from './cursor.js';
 
 describe('Cursor SDK handler helpers', () => {
@@ -59,5 +60,35 @@ describe('Cursor SDK handler helpers', () => {
       cursor_tool_name: 'edit',
       status: 'completed',
     });
+  });
+
+  it.each([
+    { type: 'system' },
+    { type: 'user' },
+    { type: 'status', status: 'CREATING' },
+    { type: 'status', status: 'RUNNING' },
+  ])('keeps Cursor initialization as startup activity %#', (event) => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, event as never);
+    expect(onActivity).toHaveBeenCalledWith('sdk_started', event.type);
+  });
+
+  it.each([
+    { type: 'assistant' },
+    { type: 'thinking' },
+    { type: 'tool_call' },
+    { type: 'task' },
+    { type: 'usage' },
+    { type: 'status', status: 'FINISHED' },
+  ])('recognizes meaningful Cursor progress %#', (event) => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, event as never);
+    expect(onActivity).toHaveBeenCalledWith('progress', event.type);
+  });
+
+  it('keeps unreviewed Cursor request events fail-open', () => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, { type: 'request' } as never);
+    expect(onActivity).toHaveBeenCalledWith('unknown_activity', 'request');
   });
 });

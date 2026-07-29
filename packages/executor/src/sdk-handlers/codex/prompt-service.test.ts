@@ -2066,11 +2066,17 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
 
   it('does not treat a future item lifecycle as a supervision lease', () => {
     const onActivity = vi.fn();
-    reportCodexActivity(onActivity, {
-      type: 'item.started',
-      item: { type: 'future_operation' },
-    });
-    expect(onActivity).toHaveBeenCalledWith('unknown_activity');
+    for (const type of ['item.started', 'item.updated', 'item.completed']) {
+      reportCodexActivity(onActivity, {
+        type,
+        item: { type: 'future_operation' },
+      });
+    }
+    expect(onActivity.mock.calls).toEqual([
+      ['unknown_activity'],
+      ['unknown_activity'],
+      ['unknown_activity'],
+    ]);
   });
 
   it('keeps todo lifecycle as progress without suspending supervision', () => {

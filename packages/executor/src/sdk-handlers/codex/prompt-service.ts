@@ -66,6 +66,16 @@ function isCodexReconnectEvent(event: {
   );
 }
 
+const CODEX_PROGRESS_ITEM_TYPES = new Set([
+  'agent_message',
+  'command_execution',
+  'file_change',
+  'mcp_tool_call',
+  'reasoning',
+  'todo_list',
+  'web_search',
+]);
+
 export function reportCodexActivity(
   callback: SdkActivityCallback | undefined,
   event: {
@@ -79,28 +89,18 @@ export function reportCodexActivity(
   // any pulse would defer both first-progress and post-progress supervision.
   if (isCodexReconnectEvent(event)) return;
 
-  if (event.type === 'item.started' || event.type === 'item.completed') {
+  if (
+    event.type === 'item.started' ||
+    event.type === 'item.updated' ||
+    event.type === 'item.completed'
+  ) {
     // Item lifecycle events are progress facts, not leases. A missing
     // item.completed event must never disable supervision indefinitely.
-    if (
-      [
-        'agent_message',
-        'command_execution',
-        'file_change',
-        'mcp_tool_call',
-        'reasoning',
-        'todo_list',
-        'web_search',
-      ].includes(event.item?.type ?? '')
-    ) {
+    if (CODEX_PROGRESS_ITEM_TYPES.has(event.item?.type ?? '')) {
       callback?.('progress');
       return;
     }
     callback?.('unknown_activity');
-    return;
-  }
-  if (event.type === 'item.updated') {
-    callback?.('progress');
     return;
   }
   if (

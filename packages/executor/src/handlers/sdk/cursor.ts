@@ -44,6 +44,25 @@ type CursorKeyResolution = {
   decryptionFailed?: boolean;
 };
 
+export function reportCursorActivity(
+  callback: StreamingCallbacks['onPulse'],
+  event: SDKMessage
+): void {
+  if (
+    event.type === 'system' ||
+    event.type === 'user' ||
+    (event.type === 'status' && (event.status === 'CREATING' || event.status === 'RUNNING'))
+  ) {
+    callback?.('sdk_started', event.type);
+    return;
+  }
+  if (event.type === 'status') {
+    callback?.('progress', event.type);
+    return;
+  }
+  reportSdkActivity(callback, 'cursor', event.type);
+}
+
 function stringifyForPreview(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
@@ -541,7 +560,7 @@ export async function executeCursorTask(params: {
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
-        reportSdkActivity(callbacks.onPulse, 'cursor', event.type);
+        reportCursorActivity(callbacks.onPulse, event);
         if (params.abortController.signal.aborted) {
           await currentRun.cancel();
           break;
