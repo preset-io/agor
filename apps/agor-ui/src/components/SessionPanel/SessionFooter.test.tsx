@@ -268,7 +268,7 @@ describe('SessionFooter', () => {
       provider: 'openai',
       model: 'gpt-5',
     });
-    expect(overflowOptions).toBeVisible();
+    await waitFor(() => expect(overflowOptions).toBeVisible());
 
     fireEvent.click(
       within(overflowOptions).getByRole('button', { name: 'Enter exact OpenCode IDs' })

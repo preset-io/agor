@@ -139,7 +139,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     }, ASYNC);
   });
 
-  it('submits teammate agentic defaults with the teammate fields', async () => {
+  it('submits teammate fields without inventing an agentic override', async () => {
     const onCreateTeammate = vi.fn();
     renderDialog({ defaultTab: 'teammate', onCreateTeammate });
 
@@ -163,7 +163,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
           displayName: 'Bootstrap Bot',
           emoji: '🤖',
           agent: 'claude-code',
-          permissionMode: 'auto',
+          permissionMode: undefined,
         }),
         expect.objectContaining({ onStatusChange: expect.any(Function) })
       );
