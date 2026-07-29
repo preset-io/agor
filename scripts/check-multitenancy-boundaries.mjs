@@ -104,6 +104,7 @@ const checks = [
     baseline: {
       // Test-only async flush helpers / event loop flushes.
       'apps/agor-daemon/src/services/branches.test.ts': 1,
+      'apps/agor-daemon/src/utils/spawn-executor.configured.test.ts': 7,
       'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
       // The two tenant-aware deferral helpers deliberately leave the current
       // ALS store before scheduling and then re-enter identity or DB scope.

@@ -30,6 +30,10 @@ import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  gatewayAgenticConfigToInlineConfiguration,
+  hasDefinedGatewayAgenticConfigInlineFields,
+} from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
@@ -70,9 +74,7 @@ export class GatewayChannelsService extends DrizzleService<
     channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>
   ): Promise<void> {
     const tool = requireActiveAgenticTool(config?.agent ?? 'claude-code');
-    const hasInline = Object.entries(config ?? {}).some(
-      ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
-    );
+    const hasInline = hasDefinedGatewayAgenticConfigInlineFields(config);
     if (config?.presetId && hasInline) {
       throw new BadRequest('Referenced gateway channels cannot contain inline values');
     }
@@ -89,13 +91,7 @@ export class GatewayChannelsService extends DrizzleService<
       config?.presetId
         ? { reference: config.presetId }
         : {
-            configuration: {
-              modelConfig: config?.modelConfig,
-              permissionMode: config?.permissionMode,
-              codexSandboxMode: config?.codexSandboxMode,
-              codexApprovalPolicy: config?.codexApprovalPolicy,
-              codexNetworkAccess: config?.codexNetworkAccess,
-            },
+            configuration: gatewayAgenticConfigToInlineConfiguration(config),
           }
     ) as AgenticToolConfigurationSource;
 

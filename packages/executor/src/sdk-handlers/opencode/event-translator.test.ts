@@ -1,51 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import { createOpenCodeEventTranslator, reconcileOpenCodeMessages } from './event-translator.js';
 
+const ACTIVE_SESSION = 'session-active';
+
+function translator(baselineMessageIds: string[] = []) {
+  return createOpenCodeEventTranslator({
+    sessionId: ACTIVE_SESSION,
+    baselineMessageIds: new Set(baselineMessageIds),
+  });
+}
+
+function messageUpdated(id: string, role = 'assistant', sessionID = ACTIVE_SESSION) {
+  return { type: 'message.updated', properties: { info: { id, sessionID, role } } };
+}
+
+function partUpdated(
+  messageID: string,
+  id: string,
+  type: string,
+  values: Record<string, unknown> = {},
+  sessionID = ACTIVE_SESSION
+) {
+  return {
+    type: 'message.part.updated',
+    properties: { part: { id, sessionID, messageID, type, ...values } },
+  };
+}
+
+function partDelta(messageID: string, partID: string, delta: string, sessionID = ACTIVE_SESSION) {
+  return {
+    type: 'message.part.delta',
+    properties: { sessionID, messageID, partID, field: 'text', delta },
+  };
+}
+
 describe('OpenCode event translator', () => {
   it('emits real assistant text deltas for the active session', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
+    const events = translator();
 
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-1', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
-    translator.translate({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          type: 'text',
-          text: '',
-        },
-      },
-    });
+    events.translate(messageUpdated('assistant-1'));
+    events.translate(partUpdated('assistant-1', 'part-1', 'text', { text: '' }));
 
-    expect(
-      translator.translate({
-        type: 'message.part.delta',
-        properties: {
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          partID: 'part-1',
-          field: 'text',
-          delta: 'Hello',
-        },
-      })
-    ).toEqual([{ type: 'text-delta', delta: 'Hello' }]);
+    expect(events.translate(partDelta('assistant-1', 'part-1', 'Hello'))).toEqual([
+      { type: 'text-delta', delta: 'Hello' },
+    ]);
   });
 
   it('filters foreign, user, and baseline messages while supporting multiple assistant IDs', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(['assistant-before-turn']),
-    });
+    const events = translator(['assistant-before-turn']);
     for (const [id, sessionID, role] of [
       ['assistant-before-turn', 'session-active', 'assistant'],
       ['user-current', 'session-active', 'user'],
@@ -53,16 +55,8 @@ describe('OpenCode event translator', () => {
       ['assistant-1', 'session-active', 'assistant'],
       ['assistant-2', 'session-active', 'assistant'],
     ]) {
-      translator.translate({
-        type: 'message.updated',
-        properties: { info: { id, sessionID, role } },
-      });
-      translator.translate({
-        type: 'message.part.updated',
-        properties: {
-          part: { id: `part-${id}`, sessionID, messageID: id, type: 'text', text: '' },
-        },
-      });
+      events.translate(messageUpdated(id, role, sessionID));
+      events.translate(partUpdated(id, `part-${id}`, 'text', { text: '' }, sessionID));
     }
 
     const effects = [
@@ -72,16 +66,14 @@ describe('OpenCode event translator', () => {
       ['assistant-1', 'before tool'],
       ['assistant-2', 'after tool'],
     ].flatMap(([messageID, delta]) =>
-      translator.translate({
-        type: 'message.part.delta',
-        properties: {
-          sessionID: messageID === 'assistant-foreign' ? 'session-foreign' : 'session-active',
+      events.translate(
+        partDelta(
           messageID,
-          partID: `part-${messageID}`,
-          field: 'text',
+          `part-${messageID}`,
           delta,
-        },
-      })
+          messageID === 'assistant-foreign' ? 'session-foreign' : ACTIVE_SESSION
+        )
+      )
     );
 
     expect(effects).toEqual([
@@ -91,160 +83,45 @@ describe('OpenCode event translator', () => {
   });
 
   it('buffers deltas until message and part snapshots identify assistant reasoning', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
+    const events = translator();
 
+    expect(events.translate(partDelta('assistant-1', 'reasoning-1', 'private thought'))).toEqual(
+      []
+    );
     expect(
-      translator.translate({
-        type: 'message.part.delta',
-        properties: {
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          partID: 'reasoning-1',
-          field: 'text',
-          delta: 'private thought',
-        },
-      })
+      events.translate(
+        partUpdated('assistant-1', 'reasoning-1', 'reasoning', {
+          text: 'private thought',
+        })
+      )
     ).toEqual([]);
-    expect(
-      translator.translate({
-        type: 'message.part.updated',
-        properties: {
-          part: {
-            id: 'reasoning-1',
-            sessionID: 'session-active',
-            messageID: 'assistant-1',
-            type: 'reasoning',
-            text: 'private thought',
-          },
-        },
-      })
-    ).toEqual([]);
-    expect(
-      translator.translate({
-        type: 'message.updated',
-        properties: {
-          info: { id: 'assistant-1', sessionID: 'session-active', role: 'assistant' },
-        },
-      })
-    ).toEqual([{ type: 'reasoning-delta', delta: 'private thought' }]);
+    expect(events.translate(messageUpdated('assistant-1'))).toEqual([
+      { type: 'reasoning-delta', delta: 'private thought' },
+    ]);
   });
 
   it('preserves arrival order while an earlier delta awaits correlation', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
-    translator.translate({
-      type: 'message.part.delta',
-      properties: {
-        sessionID: 'session-active',
-        messageID: 'assistant-1',
-        partID: 'part-1',
-        field: 'text',
-        delta: 'first',
-      },
-    });
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-2', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
-    translator.translate({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-2',
-          sessionID: 'session-active',
-          messageID: 'assistant-2',
-          type: 'text',
-        },
-      },
-    });
+    const events = translator();
+    events.translate(partDelta('assistant-1', 'part-1', 'first'));
+    events.translate(messageUpdated('assistant-2'));
+    events.translate(partUpdated('assistant-2', 'part-2', 'text'));
 
-    expect(
-      translator.translate({
-        type: 'message.part.delta',
-        properties: {
-          sessionID: 'session-active',
-          messageID: 'assistant-2',
-          partID: 'part-2',
-          field: 'text',
-          delta: 'second',
-        },
-      })
-    ).toEqual([]);
-    translator.translate({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          type: 'text',
-        },
-      },
-    });
-    expect(
-      translator.translate({
-        type: 'message.updated',
-        properties: {
-          info: { id: 'assistant-1', sessionID: 'session-active', role: 'assistant' },
-        },
-      })
-    ).toEqual([
+    expect(events.translate(partDelta('assistant-2', 'part-2', 'second'))).toEqual([]);
+    events.translate(partUpdated('assistant-1', 'part-1', 'text'));
+    expect(events.translate(messageUpdated('assistant-1'))).toEqual([
       { type: 'text-delta', delta: 'first' },
       { type: 'text-delta', delta: 'second' },
     ]);
   });
 
   it('evicts the oldest unmatched delta at the bounded queue cap', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
-    translator.translate({
-      type: 'message.part.delta',
-      properties: {
-        sessionID: 'session-active',
-        messageID: 'unmatched',
-        partID: 'unmatched-part',
-        field: 'text',
-        delta: 'evicted',
-      },
-    });
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-1', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
-    translator.translate({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'part-1',
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          type: 'text',
-        },
-      },
-    });
+    const events = translator();
+    events.translate(partDelta('unmatched', 'unmatched-part', 'evicted'));
+    events.translate(messageUpdated('assistant-1'));
+    events.translate(partUpdated('assistant-1', 'part-1', 'text'));
 
     const effects = Array.from({ length: 256 }, (_, index) =>
-      translator.translate({
-        type: 'message.part.delta',
-        properties: {
-          sessionID: 'session-active',
-          messageID: 'assistant-1',
-          partID: 'part-1',
-          field: 'text',
-          delta: `delta-${index}`,
-        },
-      })
+      events.translate(partDelta('assistant-1', 'part-1', `delta-${index}`))
     ).flat();
 
     expect(effects).toHaveLength(256);
@@ -253,31 +130,16 @@ describe('OpenCode event translator', () => {
   });
 
   it('normalizes tool snapshots once per state transition', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-1', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
+    const events = translator();
+    events.translate(messageUpdated('assistant-1'));
     const snapshot = (status: string) =>
-      translator.translate({
-        type: 'message.part.updated',
-        properties: {
-          part: {
-            id: 'tool-part-1',
-            sessionID: 'session-active',
-            messageID: 'assistant-1',
-            type: 'tool',
-            tool: 'bash',
-            callID: 'call-1',
-            state: { status, input: { command: 'pwd' } },
-          },
-        },
-      });
+      events.translate(
+        partUpdated('assistant-1', 'tool-part-1', 'tool', {
+          tool: 'bash',
+          callID: 'call-1',
+          state: { status, input: { command: 'pwd' } },
+        })
+      );
 
     expect(snapshot('pending')).toEqual([
       { type: 'tool-activity', tool: 'bash', status: 'pending' },
@@ -292,13 +154,10 @@ describe('OpenCode event translator', () => {
   });
 
   it('normalizes current and legacy permission shapes without deciding them', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(),
-    });
+    const events = translator();
 
     expect(
-      translator.translate({
+      events.translate({
         type: 'permission.asked',
         properties: {
           id: 'permission-current',
@@ -320,7 +179,7 @@ describe('OpenCode event translator', () => {
       },
     ]);
     expect(
-      translator.translate({
+      events.translate({
         type: 'permission.updated',
         properties: {
           id: 'permission-legacy',
@@ -344,32 +203,19 @@ describe('OpenCode event translator', () => {
   });
 
   it('accepts terminal evidence only after active-turn assistant activity', () => {
-    const translator = createOpenCodeEventTranslator({
-      sessionId: 'session-active',
-      baselineMessageIds: new Set(['assistant-before-turn']),
-    });
+    const events = translator(['assistant-before-turn']);
     const idle = {
       type: 'session.status',
       properties: { sessionID: 'session-active', status: { type: 'idle' } },
     };
 
-    expect(translator.translate(idle)).toEqual([]);
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-before-turn', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
-    expect(translator.translate(idle)).toEqual([]);
-    translator.translate({
-      type: 'message.updated',
-      properties: {
-        info: { id: 'assistant-current', sessionID: 'session-active', role: 'assistant' },
-      },
-    });
-    expect(translator.translate(idle)).toEqual([{ type: 'idle' }]);
+    expect(events.translate(idle)).toEqual([]);
+    events.translate(messageUpdated('assistant-before-turn'));
+    expect(events.translate(idle)).toEqual([]);
+    events.translate(messageUpdated('assistant-current'));
+    expect(events.translate(idle)).toEqual([{ type: 'idle' }]);
     expect(
-      translator.translate({
+      events.translate({
         type: 'session.error',
         properties: {
           sessionID: 'session-active',

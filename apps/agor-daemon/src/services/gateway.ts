@@ -68,6 +68,10 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import {
+  gatewayAgenticConfigToInlineConfiguration,
+  hasDefinedGatewayAgenticConfigInlineFields,
+} from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
@@ -2004,19 +2008,8 @@ export class GatewayService {
     const agenticTool: AgenticToolName = requireActiveAgenticTool(
       agenticConfig?.agent ?? 'claude-code'
     );
-    const inlineAgenticConfiguration = {
-      modelConfig: agenticConfig?.modelConfig,
-      permissionMode: agenticConfig?.permissionMode,
-      codexSandboxMode: agenticConfig?.codexSandboxMode,
-      codexApprovalPolicy: agenticConfig?.codexApprovalPolicy,
-      codexNetworkAccess: agenticConfig?.codexNetworkAccess,
-    };
-    const hasInlineAgenticIntent = Boolean(
-      agenticConfig &&
-        Object.entries(agenticConfig).some(
-          ([key, value]) => !['agent', 'presetId', 'envVars'].includes(key) && value !== undefined
-        )
-    );
+    const inlineAgenticConfiguration = gatewayAgenticConfigToInlineConfiguration(agenticConfig);
+    const hasInlineAgenticIntent = hasDefinedGatewayAgenticConfigInlineFields(agenticConfig);
     // Repository rows are untrusted at this boundary. Forward a corrupt mixed
     // shape intact so the canonical materializer rejects it instead of silently
     // discarding the inline half in favor of the reference.

@@ -70,13 +70,13 @@ interface ProviderAction {
 export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [methodIndexes, setMethodIndexes] = useState<Record<string, number>>({});
-  const [promptValues, setPromptValues] = useState<Record<string, Record<string, string>>>({});
+  const [apiKey, setApiKey] = useState('');
+  const [selectedMethodIndex, setSelectedMethodIndex] = useState<number>();
+  const [promptValues, setPromptValues] = useState<Record<string, string>>({});
   const [oauthAttempts, setOAuthAttempts] = useState<Record<string, OpenCodeOAuthAttempt>>({});
   const oauthAttemptsRef = useRef<Record<string, OpenCodeOAuthAttempt>>({});
   const cancellingAttemptsRef = useRef(new Set<string>());
-  const [oauthCodes, setOAuthCodes] = useState<Record<string, string>>({});
+  const [oauthCode, setOAuthCode] = useState('');
   const [busyProvider, setBusyProvider] = useState<string>();
   const [error, setError] = useState<string>();
   const actionIdRef = useRef(0);
@@ -123,10 +123,10 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   );
 
   const clearFormState = useCallback(() => {
-    setKeys({});
-    setMethodIndexes({});
+    setApiKey('');
+    setSelectedMethodIndex(undefined);
     setPromptValues({});
-    setOAuthCodes({});
+    setOAuthCode('');
   }, []);
 
   const storeAttempt = useCallback(
@@ -172,66 +172,39 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     if (active.length === 0 || busyProvider) return;
     let disposed = false;
     const timers = new Set<number>();
+    const ownsSelection = (providerId: string) =>
+      !disposed &&
+      actionIdRef.current === actionId &&
+      isCurrentSelection(generation, selectionGeneration, providerId);
+    const activeAttempt = (providerId: string, attemptId: string) => {
+      const attempt = oauthAttemptsRef.current[providerId];
+      return attempt?.attemptId === attemptId && isActiveOAuthAttempt(attempt)
+        ? attempt
+        : undefined;
+    };
+    const canCommitAttempt = (providerId: string, attemptId: string) =>
+      ownsSelection(providerId) &&
+      !cancellingAttemptsRef.current.has(attemptId) &&
+      Boolean(activeAttempt(providerId, attemptId));
     const schedule = (providerId: string, attemptId: string) => {
       const timer = window.setTimeout(async () => {
         timers.delete(timer);
-        if (
-          disposed ||
-          actionIdRef.current !== actionId ||
-          !isCurrentSelection(generation, selectionGeneration, providerId)
-        ) {
-          return;
-        }
-        const before = oauthAttemptsRef.current[providerId];
-        if (
-          !before ||
-          before.attemptId !== attemptId ||
-          !isActiveOAuthAttempt(before) ||
-          cancellingAttemptsRef.current.has(attemptId)
-        ) {
-          if (before?.attemptId === attemptId && isActiveOAuthAttempt(before)) {
-            schedule(providerId, attemptId);
-          }
+        if (!ownsSelection(providerId)) return;
+        if (!activeAttempt(providerId, attemptId) || cancellingAttemptsRef.current.has(attemptId)) {
+          if (activeAttempt(providerId, attemptId)) schedule(providerId, attemptId);
           return;
         }
         try {
           const next = await client.service('opencode-auth').get(attemptId);
-          const current = oauthAttemptsRef.current[providerId];
-          if (
-            disposed ||
-            actionIdRef.current !== actionId ||
-            !isCurrentSelection(generation, selectionGeneration, providerId) ||
-            cancellingAttemptsRef.current.has(attemptId) ||
-            !current ||
-            current.attemptId !== attemptId ||
-            !isActiveOAuthAttempt(current) ||
-            next.attemptId !== attemptId
-          ) {
-            return;
-          }
+          if (!canCommitAttempt(providerId, attemptId) || next.attemptId !== attemptId) return;
           storeAttempt(providerId, next, generation);
           if (next.phase === 'configured' && next.settings) setSettings(next.settings);
         } catch {
-          const current = oauthAttemptsRef.current[providerId];
-          if (
-            !disposed &&
-            actionIdRef.current === actionId &&
-            isCurrentSelection(generation, selectionGeneration, providerId) &&
-            !cancellingAttemptsRef.current.has(attemptId) &&
-            current?.attemptId === attemptId &&
-            isActiveOAuthAttempt(current)
-          ) {
+          if (canCommitAttempt(providerId, attemptId)) {
             setError('OpenCode authorization status could not be refreshed.');
           }
         } finally {
-          const current = oauthAttemptsRef.current[providerId];
-          if (
-            !disposed &&
-            actionIdRef.current === actionId &&
-            isCurrentSelection(generation, selectionGeneration, providerId) &&
-            current?.attemptId === attemptId &&
-            isActiveOAuthAttempt(current)
-          ) {
+          if (ownsSelection(providerId) && activeAttempt(providerId, attemptId)) {
             schedule(providerId, attemptId);
           }
         }
@@ -294,31 +267,29 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
 
   const connect = async (providerId: string) => {
     const generation = scopeGeneration;
-    const apiKey = keys[providerId]?.trim();
-    if (!apiKey) return;
+    const trimmedApiKey = apiKey.trim();
+    if (!trimmedApiKey) return;
     const provider = settings?.providers.find((candidate) => candidate.id === providerId);
     if (!provider) return;
-    const methodPosition =
-      methodIndexes[providerId] ?? preferredOAuthMethodIndex(provider.authMethods);
+    const methodPosition = selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods);
     const method = provider.authMethods[methodPosition];
     if (method && method.type !== 'api') return;
-    const values = promptValues[providerId] ?? {};
-    const visiblePrompts = visibleAuthPrompts(method?.prompts, values);
-    if (visiblePrompts.some((prompt) => !values[prompt.key]?.trim())) return;
+    const visiblePrompts = visibleAuthPrompts(method?.prompts, promptValues);
+    if (visiblePrompts.some((prompt) => !promptValues[prompt.key]?.trim())) return;
     const metadata = Object.fromEntries(
-      visiblePrompts.map((prompt) => [prompt.key, values[prompt.key].trim()])
+      visiblePrompts.map((prompt) => [prompt.key, promptValues[prompt.key].trim()])
     );
     const action = beginAction(providerId, generation);
     try {
       const next = (await client.service('opencode-auth').create({
         providerId,
-        apiKey,
+        apiKey: trimmedApiKey,
         ...(Object.keys(metadata).length ? { metadata } : {}),
       })) as Settings;
       if (!isCurrentAction(action)) return;
       setSettings(next);
-      setKeys((current) => ({ ...current, [providerId]: '' }));
-      setPromptValues((current) => ({ ...current, [providerId]: {} }));
+      setApiKey('');
+      setPromptValues({});
     } catch {
       if (isCurrentAction(action)) {
         setError('OpenCode could not configure that provider.');
@@ -332,15 +303,13 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     const generation = scopeGeneration;
     const provider = settings?.providers.find((candidate) => candidate.id === providerId);
     if (!provider) return;
-    const methodPosition =
-      methodIndexes[providerId] ?? preferredOAuthMethodIndex(provider.authMethods);
+    const methodPosition = selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods);
     const method = provider.authMethods[methodPosition];
     if (method?.type !== 'oauth') return;
-    const values = promptValues[providerId] ?? {};
-    const visiblePrompts = visibleAuthPrompts(method.prompts, values);
-    if (visiblePrompts.some((prompt) => !values[prompt.key]?.trim())) return;
+    const visiblePrompts = visibleAuthPrompts(method.prompts, promptValues);
+    if (visiblePrompts.some((prompt) => !promptValues[prompt.key]?.trim())) return;
     const inputs = Object.fromEntries(
-      visiblePrompts.map((prompt) => [prompt.key, values[prompt.key].trim()])
+      visiblePrompts.map((prompt) => [prompt.key, promptValues[prompt.key].trim()])
     );
     const action = beginAction(providerId, generation);
     try {
@@ -390,9 +359,9 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   const submitOAuthCode = async (providerId: string) => {
     const generation = scopeGeneration;
     const attempt = oauthAttemptsRef.current[providerId];
-    const code = oauthCodes[providerId]?.trim();
+    const code = oauthCode.trim();
     if (!attempt || !code) return;
-    setOAuthCodes((current) => ({ ...current, [providerId]: '' }));
+    setOAuthCode('');
     const action = beginAction(providerId, generation);
     try {
       const next = await client.service('opencode-auth').patch(attempt.attemptId, { code });
@@ -476,12 +445,14 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
         }}
         renderItem={(provider) => {
           const methodIndex =
-            methodIndexes[provider.id] ?? preferredOAuthMethodIndex(provider.authMethods);
+            provider.id === selectedProviderId
+              ? (selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods))
+              : preferredOAuthMethodIndex(provider.authMethods);
           const method = provider.authMethods[methodIndex];
           const apiKeyAvailable =
             method?.type === 'api' ||
             (!method && (!provider.runtimeAvailable || provider.credentialPresence !== 'absent'));
-          const values = promptValues[provider.id] ?? {};
+          const values = provider.id === selectedProviderId ? promptValues : {};
           const visiblePrompts = visibleAuthPrompts(method?.prompts, values);
           const promptsComplete = visiblePrompts.every((prompt) => values[prompt.key]?.trim());
           const oauthMethod = method?.type === 'oauth' ? method : undefined;
@@ -506,7 +477,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                     key="connect"
                     type="primary"
                     loading={busyProvider === provider.id}
-                    disabled={!keys[provider.id]?.trim() || !promptsComplete}
+                    disabled={!apiKey.trim() || !promptsComplete}
                     onClick={() => connect(provider.id)}
                   >
                     Connect
@@ -590,18 +561,13 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                                       aria-label={`${provider.name} authorization code`}
                                       autoComplete="one-time-code"
                                       placeholder="Authorization code"
-                                      value={oauthCodes[provider.id] ?? ''}
-                                      onChange={(event) =>
-                                        setOAuthCodes((current) => ({
-                                          ...current,
-                                          [provider.id]: event.target.value,
-                                        }))
-                                      }
+                                      value={oauthCode}
+                                      onChange={(event) => setOAuthCode(event.target.value)}
                                       onPressEnter={() => void submitOAuthCode(provider.id)}
                                     />
                                     <Button
                                       loading={busyProvider === provider.id}
-                                      disabled={!oauthCodes[provider.id]?.trim()}
+                                      disabled={!oauthCode.trim()}
                                       onClick={() => submitOAuthCode(provider.id)}
                                     >
                                       Submit authorization code
@@ -635,19 +601,10 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                             value: index,
                           }))}
                           onChange={(index) => {
-                            setMethodIndexes((current) => ({
-                              ...current,
-                              [provider.id]: index,
-                            }));
-                            setKeys((current) => ({ ...current, [provider.id]: '' }));
-                            setPromptValues((current) => ({
-                              ...current,
-                              [provider.id]: {},
-                            }));
-                            setOAuthCodes((current) => ({
-                              ...current,
-                              [provider.id]: '',
-                            }));
+                            setSelectedMethodIndex(index);
+                            setApiKey('');
+                            setPromptValues({});
+                            setOAuthCode('');
                           }}
                           style={{ width: '100%' }}
                         />
@@ -657,10 +614,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                           prompts={visiblePrompts}
                           values={values}
                           onChange={(key, value) =>
-                            setPromptValues((current) => ({
-                              ...current,
-                              [provider.id]: { ...current[provider.id], [key]: value },
-                            }))
+                            setPromptValues((current) => ({ ...current, [key]: value }))
                           }
                         />
                       )}
@@ -669,13 +623,8 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                           aria-label={`${provider.name} API key`}
                           autoComplete="new-password"
                           placeholder="API key"
-                          value={keys[provider.id] ?? ''}
-                          onChange={(event) =>
-                            setKeys((current) => ({
-                              ...current,
-                              [provider.id]: event.target.value,
-                            }))
-                          }
+                          value={apiKey}
+                          onChange={(event) => setApiKey(event.target.value)}
                           onPressEnter={() => void connect(provider.id)}
                         />
                       )}

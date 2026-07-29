@@ -59,6 +59,23 @@ function createMockProcess() {
   return proc;
 }
 
+function installMockExecutor(prefix: string, proc = createMockProcess()) {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  const executorPath = path.join(dir, 'agor-executor');
+  const previousPath = process.env.AGOR_EXECUTOR_PATH;
+  writeFileSync(executorPath, '#!/usr/bin/env node\n');
+  process.env.AGOR_EXECUTOR_PATH = executorPath;
+  spawnMock.mockReturnValue(proc);
+  return {
+    proc,
+    restore() {
+      if (previousPath === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+      else process.env.AGOR_EXECUTOR_PATH = previousPath;
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -424,13 +441,8 @@ describe('configured executor spawning', () => {
   });
 
   it('keeps OAuth lifecycle frames private and contains the whole process group on cancel', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-executor-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-executor-');
+    const { proc } = fixture;
     const onEvent = vi.fn();
 
     try {
@@ -500,9 +512,7 @@ describe('configured executor spawning', () => {
       );
       expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Synthetic code 1234'));
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
@@ -526,13 +536,8 @@ describe('configured executor spawning', () => {
 
   it('contains the OAuth process group on its bounded timeout', async () => {
     vi.useFakeTimers();
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-timeout-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-timeout-');
+    const { proc } = fixture;
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -553,20 +558,13 @@ describe('configured executor spawning', () => {
       expect(untrackMock).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('waits for close and parses the final OAuth result frame after exit', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-final-frame-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-final-frame-');
+    const { proc } = fixture;
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -594,9 +592,7 @@ describe('configured executor spawning', () => {
         data: { runtime: 'available' },
       });
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
@@ -604,13 +600,8 @@ describe('configured executor spawning', () => {
     ['missing', ''],
     ['truncated', 'AGOR_EXECUTOR_RESULT {"success":true'],
   ])('fails safely for a %s OAuth result frame after close', async (_label, frame) => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-missing-frame-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-missing-frame-');
+    const { proc } = fixture;
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -635,24 +626,17 @@ describe('configured executor spawning', () => {
       expect(JSON.stringify(await handle.result)).not.toContain('secret password');
       expect(JSON.stringify(await handle.result)).not.toContain('/private/path');
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('shares one finalization across cancel and exit and retains unverified tracking', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-unverified-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
+    const fixture = installMockExecutor('agor-oauth-unverified-');
+    const { proc } = fixture;
     containMock.mockResolvedValue({
       status: 'unverified',
       reason: 'synthetic containment failure',
     });
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -687,16 +671,11 @@ describe('configured executor spawning', () => {
       expect(containMock).toHaveBeenCalledTimes(2);
       expect(untrackMock).toHaveBeenCalledOnce();
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('submits exactly one secret code over the bounded OAuth stdin without echoing it', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
     const proc = createMockProcess();
     let finishInput!: () => void;
     proc.stdin = new Writable({
@@ -708,9 +687,7 @@ describe('configured executor spawning', () => {
         finishInput = callback;
       },
     });
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-code-', proc);
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -741,16 +718,11 @@ describe('configured executor spawning', () => {
       proc.emit('close', null);
       await cancellation;
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('rejects code delivery when stdin finalization fails asynchronously', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-final-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
     const proc = createMockProcess();
     proc.stdin = new Writable({
       write(chunk, _encoding, callback) {
@@ -761,9 +733,7 @@ describe('configured executor spawning', () => {
         setImmediate(() => callback(new Error('EPIPE synthetic-secret-code /private/final-path')));
       },
     });
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-code-final-', proc);
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -792,25 +762,18 @@ describe('configured executor spawning', () => {
         expect.stringContaining('synthetic-secret-code')
       );
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('owns an initial OAuth stdin delivery failure without exposing the payload', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-initial-write-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
     const proc = createMockProcess();
     proc.stdin = new Writable({
       write(_chunk, _encoding, callback) {
         callback(new Error('EPIPE synthetic-secret /private/path'));
       },
     });
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-initial-write-', proc);
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -838,16 +801,11 @@ describe('configured executor spawning', () => {
       expect(JSON.stringify(await handle.result)).not.toContain('/private/path');
       expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('synthetic-secret'));
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 
   it('settles a failed code write through concurrent cancellation and exit', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'agor-oauth-code-write-'));
-    const executorPath = path.join(dir, 'agor-executor');
-    const previous = process.env.AGOR_EXECUTOR_PATH;
     const proc = createMockProcess();
     let writes = 0;
     let failCodeWrite!: () => void;
@@ -862,9 +820,7 @@ describe('configured executor spawning', () => {
         }
       },
     });
-    spawnMock.mockReturnValue(proc);
-    writeFileSync(executorPath, '#!/usr/bin/env node\n');
-    process.env.AGOR_EXECUTOR_PATH = executorPath;
+    const fixture = installMockExecutor('agor-oauth-code-write-', proc);
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
@@ -896,9 +852,7 @@ describe('configured executor spawning', () => {
       );
       expect(JSON.stringify(await handle.result)).not.toContain('/private/code-path');
     } finally {
-      if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
-      else process.env.AGOR_EXECUTOR_PATH = previous;
-      rmSync(dir, { recursive: true, force: true });
+      fixture.restore();
     }
   });
 });

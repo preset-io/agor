@@ -23,6 +23,20 @@ const mutationSlots = new Map<string, Promise<void>>();
 // The stored verifier delegates recovery to the existing tracked-process owner.
 const blockedNamespaces = new Map<string, () => Promise<boolean>>();
 
+function assertOptionalStringRecord(
+  value: unknown
+): asserts value is Record<string, string> | undefined {
+  if (
+    value !== undefined &&
+    (!value ||
+      Array.isArray(value) ||
+      typeof value !== 'object' ||
+      Object.values(value).some((entry) => typeof entry !== 'string'))
+  ) {
+    throw new BadRequest('Provider prompt values must be strings.');
+  }
+}
+
 async function inMutationSlot<T>(key: string, work: () => Promise<T>): Promise<T> {
   const previous = mutationSlots.get(key) ?? Promise.resolve();
   const current = previous
@@ -156,15 +170,7 @@ export class OpenCodeAuthService {
     const apiKey = data?.apiKey?.trim();
     if (!providerId || !apiKey) throw new BadRequest('Provider and API key are required.');
     const metadata = data.metadata;
-    if (
-      metadata !== undefined &&
-      (!metadata ||
-        Array.isArray(metadata) ||
-        typeof metadata !== 'object' ||
-        Object.values(metadata).some((value) => typeof value !== 'string'))
-    ) {
-      throw new BadRequest('Provider prompt values must be strings.');
-    }
+    assertOptionalStringRecord(metadata);
 
     const context = await this.credentialContext(params);
     const result = await inMutationSlot(context.namespaceKey, () =>
@@ -237,15 +243,7 @@ export class OpenCodeAuthService {
     if (!providerId || !Number.isInteger(data.method) || data.method < 0) {
       throw new BadRequest('Provider and OAuth method are required.');
     }
-    if (
-      data.inputs !== undefined &&
-      (!data.inputs ||
-        Array.isArray(data.inputs) ||
-        typeof data.inputs !== 'object' ||
-        Object.values(data.inputs).some((value) => typeof value !== 'string'))
-    ) {
-      throw new BadRequest('Provider prompt values must be strings.');
-    }
+    assertOptionalStringRecord(data.inputs);
 
     const context = await this.credentialContext(params);
     let resolveReady!: () => void;

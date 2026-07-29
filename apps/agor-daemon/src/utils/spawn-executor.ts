@@ -332,75 +332,15 @@ export function spawnExecutor(
  * stdout/stderr are inherited so logs appear in daemon output.
  */
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
-  const executorPath = findExecutorPath();
-
-  // Default cwd to executor package directory for proper module resolution
-  // ESM imports resolve relative to the file location, and pnpm's node_modules
-  // structure requires running from the package directory
-  const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
-
-  const {
-    cwd = executorDir,
-    env = process.env as Record<string, string>,
-    logPrefix = '[Executor]',
-    asUser: rawAsUser,
-    onSpawn,
-    preparedEnv,
-    preparedEnvFilePath,
-  } = options;
-  const asUser = rawAsUser || undefined;
-
-  const daemonUrl = getDaemonUrl();
-
-  const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
-    : asUser
-      ? withDaemonExecutorEnv(
-          Object.fromEntries(
-            Object.entries({
-              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-              NODE_ENV: env.NODE_ENV,
-              LOG_LEVEL: env.LOG_LEVEL,
-              // HOME: not set - sudo will set it to the target user's home directory
-              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-              OPENAI_API_KEY: env.OPENAI_API_KEY,
-              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-              GEMINI_API_KEY: env.GEMINI_API_KEY,
-              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-              // Forward git hardening pairs across the sudo boundary (sudoers
-              // env_keep is the belt; this is the suspenders for this path).
-              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-            }).filter(([_, v]) => v !== undefined)
-          ),
-          daemonUrl
-        )
-      : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
-
-  const prepared = asUser
-    ? preparedEnvFilePath
-      ? {
-          inlineEnv: Object.fromEntries(
-            Object.entries(envWithDaemonUrl).filter(([k]) => !isSecretEnvKey(k))
-          ),
-          envFilePath: preparedEnvFilePath,
-        }
-      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
-    : { inlineEnv: undefined, envFilePath: undefined };
-
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
-    asUser,
-    env: asUser ? prepared.inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
-    envFilePath: prepared.envFilePath,
-  });
+  const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
+    prepareLocalExecutorSpawn(options, '--stdin');
+  const logPrefix = options.logPrefix ?? '[Executor]';
 
   if (asUser) {
     // Safe summary only — never log secret values or their key names.
-    const safeEnvKeys = Object.keys(prepared.inlineEnv ?? {}).filter((k) => !isSecretEnvKey(k));
+    const safeEnvKeys = Object.keys(inlineEnv ?? {}).filter((key) => !isSecretEnvKey(key));
     console.log(
-      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${prepared.envFilePath ? ' (secrets in env-file)' : ''}`
+      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${envFilePath ? ' (secrets in env-file)' : ''}`
     );
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
@@ -450,9 +390,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // file before exec, but if sudo/bash failed to launch — or `set -eu`
   // aborted the source step — the file may remain. attachEnvFileCleanup
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
-  attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
+  attachEnvFileCleanup(executorProcess, { envFilePath, asUser });
 
-  onSpawn?.(executorProcess, { mode: 'local' });
+  options.onSpawn?.(executorProcess, { mode: 'local' });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -583,16 +523,19 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
 
 const OPENCODE_OAUTH_EVENT_PREFIX = 'AGOR_OPENCODE_OAUTH_EVENT ';
 
-function resolveLocalExecutorLocation(options: RunExecutorCommandOptions) {
+function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'>) {
   const executorPath = findExecutorPath();
   return {
     executorPath,
+    // Default to the executor package directory for proper module resolution.
+    // ESM imports resolve relative to the file location, and pnpm's node_modules
+    // structure requires running from the package directory.
     cwd: options.cwd ?? path.dirname(path.dirname(executorPath)),
   };
 }
 
 function prepareLocalExecutorSpawn(
-  options: RunExecutorCommandOptions,
+  options: SpawnExecutorOptions,
   mode: '--stdin' | '--opencode-oauth',
   location = resolveLocalExecutorLocation(options)
 ) {
@@ -604,8 +547,9 @@ function prepareLocalExecutorSpawn(
     preparedEnvFilePath,
   } = options;
   const asUser = rawAsUser || undefined;
+  const daemonUrl = getDaemonUrl();
   const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, getDaemonUrl())
+    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
     : asUser
       ? withDaemonExecutorEnv(
           Object.fromEntries(
@@ -624,9 +568,9 @@ function prepareLocalExecutorSpawn(
               GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
             }).filter(([_, value]) => value !== undefined)
           ),
-          getDaemonUrl()
+          daemonUrl
         )
-      : withDaemonExecutorEnv(env, getDaemonUrl());
+      : withDaemonExecutorEnv(env, daemonUrl);
   const prepared = asUser
     ? preparedEnvFilePath
       ? {
@@ -642,7 +586,15 @@ function prepareLocalExecutorSpawn(
     env: asUser ? prepared.inlineEnv : undefined,
     envFilePath: prepared.envFilePath,
   });
-  return { ...command, cwd, asUser, envWithDaemonUrl, envFilePath: prepared.envFilePath };
+  return {
+    ...command,
+    executorPath,
+    cwd,
+    asUser,
+    envWithDaemonUrl,
+    inlineEnv: prepared.inlineEnv,
+    envFilePath: prepared.envFilePath,
+  };
 }
 
 function parseOpenCodeOAuthEvent(line: string): OpenCodeOAuthProcessEvent | undefined {

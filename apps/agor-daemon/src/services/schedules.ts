@@ -25,7 +25,6 @@ import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db
 import { BadRequest } from '@agor/core/feathers';
 import { InvalidModelConfigError } from '@agor/core/models';
 import type {
-  AgenticToolConfigurationSource,
   AuthenticatedParams,
   BranchID,
   PersistedScheduleAgenticToolConfig,
@@ -39,6 +38,7 @@ import type {
 } from '@agor/core/types';
 import { SCHEDULE_CREATE_WRITE_FIELDS, SCHEDULE_PATCH_WRITE_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { scheduleAgenticToolConfigToSource } from '../utils/agentic-configuration-sources.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export type ScheduleParams = QueryParams<{
@@ -69,24 +69,9 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
     userId?: UserID
   ): Promise<ScheduleAgenticToolConfig> {
     try {
-      const source = (
-        config.configuration_reference !== undefined
-          ? { reference: config.configuration_reference }
-          : config.preset_id !== undefined
-            ? { reference: config.preset_id }
-            : {
-                configuration: {
-                  modelConfig: config.model_config,
-                  permissionMode: config.permission_mode,
-                  codexSandboxMode: config.codex_sandbox_mode,
-                  codexApprovalPolicy: config.codex_approval_policy,
-                  codexNetworkAccess: config.codex_network_access,
-                },
-              }
-      ) as AgenticToolConfigurationSource;
       const materialized = await materializeAgenticToolConfiguration(this.db, {
         tool: config.agentic_tool,
-        source,
+        source: scheduleAgenticToolConfigToSource(config),
         executionOwnerId: userId,
       });
       return config.preset_id !== undefined && materialized.agentic_tool_preset_id

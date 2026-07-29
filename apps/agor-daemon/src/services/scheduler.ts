@@ -79,6 +79,7 @@ import {
 } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
+import { scheduleAgenticToolConfigToSource } from '../utils/agentic-configuration-sources.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import type { SessionParams } from './sessions.js';
 
@@ -186,19 +187,7 @@ async function materializeNormalizedScheduleAgenticToolConfig(
 > {
   const materialized = await materializeAgenticToolConfiguration(db, {
     tool: cfg.agentic_tool,
-    source: cfg.configuration_reference
-      ? { reference: cfg.configuration_reference }
-      : cfg.preset_id
-        ? { reference: cfg.preset_id }
-        : {
-            configuration: {
-              modelConfig: cfg.model_config,
-              permissionMode: cfg.permission_mode,
-              codexSandboxMode: cfg.codex_sandbox_mode,
-              codexApprovalPolicy: cfg.codex_approval_policy,
-              codexNetworkAccess: cfg.codex_network_access,
-            },
-          },
+    source: scheduleAgenticToolConfigToSource(cfg),
     executionOwnerId: createdBy as UserID,
   });
   return {

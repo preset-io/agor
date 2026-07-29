@@ -31,9 +31,7 @@ import type {
 import type { PermissionService } from '../../permissions/permission-service.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
-  CreateSessionConfig,
   MessagesService,
-  SessionHandle,
   SessionsPatchClient,
   StreamingCallbacks,
   TasksService,
@@ -176,16 +174,15 @@ function asUnknownAsyncIterable(value: unknown): AsyncIterable<unknown> {
 /**
  * Session context for an Agor session mapped to OpenCode
  */
-interface SessionContext {
+interface TurnContext {
   opencodeSessionId: string;
-  model?: string;
-  provider?: string;
-  /** Branch directory path for project-scoped operations */
-  branchPath?: string;
+  model: string;
+  provider: string;
+  /** Branch directory path for project-scoped operations. */
+  branchPath: string;
 }
 
 export class OpenCodeTool {
-  private client: OpenCodeClient | null = null;
   private readonly dependencies: Pick<
     OpenCodeToolDependencies,
     'resolveBinary' | 'spawn' | 'randomBytes' | 'fetch'
@@ -196,7 +193,6 @@ export class OpenCodeTool {
     shutdownTimeoutMs: number;
     eventDrainMs: number;
   };
-  private sessionContexts: Map<string, SessionContext> = new Map(); // Agor session ID → session context
   /** MCP repository dependencies for resolving user-defined MCP servers */
   private sessionMCPRepo?: SessionMCPServerRepository;
   private mcpServerRepo?: MCPServerRepository;
@@ -237,7 +233,9 @@ export class OpenCodeTool {
     input: RunOpenCodeTurnInput,
     streamingCallbacks?: StreamingCallbacks
   ): Promise<OpenCodeTurnResult> {
-    if (!input.provider?.trim() || !input.model?.trim()) {
+    const provider = input.provider;
+    const model = input.model;
+    if (!provider?.trim() || !model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
     const preliminarySanitizer = createOpenCodeSanitizer([
@@ -297,6 +295,8 @@ export class OpenCodeTool {
       throw preliminarySanitizer.error(error);
     }
     const { authorization, baseUrl, close, sanitizer } = managedServer;
+    let client: OpenCodeClient | undefined;
+    let activeOpenCodeSessionId: string | undefined;
     let stopEventCollector = async () => {};
     let turnCompleted = false;
     let cleanupPromise: Promise<void> | undefined;
@@ -304,7 +304,7 @@ export class OpenCodeTool {
       cleanupPromise ??= (async () => {
         if (!turnCompleted) {
           await this.settlesWithin(
-            this.abortActiveSession(input),
+            this.abortActiveSession(client, activeOpenCodeSessionId, input.directory),
             this.dependencies.shutdownTimeoutMs
           );
         }
@@ -338,17 +338,17 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
-      this.client = this.dependencies.createClient({
+      client = this.dependencies.createClient({
         baseUrl,
         directory: input.directory,
         headers: { Authorization: authorization },
       });
-      await this.assertExplicitModelAvailable(input);
+      await this.assertExplicitModelAvailable(client, input.directory, provider, model);
 
       let openCodeSessionId = input.existingOpenCodeSessionId;
       let sessionWasCreated = false;
       if (openCodeSessionId) {
-        const response = await this.client.session.get({
+        const response = await client.session.get({
           path: { id: openCodeSessionId },
           query: { directory: input.directory },
         });
@@ -358,33 +358,21 @@ export class OpenCodeTool {
           );
         }
       } else {
-        const created = await this.createSession({
-          title: input.title,
-          projectName: 'agor',
-          model: input.model,
-          provider: input.provider,
-          workingDirectory: input.directory,
-        });
-        openCodeSessionId = created.sessionId;
+        openCodeSessionId = await this.createSession(client, input.title, input.directory);
         sessionWasCreated = true;
         await input.persistOpenCodeSessionId(openCodeSessionId);
       }
 
-      this.setSessionContext(
-        input.agorSessionId,
-        openCodeSessionId,
-        input.model,
-        input.provider,
-        input.directory
-      );
+      activeOpenCodeSessionId = openCodeSessionId;
       if (input.signal.aborted)
         throw new Error('OpenCode turn was aborted before prompt submission');
       const finalMessage = await this.executeTask(
+        client,
         input,
         {
           opencodeSessionId: openCodeSessionId,
-          model: input.model,
-          provider: input.provider,
+          model,
+          provider,
           branchPath: input.directory,
         },
         streamingCallbacks,
@@ -405,21 +393,22 @@ export class OpenCodeTool {
     } catch (error) {
       turnFailure = sanitizer.error(error);
     }
-    this.sessionContexts.delete(input.agorSessionId);
-    this.client = null;
 
     if (turnFailure) throw turnFailure;
     if (!outcome) throw new Error('OpenCode turn ended without a result');
     return outcome;
   }
 
-  private async abortActiveSession(input: RunOpenCodeTurnInput): Promise<void> {
-    const context = this.getSessionContext(input.agorSessionId);
-    if (!context || !this.client) return;
+  private async abortActiveSession(
+    client: OpenCodeClient | undefined,
+    openCodeSessionId: string | undefined,
+    directory: string
+  ): Promise<void> {
+    if (!client || !openCodeSessionId) return;
     try {
-      await this.client.session.abort({
-        path: { id: context.opencodeSessionId },
-        query: { directory: input.directory },
+      await client.session.abort({
+        path: { id: openCodeSessionId },
+        query: { directory },
       });
     } catch {
       // Local child cleanup remains authoritative.
@@ -459,65 +448,31 @@ export class OpenCodeTool {
   }
 
   /**
-   * Set session context (OpenCode session ID, model, provider, branch path, and MCP token) for an Agor session
-   * Must be called before executeTask
-   *
-   * @param agorSessionId - Agor session ID
-   * @param opencodeSessionId - OpenCode session ID
-   * @param model - Model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
-   * @param provider - Provider ID (e.g., 'openai', 'opencode'). If omitted, uses legacy mapping.
-   * @param branchPath - Branch directory path for project-scoped operations
-   */
-  private setSessionContext(
-    agorSessionId: string,
-    opencodeSessionId: string,
-    model?: string,
-    provider?: string,
-    branchPath?: string
-  ): void {
-    this.sessionContexts.set(agorSessionId, {
-      opencodeSessionId,
-      model,
-      provider,
-      branchPath,
-    });
-  }
-
-  /**
-   * Get session context for an Agor session
-   */
-  private getSessionContext(agorSessionId: string): SessionContext | undefined {
-    return this.sessionContexts.get(agorSessionId);
-  }
-
-  /** Return the invocation-scoped authenticated client. */
-  private getClientForDirectory(_directory: string | undefined): OpenCodeClient {
-    if (!this.client) throw new Error('OpenCode managed server is not running');
-    return this.client;
-  }
-
-  /**
    * Admit the required exact pair against the configured catalog on this
    * task's already-running server.
    */
-  private async assertExplicitModelAvailable(input: RunOpenCodeTurnInput): Promise<void> {
-    const client = this.getClientForDirectory(input.directory);
+  private async assertExplicitModelAvailable(
+    client: OpenCodeClient,
+    directory: string,
+    providerId: string,
+    modelId: string
+  ): Promise<void> {
     let available = false;
     try {
-      const query = { directory: input.directory };
+      const query = { directory };
       const [catalogResponse, runtimeResponse] = await Promise.all([
         client.config.providers({ query }),
         client.provider.list({ query }),
       ]);
-      const provider = catalogResponse.data?.providers.find((entry) => entry.id === input.provider);
+      const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
       available =
         !catalogResponse.error &&
         !runtimeResponse.error &&
-        Boolean(runtimeResponse.data?.connected.includes(input.provider as string)) &&
+        Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
         Boolean(
           provider &&
             Object.entries(provider.models).some(
-              ([modelId, model]) => modelId === input.model || model.id === input.model
+              ([candidateId, model]) => candidateId === modelId || model.id === modelId
             )
         );
     } catch {
@@ -607,26 +562,29 @@ export class OpenCodeTool {
     return { mcp, permission: AGOR_PERMISSION_INTERCEPTION };
   }
 
-  /** Create a new OpenCode session on the managed runtime. */
-  private async createSession(config: CreateSessionConfig): Promise<SessionHandle> {
-    const client = this.getClientForDirectory(config.workingDirectory);
+  /** Create a new OpenCode session on the invocation's managed runtime. */
+  private async createSession(
+    client: OpenCodeClient,
+    title: string,
+    directory: string
+  ): Promise<string> {
     const response = await client.session.create({
-      body: { title: String(config.title || 'Agor Session') },
-      query: config.workingDirectory ? { directory: config.workingDirectory } : undefined,
+      body: { title: title || 'Agor Session' },
+      query: { directory },
     });
     if (response.error) throw new Error('OpenCode failed to create a session');
     if (!response.data) throw new Error('OpenCode returned no session data');
-    return { sessionId: response.data.id, toolType: 'opencode' };
+    return response.data.id;
   }
 
   private async executeTask(
+    client: OpenCodeClient,
     input: RunOpenCodeTurnInput,
-    context: SessionContext,
+    context: TurnContext,
     streamingCallbacks: StreamingCallbacks | undefined,
     registerStopEventCollector: (stop: () => Promise<void>) => void,
     sanitizer: OpenCodeSanitizer
   ): Promise<OpenCodeTurnResult['finalMessage']> {
-    const client = this.getClientForDirectory(context.branchPath);
     const promptFailure = (): Error =>
       new Error(
         `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
