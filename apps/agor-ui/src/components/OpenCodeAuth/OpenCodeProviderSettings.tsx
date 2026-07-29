@@ -533,7 +533,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
                   </Button>
                 ) : null,
               ].filter(Boolean)}
-              style={apiKeyAvailable && !oauthActive ? { alignItems: 'flex-end' } : undefined}
+              style={{ alignItems: 'flex-end' }}
             >
               <List.Item.Meta
                 title={

@@ -231,7 +231,7 @@ Reasons not to ship broadly yet:
 
 - ✅ Add `cursor` to core/executor/UI type unions and static capability maps.
 - ✅ Add `CURSOR_API_KEY` credential plumbing.
-- ✅ Surface Cursor as a beta provider in agent selection/settings, matching the OpenCode beta posture.
+- ✅ Surface Cursor as a beta provider in agent selection/settings, matching other experimental providers.
 - ✅ Add package dependency (`@cursor/sdk`) to executor.
 - Add import/install smoke test for Linux CI.
 

@@ -17,7 +17,7 @@ vi.mock('../../store/agorStore', () => ({
 
 const agents: AgenticToolOption[] = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'x' },
-  { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y', beta: true },
+  { id: 'cursor', name: 'Cursor SDK', icon: '⌘', description: 'y', beta: true },
 ];
 
 function gridEl(container: HTMLElement): HTMLElement {
