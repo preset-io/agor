@@ -30,6 +30,7 @@ import {
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
+  stripTenantIdFromMutation,
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
@@ -247,6 +248,27 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining(['kb/settings', 'kb/indexing/status', 'kb/indexing/reindex'])
     );
+  });
+});
+
+describe('tenant-owned write data', () => {
+  it('leaves create DTOs unchanged until persistence stamps the resolved tenant', () => {
+    const data = { name: 'Nightly', tenant_id: 'caller-supplied-tenant' };
+
+    expect(stripTenantIdFromMutation('create', data)).toBe(data);
+    expect(data.tenant_id).toBe('caller-supplied-tenant');
+  });
+
+  it.each([
+    'update',
+    'patch',
+  ] as const)('continues stripping tenant identity from %s data', (method) => {
+    expect(
+      stripTenantIdFromMutation(method, [
+        { name: 'first', tenant_id: 'tenant-b' },
+        { name: 'second', tenant_id: 'tenant-c' },
+      ])
+    ).toEqual([{ name: 'first' }, { name: 'second' }]);
   });
 });
 

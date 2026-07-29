@@ -60,6 +60,10 @@ If correct handling changes approved behavior, architecture, scope, or proof,
 revise the task instead of preserving a single-tenant assumption or inventing
 speculative infrastructure.
 
+For tenant-owned creates, keep resolved tenant identity in params and ambient
+context through public DTO validation. Persistence adapters materialize
+`tenant_id` only after that validation succeeds.
+
 ## Existing code owners
 
 Reuse these instead of adding local tenant plumbing:

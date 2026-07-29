@@ -540,6 +540,15 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   return context;
 }
 
+export function stripTenantIdFromMutation(method: HookContext['method'], data: unknown): unknown {
+  if (method !== 'update' && method !== 'patch') return data;
+  if (Array.isArray(data)) return data.map((item) => stripTenantIdFromMutation(method, item));
+  if (!data || typeof data !== 'object') return data;
+  const clone = { ...(data as Record<string, unknown>) };
+  delete clone.tenant_id;
+  return clone;
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -583,20 +592,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
-  const stampTenantData = (data: unknown, tenantId: string): unknown => {
-    if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));
-    if (!data || typeof data !== 'object') return data;
-    return { ...(data as Record<string, unknown>), tenant_id: tenantId };
-  };
-
-  const stripTenantData = (data: unknown): unknown => {
-    if (Array.isArray(data)) return data.map(stripTenantData);
-    if (!data || typeof data !== 'object') return data;
-    const clone = { ...(data as Record<string, unknown>) };
-    delete clone.tenant_id;
-    return clone;
-  };
-
   const resultBelongsToTenant = (result: unknown, tenantId: string): boolean => {
     if (Array.isArray(result)) return result.every((item) => resultBelongsToTenant(item, tenantId));
     if (!result || typeof result !== 'object') return true;
@@ -636,11 +631,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
 
-    if (context.method === 'create') {
-      context.data = stampTenantData(context.data, tenantId) as typeof context.data;
-    } else if (context.method === 'update' || context.method === 'patch') {
-      context.data = stripTenantData(context.data) as typeof context.data;
-    }
+    context.data = stripTenantIdFromMutation(context.method, context.data) as typeof context.data;
 
     // Do not inject tenant_id into Feathers find queries. Several services
     // intentionally omit tenant_id from their public DTOs; the generic in-memory

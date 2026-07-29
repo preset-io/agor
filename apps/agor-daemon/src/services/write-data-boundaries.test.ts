@@ -10,6 +10,7 @@ describe('runtime write-data boundaries', () => {
     ['last_run_session_id', 'caller-supplied-session'],
     ['next_run_at', 456],
     ['created_at', '2026-07-28T00:00:00.000Z'],
+    ['tenant_id', 'caller-supplied-tenant'],
   ])('rejects runtime-owned schedule create field %s', async (field, value) => {
     const service = new SchedulesService(null as never);
 
@@ -60,6 +61,7 @@ describe('runtime write-data boundaries', () => {
     ['channel_key', 'caller-supplied-secret'],
     ['created_at', '2026-07-28T00:00:00.000Z'],
     ['last_message_at', '2026-07-28T00:00:00.000Z'],
+    ['tenant_id', 'caller-supplied-tenant'],
   ])('rejects runtime-owned gateway create field %s', async (field, value) => {
     const service = new GatewayChannelsService(null as never);
 
