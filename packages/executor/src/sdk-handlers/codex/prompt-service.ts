@@ -80,16 +80,23 @@ export function reportCodexActivity(
   if (isCodexReconnectEvent(event)) return;
 
   if (event.type === 'item.started' || event.type === 'item.completed') {
-    // Codex todo_list is turn-long progress state. Every other known or
-    // future item type has a bounded lifecycle and suspends supervision.
-    if (event.item?.type === 'todo_list') {
+    // Item lifecycle events are progress facts, not leases. A missing
+    // item.completed event must never disable supervision indefinitely.
+    if (
+      [
+        'agent_message',
+        'command_execution',
+        'file_change',
+        'mcp_tool_call',
+        'reasoning',
+        'todo_list',
+        'web_search',
+      ].includes(event.item?.type ?? '')
+    ) {
       callback?.('progress');
       return;
     }
-    callback?.(
-      'progress',
-      event.type === 'item.started' ? 'operation.start' : 'operation.complete'
-    );
+    callback?.('unknown_activity');
     return;
   }
   if (event.type === 'item.updated') {

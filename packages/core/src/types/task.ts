@@ -66,6 +66,8 @@ export interface SdkFailure {
   detected_at: string;
   tool: PersistedAgenticToolName;
   last_pulse?: ExecutorPulse;
+  /** Executor-local pulse sequence captured when the watchdog made its decision. */
+  pulse_sequence_at_detection?: number;
   elapsed_ms?: number;
   watchdog_action?: 'would_fire' | 'enforced';
   unknown_event_count?: number;
@@ -75,7 +77,11 @@ export interface SdkFailure {
 
 export type SdkHealthFailureInput = Pick<
   SdkFailure,
-  'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
+  | 'elapsed_ms'
+  | 'watchdog_action'
+  | 'unknown_event_count'
+  | 'sdk_version'
+  | 'pulse_sequence_at_detection'
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
 export type TerminationCause =

@@ -50,6 +50,7 @@ describe('TasksService SDK health reports', () => {
       elapsed_ms: 180_000,
       watchdog_action: 'would_fire',
       sdk_version: 'sdk@1.0.0',
+      pulse_sequence_at_detection: 4,
     });
 
     expect(result).toMatchObject({
@@ -57,6 +58,7 @@ describe('TasksService SDK health reports', () => {
       sdk_failure: {
         reason: 'no_first_progress',
         watchdog_action: 'would_fire',
+        pulse_sequence_at_detection: 4,
         termination: 'not_requested',
       },
     });
@@ -82,6 +84,17 @@ describe('TasksService SDK health reports', () => {
         watchdog_action: 'would_fire',
       })
     ).rejects.toThrow('invalid SDK health reason');
+  });
+
+  it('rejects an invalid pulse sequence baseline', async () => {
+    await expect(
+      serviceFor().reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'no_first_progress',
+        watchdog_action: 'would_fire',
+        pulse_sequence_at_detection: -1,
+      })
+    ).rejects.toThrow('pulse_sequence_at_detection must be a non-negative safe integer');
   });
 
   it('hands enforced decisions to the shared coordinator with the configured grace', async () => {

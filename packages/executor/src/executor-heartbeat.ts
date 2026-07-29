@@ -10,7 +10,7 @@ export interface ExecutorHeartbeatOptions {
 }
 
 export interface ExecutorHeartbeatHandle {
-  recordPulse(kind: ExecutorPulseKind, detail?: string): void;
+  recordPulse(kind: ExecutorPulseKind, detail?: string): number;
   stop(): void;
 }
 
@@ -18,10 +18,6 @@ const DEFAULT_INTERVAL_MS = 10_000;
 
 export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): ExecutorHeartbeatHandle {
   const enabled = options.enabled ?? true;
-  if (!enabled) {
-    return { recordPulse() {}, stop() {} };
-  }
-
   const intervalMs =
     typeof options.intervalMs === 'number' &&
     Number.isFinite(options.intervalMs) &&
@@ -32,6 +28,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
   let stopped = false;
   let inFlight = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let pulseTimer: ReturnType<typeof setTimeout> | undefined;
   let sequence = 0;
   let latestPulse: { sequence: number; kind: ExecutorPulseKind; detail?: string } | undefined;
   let latestProgress: { sequence: number; kind: 'progress'; detail?: string } | undefined;
@@ -55,11 +52,24 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     }
   };
 
-  void emit();
-  timer = setInterval(() => {
+  const schedulePulseFlush = () => {
+    if (enabled || stopped || pulseTimer) return;
+    pulseTimer = setTimeout(async () => {
+      const scheduledSequence = sequence;
+      await emit();
+      pulseTimer = undefined;
+      if (sequence > scheduledSequence) schedulePulseFlush();
+    }, intervalMs);
+    pulseTimer.unref?.();
+  };
+
+  if (enabled) {
     void emit();
-  }, intervalMs);
-  timer.unref?.();
+    timer = setInterval(() => {
+      void emit();
+    }, intervalMs);
+    timer.unref?.();
+  }
 
   return {
     recordPulse(kind, detail) {
@@ -68,10 +78,13 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       if (kind === 'progress') {
         latestProgress = { sequence, kind, ...(detail ? { detail } : {}) };
       }
+      schedulePulseFlush();
+      return sequence;
     },
     stop() {
       stopped = true;
       if (timer) clearInterval(timer);
+      if (pulseTimer) clearTimeout(pulseTimer);
     },
   };
 }

@@ -64,6 +64,7 @@ export class AgorExecutor {
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
+  private lastPulseSequence = 0;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
 
@@ -265,24 +266,22 @@ export class AgorExecutor {
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
-    if (this.config.tool !== 'cursor') {
-      const idleTimeoutMs =
-        this.config.tool === 'claude-code'
-          ? watchdogConfig.claude_idle_timeout_ms
-          : this.config.tool === 'codex'
-            ? watchdogConfig.codex_idle_timeout_ms
-            : null;
-      this.watchdog = new SdkWatchdog({
-        mode: watchdogConfig.mode,
-        firstProgressTimeoutMs: watchdogConfig.first_progress_timeout_ms,
-        idleTimeoutMs,
-        sdkVersion: getSdkActivityVersion(this.config.tool),
-        onDecision: (evidence) => this.handleWatchdogDecision(evidence),
-      });
-      // Start at the executor boundary so imports, subscriptions, prompt
-      // submission, and a silent first SDK event are all covered.
-      this.recordPulse('sdk_started', this.config.tool);
-    }
+    const idleTimeoutMs =
+      this.config.tool === 'claude-code'
+        ? watchdogConfig.claude_idle_timeout_ms
+        : this.config.tool === 'codex'
+          ? watchdogConfig.codex_idle_timeout_ms
+          : null;
+    this.watchdog = new SdkWatchdog({
+      mode: watchdogConfig.mode,
+      firstProgressTimeoutMs: watchdogConfig.first_progress_timeout_ms,
+      idleTimeoutMs,
+      sdkVersion: getSdkActivityVersion(this.config.tool),
+      onDecision: (evidence) => this.handleWatchdogDecision(evidence),
+    });
+    // Start at the executor boundary so imports, subscriptions, prompt
+    // submission, and a silent first SDK event are all covered.
+    this.recordPulse('sdk_started', this.config.tool);
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -318,7 +317,7 @@ export class AgorExecutor {
     kind: Parameters<ExecutorHeartbeatHandle['recordPulse']>[0],
     detail?: string
   ) {
-    this.heartbeat?.recordPulse(kind, detail);
+    this.lastPulseSequence = this.heartbeat?.recordPulse(kind, detail) ?? this.lastPulseSequence;
     this.watchdog?.record(kind, detail);
   }
 
@@ -329,7 +328,11 @@ export class AgorExecutor {
     let acknowledged = false;
     const report = this.client
       .service('tasks')
-      .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
+      .reportSdkHealthFailure({
+        ...evidence,
+        task_id: this.config.taskId,
+        pulse_sequence_at_detection: this.lastPulseSequence,
+      })
       .then((task) => {
         acknowledged = true;
         this.handleTaskLifecycleUpdate(task);

@@ -1,7 +1,7 @@
 import type { ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
 import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
-export type SdkActivityAdapter = 'claude-code' | 'gemini' | 'copilot' | 'opencode';
+export type SdkActivityAdapter = 'claude-code' | 'gemini' | 'copilot' | 'opencode' | 'cursor';
 type SdkVersionAdapter = SdkActivityAdapter | 'codex';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
 
@@ -11,6 +11,7 @@ export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkVersionAdapter, string> = 
   gemini: '@google/gemini-cli-core@0.31.0',
   copilot: '@github/copilot-sdk@0.2.2',
   opencode: '@opencode-ai/sdk@1.14.33',
+  cursor: '@cursor/sdk@1.0.23',
 };
 
 export function getSdkActivityVersion(adapter: string): string | undefined {
@@ -51,6 +52,14 @@ const PROGRESS = new Set([
   'opencode:message.updated',
   'opencode:message.part.updated',
   'opencode:session.status',
+  'cursor:assistant',
+  'cursor:thinking',
+  'cursor:tool_call',
+  'cursor:status',
+  'cursor:system',
+  'cursor:request',
+  'cursor:task',
+  'cursor:user',
 ]);
 
 function boundedDetail(value: string): string {
@@ -96,7 +105,6 @@ interface WatchdogState {
   firstProgressAt?: number;
   idleAnchor?: number;
   pausedAt?: number;
-  activeOperationCount: number;
   unknownCount: number;
   unknownReported: boolean;
 }
@@ -110,12 +118,7 @@ function inspectSdkWatchdog(
   firstProgressTimeoutMs: number,
   idleTimeoutMs: number | null
 ): { reason?: WatchdogReason; nextCheckAt?: number } {
-  if (
-    mode === 'disabled' ||
-    state.startedAt === undefined ||
-    state.pausedAt !== undefined ||
-    state.activeOperationCount > 0
-  ) {
+  if (mode === 'disabled' || state.startedAt === undefined || state.pausedAt !== undefined) {
     return {};
   }
   if (state.firstProgressAt === undefined) {
@@ -150,7 +153,6 @@ function inspectSdkWatchdog(
 
 export class SdkWatchdog {
   private state: WatchdogState = {
-    activeOperationCount: 0,
     unknownCount: 0,
     unknownReported: false,
   };
@@ -197,20 +199,6 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (
-        detail === 'tool.start' ||
-        detail === 'operation.start' ||
-        detail === 'background_task.start'
-      ) {
-        this.state.activeOperationCount++;
-      }
-      if (
-        detail === 'tool.complete' ||
-        detail === 'operation.complete' ||
-        detail === 'background_task.complete'
-      ) {
-        this.state.activeOperationCount = Math.max(0, this.state.activeOperationCount - 1);
-      }
     }
     this.check();
   }

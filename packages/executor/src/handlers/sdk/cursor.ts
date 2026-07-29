@@ -29,6 +29,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import { reportSdkActivity } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
@@ -434,6 +435,7 @@ export async function executeCursorTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
+  onPulse?: StreamingCallbacks['onPulse'];
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
@@ -461,7 +463,7 @@ export async function executeCursorTask(params: {
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId, params.onPulse);
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -539,6 +541,7 @@ export async function executeCursorTask(params: {
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
+        reportSdkActivity(callbacks.onPulse, 'cursor', event.type);
         if (params.abortController.signal.aborted) {
           await currentRun.cancel();
           break;

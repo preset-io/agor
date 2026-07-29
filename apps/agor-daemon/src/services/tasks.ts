@@ -1308,6 +1308,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     for (const [name, value] of Object.entries({
       elapsed_ms: data.elapsed_ms,
       unknown_event_count: data.unknown_event_count,
+      pulse_sequence_at_detection: data.pulse_sequence_at_detection,
     })) {
       if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
         throw new BadRequest(`${name} must be a non-negative safe integer`);
@@ -1349,6 +1350,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       detected_at: new Date().toISOString(),
       tool: session.agentic_tool,
       last_pulse: current.latest_executor_pulse,
+      pulse_sequence_at_detection: data.pulse_sequence_at_detection,
       elapsed_ms: data.elapsed_ms,
       watchdog_action: action,
       unknown_event_count: data.unknown_event_count,

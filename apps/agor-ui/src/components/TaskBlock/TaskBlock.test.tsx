@@ -30,6 +30,7 @@ const observedSdkFailure = {
   detected_at: '2026-07-23T20:03:00.000Z',
   tool: 'codex',
   watchdog_action: 'would_fire',
+  pulse_sequence_at_detection: 1,
   termination: 'not_requested',
 } satisfies NonNullable<Task['sdk_failure']>;
 
@@ -350,14 +351,14 @@ describe('TaskBlock SDK failure presentation', () => {
     expect(message.isThinking).toBe(true);
   });
 
-  it('returns to ordinary running presentation after strictly later progress', () => {
+  it('uses pulse order rather than daemon receipt time to recognize later progress', () => {
     renderTaskBlock(
       makeTask({
         sdk_failure: observedSdkFailure,
         latest_executor_pulse: {
           sequence: 2,
           kind: 'progress',
-          observed_at: '2026-07-23T20:03:01.000Z',
+          observed_at: '2026-07-23T20:02:59.000Z',
         },
       }),
       true,
@@ -366,6 +367,24 @@ describe('TaskBlock SDK failure presentation', () => {
 
     expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
     expectRunningPresentation(true);
+  });
+
+  it('keeps observe recovery resolved while a normal Stop is in progress', () => {
+    renderTaskBlock(
+      makeTask({
+        status: TaskStatus.STOPPING,
+        sdk_failure: observedSdkFailure,
+        latest_executor_progress: {
+          sequence: 2,
+          kind: 'progress',
+          observed_at: '2026-07-23T20:03:01.000Z',
+        },
+      }),
+      true
+    );
+
+    expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Monitoring only/)).not.toBeInTheDocument();
   });
 
   it.each([
@@ -413,15 +432,15 @@ describe('TaskBlock SDK failure presentation', () => {
   });
 
   it.each([
-    ['equal progress timestamp', 'progress', '2026-07-23T20:03:00.000Z'],
-    ['invalid progress timestamp', 'progress', 'not-a-date'],
+    ['equal progress sequence', 'progress', '2026-07-23T20:03:01.000Z'],
+    ['invalid timestamp at the same sequence', 'progress', 'not-a-date'],
     ['later wait pulse', 'waiting', '2026-07-23T20:03:01.000Z'],
   ] as const)('keeps the diagnosis active for %s', (_case, kind, observedAt) => {
     renderTaskBlock(
       makeTask({
         sdk_failure: observedSdkFailure,
         latest_executor_pulse: {
-          sequence: 2,
+          sequence: 1,
           kind,
           observed_at: observedAt,
         },

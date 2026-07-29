@@ -145,14 +145,14 @@ describe('SdkWatchdog', () => {
     expect(decisions).toHaveLength(1);
   });
 
-  it('pauses post-progress supervision while an operation is active', () => {
+  it.each([
+    'operation.start',
+    'tool.start',
+    'background_task.start',
+  ])('does not let a missing completion for %s suspend supervision', (detail) => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
-    watchdog.record('progress', 'operation.start');
-    vi.advanceTimersByTime(20_000);
-    expect(decisions).toEqual([]);
-
-    watchdog.record('progress', 'operation.complete');
+    watchdog.record('progress', detail);
     vi.advanceTimersByTime(1_999);
     expect(decisions).toEqual([]);
     vi.advanceTimersByTime(1);
@@ -226,49 +226,6 @@ describe('SdkWatchdog', () => {
     watchdog.record('sdk_started', 'permission.timeout');
     vi.advanceTimersByTime(1_000);
     expect(decisions[0]?.reason).toBe('no_first_progress');
-  });
-
-  it('pauses idle policy while a known tool is active', () => {
-    const { watchdog, decisions } = harness();
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    vi.advanceTimersByTime(1_000);
-    watchdog.record('progress', 'tool.start');
-    vi.advanceTimersByTime(10_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
-  });
-
-  it('pauses idle policy while an SDK background task is active', () => {
-    const { watchdog, decisions } = harness();
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    watchdog.record('progress', 'background_task.start');
-    vi.advanceTimersByTime(10_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('progress', 'background_task.complete');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
-  });
-
-  it('keeps idle policy paused until every parallel tool completes', () => {
-    const { watchdog, decisions } = harness();
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    watchdog.record('progress', 'tool.start');
-    watchdog.record('progress', 'tool.start');
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(10_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(2_000);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 
   it('does nothing when disabled or stopped', () => {

@@ -2056,17 +2056,21 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     'mcp_tool_call',
     'reasoning',
     'web_search',
-    'future_operation',
-  ])('normalizes %s item lifecycle as a generic active operation', (itemType) => {
+  ])('normalizes known %s item lifecycle as progress', (itemType) => {
     const onActivity = vi.fn();
     reportCodexActivity(onActivity, { type: 'item.started', item: { type: itemType } });
     reportCodexActivity(onActivity, { type: 'item.updated', item: { type: itemType } });
     reportCodexActivity(onActivity, { type: 'item.completed', item: { type: itemType } });
-    expect(onActivity.mock.calls).toEqual([
-      ['progress', 'operation.start'],
-      ['progress'],
-      ['progress', 'operation.complete'],
-    ]);
+    expect(onActivity.mock.calls).toEqual([['progress'], ['progress'], ['progress']]);
+  });
+
+  it('does not treat a future item lifecycle as a supervision lease', () => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, {
+      type: 'item.started',
+      item: { type: 'future_operation' },
+    });
+    expect(onActivity).toHaveBeenCalledWith('unknown_activity');
   });
 
   it('keeps todo lifecycle as progress without suspending supervision', () => {

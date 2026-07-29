@@ -40,6 +40,34 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
+  it('still persists coalesced SDK pulses when periodic heartbeats are disabled', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({
+        client,
+        taskId: 'task-1',
+        enabled: false,
+        intervalMs: 1000,
+      });
+
+      handle.recordPulse('progress', 'item.completed');
+      handle.recordPulse('waiting', 'permission.request');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(reportRuntimeTelemetry).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reportRuntimeTelemetry).toHaveBeenCalledWith({
+        task_id: 'task-1',
+        pulse: { sequence: 2, kind: 'waiting', detail: 'permission.request' },
+        progress: { sequence: 1, kind: 'progress', detail: 'item.completed' },
+      });
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces many pulses into the latest fact at heartbeat cadence', async () => {
     vi.useFakeTimers();
     try {

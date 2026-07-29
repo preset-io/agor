@@ -501,12 +501,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       task.latest_executor_progress ??
       (task.latest_executor_pulse?.kind === 'progress' ? task.latest_executor_pulse : undefined);
     const laterObserveProgress =
-      task.status === TaskStatus.RUNNING &&
       isActionableSdkFailure &&
       sdkFailure?.watchdog_action === 'would_fire' &&
       sdkFailure.termination === 'not_requested' &&
       latestExecutorProgress &&
-      Date.parse(latestExecutorProgress.observed_at) > Date.parse(sdkFailure.detected_at);
+      (sdkFailure.pulse_sequence_at_detection !== undefined
+        ? latestExecutorProgress.sequence > sdkFailure.pulse_sequence_at_detection
+        : Date.parse(latestExecutorProgress.observed_at) > Date.parse(sdkFailure.detected_at));
     const activeSdkFailure =
       sdkFailure &&
       isActionableSdkFailure &&

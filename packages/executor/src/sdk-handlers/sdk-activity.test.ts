@@ -12,6 +12,7 @@ describe('SDK activity mapping', () => {
     ['gemini', 'content'],
     ['copilot', 'assistant.message_delta'],
     ['opencode', 'message.part.updated'],
+    ['cursor', 'assistant'],
   ] as const)('%s maps healthy activity to progress', (adapter, event) => {
     expect(mapSdkActivity(adapter, event)).toEqual({ kind: 'progress', detail: event });
   });
@@ -21,6 +22,7 @@ describe('SDK activity mapping', () => {
     ['gemini', 'future.event'],
     ['copilot', 'future.event'],
     ['opencode', 'future.event'],
+    ['cursor', 'future.event'],
   ] as const)('%s keeps unknown activity visible but non-progressing', (adapter, event) => {
     expect(mapSdkActivity(adapter, event)).toEqual({
       kind: 'unknown_activity',
@@ -46,7 +48,7 @@ describe('SDK activity version manifest', () => {
   it('matches every reviewed resolved dependency version', () => {
     const lockfile = readFileSync(new URL('../../../../pnpm-lock.yaml', import.meta.url), 'utf8');
     expect(Object.keys(SDK_ACTIVITY_VERSION_MANIFEST).sort()).toEqual(
-      ['claude-code', 'codex', 'gemini', 'copilot', 'opencode'].sort()
+      ['claude-code', 'codex', 'gemini', 'copilot', 'opencode', 'cursor'].sort()
     );
     for (const dependency of Object.values(SDK_ACTIVITY_VERSION_MANIFEST)) {
       expect(lockfile).toContain(`'${dependency}':`);

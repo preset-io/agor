@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const runtime = vi.hoisted(() => ({
   execute: vi.fn().mockResolvedValue(undefined),
   initialize: vi.fn().mockResolvedValue(undefined),
-  recordPulse: vi.fn(),
+  recordPulse: vi.fn(() => 1),
   stopHeartbeat: vi.fn(),
   watchdogOptions: [] as Array<Record<string, unknown>>,
 }));
@@ -85,13 +85,16 @@ describe('AgorExecutor watchdog handoff', () => {
     runtime.watchdogOptions.length = 0;
   });
 
-  it('starts SDK observation before invoking the tool', async () => {
+  it.each([
+    'opencode',
+    'cursor',
+  ] as const)('starts %s SDK observation before invoking the tool', async (tool) => {
     const executor = new AgorExecutor({
       sessionToken: 'token',
       sessionId: 'session-1',
       taskId: 'task-1',
       prompt: 'prompt',
-      tool: 'opencode',
+      tool,
       daemonUrl: 'http://daemon',
       resolvedConfig: {
         execution: {
@@ -112,7 +115,7 @@ describe('AgorExecutor watchdog handoff', () => {
 
     await executor.executeTask();
 
-    expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', 'opencode');
+    expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', tool);
     expect(runtime.recordPulse.mock.invocationCallOrder[0]).toBeLessThan(
       runtime.execute.mock.invocationCallOrder[0]!
     );
@@ -122,6 +125,7 @@ describe('AgorExecutor watchdog handoff', () => {
     ['claude-code', 2_000],
     ['codex', 3_000],
     ['gemini', null],
+    ['cursor', null],
   ] as const)('selects only the generic idle timeout for %s', async (tool, idleTimeoutMs) => {
     const executor = harness(() => Promise.resolve(), tool, { claude: 2_000, codex: 3_000 });
 
@@ -150,6 +154,23 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(executor.abortController.signal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(100);
     expect(exit).toHaveBeenCalledWith(70);
+  });
+
+  it('reports the executor-local pulse sequence captured at detection', async () => {
+    const reportSdkHealthFailure = vi.fn().mockResolvedValue({});
+    const executor = harness(reportSdkHealthFailure) as ReturnType<typeof harness> & {
+      lastPulseSequence: number;
+    };
+    executor.lastPulseSequence = 7;
+
+    await executor.handleWatchdogDecision({
+      ...evidence,
+      watchdog_action: 'would_fire',
+    });
+
+    expect(reportSdkHealthFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ pulse_sequence_at_detection: 7 })
+    );
   });
 
   it('aborts immediately on the durable stopping patch and reports quiescence', async () => {
