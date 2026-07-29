@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
 
 describe('Postgres migrations', () => {
@@ -33,5 +36,69 @@ describe('Postgres migrations', () => {
       /ALTER COLUMN "last_executor_heartbeat_at" TYPE timestamp with time zone/i
     );
     expect(heartbeatMigration).toMatch(/AT TIME ZONE 'UTC'/i);
+  });
+});
+
+describe('SDK session storage retirement migrations', () => {
+  it('discards SQLite snapshot payloads while preserving task data', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-storage-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      await client.execute(`
+        CREATE TABLE tasks (
+          task_id text PRIMARY KEY NOT NULL,
+          session_md5 text,
+          data text NOT NULL
+        )
+      `);
+      await client.execute(`
+        CREATE TABLE serialized_sessions (
+          id text PRIMARY KEY NOT NULL,
+          payload blob
+        )
+      `);
+      await client.execute(
+        `INSERT INTO tasks (task_id, session_md5, data)
+         VALUES ('task-1', 'legacy-hash', '{"preserved":true}')`
+      );
+      await client.execute(
+        `INSERT INTO serialized_sessions (id, payload)
+         VALUES ('snapshot-1', X'1F8B0800')`
+      );
+
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0072_drop_serialized_sessions.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const legacyTable = await client.execute(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name = 'serialized_sessions'`
+      );
+      const taskColumns = await client.execute('PRAGMA table_info(tasks)');
+      const task = await client.execute('SELECT task_id, data FROM tasks');
+
+      expect(legacyTable.rows).toHaveLength(0);
+      expect(taskColumns.rows.map((column) => column.name)).not.toContain('session_md5');
+      expect(task.rows).toEqual([{ task_id: 'task-1', data: '{"preserved":true}' }]);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('explicitly drops the legacy table and task hash column in Postgres', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0067_drop_serialized_sessions.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain('DROP TABLE "serialized_sessions"');
+    expect(migration).toContain('ALTER TABLE "tasks" DROP COLUMN "session_md5"');
+    expect(migration).toContain('payloads are intentionally discarded');
   });
 });

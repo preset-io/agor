@@ -1,5 +1,11 @@
 // src/types/schedule.ts
-import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  PersistedAgenticToolName,
+} from './agentic-tool';
+import { isAgenticToolName } from './agentic-tool';
 import type {
   AgenticToolDefaultConfigurationReference,
   AgenticToolPresetID,
@@ -30,7 +36,13 @@ export type ScheduleID = UUID;
  * blob) get `utc` to preserve today's hardcoded-UTC behavior. New
  * schedules default to `local`.
  */
-export type TimezoneMode = 'local' | 'utc';
+export const TIMEZONE_MODES = ['local', 'utc'] as const;
+export type TimezoneMode = (typeof TIMEZONE_MODES)[number];
+
+/** Narrow untyped transport data before it reaches schedule persistence. */
+export function isTimezoneMode(value: unknown): value is TimezoneMode {
+  return TIMEZONE_MODES.some((mode) => mode === value);
+}
 
 /**
  * Agentic-tool configuration for a scheduled session.
@@ -97,6 +109,24 @@ type InlineScheduleAgenticToolConfig = {
 
 export type ScheduleAgenticToolConfig = ScheduleAgenticToolConfigBase &
   (ReferencedScheduleAgenticToolConfig | InlineScheduleAgenticToolConfig);
+
+/**
+ * Storage-facing schedule configuration.
+ *
+ * Historical rows may name a removed tool. Readers preserve that identifier;
+ * create/update and runtime boundaries narrow it through
+ * {@link ScheduleAgenticToolConfig} instead of reinterpreting it.
+ */
+export type PersistedScheduleAgenticToolConfig = Omit<ScheduleAgenticToolConfig, 'agentic_tool'> & {
+  agentic_tool: PersistedAgenticToolName;
+};
+
+/** Narrow a storage-facing configuration before using it at a current runtime/write boundary. */
+export function isActiveScheduleAgenticToolConfig(
+  config: PersistedScheduleAgenticToolConfig | undefined
+): config is ScheduleAgenticToolConfig {
+  return config !== undefined && isAgenticToolName(config.agentic_tool);
+}
 
 /**
  * First-class schedule entity.
@@ -174,7 +204,7 @@ export interface Schedule {
    * Agentic-tool configuration selection. Preset references resolve live for each run.
    * See `ScheduleAgenticToolConfig`.
    */
-  agentic_tool_config: ScheduleAgenticToolConfig;
+  agentic_tool_config: PersistedScheduleAgenticToolConfig;
 
   /** MCP servers attached independently of the agentic-tool configuration. */
   mcp_server_ids?: string[];
@@ -244,3 +274,94 @@ export interface Schedule {
    */
   created_by: UUID;
 }
+
+/**
+ * Public create DTO.
+ *
+ * Runtime-owned identity, audit, and cursor fields are deliberately omitted,
+ * and removed tools are never accepted for new writes. Fields required by the
+ * repository are required here as well so clients cannot advertise incomplete
+ * creates as valid.
+ */
+interface ScheduleCreateBaseData {
+  branch_id: BranchID;
+  name: string;
+  description?: string;
+  cron_expression: string;
+  prompt: string;
+  agentic_tool_config: ScheduleAgenticToolConfig;
+  mcp_server_ids?: string[];
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}
+
+/**
+ * A new schedule must state how its cron is interpreted. Local schedules also
+ * require an IANA timezone; UTC schedules cannot accidentally persist a
+ * meaningless local-timezone value.
+ */
+export type ScheduleCreateData = ScheduleCreateBaseData &
+  ({ timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc'; timezone?: never });
+
+/**
+ * Public partial-update DTO. Branch reparenting and PUT-style replacement are
+ * intentionally unsupported.
+ */
+export interface SchedulePatchData {
+  name?: string;
+  description?: string;
+  cron_expression?: string;
+  timezone_mode?: TimezoneMode;
+  timezone?: string;
+  prompt?: string;
+  agentic_tool_config?: ScheduleAgenticToolConfig;
+  mcp_server_ids?: string[];
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}
+
+type ExhaustiveWriteFields<T, Fields extends readonly (keyof T)[]> =
+  Exclude<keyof T, Fields[number]> extends never ? Fields : never;
+
+const SCHEDULE_CREATE_WRITE_FIELD_VALUES = [
+  'branch_id',
+  'name',
+  'description',
+  'cron_expression',
+  'timezone_mode',
+  'timezone',
+  'prompt',
+  'agentic_tool_config',
+  'mcp_server_ids',
+  'enabled',
+  'retention',
+  'allow_concurrent_runs',
+] as const;
+
+/** Canonical, compile-time-exhaustive allowlist for public schedule creates. */
+export const SCHEDULE_CREATE_WRITE_FIELDS: ExhaustiveWriteFields<
+  ScheduleCreateData,
+  typeof SCHEDULE_CREATE_WRITE_FIELD_VALUES
+> = SCHEDULE_CREATE_WRITE_FIELD_VALUES;
+
+const SCHEDULE_PATCH_WRITE_FIELD_VALUES = [
+  'name',
+  'description',
+  'cron_expression',
+  'timezone_mode',
+  'timezone',
+  'prompt',
+  'agentic_tool_config',
+  'mcp_server_ids',
+  'enabled',
+  'retention',
+  'allow_concurrent_runs',
+] as const;
+
+/** Canonical, compile-time-exhaustive allowlist for public schedule patches. */
+export const SCHEDULE_PATCH_WRITE_FIELDS: ExhaustiveWriteFields<
+  SchedulePatchData,
+  typeof SCHEDULE_PATCH_WRITE_FIELD_VALUES
+> = SCHEDULE_PATCH_WRITE_FIELD_VALUES;

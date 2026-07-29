@@ -13,10 +13,11 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode } from '@agor-live/client';
-import { Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
+import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
+import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
   getUserAgenticToolDefault,
@@ -62,8 +63,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [configPreset, setConfigPreset] = useState<'parent' | 'custom'>('parent');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>(
-    session?.agentic_tool || 'claude-code'
+    isAgenticToolName(session?.agentic_tool) ? session.agentic_tool : 'claude-code'
   );
+  const hasActiveParentTool = isAgenticToolName(session?.agentic_tool);
 
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
@@ -114,7 +116,9 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     if (open && session) {
       setConfigPreset('parent');
       setEnvVarNames([]);
-      const agentTool = session.agentic_tool || 'claude-code';
+      const agentTool = isAgenticToolName(session.agentic_tool)
+        ? session.agentic_tool
+        : 'claude-code';
       form.setFieldsValue({
         prompt: initialPrompt,
         enableCallback: session.callback_config?.enabled,
@@ -129,7 +133,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   // effective if the user submits without touching individual fields.
   useEffect(() => {
     if (!open || !session || configPreset !== 'custom') return;
-    const agentTool = session.agentic_tool || 'claude-code';
+    if (!isAgenticToolName(session.agentic_tool)) return;
+    const agentTool = session.agentic_tool;
     form.setFieldsValue({
       ...getCustomConfigDefaults(agentTool),
       mcpServerIds: currentUser?.default_mcp_server_ids || [],
@@ -145,6 +150,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   ]);
 
   const handleOk = async () => {
+    if (!hasActiveParentTool) return;
+
     // Validate fields first. If validation fails, bail out WITHOUT clearing
     // the form — the user's prompt text must be preserved.
     try {
@@ -180,12 +187,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             spawnConfig.presetId = values.agenticToolPresetId;
           } else {
             spawnConfig.permissionMode = values.permissionMode;
-            // Fold the standalone effort field back into model_config.
-            spawnConfig.modelConfig = values.modelConfig
-              ? { ...values.modelConfig, ...(values.effort ? { effort: values.effort } : {}) }
-              : values.effort
-                ? { effort: values.effort }
-                : undefined;
+            spawnConfig.modelConfig = buildModelConfigFromFormValues({
+              modelConfig: values.modelConfig,
+              effort: values.effort,
+            });
             spawnConfig.codexSandboxMode = values.codexSandboxMode;
             spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
             spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
@@ -255,6 +260,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       afterClose={afterClose}
       okText={`${actionLabel} Session`}
       confirmLoading={loading}
+      okButtonProps={{ disabled: !hasActiveParentTool }}
       width={700}
       forceRender
     >
@@ -263,6 +269,16 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           {actionDescription}
         </Typography.Text>
       </div>
+
+      {!hasActiveParentTool && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This historical session cannot be continued"
+          description="The session uses a removed agentic tool. Its transcript remains readable, but fork and spawn are disabled."
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Form
         form={form}
@@ -329,6 +345,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                       form.setFieldsValue(getCustomConfigDefaults(agentTool));
                     }}
                     columns={2}
+                    fallbackToFirstVisibleAgent
                   />
                 </Form.Item>
 

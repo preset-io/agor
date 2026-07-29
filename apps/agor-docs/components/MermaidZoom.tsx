@@ -94,7 +94,6 @@ export function MermaidZoom() {
       onClick={close}
       onKeyDown={(e) => e.key === 'Escape' && close()}
     >
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: buttons carry their own handlers; this only stops backdrop close */}
       <div className={styles.toolbar} onClick={(e) => e.stopPropagation()}>
         <button
           type="button"
@@ -117,7 +116,6 @@ export function MermaidZoom() {
           ✕
         </button>
       </div>
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop handles keys; this just stops propagation */}
       <div
         ref={viewportRef}
         className={styles.viewport}

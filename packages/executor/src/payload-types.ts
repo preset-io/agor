@@ -9,6 +9,7 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
+import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -71,16 +72,8 @@ const GitUrlSchema = z.string().refine(isGitUrl, {
 /**
  * Tool types supported by the prompt command
  */
-export const ToolTypeSchema = z.enum([
-  'claude-code',
-  'claude-code-cli',
-  'gemini',
-  'codex',
-  'opencode',
-  'copilot',
-  'cursor',
-]);
-export type ToolType = z.infer<typeof ToolTypeSchema>;
+export const ToolTypeSchema = z.enum(AGENTIC_TOOL_NAMES);
+export type ToolType = AgenticToolName;
 
 /**
  * Permission modes for agent execution
@@ -422,6 +415,9 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
     /** Path to the branch to remove */
     branchPath: z.string(),
 
+    /** Tenant-aware root that must contain branchPath */
+    branchesRoot: z.string(),
+
     /** Force removal even if dirty */
     force: z.boolean().optional(),
 
@@ -503,6 +499,117 @@ export const BranchFilesListPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type BranchFilesListPayload = z.infer<typeof BranchFilesListPayloadSchema>;
+
+export const BranchFilesBrowsePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.browse'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+  }),
+});
+
+export type BranchFilesBrowsePayload = z.infer<typeof BranchFilesBrowsePayloadSchema>;
+
+export const BranchFilesReadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.files.read'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    filePath: z.string().min(1),
+  }),
+});
+
+export type BranchFilesReadPayload = z.infer<typeof BranchFilesReadPayloadSchema>;
+
+export const BranchFilesystemStatusPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.filesystem.status'),
+  sessionToken: z.string(),
+  params: z
+    .object({
+      branchId: z.string().uuid().optional(),
+      branchIds: z.array(z.string().uuid()).max(10000).optional(),
+    })
+    .refine((value) => value.branchId !== undefined || value.branchIds !== undefined, {
+      message: 'branchId or branchIds is required',
+    }),
+});
+
+export type BranchFilesystemStatusPayload = z.infer<typeof BranchFilesystemStatusPayloadSchema>;
+
+export const BranchArtifactPublishPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.publish'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+    publishData: z.record(z.string(), z.unknown()),
+  }),
+});
+
+export type BranchArtifactPublishPayload = z.infer<typeof BranchArtifactPublishPayloadSchema>;
+
+export const BranchArtifactLandPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.land'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    artifactId: z.string().uuid(),
+    subpath: z.string().optional(),
+    overwrite: z.boolean().optional(),
+  }),
+});
+
+export type BranchArtifactLandPayload = z.infer<typeof BranchArtifactLandPayloadSchema>;
+
+export const BranchArtifactValidatePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.artifact.validate'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+  }),
+});
+
+export type BranchArtifactValidatePayload = z.infer<typeof BranchArtifactValidatePayloadSchema>;
+
+export const BranchKnowledgeWritePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.knowledge.write'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+    content: z.string(),
+    sidecar: z.record(z.string(), z.unknown()),
+    overwrite: z.boolean().optional(),
+  }),
+});
+export type BranchKnowledgeWritePayload = z.infer<typeof BranchKnowledgeWritePayloadSchema>;
+
+export const BranchKnowledgeReadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.knowledge.read'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    subpath: z.string().min(1),
+  }),
+});
+export type BranchKnowledgeReadPayload = z.infer<typeof BranchKnowledgeReadPayloadSchema>;
+
+export const BranchSlackFileUploadPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.gateway.slack-file-upload'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    filePath: z.string().min(1),
+    gatewayChannelId: z.string().uuid(),
+    channel: z.string().min(1),
+    threadTs: z.string().optional(),
+    filename: z.string().optional(),
+    comment: z.string().optional(),
+    maxBytes: z.number().int().positive(),
+  }),
+});
+export type BranchSlackFileUploadPayload = z.infer<typeof BranchSlackFileUploadPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Branch Inspect Payload
@@ -696,8 +803,12 @@ export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** Repo being deleted; executor fetches/derives managed paths itself */
+    /** Repo being deleted; executor fetches the concrete managed paths itself. */
     repoId: z.string().uuid(),
+    /** Tenant-scoped root that is allowed to contain the managed repository. */
+    reposRoot: z.string().min(1),
+    /** Tenant-scoped root that is allowed to contain managed branches. */
+    branchesRoot: z.string().min(1),
   }),
 });
 
@@ -883,48 +994,13 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
 
   params: z.object({
     /** Action: create new tab, focus existing, or close-by-name */
-    action: z.enum(['create', 'focus', 'close']),
+    action: z.enum(['create', 'focus']),
 
     /** Tab name (branch name) */
     tabName: z.string(),
 
     /** Working directory (for 'create' action) */
     cwd: z.string().optional(),
-
-    /**
-     * Optional binary to run inside the new tab.
-     * Maps to `zellij action new-tab --command <bin>`.
-     *
-     * Use case: spawn the `claude` shell binary directly into a tab so
-     * its REPL is the tab's foreground process. Without this the tab
-     * opens a default shell.
-     *
-     * Only honored when `action === 'create'`.
-     */
-    command: z.string().optional(),
-
-    /**
-     * Argv passed to `command`. Each element produces a separate
-     * `--args <one>` repetition on the `zellij action new-tab` invocation
-     * (Zellij requires this rather than space-separated argv).
-     *
-     * Ignored when `command` is omitted.
-     */
-    commandArgs: z.array(z.string()).optional(),
-
-    /**
-     * Force-recreate semantics for `action: 'create'`. Closes EVERY tab
-     * matching `tabName` before issuing `new-tab` — bypasses the
-     * default "tab exists → focus instead" auto-converse.
-     *
-     * Used by:
-     *   - `/sessions/:id/restart-cli` — always wants a fresh `claude`.
-     *   - The ensure-create path when the daemon detected the in-tab
-     *     `claude` is dead (pgrep returned no match).
-     *
-     * Ignored when `action !== 'create'`.
-     */
-    forceRecreate: z.boolean().optional(),
   }),
 });
 
@@ -945,6 +1021,15 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
   BranchFilesListPayloadSchema,
+  BranchFilesBrowsePayloadSchema,
+  BranchFilesReadPayloadSchema,
+  BranchFilesystemStatusPayloadSchema,
+  BranchArtifactPublishPayloadSchema,
+  BranchArtifactLandPayloadSchema,
+  BranchArtifactValidatePayloadSchema,
+  BranchKnowledgeWritePayloadSchema,
+  BranchKnowledgeReadPayloadSchema,
+  BranchSlackFileUploadPayloadSchema,
   BranchInspectPayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
@@ -1011,6 +1096,15 @@ export function getSupportedCommands(): string[] {
     'git.branch.remove',
     'git.branch.clean',
     'branch.files.list',
+    'branch.files.browse',
+    'branch.files.read',
+    'branch.filesystem.status',
+    'branch.artifact.publish',
+    'branch.artifact.land',
+    'branch.artifact.validate',
+    'branch.knowledge.write',
+    'branch.knowledge.read',
+    'branch.gateway.slack-file-upload',
     'branch.inspect',
     'branch.agor-yml.import',
     'branch.agor-yml.export',

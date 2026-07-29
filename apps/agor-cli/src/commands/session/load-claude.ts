@@ -19,6 +19,7 @@ import type {
   CreateSessionInput,
   MessageID,
   Repo,
+  Session,
   SessionID,
   TaskID,
   UUID,
@@ -146,7 +147,7 @@ export default class SessionLoadClaude extends BaseCommand {
           children: [],
         },
         tasks: [],
-      };
+      } satisfies Partial<Session> & { session_id: SessionID; created_by: string };
 
       // Create session in daemon
       const sessionsService = client.service('sessions');

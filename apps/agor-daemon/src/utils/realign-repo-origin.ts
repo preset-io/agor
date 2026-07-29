@@ -40,8 +40,7 @@ export async function ensureRepoOriginAlignedForRepo(
   if (!repo.local_path) return;
 
   const sessionToken = generateScopedServiceToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } },
-    params
+    app as unknown as { settings: { authentication?: { secret?: string } } }
   );
 
   spawnExecutorFireAndForget(

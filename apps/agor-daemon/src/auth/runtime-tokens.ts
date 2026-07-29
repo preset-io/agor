@@ -3,9 +3,8 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 export const RUNTIME_JWT_ISSUER = 'agor';
 export const RUNTIME_JWT_AUDIENCE = 'https://agor.dev';
-export const ARTIFACT_RUNTIME_JWT_AUDIENCE = 'agor:artifact-runtime';
 
-export type RuntimeTokenType = 'access' | 'refresh' | 'service' | 'executor-session' | 'artifact';
+export type RuntimeTokenType = 'access' | 'refresh' | 'service' | 'executor-session';
 
 export interface RuntimeTokenPayload {
   sub: UserID | string;

@@ -4,8 +4,14 @@
  * Ephemeral executor that:
  * 1. Connects to daemon via Feathers/WebSocket
  * 2. Executes exactly one task
- * 3. Listens for stop events while running
- * 4. Exits when task completes
+ * 3. Receives realtime permission resolutions while running
+ * 4. Receives task-scoped Stop control events over that socket
+ * 5. Exits when task completes
+ *
+ * The daemon persists Stop before publishing a private task-scoped control
+ * event. The durable Task patch/read remains reconnect and race recovery. The
+ * executor cooperatively aborts its SDK and reports quiescence; local process
+ * signals and remote heartbeat recovery remain containment fallbacks.
  */
 
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
@@ -15,6 +21,7 @@ import type {
   PermissionMode,
   PermissionScope,
   SessionID,
+  Task,
   TaskID,
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
@@ -22,14 +29,10 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
-import {
-  getSdkActivityVersion,
-  isSdkHealthAbort,
-  markSdkHealthAbort,
-  SdkWatchdog,
-} from './sdk-watchdog.js';
+import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
+import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
 
@@ -63,6 +66,8 @@ export class AgorExecutor {
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
+  private terminationRequest: Task['termination_request'];
+  private terminationReport: Promise<void> | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -77,7 +82,7 @@ export class AgorExecutor {
     status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
     errorMessage?: string
   ): Promise<void> {
-    if (!this.client || isSdkHealthAbort(this.abortController)) return;
+    if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
     await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
   }
 
@@ -94,27 +99,37 @@ export class AgorExecutor {
     try {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
-      this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
+      this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken, {
+        onReauthenticated: () => this.refreshTerminationState(),
+      });
       executorDebug('[executor] Connected to daemon');
+
+      // Register before claiming so Stop cannot fall into the connect → listen
+      // gap. The durable-state refresh in the catch path covers Stop that won
+      // before this socket authenticated.
+      this.setupEventListeners();
+      this.setupShutdownHandlers();
 
       // Authentication is complete. Atomically claim the daemon-dispatched task
       // before starting heartbeats or SDK work; a late executor cannot revive a
       // stopped or terminal task.
-      await this.client.service('tasks').connectExecutor({ task_id: this.config.taskId });
-
-      // Setup event listeners
-      this.setupEventListeners();
-
-      // Setup graceful shutdown handlers
-      this.setupShutdownHandlers();
+      const connectedTask = await this.client
+        .service('tasks')
+        .connectExecutor({ task_id: this.config.taskId });
+      this.handleTaskLifecycleUpdate(connectedTask);
 
       // Execute the task
-      await this.executeTask();
+      if (!this.terminationRequest) await this.executeTask();
+      await this.reportTerminationComplete();
 
       // Exit successfully
       console.log('[executor] Task completed, exiting');
       process.exit(0);
     } catch (error) {
+      if (await this.recoverTerminationBeforeStart()) {
+        process.exit(0);
+        return;
+      }
       console.error('[executor] Fatal error:', error);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
@@ -127,12 +142,18 @@ export class AgorExecutor {
   /**
    * Setup event listeners for WebSocket events
    *
-   * Stop signaling is handled via Unix signals (SIGTERM/SIGKILL) from the daemon,
-   * not WebSocket events. The SIGTERM handler in setupShutdownHandlers() calls
-   * abortController.abort() for graceful shutdown.
+   * Task lifecycle patches are already durable and realtime, so Stop needs no
+   * second ephemeral command channel. Reconnect recovery reads the same Task.
    */
   private setupEventListeners(): void {
     if (!this.client) return;
+
+    this.client.service('tasks').on('patched', (data: unknown) => {
+      this.handleTaskLifecycleUpdate(data as Task);
+    });
+    this.client.service('tasks').on('termination_requested', (data: unknown) => {
+      this.handleTaskLifecycleUpdate(data as Task);
+    });
 
     // Listen for permission_resolved events
     this.client.service('messages').on('permission_resolved', (data: unknown) => {
@@ -165,6 +186,67 @@ export class AgorExecutor {
     executorDebug('[executor] Event listeners registered');
   }
 
+  private handleTaskLifecycleUpdate(task: Task): void {
+    if (
+      task.task_id !== this.config.taskId ||
+      task.status !== TaskStatus.STOPPING ||
+      !task.termination_request
+    ) {
+      return;
+    }
+    if (this.terminationRequest?.requested_at === task.termination_request.requested_at) return;
+
+    this.terminationRequest = task.termination_request;
+    console.log(
+      `[executor] Received ${task.termination_request.cause} termination request; stopping SDK`
+    );
+    markCoordinatorTerminationAbort(this.abortController);
+    this.heartbeat?.stop();
+    this.heartbeat = null;
+    this.watchdog?.stop();
+    this.watchdog = null;
+    this.abortController.abort();
+  }
+
+  private async refreshTerminationState(): Promise<void> {
+    if (!this.client) return;
+    const task = (await this.client.service('tasks').get(this.config.taskId)) as Task;
+    this.handleTaskLifecycleUpdate(task);
+  }
+
+  private async reportTerminationComplete(): Promise<void> {
+    if (!this.client || !this.terminationRequest) return;
+    if (!this.terminationReport) {
+      const report = this.client
+        .service('tasks')
+        .reportTerminationComplete({
+          task_id: this.config.taskId,
+          requested_at: this.terminationRequest.requested_at,
+        })
+        .then(() => {
+          console.log('[executor] Cooperative termination complete');
+        });
+      this.terminationReport = report;
+      void report.catch(() => {
+        if (this.terminationReport === report) this.terminationReport = null;
+      });
+    }
+    await this.terminationReport;
+  }
+
+  /** Handle Stop that atomically beat connectExecutor() without starting SDK work. */
+  private async recoverTerminationBeforeStart(): Promise<boolean> {
+    if (!this.client) return false;
+    try {
+      await this.refreshTerminationState();
+      if (!this.terminationRequest) return false;
+      await this.reportTerminationComplete();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Execute the task using the appropriate SDK
    */
@@ -172,6 +254,7 @@ export class AgorExecutor {
     if (!this.client) {
       throw new Error('Feathers client not initialized');
     }
+    if (this.terminationRequest || this.abortController.signal.aborted) return;
 
     this.isRunning = true;
 
@@ -243,8 +326,9 @@ export class AgorExecutor {
     const report = this.client
       .service('tasks')
       .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
-      .then(() => {
+      .then((task) => {
         acknowledged = true;
+        this.handleTaskLifecycleUpdate(task);
       })
       .catch((error) => console.error('[executor] Failed to report SDK health:', error));
     if (evidence.watchdog_action !== 'enforced') {

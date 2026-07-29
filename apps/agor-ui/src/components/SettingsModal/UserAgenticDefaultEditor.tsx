@@ -15,8 +15,7 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
   const form = Form.useFormInstance();
   const source = Form.useWatch('defaultSelectionSource', form) ?? 'workspace_default';
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
-  const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
-  const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(canonicalTool));
+  const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(tool));
   const inlineAllowed = settings?.inline_configuration_allowed !== false;
 
   useEffect(() => {
@@ -24,14 +23,14 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
     let active = true;
     void client
       .service('agentic-tool-presets')
-      .find({ query: { tool: canonicalTool } })
+      .find({ query: { tool } })
       .then((result) => {
         if (active) setPresets(Array.isArray(result) ? result : result.data);
       });
     return () => {
       active = false;
     };
-  }, [canonicalTool, client]);
+  }, [client, tool]);
 
   const workspaceDefault = presets.find((preset) => preset.is_default);
 

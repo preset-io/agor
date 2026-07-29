@@ -14,6 +14,7 @@ vi.mock('../../store/agorStore', () => ({
     selector({
       agenticToolSettingsByName: new Map([
         ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+        ['codex', { inline_configuration_allowed: storeSettings.inlineAllowed }],
       ]),
     }),
 }));
@@ -64,7 +65,23 @@ vi.mock('../PermissionModeSelector', async () => {
     ),
   };
 });
-vi.mock('../EffortSelector', () => ({ EffortSelector: () => <div data-testid="effort-select" /> }));
+vi.mock('../EffortSelector', () => ({
+  EffortSelector: ({
+    value,
+    onChange,
+    allowInherited,
+    levels,
+  }: {
+    value?: string;
+    onChange?: (value: string) => void;
+    allowInherited?: boolean;
+    levels?: readonly string[];
+  }) => (
+    <button type="button" data-testid="effort-select" onClick={() => onChange?.('medium')}>
+      {value ?? 'Inherited'}|{allowInherited ? 'clearable' : 'fixed'}|{levels?.join(',')}
+    </button>
+  ),
+}));
 vi.mock('../MCPServerSelect', () => ({ MCPServerSelect: () => <div data-testid="mcp-select" /> }));
 
 const makeClient = () =>
@@ -92,7 +109,7 @@ function Harness({
   user: User;
   client?: AgorClient | null;
   initialSource?: string;
-  tool?: 'claude-code' | 'opencode';
+  tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode';
 }) {
   const [form] = Form.useForm();
   return (
@@ -113,6 +130,7 @@ function Harness({
               provider: (form.getFieldValue('modelConfig') as { provider?: string } | undefined)
                 ?.provider,
               perm: form.getFieldValue('permissionMode'),
+              effort: form.getFieldValue('effort'),
             })}
           </span>
         )}
@@ -287,6 +305,39 @@ describe('AgenticConfigChipRow', () => {
       const state = JSON.parse(screen.getByTestId('state').textContent || '{}');
       expect(state).toMatchObject({ provider: 'openai', model: 'gpt-5' });
     });
+  });
+
+  it('shows inherited Codex effort and turns an explicit selection into a custom override', async () => {
+    const codexUser = {
+      user_id: 'codex-user',
+      default_agentic_config: {
+        codex: {
+          modelConfig: { model: 'gpt-5.6-sol' },
+          permissionMode: 'allow-all',
+        },
+      },
+    } as unknown as User;
+
+    render(<Harness user={codexUser} tool="codex" />);
+
+    const effortChip = await screen.findByTestId('effort-chip');
+    expect(effortChip).toHaveTextContent('Effort: Inherited');
+    expect(screen.queryByTestId('advisor-chip')).not.toBeInTheDocument();
+
+    fireEvent.click(effortChip);
+    const selector = await screen.findByTestId('effort-select');
+    expect(selector).toHaveTextContent('Inherited|clearable|low,medium,high,xhigh');
+    fireEvent.click(selector);
+
+    await waitFor(() => expect(screen.getByText('Custom')).toBeInTheDocument());
+    expect(screen.getByTestId('effort-chip')).toHaveTextContent('Effort: Medium');
+    expect(JSON.parse(screen.getByTestId('state').textContent || '{}').effort).toBe('medium');
+  });
+
+  it('does not render effort for unsupported tools', async () => {
+    render(<Harness user={{ user_id: 'gemini-user' } as User} tool="gemini" />);
+    await screen.findByTestId('permission-chip');
+    expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
   });
 });
 

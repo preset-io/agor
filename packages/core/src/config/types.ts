@@ -53,10 +53,10 @@ export interface AgorDaemonSettings {
   public_url?: string;
 
   /**
-   * Base URL for external/user-facing links (e.g., session URLs in Slack messages).
+   * Browser-reachable base URL for daemon endpoints.
    *
-   * Used to generate clickable URLs to sessions, boards, and other resources
-   * that are sent to external platforms like Slack, email, etc.
+   * Used for OAuth callbacks and artifact API grants. It is also the fallback
+   * origin for browser UI links when ui.base_url is not set.
    *
    * Defaults to `http://localhost:{port}` in development.
    * Should be set to your public domain in production (e.g., https://agor.example.com).
@@ -140,9 +140,10 @@ export interface AgorUISettings {
   /**
    * Public user-facing base URL for the UI.
    *
-   * Legacy/compatibility alias for daemon.base_url in older configs. New
-   * installs should prefer daemon.base_url so all external link builders share
-   * one setting.
+   * Set this when the browser UI is served from a different origin than the
+   * daemon, such as the two-process development setup. When omitted, browser
+   * links fall back to daemon.base_url. It also remains a compatibility
+   * fallback for older one-origin installations.
    */
   base_url?: string;
 
@@ -439,17 +440,6 @@ export interface AgorExecutionSettings {
   permission_timeout_ms?: number;
 
   /**
-   * Stateless filesystem mode for headless/k8s deployments without persistent volumes.
-   *
-   * When enabled, the agent SDK's session state (JSONL transcript file) is serialized
-   * into the Agor database after each turn and restored on demand when a new pod picks
-   * up a session. This allows sessions to survive pod restarts/rescheduling.
-   *
-   * Default: false (session files are expected to persist on the local filesystem)
-   */
-  stateless_fs_mode?: boolean;
-
-  /**
    * Executor command template for remote/containerized execution.
    *
    * When null/undefined (default), executors are spawned as local subprocesses.
@@ -463,6 +453,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
+   * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it
    * to `agor-executor --stdin`.
@@ -928,39 +919,27 @@ export interface AgorTeammateSettings {
 }
 
 /**
- * Per-vendor HTTP proxy configuration.
- *
- * Mounts a thin pass-through proxy at `/proxies/<vendor>/...` that forwards
- * bytes to `upstream/...`. Designed to let Sandpack artifacts call third-party
- * REST APIs that don't return CORS headers (Shortcut, Linear, Jira, etc.).
- *
- * Hard rules:
- *  - Pass-through bytes only — no transformation, no caching, no auth injection.
- *  - Read-only by default — `allowed_methods` defaults to `['GET']`.
- *  - Off by default — when no `proxies:` block is configured, the route is
- *    not mounted at all.
+ * Knowledge Base semantic search settings. Secrets are stored separately in the
+ * encrypted app_variables table; this config only carries non-secret defaults.
  */
-export interface AgorProxyConfig {
-  /**
-   * Bare scheme+host of the upstream API (no path prefix).
-   *
-   * Convention: `https://api.app.shortcut.com`, NOT
-   * `https://api.app.shortcut.com/api/v3`. The caller specifies the path
-   * tail. Must be `https://` — `http://` upstreams are rejected at startup.
-   */
-  upstream: string;
-
-  /** Optional human-readable label, surfaced in MCP discovery and docs. */
-  description?: string;
-
-  /** Optional link to the upstream's developer documentation. */
-  docs_url?: string;
-
-  /**
-   * HTTP methods the proxy will accept for this vendor. Defaults to `['GET']`
-   * (read-only-by-default rule). Operators opt into writes per vendor.
-   */
-  allowed_methods?: Array<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'>;
+export interface AgorKnowledgeSettings {
+  semantic_search?: {
+    enabled?: boolean;
+    provider?: 'openai' | 'voyage' | 'openai-compatible';
+    model?: string;
+    dimensions?: number;
+    chunking?: {
+      target_tokens?: number;
+      max_tokens?: number;
+      overlap_tokens?: number;
+      min_tokens?: number;
+    };
+    indexing?: {
+      paused?: boolean;
+      batch_size?: number;
+      concurrency?: number;
+    };
+  };
 }
 
 /**
@@ -973,6 +952,15 @@ export interface AgorProxyConfig {
  * accessed.
  */
 export interface AgorMultiTenancySettings {
+  /** Store tenant-owned filesystem data below a tenant-specific root. Defaults to false. */
+  filesystem_isolation_enabled?: boolean;
+
+  /**
+   * Parent directory for tenant data. Absolute paths and paths relative to
+   * `~/.agor` are supported. Defaults to `~/.agor/tenants`.
+   */
+  tenants_base_folder?: string;
+
   /** Multi-tenancy mode. Defaults to `static`. */
   mode?: 'static' | 'required_from_auth';
 
@@ -1022,16 +1010,6 @@ export interface AgorConfig {
 
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
-
-  /**
-   * HTTP proxy passthroughs for third-party APIs that don't return CORS
-   * headers (Shortcut, Linear, Jira, etc.). Keyed by vendor slug used in
-   * the route path: `/proxies/<vendor>/...`.
-   *
-   * Off by default: omit this block to disable the feature entirely.
-   * See `apps/agor-docs/pages/guide/api-proxies.mdx`.
-   */
-  proxies?: Record<string, AgorProxyConfig>;
 }
 
 /**
@@ -1047,4 +1025,5 @@ export type ConfigKey =
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
-  | `telemetry.${keyof AgorTelemetrySettings}`;
+  | `telemetry.${keyof AgorTelemetrySettings}`
+  | `multi_tenancy.${keyof AgorMultiTenancySettings}`;

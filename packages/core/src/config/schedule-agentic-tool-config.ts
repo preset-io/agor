@@ -1,6 +1,8 @@
-import type { ScheduleAgenticToolConfig } from '../types';
 import {
+  isAgenticToolName,
   normalizeAgenticToolDefaultConfigurationReference,
+  type PersistedScheduleAgenticToolConfig,
+  type ScheduleAgenticToolConfig,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '../types';
 
@@ -28,7 +30,7 @@ function normalizeDefaultReference(reference: string) {
   );
 }
 
-function hasDefinedInlineFields(config: ScheduleAgenticToolConfig): boolean {
+function hasDefinedInlineFields(config: PersistedScheduleAgenticToolConfig): boolean {
   return Object.entries(config).some(
     ([key, value]) => !SOURCE_FIELDS.has(key) && value !== undefined
   );
@@ -36,10 +38,16 @@ function hasDefinedInlineFields(config: ScheduleAgenticToolConfig): boolean {
 
 /** Canonicalize and enforce the exactly-one-source schedule configuration contract. */
 export function normalizeScheduleAgenticToolConfig(
-  config: ScheduleAgenticToolConfig
+  config: PersistedScheduleAgenticToolConfig
 ): ScheduleAgenticToolConfig {
+  if (!isAgenticToolName(config.agentic_tool)) {
+    throw new InvalidScheduleAgenticToolConfigError(
+      `Removed or unsupported schedule agentic tool: ${String(config.agentic_tool)}`
+    );
+  }
   const hasReference = config.configuration_reference !== undefined;
-  const hasPreset = config.preset_id !== undefined;
+  const presetId = config.preset_id;
+  const hasPreset = presetId !== undefined;
   const hasInline = hasDefinedInlineFields(config);
 
   if (hasReference) {
@@ -61,14 +69,36 @@ export function normalizeScheduleAgenticToolConfig(
     };
   }
 
-  if (!hasPreset) return config;
+  if (!hasPreset) {
+    return {
+      agentic_tool: config.agentic_tool,
+      ...(config.context_files !== undefined ? { context_files: config.context_files } : {}),
+      ...(config.permission_mode !== undefined ? { permission_mode: config.permission_mode } : {}),
+      ...(config.model_config !== undefined ? { model_config: config.model_config } : {}),
+      ...(config.codex_sandbox_mode !== undefined
+        ? { codex_sandbox_mode: config.codex_sandbox_mode }
+        : {}),
+      ...(config.codex_approval_policy !== undefined
+        ? { codex_approval_policy: config.codex_approval_policy }
+        : {}),
+      ...(config.codex_network_access !== undefined
+        ? { codex_network_access: config.codex_network_access }
+        : {}),
+    };
+  }
   if (hasInline) {
     throw new InvalidScheduleAgenticToolConfigError(
       'Preset-backed schedules cannot contain inline overrides'
     );
   }
-  const reference = normalizeDefaultReference(config.preset_id as string);
-  if (!reference) return config;
+  const reference = normalizeDefaultReference(presetId);
+  if (!reference) {
+    return {
+      agentic_tool: config.agentic_tool,
+      preset_id: presetId,
+      ...(config.context_files !== undefined ? { context_files: config.context_files } : {}),
+    };
+  }
   return {
     agentic_tool: config.agentic_tool,
     configuration_reference: reference,

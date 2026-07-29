@@ -30,10 +30,13 @@ import type {
   BranchID,
   MCPServer,
   Schedule,
+  ScheduleCreateData,
+  SchedulePatchData,
   User,
 } from '@agor-live/client';
 import {
   humanizeCron,
+  isActiveScheduleAgenticToolConfig,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
@@ -153,11 +156,20 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const [form] = Form.useForm<ScheduleFormValues>();
 
   // Agent picker is controlled via local state because it drives which
-  // fields AgenticToolConfigForm shows (e.g., effort for Claude only).
+  // fields AgenticToolConfigForm shows (for example runtime-supported effort).
   // The selected value is mirrored into the form as `agenticTool` so save
   // can read it consistently with the rest of the form.
+  const configuredConfig = schedule?.agentic_tool_config;
+  const configuredActiveConfig = isActiveScheduleAgenticToolConfig(configuredConfig)
+    ? configuredConfig
+    : undefined;
+  const configuredTool = configuredConfig?.agentic_tool;
+  const configuredActiveTool = configuredActiveConfig?.agentic_tool;
   const [agentTool, setAgentTool] = useState<AgenticToolName>(
-    (schedule?.agentic_tool_config?.agentic_tool as AgenticToolName) ?? 'claude-code'
+    configuredActiveTool ?? 'claude-code'
+  );
+  const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(
+    Boolean(configuredTool && !configuredActiveTool)
   );
   const [showCronPicker, setShowCronPicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -165,12 +177,16 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   // Initialize form when modal opens or the schedule prop changes.
   useEffect(() => {
     if (!open) return;
-    const tool = (schedule?.agentic_tool_config?.agentic_tool as AgenticToolName) ?? 'claude-code';
-    const configValues = getFormValuesFromConfig(
-      tool,
-      scheduleConfigToDefaultConfig(schedule?.agentic_tool_config)
-    );
+    const persistedConfig = schedule?.agentic_tool_config;
+    const activeConfig = isActiveScheduleAgenticToolConfig(persistedConfig)
+      ? persistedConfig
+      : undefined;
+    const persistedTool = persistedConfig?.agentic_tool;
+    const activeTool = activeConfig?.agentic_tool;
+    const tool = activeTool ?? 'claude-code';
+    const configValues = getFormValuesFromConfig(tool, scheduleConfigToDefaultConfig(activeConfig));
     setAgentTool(tool);
+    setRequiresSupportedToolSelection(Boolean(persistedTool && !activeTool));
     setShowCronPicker(false);
     form.resetFields();
     form.setFieldsValue({
@@ -198,7 +214,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   // `agentTool` would clobber the just-loaded saved values on every
   // edit-open (the original ScheduleTab carried the same warning).
   const handleAgentToolChange = (next: AgenticToolName) => {
-    if (next === agentTool) return;
+    if (next === agentTool && !requiresSupportedToolSelection) return;
+    setRequiresSupportedToolSelection(false);
     setAgentTool(next);
     const defaults = getFormValuesFromConfig(next);
     form.setFieldsValue({
@@ -229,6 +246,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       showError('Not connected to daemon');
       return;
     }
+    if (requiresSupportedToolSelection) {
+      showError('Choose a supported agentic tool before saving this historical schedule');
+      return;
+    }
     let values: ScheduleFormValues;
     try {
       values = await form.validateFields();
@@ -242,17 +263,30 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     // `getFieldsValue(true)` includes fields rendered inside collapsed
     // panels (which validateFields can skip).
     const all = { ...form.getFieldsValue(true), ...values } as ScheduleFormValues;
+    const timezoneMode = all.timezone_mode ?? 'local';
+    const timezone = all.timezone?.trim();
+    if (timezoneMode === 'local' && !timezone) {
+      showError("Timezone is required when mode is 'local'");
+      return;
+    }
+    let timezoneConfig: { timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc' };
+    if (timezoneMode === 'local') {
+      // Guarded above; keep the discriminated create DTO honest without a cast.
+      if (!timezone) return;
+      timezoneConfig = { timezone_mode: 'local', timezone };
+    } else {
+      timezoneConfig = { timezone_mode: 'utc' };
+    }
 
     setSaving(true);
     try {
-      const payload: Partial<Schedule> = {
+      const payload: ScheduleCreateData = {
         branch_id: branchId,
         name: (all.name ?? '').trim(),
         description: all.description?.trim() || undefined,
         prompt: (all.prompt ?? '').trim(),
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
-        timezone_mode: all.timezone_mode ?? 'local',
-        timezone: all.timezone_mode === 'local' ? all.timezone : undefined,
+        ...timezoneConfig,
         agentic_tool_config:
           all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION
             ? {
@@ -291,7 +325,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
       let saved: Schedule;
       if (isEditing && schedule?.schedule_id) {
-        saved = await client.service('schedules').patch(schedule.schedule_id, payload);
+        const { branch_id: _branchId, ...patchPayload } = payload;
+        saved = await client
+          .service('schedules')
+          .patch(schedule.schedule_id, patchPayload satisfies SchedulePatchData);
       } else {
         saved = await client.service('schedules').create(payload);
       }
@@ -317,11 +354,26 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         <Button key="cancel" onClick={onClose} disabled={saving}>
           Cancel
         </Button>,
-        <Button key="save" type="primary" loading={saving} onClick={handleSave}>
+        <Button
+          key="save"
+          type="primary"
+          loading={saving}
+          disabled={requiresSupportedToolSelection}
+          onClick={handleSave}
+        >
           {isEditing ? 'Save' : 'Create'}
         </Button>,
       ]}
     >
+      {requiresSupportedToolSelection && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This schedule uses a removed agentic tool"
+          description="Its saved configuration is preserved, but it cannot run. Choose a supported tool to migrate the schedule explicitly."
+          style={{ marginTop: 16 }}
+        />
+      )}
       <Form form={form} layout="vertical" preserve={false} style={{ marginTop: 16 }}>
         <Form.Item name="enabled" label="Enabled" valuePropName="checked">
           <Switch />
@@ -420,20 +472,22 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         <Form.Item label="Agentic tool">
           <AgentSelectionGrid
             agents={AVAILABLE_AGENTS}
-            selectedAgentId={agentTool}
+            selectedAgentId={requiresSupportedToolSelection ? null : agentTool}
             onSelect={(id) => handleAgentToolChange(id as AgenticToolName)}
             variant="select"
           />
         </Form.Item>
 
-        <AgenticToolConfigurationPicker
-          tool={agentTool}
-          mcpServerById={mcpServerById}
-          client={client}
-          branchId={branchId}
-          defaultResolution="schedule-run"
-          currentUser={executionOwner}
-        />
+        {!requiresSupportedToolSelection && (
+          <AgenticToolConfigurationPicker
+            tool={agentTool}
+            mcpServerById={mcpServerById}
+            client={client}
+            branchId={branchId}
+            defaultResolution="schedule-run"
+            currentUser={executionOwner}
+          />
+        )}
 
         <Collapse
           ghost

@@ -1,6 +1,6 @@
 /**
- * Single source of truth for agor-ui's surface branding: the Agor mark asset
- * (used as both favicon and in-chrome logo) and the document-title format.
+ * Single source of truth for agor-ui's surface branding: the transparent Agor
+ * mark, the backed favicon badge, and the document-title format.
  *
  * Every web surface in this app (Workspace, Knowledge, Artifact fullscreen, …)
  * consumes these helpers so favicon/title metadata can't drift as new surfaces
@@ -14,24 +14,31 @@
  */
 
 export const BRAND = {
-  /** Wordmark used in document titles and image alt text. */
+  /** Wordmark used in document titles and accessible product naming. */
   name: 'Agor',
-  /** Agor mark asset, served from the Vite public dir (favicon + logo). */
-  markFile: 'favicon.png',
+  /** Transparent Agor mark for normal in-product rendering. */
+  markFile: 'logo-mark.svg',
+  /** Backed Agor badge for favicons and other contexts that need a plate. */
+  badgeFile: 'logo.svg',
   /** Separator between a surface label and the brand name in tab titles. */
   titleSeparator: ' · ',
 } as const;
 
 /**
- * Absolute, base-aware URL to the Agor mark asset (favicon / logo).
+ * Absolute, base-aware URL to the transparent Agor mark asset.
  *
- * MUST be absolute (base-prefixed), never a bare relative `favicon.png`: SPA
+ * MUST be absolute (base-prefixed), never a bare relative filename: SPA
  * surfaces live at nested paths (e.g. `/ui/knowledge/<ns>/<doc>`) and a
  * relative href resolves against the current document URL → 404. This is the
  * bug that made the Knowledge surface's favicon disappear on deep links.
  */
 export function brandMarkHref(baseUrl: string = import.meta.env.BASE_URL): string {
   return `${baseUrl}${BRAND.markFile}`;
+}
+
+/** Absolute, base-aware URL to the backed badge asset used by favicons. */
+export function brandBadgeHref(baseUrl: string = import.meta.env.BASE_URL): string {
+  return `${baseUrl}${BRAND.badgeFile}`;
 }
 
 /** Build a document title for a surface, e.g. `surfaceTitle('Knowledge')` → "Knowledge · Agor". */

@@ -25,6 +25,8 @@ export interface TerminationInput {
   errorMessage: string;
   params?: Params;
   signalDelayMs?: number;
+  /** Test/configuration seam for the cooperative socket-stop grace window. */
+  cooperativeGraceMs?: number;
   absenceVerified?: boolean;
   sdkFailure?: SdkFailure;
   expectedStatus?: Task['status'];
@@ -34,6 +36,9 @@ export interface TerminationInput {
 }
 
 const operations = new Map<string, Promise<TerminationResult>>();
+const DEFAULT_COOPERATIVE_GRACE_MS = 1000;
+const COOPERATIVE_POLL_MS = 25;
+const LOCAL_WRAPPER_EXIT_GRACE_MS = 250;
 
 function internalParams(params?: Params): Params {
   return { ...(params ?? {}), provider: undefined };
@@ -72,42 +77,94 @@ async function loadAgenticTool(input: TerminationInput): Promise<AgenticToolName
   return session.agentic_tool;
 }
 
+async function waitForExecutorQuiescence(input: TerminationInput, requested: Task): Promise<Task> {
+  if (
+    !requested.executor_connected_at ||
+    requested.termination_request?.executor_quiesced_at ||
+    isTerminalTaskStatus(requested.status)
+  ) {
+    return requested;
+  }
+
+  const graceMs = input.signalDelayMs ?? input.cooperativeGraceMs ?? DEFAULT_COOPERATIVE_GRACE_MS;
+  if (graceMs <= 0) return requested;
+
+  const tasks = input.app.service('tasks');
+  const requestedAt = requested.termination_request?.requested_at;
+  const deadline = Date.now() + graceMs;
+  let current = requested;
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(COOPERATIVE_POLL_MS, Math.max(0, deadline - Date.now())))
+    );
+    current = await tasks.get(requested.task_id, internalParams(input.params));
+    if (
+      isTerminalTaskStatus(current.status) ||
+      current.status !== TaskStatus.STOPPING ||
+      current.termination_request?.requested_at !== requestedAt ||
+      current.termination_request?.executor_quiesced_at
+    ) {
+      return current;
+    }
+  }
+  return current;
+}
+
 async function runContainment(
   input: TerminationInput,
   requested: Task,
   tool: AgenticToolName
 ): Promise<TerminationResult> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
-  if (input.signalDelayMs) {
-    await new Promise<void>((resolve) => setTimeout(resolve, input.signalDelayMs));
+  const current = await waitForExecutorQuiescence(input, requested);
+  if (
+    current.status !== requested.status &&
+    current.status !== TaskStatus.STOPPING &&
+    !isTerminalTaskStatus(current.status)
+  ) {
+    return { status: 'condition_changed', task: current };
   }
+  const executorQuiesced = !!current.termination_request?.executor_quiesced_at;
+  // A scoped remote executor is the only component able to authoritatively
+  // quiesce its SDK runtime. Local mode additionally verifies PGID absence.
+  const remoteCooperativeContainment = current.executor_mode === 'templated' && executorQuiesced;
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
-    : await containExecutorProcess(requested.session_id, requested.task_id);
-  if (isTerminalTaskStatus(requested.status)) {
+    : remoteCooperativeContainment
+      ? ({ status: 'verified_absent' } as const)
+      : executorQuiesced
+        ? await containExecutorProcess(current.session_id, current.task_id, {
+            preSignalGraceMs: LOCAL_WRAPPER_EXIT_GRACE_MS,
+          })
+        : await containExecutorProcess(current.session_id, current.task_id);
+  if (isTerminalTaskStatus(current.status)) {
     if (containment.status === 'unverified') {
-      return { status: 'unverified', task: requested, reason: containment.reason };
+      return { status: 'unverified', task: current, reason: containment.reason };
     }
-    untrackExecutorProcess(requested.session_id, requested.task_id);
-    return { status: 'terminal', task: requested };
+    untrackExecutorProcess(current.session_id, current.task_id);
+    return { status: 'terminal', task: current };
   }
-  if (containment.status === 'unverified') {
-    const reason = containment.reason;
-    const diagnosis: SdkFailure = requested.sdk_failure
-      ? { ...requested.sdk_failure, termination: 'unverified' }
+  const providerUnverified = tool === 'opencode';
+  if (containment.status === 'unverified' || providerUnverified) {
+    const reason =
+      containment.status === 'unverified'
+        ? containment.reason
+        : 'OpenCode server-side execution termination is not verified.';
+    const diagnosis: SdkFailure = current.sdk_failure
+      ? { ...current.sdk_failure, termination: 'unverified' }
       : {
           reason: 'termination_unverified',
           detected_at: new Date().toISOString(),
           tool,
-          last_pulse: requested.latest_executor_pulse,
+          last_pulse: current.latest_executor_pulse,
           termination: 'unverified',
         };
     const settlement = await tasks.settleTermination(
       {
-        taskId: requested.task_id,
+        taskId: current.task_id,
         outcome: 'unverified',
         sdkFailure: diagnosis,
-        errorMessage: unverifiedMessage(requested.task_id, reason),
+        errorMessage: unverifiedMessage(current.task_id, reason),
       },
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
     );
@@ -122,7 +179,7 @@ async function runContainment(
 
   const settlement = await tasks.settleTermination(
     {
-      taskId: requested.task_id,
+      taskId: current.task_id,
       outcome: 'verified_absent',
       errorMessage: input.errorMessage,
     },

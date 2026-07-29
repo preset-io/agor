@@ -1,0 +1,76 @@
+---
+title: Multi-Tenant Filesystem
+description: Configure tenant-isolated repositories, branches, and uploads for hosted Agor deployments.
+---
+
+# Multi-Tenant Filesystem
+
+Agor can partition tenant-owned files while keeping daemon state shared. This
+is intended for hosted deployments that resolve tenant identity from trusted
+authentication.
+
+## Configuration
+
+```yaml
+multi_tenancy:
+  mode: required_from_auth
+  auth_claim: tenant_id
+  filesystem_isolation_enabled: true
+  tenants_base_folder: ~/.agor/tenants
+```
+
+`filesystem_isolation_enabled` defaults to `false`, preserving the existing
+single-tenant layout. It is required when `mode` is `required_from_auth`; the
+daemon rejects that mode without filesystem isolation.
+
+`tenants_base_folder` may be absolute, such as `/data/agor-tenants`, or relative
+to the daemon home (`~/.agor`). Its default is `~/.agor/tenants`.
+
+## Filesystem layout
+
+With filesystem isolation enabled, Agor creates directories lazily:
+
+```text
+~/.agor/
+  tenants/
+    <tenant-id>/
+      repos/
+      worktrees/
+      uploads/
+  agor.db
+  config.yaml
+```
+
+Repository clones, branch directories, direct uploads, and gateway attachment
+uploads are tenant-scoped. `agor.db` and `config.yaml` remain shared daemon
+state under `~/.agor`.
+
+In the default single-tenant mode, paths remain unchanged:
+
+```text
+~/.agor/
+  repos/
+  worktrees/
+  uploads/
+  agor.db
+  config.yaml
+```
+
+## User homes and container mounts
+
+Agor does not provision or relocate Unix user home directories as part of this
+setting. In Kubernetes or another container scheduler, user-home persistence is
+an executor provisioning responsibility. A deployment may mount a stable home
+for the Agor user together with only the authorized branch paths, using
+read-only or read-write mounts according to its RBAC policy.
+
+Tenant filesystem isolation determines where daemon-managed data lives; it
+does not require mounting the entire tenant root into every executor.
+
+## Migration
+
+Enabling filesystem isolation does **not** move existing repositories,
+worktrees, or uploads. Configure it for a new multi-tenant deployment, or move
+existing tenant data into the target topology while the daemon is stopped.
+Database rows containing filesystem paths must agree with the resulting
+locations.

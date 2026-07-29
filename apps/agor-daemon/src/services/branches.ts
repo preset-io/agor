@@ -6,12 +6,12 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  getBranchesDir,
   loadConfig,
   PAGINATION,
   resolveExecutionSecurityMode,
@@ -68,6 +68,7 @@ import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloa
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
@@ -1281,6 +1282,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
     const { deleteFromFilesystem } = params?.query || {};
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
@@ -1319,6 +1321,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               params: {
                 branchId: branch.branch_id,
                 branchPath: branch.path,
+                branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Already deleted above
                 // Clean up the branch if it was created by Agor
                 branch: branch.ref,
@@ -1428,6 +1431,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
     } else if (filesystemAction === 'deleted') {
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
+      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
       // No user impersonation for infrastructure operations — the daemon user
       // owns all branches and impersonation would resolve getBranchesDir()
@@ -1454,6 +1458,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               params: {
                 branchId: branch.branch_id,
                 branchPath: branch.path,
+                branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Daemon handles DB deletion separately
                 // Clean up the branch if it was created by Agor
                 branch: branch.ref,
@@ -1586,7 +1591,32 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    if (!existsSync(branch.path)) {
+    const statusToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    );
+    const statusResult = await runExecutorCommand(
+      {
+        command: 'branch.filesystem.status',
+        sessionToken: statusToken,
+        daemonUrl: getDaemonUrl(),
+        params: { branchId: branch.branch_id },
+      },
+      {
+        logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
+        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
+      }
+    );
+    if (!statusResult.success) {
+      throw new Error(
+        `Failed to inspect branch filesystem before unarchive: ${statusResult.error?.message ?? 'unknown executor error'}`
+      );
+    }
+    const branchPathExists =
+      !!statusResult.data &&
+      typeof statusResult.data === 'object' &&
+      (statusResult.data as { exists?: unknown }).exists === true;
+
+    if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild
@@ -1638,8 +1668,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          params
+          this.app as unknown as { settings: { authentication?: { secret?: string } } }
         );
         spawnExecutor(
           {

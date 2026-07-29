@@ -93,6 +93,47 @@ async function createTask(db: any, sessionId: UUID, overrides: Partial<Task> = {
 }
 
 describe('SessionsService.patch — agentic_tool immutability guard', () => {
+  dbTest(
+    'keeps historical metadata readable but rejects creation and runtime reinterpretation',
+    async ({ db }) => {
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const sessionId = await createSession(db, branchId, {
+        agentic_tool: 'claude-code-cli',
+        cli_state: { watcher_offset: 42, jsonl_path: '/historical/transcript.jsonl' },
+        billing_mode: 'subscription',
+      });
+
+      const historical = await service.get(sessionId);
+      expect(historical).toMatchObject({
+        agentic_tool: 'claude-code-cli',
+        cli_state: { watcher_offset: 42, jsonl_path: '/historical/transcript.jsonl' },
+        billing_mode: 'subscription',
+      });
+
+      const patched = (await service.patch(sessionId, { title: 'Readable history' })) as Session;
+      expect(patched).toMatchObject({
+        title: 'Readable history',
+        agentic_tool: 'claude-code-cli',
+        cli_state: { watcher_offset: 42, jsonl_path: '/historical/transcript.jsonl' },
+        billing_mode: 'subscription',
+      });
+
+      await expect(service.patch(sessionId, { agentic_tool: 'claude-code' })).rejects.toThrow(
+        /removed experimental Claude Code CLI integration/i
+      );
+
+      await expect(
+        service.create({
+          branch_id: branchId,
+          agentic_tool: 'claude-code-cli',
+          status: SessionStatus.IDLE,
+          created_by: 'test-user' as UUID,
+        } as never)
+      ).rejects.toThrow(/removed experimental Claude Code CLI integration/i);
+    }
+  );
+
   dbTest('rejects an agentic_tool change on a session that already has a task', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
     const branchId = await createBranch(db);

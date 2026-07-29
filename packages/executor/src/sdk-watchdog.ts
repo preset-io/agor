@@ -1,5 +1,6 @@
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
+import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
 export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot' | 'opencode';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
@@ -90,15 +91,13 @@ export function reportSdkActivity(
 }
 
 type WatchdogEvidence = Omit<SdkHealthFailureInput, 'task_id'>;
-type AbortControllerWithCause = AbortController & { agorAbortCause?: string };
-
 export function markSdkHealthAbort(controller: AbortController): void {
-  (controller as AbortControllerWithCause).agorAbortCause = 'sdk_health_failure';
+  markAgorAbortCause(controller, 'sdk_health_failure');
   controller.abort();
 }
 
 export function isSdkHealthAbort(controller: AbortController): boolean {
-  return (controller as AbortControllerWithCause).agorAbortCause === 'sdk_health_failure';
+  return hasAgorAbortCause(controller, 'sdk_health_failure');
 }
 
 interface WatchdogState {
@@ -209,8 +208,10 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (detail === 'tool.start') this.state.activeToolCount++;
-      if (detail === 'tool.complete') {
+      if (detail === 'tool.start' || detail === 'background_task.start') {
+        this.state.activeToolCount++;
+      }
+      if (detail === 'tool.complete' || detail === 'background_task.complete') {
         this.state.activeToolCount = Math.max(0, this.state.activeToolCount - 1);
       }
     }

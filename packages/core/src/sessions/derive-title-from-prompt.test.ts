@@ -36,4 +36,22 @@ describe('deriveTitleFromPrompt', () => {
     expect(deriveTitleFromPrompt('   ')).toBe('');
     expect(deriveTitleFromPrompt('')).toBe('');
   });
+
+  it('returns an empty string for an attachment-only prompt', () => {
+    expect(deriveTitleFromPrompt('Attached files:\n- .agor/uploads/chart.png')).toBe('');
+  });
+
+  it('derives from user text after the attachment preamble', () => {
+    expect(
+      deriveTitleFromPrompt(
+        'Attached files:\n- .agor/uploads/chart-a.png\n- .agor/uploads/chart-b.png\n\nCompare these charts'
+      )
+    ).toBe('Compare these charts');
+  });
+
+  it('derives from slash-command text before the attachment block', () => {
+    expect(
+      deriveTitleFromPrompt('/compact focus on this chart\n\nAttached files:\n- /tmp/chart.png')
+    ).toBe('/compact focus on this chart');
+  });
 });

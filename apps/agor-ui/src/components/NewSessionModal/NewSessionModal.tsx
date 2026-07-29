@@ -4,6 +4,7 @@ import type {
   Branch,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  DefaultModelConfig,
   EffortLevel,
   PermissionMode,
   User,
@@ -17,7 +18,7 @@ import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
-import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
+import { buildConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
@@ -32,7 +33,6 @@ import {
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -51,7 +51,7 @@ export interface NewSessionConfig {
   initialPrompt?: string;
 
   // Advanced configuration
-  modelConfig?: ModelConfig;
+  modelConfig?: DefaultModelConfig;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -209,8 +209,22 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
-      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = isInline ? values.modelConfig : undefined;
+      const isInline =
+        !values.agenticToolPresetId || values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const hasCompleteOpenCodeModel = Boolean(
+        values.modelConfig?.provider?.trim() && values.modelConfig?.model?.trim()
+      );
+      const inlineAgentConfig =
+        isInline && (selectedAgent !== 'opencode' || hasCompleteOpenCodeModel)
+          ? buildConfigFromFormValues(selectedAgent as AgenticToolName, {
+              modelConfig: values.modelConfig,
+              effort: values.effort,
+              permissionMode: values.permissionMode,
+              codexSandboxMode: values.codexSandboxMode,
+              codexApprovalPolicy: values.codexApprovalPolicy,
+              codexNetworkAccess: values.codexNetworkAccess,
+            })
+          : undefined;
 
       // Promote the inline config to the user's default when requested. Fire and
       // forget — session creation shouldn't block on the profile patch.
@@ -240,13 +254,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         // Preset/workspace sources resolve on the daemon. Sending their
         // currently displayed model here would incorrectly promote it to a
         // session override ahead of the selected source.
-        modelConfig: selectedModelConfig,
-        effort:
-          isInline &&
-          (selectedAgent !== 'opencode' ||
-            Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim()))
-            ? ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort)
-            : undefined,
+        modelConfig: isInline ? inlineAgentConfig?.modelConfig : undefined,
+        effort: undefined,
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode: isInline ? permissionMode : undefined,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
@@ -341,6 +350,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             columns={4}
             size="small"
             showComparisonLink={false}
+            fallbackToFirstVisibleAgent
           />
         </Form.Item>
 

@@ -1,7 +1,12 @@
-import { Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import { type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { authorizeTaskTerminalRoute, findUnverifiedTerminationTask } from './register-routes.js';
+import {
+  authorizeTaskTerminalRoute,
+  findUnverifiedTerminationTask,
+  rejectRemovedClaudeCliRestart,
+} from './register-routes.js';
+import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from './utils/agentic-tool-runtime.js';
 
 function harness(createdBy = 'user-1', role = 'member') {
   return {
@@ -48,4 +53,9 @@ it('selects the unverified active task even when newer queued work exists', () =
   const queued = { task_id: 'task-queued', status: TaskStatus.QUEUED } as Task;
 
   expect(findUnverifiedTerminationTask([queued, stopping])).toBe(stopping);
+});
+
+it('keeps the stale restart endpoint as an explicit removed-runtime tombstone', () => {
+  expect(rejectRemovedClaudeCliRestart).toThrow(BadRequest);
+  expect(rejectRemovedClaudeCliRestart).toThrow(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
 });

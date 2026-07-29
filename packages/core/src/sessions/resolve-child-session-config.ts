@@ -18,7 +18,13 @@
  * regardless of tool match.
  */
 
-import type { AgenticToolName, DefaultAgenticToolConfig, Session, User } from '../types/index.js';
+import {
+  type AgenticToolName,
+  type DefaultAgenticToolConfig,
+  isAgenticToolName,
+  type Session,
+  type User,
+} from '../types/index.js';
 import { resolveSessionDefaults } from './resolve-session-defaults.js';
 
 /** Minimal parent shape this resolver reads — keeps tests free of full Session fixtures. */
@@ -55,7 +61,13 @@ export function resolveChildSessionConfig(
   args: ResolveChildSessionConfigArgs
 ): ResolvedChildSessionConfig {
   const { parent, user, source, now } = args;
-  const effectiveTool: AgenticToolName = args.effectiveTool ?? parent.agentic_tool;
+  const requestedTool = args.effectiveTool ?? parent.agentic_tool;
+  if (!isAgenticToolName(requestedTool)) {
+    throw new Error(
+      `Cannot resolve child configuration for removed agentic tool: ${requestedTool}`
+    );
+  }
+  const effectiveTool: AgenticToolName = requestedTool;
   const resolved = resolveSessionDefaults({
     agenticTool: effectiveTool,
     user,

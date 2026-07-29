@@ -11,7 +11,6 @@
  * and no `sandpack.json`/`agor.config.js` sidecar.
  */
 
-import path from 'node:path';
 import { BranchRepository } from '@agor/core/db';
 import type {
   AgorGrants,
@@ -25,7 +24,7 @@ import type {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ArtifactsService } from '../../services/artifacts.js';
+import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
@@ -81,14 +80,10 @@ const SandpackConfigSchema = z
 
 const AgorGrantsSchema = z
   .object({
-    agor_token: z.boolean().optional(),
     agor_api_url: z.boolean().optional(),
     agor_user_email: z.boolean().optional(),
     agor_artifact_id: z.boolean().optional(),
     agor_board_id: z.boolean().optional(),
-    agor_proxies: z
-      .array(mcpRequiredString('agorGrants.agor_proxies[]', 'Configured proxy vendor slug'))
-      .optional(),
   })
   .optional();
 
@@ -113,19 +108,17 @@ export function registerArtifactTools(server: McpServer, ctx: McpContext): void 
 If artifactId is omitted, creates a new artifact.
 If artifactId is provided, updates the existing artifact (must be owned by you).
 
-The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). Prefer \`branchId + subpath\`: \`subpath\` is a branch-relative folder path and the daemon verifies the caller has access to that branch worktree before reading files. Legacy absolute \`folderPath\` is still accepted for compatibility, but if it resolves inside a registered branch it is subject to the same branch access check. The folder is only read at publish time; after that, the artifact lives in the database.
+The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). \`branchId + subpath\` identifies the branch-relative folder. The executor verifies the caller has access, reads it, and registers the artifact through the daemon API. After publishing, the artifact lives in the database.
 
 Recommended: create the folder inside your branch so files can be version-controlled.
 
 DECLARATIVE CONFIG:
 - \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
-    \`agor_token: true\`     → mints a 15-min artifact-runtime token for the viewer; injected as \`AGOR_TOKEN\`. Accepted by artifact/proxy runtime paths, not as a general daemon API credential. ARTIFACT-SCOPED CONSENT ONLY — author/instance grants don't auto-cover this.
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
     \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.
     \`agor_artifact_id: true\` → \`AGOR_ARTIFACT_ID\` (informational, no consent).
     \`agor_board_id: true\`   → \`AGOR_BOARD_ID\` (informational, no consent).
-    \`agor_proxies: ["openai", ...]\` → injects \`AGOR_PROXY_OPENAI\` etc. for HTTP proxy URLs.
 - \`sandpackConfig\`: author-controlled SandpackProvider config (template, customSetup, theme, options). Sanitized on write — UI-affecting / private-account props are stripped.
 
 CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
@@ -137,19 +130,12 @@ IMPORTANT:
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
-        folderPath: mcpOptionalString(
-          'folderPath',
-          'Legacy absolute path to folder containing artifact files. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
-        ),
-        branchId: mcpOptionalId(
+        branchId: mcpRequiredId(
           'branchId',
           'Branch',
-          'Branch ID (UUID or short ID). Prefer this with subpath to publish from a branch worktree.'
+          'Branch ID (UUID or short ID) containing the artifact folder.'
         ),
-        subpath: mcpOptionalString(
-          'subpath',
-          'Branch-relative subpath to the artifact folder (required with branchId).'
-        ),
+        subpath: mcpRequiredString('subpath', 'Branch-relative subpath to the artifact folder.'),
         boardId: mcpOptionalId(
           'boardId',
           'Board',
@@ -215,18 +201,12 @@ IMPORTANT:
       const branchIdRaw = coerceString(args.branchId);
       const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
       const subpath = coerceString(args.subpath);
-      const folderPath = coerceString(args.folderPath);
       const resolvedArtifactId = coerceString(args.artifactId)
         ? await resolveArtifactId(ctx, coerceString(args.artifactId)!)
         : undefined;
-      if (!folderPath && (!resolvedBranchId || !subpath)) {
-        throw new Error(
-          'Provide either legacy folderPath or branchId + subpath to publish artifacts.'
-        );
-      }
+      if (!resolvedBranchId || !subpath) throw new Error('branchId and subpath are required');
       const artifact = await service.publishArtifact(
         {
-          folderPath,
           branch_id: resolvedBranchId,
           source_session_id: ctx.sessionId,
           subpath,
@@ -244,8 +224,7 @@ IMPORTANT:
           width: args.width,
           height: args.height,
         },
-        ctx.userId,
-        ctx.authenticatedUser.role as UserRole
+        ctx.baseServiceParams as ArtifactParams
       );
 
       const publishValidation = args.waitForStatus
@@ -294,20 +273,16 @@ IMPORTANT:
     'agor_artifacts_check_build',
     {
       description:
-        'Browserless artifact folder validation in a branch-relative folder (branchId + subpath preferred) or legacy absolute folderPath. Checks source presence/non-empty files, package.json syntax, configured entry existence, missing local imports, and common env/template footguns. Does NOT run Sandpack; use publish(waitForStatus=true) or agor_artifacts_status for browser runtime validation.',
+        'Browserless artifact folder validation in a branch-relative folder. Checks source presence/non-empty files, package.json syntax, configured entry existence, missing local imports, and common env/template footguns. Does NOT run Sandpack; use publish(waitForStatus=true) or agor_artifacts_status for browser runtime validation.',
       inputSchema: z.object({
-        folderPath: mcpOptionalString(
-          'folderPath',
-          'Legacy absolute path to the folder containing artifact files to check. Prefer branchId + subpath. If this resolves inside a registered branch, branch session permission is required.'
-        ),
-        branchId: mcpOptionalId(
+        branchId: mcpRequiredId(
           'branchId',
           'Branch',
-          'Branch ID (UUID or short ID). Prefer this with subpath to check a branch worktree path.'
+          'Branch ID (UUID or short ID) containing the artifact folder.'
         ),
-        subpath: mcpOptionalString(
+        subpath: mcpRequiredString(
           'subpath',
-          'Branch-relative subpath pointing at the artifact folder (required with branchId).'
+          'Branch-relative subpath pointing at the artifact folder.'
         ),
       }),
     },
@@ -315,21 +290,14 @@ IMPORTANT:
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const branchIdRaw = coerceString(args.branchId);
       const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
-      const folderPath = coerceString(args.folderPath);
       const subpath = coerceString(args.subpath);
-      if (!folderPath && (!resolvedBranchId || !subpath)) {
-        throw new Error(
-          'Provide either legacy folderPath or branchId + subpath to check artifact files.'
-        );
-      }
+      if (!resolvedBranchId || !subpath) throw new Error('branchId and subpath are required');
       const result = await service.checkBuildFromFolder(
         {
-          folderPath,
           branch_id: resolvedBranchId,
           subpath,
         },
-        ctx.userId,
-        ctx.authenticatedUser.role as UserRole
+        ctx.baseServiceParams as ArtifactParams
       );
       // Mirror getStatus shape — `build_status` (not `status`) and `build_errors`
       // (always an array, never undefined) so agents can parse one schema across
@@ -350,18 +318,14 @@ IMPORTANT:
       description:
         'Browserless artifact folder validation. Clearer alias for agor_artifacts_check_build: verifies source files, package.json syntax, configured entry existence, missing local imports, and common env/template footguns. It still does NOT run Sandpack; use agor_artifacts_publish(waitForStatus=true) or agor_artifacts_status for browser runtime validation.',
       inputSchema: z.object({
-        folderPath: mcpOptionalString(
-          'folderPath',
-          'Legacy absolute path to the artifact folder. Prefer branchId + subpath.'
-        ),
-        branchId: mcpOptionalId(
+        branchId: mcpRequiredId(
           'branchId',
           'Branch',
-          'Branch ID (UUID or short ID). Prefer this with subpath.'
+          'Branch ID (UUID or short ID) containing the artifact folder.'
         ),
-        subpath: mcpOptionalString(
+        subpath: mcpRequiredString(
           'subpath',
-          'Branch-relative subpath pointing at the artifact folder (required with branchId).'
+          'Branch-relative subpath pointing at the artifact folder.'
         ),
       }),
     },
@@ -369,21 +333,14 @@ IMPORTANT:
       const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const branchIdRaw = coerceString(args.branchId);
       const resolvedBranchId = branchIdRaw ? await resolveBranchId(ctx, branchIdRaw) : undefined;
-      const folderPath = coerceString(args.folderPath);
       const subpath = coerceString(args.subpath);
-      if (!folderPath && (!resolvedBranchId || !subpath)) {
-        throw new Error(
-          'Provide either legacy folderPath or branchId + subpath to validate artifact files.'
-        );
-      }
+      if (!resolvedBranchId || !subpath) throw new Error('branchId and subpath are required');
       const result = await service.checkBuildFromFolder(
         {
-          folderPath,
           branch_id: resolvedBranchId,
           subpath,
         },
-        ctx.userId,
-        ctx.authenticatedUser.role as UserRole
+        ctx.baseServiceParams as ArtifactParams
       );
       return textResult({
         build_status: result.status,
@@ -707,23 +664,23 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         });
       }
 
-      const result = await service.land(artifactId, branch.path, {
-        subpath: coerceString(args.subpath),
-        overwrite: args.overwrite,
-      });
-
-      const destinationSubpath = path
-        .relative(branch.path, result.destinationPath)
-        .replace(/\\/g, '/');
+      const result = await service.land(
+        artifactId,
+        branchIdBranded,
+        {
+          subpath: coerceString(args.subpath),
+          overwrite: args.overwrite,
+        },
+        ctx.baseServiceParams as ArtifactParams
+      );
 
       return textResult({
         artifactId,
         branchId: branch.branch_id,
-        subpath: destinationSubpath,
-        destinationPath: result.destinationPath,
+        subpath: result.subpath,
         fileCount: result.fileCount,
         bytesWritten: result.bytesWritten,
-        instructions: `Artifact materialized to branch ${branch.branch_id} at subpath ${destinationSubpath}. The folder includes \`agor.artifact.json\` — keep it: it carries template/sandpack_config/required_env_vars/agor_grants for round-trip publishing. Edit source files there, then call agor_artifacts_publish with branchId=${branch.branch_id}, subpath=${destinationSubpath}, and artifactId=${artifactId} to push changes back.`,
+        instructions: `Artifact materialized to branch ${branch.branch_id} at subpath ${result.subpath}. The folder includes \`agor.artifact.json\` — keep it: it carries template/sandpack_config/required_env_vars/agor_grants for round-trip publishing. Edit source files there, then call agor_artifacts_publish with branchId=${branch.branch_id}, subpath=${result.subpath}, and artifactId=${artifactId} to push changes back.`,
       });
     }
   );
@@ -769,7 +726,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
     {
       description: `Export an artifact to CodeSandbox via their "define API". Returns a sandbox URL and ID. Useful for sharing or demoing — the artifact runs in CodeSandbox's standard environment, not Agor.
 
-CAVEAT: daemon-supplied capabilities (\`AGOR_TOKEN\`, \`AGOR_PROXY_*\`, etc.) won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
+CAVEAT: daemon-supplied capabilities won't work on CodeSandbox. The exported sandbox can read \`required_env_vars\` from CodeSandbox's "Secret Keys" UI — the names match because both sides use the same prefix-per-template convention (Vite → \`VITE_\`, CRA → \`REACT_APP_\`, etc.).`,
       inputSchema: z.object({
         artifactId: mcpRequiredId(
           'artifactId',

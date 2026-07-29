@@ -1,8 +1,8 @@
 // src/types/session.ts
 
 /**
- * Effort level controls how much reasoning Claude applies.
- * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
+ * Effort level controls how much reasoning a supported agent applies.
+ * Runtime adapters map this shared value to their native effort option.
  */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -15,6 +15,7 @@ import type {
   CursorPermissionMode,
   GeminiPermissionMode,
   OpenCodePermissionMode,
+  PersistedAgenticToolName,
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
@@ -98,9 +99,7 @@ export type {
  *   for the built-in `agor` server and any attached MCP servers are
  *   auto-approved by that same hook, so MCP-heavy sessions don't
  *   death-by-modal. Users can flip a running session to `acceptEdits` or
- *   `bypassPermissions` mid-flight from the session UI. Applies to both the
- *   Claude Agent SDK (`claude-code`) and interactive CLI (`claude-code-cli`)
- *   paths, which share this default.
+ *   `bypassPermissions` mid-flight from the session UI.
  * - Codex: 'allow-all' — maps to sandbox `workspace-write` + approval
  *   `never` + network-on. Codex's MCP auto-approve is wired through
  *   `default_tools_approval_mode = "approve"` on each server config
@@ -128,7 +127,7 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
     case 'cursor':
       return 'bypassPermissions'; // Cursor SDK is experimental/autonomous until permission callbacks exist
     default:
-      return 'auto'; // Claude Code (SDK + CLI): model-classifier permissions
+      return 'auto'; // Claude Code: model-classifier permissions
   }
 }
 
@@ -137,7 +136,7 @@ export interface Session {
   session_id: SessionID;
 
   /** Which agentic coding tool is running this session (Claude Code, Codex, Gemini) */
-  agentic_tool: AgenticToolName;
+  agentic_tool: PersistedAgenticToolName;
   /** Live tenant preset reference. When set, atomic runtime fields are read-only. */
   agentic_tool_preset_id?: import('./agentic-tool-preset').AgenticToolPresetID | null;
   /** Agentic tool/CLI version */
@@ -258,7 +257,7 @@ export interface Session {
     updated_at: string;
     /** Optional user notes about why this model was selected */
     notes?: string;
-    /** Effort level for reasoning depth (default: high) */
+    /** Optional session override for reasoning depth; unset delegates to the runtime default. */
     effort?: EffortLevel;
     /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */
     advisorModel?: string;
@@ -271,38 +270,27 @@ export interface Session {
   } | null;
 
   /**
-   * Claude Code CLI adapter state. Only set when `agentic_tool === 'claude-code-cli'`.
-   * Persisted on the session row's `data` blob so the daemon-side watcher can
-   * resume tailing the JSONL across restarts (see
-   * docs/internal/claude-code-cli-integration-analysis-2026-05-14.md).
+   * Read-only metadata left by the removed Claude Code CLI adapter.
+   *
+   * Kept in the wire type so historical rows remain inspectable. No runtime
+   * reads or mutates this state.
    */
   cli_state?: {
-    /** Bytes consumed from the JSONL — resume point on watcher restart. */
+    /** Bytes consumed from the historical transcript. */
     watcher_offset?: number;
-    /** ISO 8601 of the most recent processed JSONL line. Telemetry. */
+    /** ISO 8601 of the most recent processed transcript line. */
     last_event_ts?: string;
-    /** `uuid` of the most recent processed JSONL line. Sanity / dedup. */
+    /** `uuid` of the most recent processed transcript line. */
     last_event_uuid?: string;
-    /** Slugged dir under `~/.claude/projects/` (`/` and `.` → `-`). */
+    /** Former transcript directory slug. */
     slug?: string;
-    /** Absolute path to the JSONL file. */
+    /** Former absolute transcript path. */
     jsonl_path?: string;
-    /** Zellij pane handle for PTY-injection targeting. */
+    /** Former terminal pane handle. */
     zellij_pane_id?: string;
-    /** Zellij tab name (`cli-<short>` by convention). */
+    /** Former terminal tab name. */
     zellij_tab_name?: string;
-    /**
-     * In-flight turn snapshot. Written on `user_message`, set to `null`
-     * on `turn_end` (not undefined — `deepMerge` in
-     * `SessionRepository.update` skips undefined, so an explicit `null`
-     * is the documented "clear this field" signal). Lets the watcher
-     * rehydrate the task linkage for assistant/tool messages that
-     * arrive after a daemon restart — without this, post-restart events
-     * would orphan and `turn_end` would skip closing the task.
-     * Analytics accumulated mid-turn (per-message usage,
-     * lastAssistantRaw) are *not* persisted; only the linkage is
-     * recovered.
-     */
+    /** Last in-flight turn snapshot recorded before the integration was removed. */
     active_turn?: {
       task_id: string;
       user_message_index: number;
@@ -310,11 +298,7 @@ export interface Session {
     } | null;
   };
 
-  /**
-   * Billing model for this session. CLI sessions default to 'subscription'
-   * (Claude Pro/Max interactive limits), SDK sessions to 'api-key' or
-   * 'unknown'. Drives the cost-UI caption and the 5h billing-window banner.
-   */
+  /** Historical billing metadata written by the removed integration. */
   billing_mode?: 'subscription' | 'api-key' | 'unknown';
 
   // Custom context for Handlebars templates
@@ -516,9 +500,8 @@ export interface Session {
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<
   Partial<Session>,
-  'agentic_tool_preset_id' | 'model_config' | 'permission_config'
-> &
-  (
+  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config' | 'permission_config'
+> & { agentic_tool?: AgenticToolName } & (
     | {
         agentic_tool_preset_id: AgenticToolConfigurationReference;
         model_config?: never;
@@ -530,6 +513,11 @@ export type CreateSessionInput = Omit<
         permission_config?: Session['permission_config'];
       }
   );
+
+/** Session patch semantics: omit/undefined preserves, string sets, null clears. */
+export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id'> & {
+  sdk_session_id?: string | null;
+};
 
 /**
  * Minimal persisted session state needed to decide whether a new task can

@@ -70,10 +70,13 @@ import type {
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_DISPLAY_NAMES,
+  GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  SCHEDULE_CREATE_WRITE_FIELDS,
+  SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
 import {
@@ -135,7 +138,6 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -149,6 +151,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
+import { createSessionMcpTokenAfterHooks } from './utils/session-mcp-token-hook.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
@@ -157,13 +160,14 @@ import {
 import {
   createServiceToken,
   getDaemonUrl,
-  serviceTokenScopeForParams,
+  serviceTokenScopeForCurrentTenant,
   spawnExecutorFireAndForget,
 } from './utils/spawn-executor.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
+import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -487,8 +491,7 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'agent_session_id',
   'error_message',
   'report',
-  'permission_request',
-  'session_md5'
+  'permission_request'
 );
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
@@ -570,6 +573,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
   const executionMode = resolveExecutionSecurityMode(config);
+  const sessionMcpTokenAfterHooks = createSessionMcpTokenAfterHooks({
+    app,
+    config,
+    onGetAttached: (session) =>
+      mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`),
+    onCreateAttached: (session) =>
+      console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`),
+  });
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
@@ -668,10 +679,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // Without tenant columns (SQLite / single-tenant), tenant-owned services skip
   // the full RLS-transaction hooks — but they must still carry ambient tenant
-  // identity so tenant-aware call sites (e.g. MCP session-token minting in
-  // mcp/tokens.ts) can resolve the active tenant instead of throwing "missing
-  // active tenant context". Identity only: no data stamping or DB transaction,
-  // which are Postgres tenant-column mechanics.
+  // identity for tenant-aware call sites. MCP session-token issuance can
+  // resolve the configured tenant without ambient identity in static mode,
+  // while required_from_auth remains fail-closed. Identity only: no data
+  // stamping or DB transaction, which are Postgres tenant-column mechanics.
   const registerTenantIdentityForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
       safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
@@ -720,25 +731,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const createExecutorServiceToken = (
-    params: Partial<AuthenticatedParams> | undefined,
-    scope: Record<string, unknown>
-  ): string | undefined => {
+  const createExecutorServiceToken = (scope: Record<string, unknown>): string | undefined => {
     if (!jwtSecret) return undefined;
     return createServiceToken(jwtSecret, undefined, {
-      ...serviceTokenScopeForParams(params),
       ...scope,
+      ...serviceTokenScopeForCurrentTenant(),
     });
   };
 
   const syncBranchUnixAccess = (
     branchId: BranchID,
     logPrefix: string,
-    params?: Partial<AuthenticatedParams>,
     options?: { delete?: boolean; scope?: Record<string, unknown> }
   ): void => {
     if (!executionMode.unixFsIsolationEnabled) return;
-    const serviceToken = createExecutorServiceToken(params, {
+    const serviceToken = createExecutorServiceToken({
       ...options?.scope,
       branch_id: branchId,
       command: 'unix.sync-branch',
@@ -761,8 +768,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const syncUnixAccessForBoardAlignedBranches = async (
     boardId: unknown,
-    logPrefix: string,
-    params?: Partial<AuthenticatedParams>
+    logPrefix: string
   ): Promise<void> => {
     if (!executionMode.unixFsIsolationEnabled) return;
     if (typeof boardId !== 'string' || boardId.length === 0) return;
@@ -775,7 +781,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       await invalidateRealtimeBranchAccess(branch.branch_id);
     }
 
-    const serviceToken = createExecutorServiceToken(params, {
+    const serviceToken = createExecutorServiceToken({
       board_id: boardId,
       command: 'unix.sync-board',
     });
@@ -798,11 +804,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     context: HookContext,
     logPrefix: string
   ): Promise<HookContext> => {
-    await syncUnixAccessForBoardAlignedBranches(
-      context.params.route?.id,
-      logPrefix,
-      context.params as Partial<AuthenticatedParams>
-    );
+    await syncUnixAccessForBoardAlignedBranches(context.params.route?.id, logPrefix);
     return context;
   };
 
@@ -839,7 +841,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
     );
     for (const branchId of branchIds) {
-      syncBranchUnixAccess(branchId, logPrefix, context.params as Partial<AuthenticatedParams>);
+      syncBranchUnixAccess(branchId, logPrefix);
       await invalidateRealtimeBranchAccess(branchId);
     }
     return context;
@@ -1037,10 +1039,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
+      publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
+      validateFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'validate artifacts')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
     },
-  });
+  } as never);
 
   // Custom REST routes for artifact payload and console
   {
@@ -1450,11 +1454,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 console.log(
                   `[Unix Integration] Syncing permissions for branch ${shortId(branch.branch_id)} (others_fs_access: ${previousValue} -> ${branch.others_fs_access})`
                 );
-                syncBranchUnixAccess(
-                  branch.branch_id,
-                  '[Executor/branch.patch]',
-                  context.params as Partial<AuthenticatedParams>
-                );
+                syncBranchUnixAccess(branch.branch_id, '[Executor/branch.patch]');
 
                 return context;
               },
@@ -1470,12 +1470,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 const branchId = context.id as import('@agor/core/types').BranchID;
 
                 // Fire-and-forget sync with delete flag to executor.
-                syncBranchUnixAccess(
-                  branchId,
-                  '[Executor/branch.remove]',
-                  context.params as Partial<AuthenticatedParams>,
-                  { delete: true }
-                );
+                syncBranchUnixAccess(branchId, '[Executor/branch.remove]', { delete: true });
 
                 return context;
               },
@@ -1776,6 +1771,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       create: [
         requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
+        enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
         injectCreatedBy(),
         // Encrypt env var values at rest (same pattern as user env vars / API keys)
         async (context: HookContext) => {
@@ -1791,9 +1787,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
+        markWriteDataPrepared(),
       ],
       patch: [
         requireMinimumRole(ROLES.ADMIN, 'update gateway channels'),
+        enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
         // Resolve redacted env var sentinel values ('••••••••') back to real
         // values from the database. Uses the repository directly to bypass
         // the after-hook redaction that the service layer applies.
@@ -1879,6 +1877,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           return context;
         },
+        markWriteDataPrepared(),
       ],
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete gateway channels')],
     },
@@ -2057,11 +2056,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(
-              branchId as BranchID,
-              '[Executor/branch-group-grants.create]',
-              context.params as Partial<AuthenticatedParams>
-            );
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.create]');
           }
           return context;
         },
@@ -2071,11 +2066,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(
-              branchId as BranchID,
-              '[Executor/branch-group-grants.patch]',
-              context.params as Partial<AuthenticatedParams>
-            );
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.patch]');
           }
           return context;
         },
@@ -2085,11 +2076,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(
-              branchId as BranchID,
-              '[Executor/branch-group-grants.remove]',
-              context.params as Partial<AuthenticatedParams>
-            );
+            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.remove]');
           }
           return context;
         },
@@ -2303,13 +2290,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken(
-            context.params as Partial<AuthenticatedParams>,
-            {
-              user_id: user.user_id,
-              command: 'unix.sync-user',
-            }
-          );
+          const serviceToken = createExecutorServiceToken({
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
@@ -2376,13 +2360,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken(
-            context.params as Partial<AuthenticatedParams>,
-            {
-              user_id: user.user_id,
-              command: 'unix.sync-user',
-            }
-          );
+          const serviceToken = createExecutorServiceToken({
+            user_id: user.user_id,
+            command: 'unix.sync-user',
+          });
           if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
@@ -2527,9 +2508,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                             | undefined
                         ),
                         logPrefix: `[sessions.create ${branch.name}]`,
-                        serviceTokenScope: serviceTokenScopeForParams(
-                          context.params as AuthenticatedParams
-                        ),
                       }
                     );
                     (context.data as Record<string, unknown>).git_state = {
@@ -2642,53 +2620,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      get: [
-        async (context) => {
-          // Attach an MCP token for fetched session (cached/reused when still valid).
-          if (config.daemon?.mcpEnabled === false) {
-            return context;
-          }
-
-          const session = context.result as Session;
-          const callerUser = (context.params as AuthenticatedParams).user;
-
-          // Rationale for the narrow gate lives on canReceiveMcpTokenForSession.
-          if (
-            !canReceiveMcpTokenForSession({
-              callerUserId: callerUser?.user_id,
-              callerRole: callerUser?.role,
-            })
-          ) {
-            return context;
-          }
-
-          const { generateSessionToken } = await import('./mcp/tokens.js');
-          const userId = callerUser?.user_id;
-          if (!userId) {
-            return context;
-          }
-
-          const jwtSecret = app.settings.authentication?.secret;
-          if (!jwtSecret) {
-            console.error('❌ JWT secret not configured - cannot generate MCP token');
-            return context;
-          }
-
-          const mcpToken = await generateSessionToken(
-            app,
-            session.session_id,
-            userId as import('@agor/core/types').UserID
-          );
-
-          mcpTokenDebug(`🔄 Resolved MCP token for session ${shortId(session.session_id)}`);
-
-          // Add token to result. Tokens are not stored on the session row; the
-          // token module may reuse a still-valid issued token or mint a new one.
-          context.result = { ...session, mcp_token: mcpToken };
-
-          return context;
-        },
-      ],
+      get: [sessionMcpTokenAfterHooks.get],
       create: [
         async (context) => {
           const session = context.result as Session;
@@ -2699,89 +2631,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           );
           return context;
         },
-        // Claude Code CLI: register watcher + persist cli_state + dispatch
-        // the Zellij tab spawn. No-op for other agentic tools.
-        async (context) => {
-          const session = context.result as Session;
-          if (session.agentic_tool !== 'claude-code-cli') return context;
-          // Session creation is tenant-transactional. Defer filesystem,
-          // watcher, and terminal integration until after commit while retaining
-          // tenant identity; each DB helper then opens its own short unit.
-          deferWithTenantContext(
-            context.params,
-            async () => {
-              const branch = await context.app
-                .service('branches')
-                .get(session.branch_id, { provider: undefined });
-              const cwd = (branch as { path?: string } | undefined)?.path;
-              if (!cwd) {
-                console.warn(
-                  `[claude-cli-integration] no branch.path for session ${session.session_id}; skipping spawn`
-                );
-                return;
-              }
-              const { onCliSessionCreated } = await import('./services/claude-cli-integration.js');
-              await onCliSessionCreated(context.app, session, cwd);
-            },
-            (err) => {
-              // Never fail the committed session on integration errors — the
-              // session row is still useful even if the watcher misfires.
-              console.error('[claude-cli-integration] onCliSessionCreated failed:', err);
-            }
-          );
-          return context;
-        },
-        async (context) => {
-          // Skip MCP setup if MCP server is disabled
-          if (config.daemon?.mcpEnabled === false) {
-            return context;
-          }
-
-          // Gate MCP token issuance through the same caller-scoped policy as `after:get`.
-          const callerUser = (context.params as AuthenticatedParams).user;
-          if (
-            !canReceiveMcpTokenForSession({
-              callerUserId: callerUser?.user_id,
-              callerRole: callerUser?.role,
-            })
-          ) {
-            return context;
-          }
-
-          // Resolve MCP token for this session (cached/reused when still valid).
-          // Mint it for the active caller, not for an inherited/parent creator.
-          const { generateSessionToken } = await import('./mcp/tokens.js');
-          const session = context.result as Session;
-          const userId = callerUser?.user_id;
-          if (!userId) {
-            return context;
-          }
-
-          // Get JWT secret from app settings
-          const jwtSecret = app.settings.authentication?.secret;
-          if (!jwtSecret) {
-            console.error('❌ JWT secret not configured - cannot generate MCP token');
-            return context;
-          }
-
-          const mcpToken = await generateSessionToken(
-            app,
-            session.session_id,
-            userId as import('@agor/core/types').UserID
-          );
-
-          console.log(`🎫 MCP token issued for session ${shortId(session.session_id)}`);
-
-          // Note: We no longer auto-attach global MCP servers to sessions.
-          // Instead, getMcpServersForSession() will automatically provide ALL
-          // global servers plus any session-specific servers assigned to this
-          // session. This avoids polluting the session_mcp_servers junction table.
-
-          // Update context.result to include the token
-          context.result = { ...session, mcp_token: mcpToken };
-
-          return context;
-        },
+        sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
 
         // Unix Integration: When a non-owner creates a session in a branch with
@@ -2817,12 +2667,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
                       `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
                   );
-                  syncBranchUnixAccess(
-                    branch.branch_id,
-                    '[Executor/session.create.unix-group]',
-                    context.params as Partial<AuthenticatedParams>,
-                    { scope: { session_id: session.session_id } }
-                  );
+                  syncBranchUnixAccess(branch.branch_id, '[Executor/session.create.unix-group]', {
+                    scope: { session_id: session.session_id },
+                  });
                 } catch (error) {
                   // Don't fail session creation if unix sync fails
                   console.error(
@@ -2946,9 +2793,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
+        enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
         injectCreatedBy(),
         validateScheduleConfig(),
         recomputeNextRunAt(),
+        markWriteDataPrepared(),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
@@ -2958,6 +2807,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanModifySchedule(superadminOpts),
             ]
           : []),
+        enforcePublicWriteFields('Schedule', SCHEDULE_PATCH_WRITE_FIELDS),
         // Lazy-load the current schedule when RBAC didn't cache it for
         // us. `validateScheduleConfig` and `recomputeNextRunAt` both
         // need the merged current+patch shape to do their work
@@ -2966,6 +2816,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ensureScheduleRunsAsCaller(superadminOpts),
         validateScheduleConfig(),
         recomputeNextRunAt(),
+        markWriteDataPrepared(),
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),
@@ -3027,6 +2878,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
+      reportTerminationComplete: [requireExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireExecutorRuntimeToken()],
       remove: [

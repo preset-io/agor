@@ -10,7 +10,7 @@
  * than reaching into `claude/claude-tool.ts` to grab Claude-local types.
  */
 
-import type { Session } from '@agor/core/types';
+import type { Session, SessionUpdate } from '@agor/core/types';
 import type { Message } from '../../types.js';
 
 /**
@@ -55,5 +55,5 @@ export interface TasksStreamingService {
  * exported from `@agor/core/client`, which is a much larger surface.
  */
 export interface SessionsPatchClient {
-  patch(id: string, data: Partial<Session>): Promise<Session>;
+  patch(id: string, data: SessionUpdate): Promise<Session>;
 }

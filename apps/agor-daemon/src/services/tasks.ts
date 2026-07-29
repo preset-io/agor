@@ -29,6 +29,7 @@ import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   ContentBlock,
+  ExecutorTerminationCompleteInput,
   Paginated,
   QueryParams,
   RuntimeTelemetryInput,
@@ -49,7 +50,10 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { beginExecutorTermination } from '../termination-coordinator.js';
+import {
+  beginExecutorTermination,
+  requestExecutorTermination,
+} from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
@@ -57,6 +61,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -218,6 +223,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       `🔍 [TasksService.create] Result is array: ${Array.isArray(result)}, this.app exists: ${!!this.app}`
     );
 
+    if (!Array.isArray(result)) {
+      await this.autoTitleSession(result, params);
+    }
+
     // If task is created with RUNNING status, atomically update session status to RUNNING
     // NOTE: create() always returns a single Task (not an array) in practice
     if (data.status === TaskStatus.RUNNING && !Array.isArray(result) && this.app) {
@@ -250,6 +259,36 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     return result;
+  }
+
+  /**
+   * Assign the deterministic title as soon as an eligible textual task exists.
+   *
+   * The prompt route also calls this after its repository-level pending-task
+   * insert, which deliberately bypasses create() to own queue positioning.
+   */
+  async autoTitleSession(task: Task, params?: TaskParams): Promise<void> {
+    if (!task.full_prompt) return;
+
+    const autoTitle = deriveTitleFromPrompt(task.full_prompt);
+    if (!autoTitle) return;
+
+    try {
+      const fresh = await this.app.service('sessions').get(task.session_id, params);
+      // null/undefined means unset. An empty string is an explicit user choice.
+      if (fresh.title == null) {
+        // Keep trusted metadata separate from prompt-flow patches so external
+        // collaborators do not need permission to edit session metadata.
+        await this.app
+          .service('sessions')
+          .patch(task.session_id, { title: autoTitle }, { ...params, provider: undefined });
+      }
+    } catch (titleError) {
+      const message = titleError instanceof Error ? titleError.message : String(titleError);
+      console.warn(
+        `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}: ${message}`
+      );
+    }
   }
 
   private baseTaskAnalyticsProperties(task: Task): Record<string, unknown> {
@@ -311,15 +350,36 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<TerminationClaimResult> {
     const result = await this.taskRepo.claimTermination(input);
-    if (result.outcome !== 'claimed') return result;
+    const claimed = result.outcome === 'claimed';
+    const retryingActiveRequest =
+      result.outcome === 'unchanged' &&
+      result.task.status === TaskStatus.STOPPING &&
+      !!result.task.termination_request &&
+      !result.task.termination_request.executor_quiesced_at;
+    if (!claimed && !retryingActiveRequest) return result;
 
+    if (claimed) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: result.task,
+        id: result.task.task_id,
+        params,
+      });
+    }
+    // A repeated claim keeps the original requested_at fence but re-publishes
+    // the private control event. This makes Stop retryable after a lost socket
+    // delivery without creating a new cancellation epoch.
     emitServiceEvent(this.app, {
       path: 'tasks',
-      event: 'patched',
+      event: 'termination_requested',
       data: result.task,
       id: result.task.task_id,
+      method: 'patch',
       params,
     });
+    if (!claimed) return result;
+
     try {
       await this.app
         .service('sessions')
@@ -511,25 +571,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
       );
 
-      // Keep the prompt-flow patch above separate from this trusted metadata
-      // patch so collaborators do not need title-edit permission to complete a task.
-      if (status === TaskStatus.COMPLETED && task.full_prompt) {
-        const autoTitle = deriveTitleFromPrompt(task.full_prompt);
-        if (autoTitle) {
-          try {
-            const fresh = await this.app.service('sessions').get(task.session_id, params);
-            if (fresh.title == null) {
-              await this.app
-                .service('sessions')
-                .patch(task.session_id, { title: autoTitle }, { ...params, provider: undefined });
-            }
-          } catch (error) {
-            console.warn(
-              `⚠️  [TasksService] Auto-title failed for session ${shortId(task.session_id)}:`,
-              error instanceof Error ? error.message : String(error)
-            );
-          }
-        }
+      // Defensive fallback for tasks created before create-time auto-title
+      // ran (or after a transient title-patch failure). Later completed
+      // textual tasks can still title a session left unset by blank or
+      // image-only prompts.
+      if (status === TaskStatus.COMPLETED) {
+        await this.autoTitleSession(task, params);
       }
 
       if (!isStop) {
@@ -1160,6 +1207,52 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
     return connection.task;
+  }
+
+  async reportTerminationComplete(
+    data: ExecutorTerminationCompleteInput,
+    params?: TaskParams
+  ): Promise<Task> {
+    const task = await this.taskRepo.recordExecutorQuiescence(data);
+    if (!task?.termination_request) {
+      throw new Conflict(
+        `Task ${shortId(data.task_id)} has no matching active termination request`
+      );
+    }
+    const terminationRequest = task.termination_request;
+
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: task,
+      id: task.task_id,
+      params,
+    });
+
+    // Do not await containment here. A local executor must receive this RPC
+    // response before it can exit, while the coordinator verifies that process
+    // group only after the wrapper exits. Start recovery after this service
+    // transaction commits and outside its ALS database scope; the durable
+    // quiescence timestamp makes the deferred recovery restart/retry safe.
+    const coordinatorParams = { ...(params ?? {}), provider: undefined };
+    deferWithTenantContext(
+      params,
+      () =>
+        requestExecutorTermination({
+          app: this.app,
+          taskId: task.task_id,
+          cause: terminationRequest.cause,
+          errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
+          params: coordinatorParams,
+        }).then(() => undefined),
+      (error) =>
+        console.error(
+          `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,
+          error
+        )
+    );
+
+    return task;
   }
 
   async recordExecutorStartupWarning(

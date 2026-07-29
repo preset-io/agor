@@ -58,12 +58,6 @@
       "import": "./dist/claude/index.js",
       "require": "./dist/claude/index.cjs"
     },
-    "./claude-cli": {
-      "source": "./src/claude-cli/index.ts",
-      "types": "./dist/claude-cli/index.d.ts",
-      "import": "./dist/claude-cli/index.js",
-      "require": "./dist/claude-cli/index.cjs"
-    },
     "./analytics": {
       "source": "./src/analytics/index.ts",
       "types": "./dist/analytics/index.d.ts",

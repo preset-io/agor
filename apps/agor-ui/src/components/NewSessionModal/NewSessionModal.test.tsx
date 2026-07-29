@@ -12,7 +12,6 @@
  * but refused once `isCreating` is latched by an in-flight onCreate.
  */
 
-import type { User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,8 +61,8 @@ vi.mock('../AutocompleteTextarea', () => ({
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
   AgentSelectionGrid: ({ onSelect }: { onSelect: (id: string) => void }) => (
     <div data-testid="agent-grid">
-      <button type="button" data-testid="pick-cli" onClick={() => onSelect('claude-code-cli')}>
-        cli
+      <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
+        codex
       </button>
       <button type="button" data-testid="pick-opencode" onClick={() => onSelect('opencode')}>
         opencode
@@ -249,44 +248,6 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     fireEvent.click(screen.getByTestId('cfg-valid'));
     await waitFor(() => expect(button).toBeEnabled());
   });
-
-  it('applies a canonical claude-code default to a claude-code-cli session', async () => {
-    const currentUser = {
-      user_id: 'u1',
-      default_agentic_config: {
-        'claude-code': {
-          modelConfig: { mode: 'exact', model: 'canon-model' },
-          permissionMode: 'plan',
-        },
-      },
-    } as unknown as User;
-    const onCreate = vi.fn();
-    render(
-      <NewSessionModal
-        open
-        onClose={vi.fn()}
-        onCreate={onCreate}
-        availableAgents={[]}
-        branchId="branch-1"
-        currentUser={currentUser}
-        client={null}
-      />
-    );
-
-    fireEvent.click(screen.getByTestId('pick-cli'));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Session' }));
-
-    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0][0]).toEqual(
-      expect.objectContaining({
-        agent: 'claude-code-cli',
-        agenticToolPresetId: '__user_default__',
-        modelConfig: undefined,
-        permissionMode: undefined,
-      })
-    );
-  });
-
   it('omits a cleared OpenCode override so the personal exact pair can resolve', async () => {
     const currentUser = {
       user_id: 'u1',

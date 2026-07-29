@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { BranchID, BranchName, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
 const mocks = vi.hoisted(() => {
   const branch = {
@@ -66,11 +67,6 @@ vi.mock('@agor/core/db', () => ({
       mocks.databaseScopeDepth -= 1;
     }
   },
-  SessionRepository: class {
-    constructor(db: unknown) {
-      mocks.repositoryDbs.push(db);
-    }
-  },
   UsersRepository: class {
     constructor(db: unknown) {
       mocks.repositoryDbs.push(db);
@@ -97,21 +93,10 @@ vi.mock('../utils/branch-authorization.js', () => ({
   hasBranchPermission: () => true,
 }));
 
-vi.mock('../utils/mcp-token-authorization.js', () => ({
-  canControlCliSession: () => true,
-}));
-
 vi.mock('../utils/spawn-executor.js', () => ({
   generateSessionToken: () => 'session-token',
   generateScopedServiceToken: mocks.generateScopedServiceToken,
-  serviceTokenScopeForParams: () => ({}),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
-}));
-
-vi.mock('./claude-cli-integration.js', () => ({
-  buildSpawnConfigForSession: vi.fn(),
-  isClaudeRunningFor: vi.fn(async () => false),
-  writeClaudeCliMcpConfigForSession: vi.fn(async () => undefined),
 }));
 
 import { buildBranchShellTabName, buildZellijSessionName, TerminalsService } from './terminals';
@@ -265,7 +250,6 @@ describe('TerminalsService readiness ack gating', () => {
 
     expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
       expect.anything(),
-      expect.anything(),
       { terminal_user_id: params.user.user_id },
       '30d'
     );
@@ -290,6 +274,22 @@ describe('TerminalsService readiness ack gating', () => {
     );
     expect(warm.isNew).toBe(false);
     expect(warm.ready).toBe(true);
+  });
+
+  it('rejects stale Claude CLI bootstrap input before adopting or spawning an executor', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create(
+        {
+          branchId: 'branch-1',
+          ensureCliSessionId: 'historical-session',
+          focusTabName: 'cli-historic',
+        },
+        params as never
+      )
+    ).rejects.toThrow(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 
   it('notifies the browser channel on ready and error acks', () => {

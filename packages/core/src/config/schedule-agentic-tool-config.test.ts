@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   AgenticToolDefaultConfigurationReference,
   AgenticToolPresetID,
+  PersistedScheduleAgenticToolConfig,
   ScheduleAgenticToolConfig,
 } from '../types';
 import {
@@ -16,6 +17,15 @@ import {
 const LEGACY_WORKSPACE_DEFAULT = '___workspace_default___';
 
 describe('normalizeScheduleAgenticToolConfig', () => {
+  it('rejects removed runtime identifiers preserved in historical rows', () => {
+    expect(() =>
+      normalizeScheduleAgenticToolConfig({
+        agentic_tool: 'claude-code-cli',
+        permission_mode: 'auto',
+      })
+    ).toThrow(/removed or unsupported schedule agentic tool/i);
+  });
+
   it.each([
     [USER_DEFAULT_AGENTIC_CONFIGURATION, USER_DEFAULT_AGENTIC_CONFIGURATION],
     [WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION],
@@ -70,7 +80,7 @@ describe('normalizeScheduleAgenticToolConfig', () => {
     ],
   ])('rejects %s sources', (_label, config) => {
     expect(() =>
-      normalizeScheduleAgenticToolConfig(config as unknown as ScheduleAgenticToolConfig)
+      normalizeScheduleAgenticToolConfig(config as PersistedScheduleAgenticToolConfig)
     ).toThrow(InvalidScheduleAgenticToolConfigError);
   });
 

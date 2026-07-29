@@ -3,9 +3,8 @@
  *
  * `EmbeddedTerminal.tsx` statically imports `@xterm/xterm` and its addons
  * (~300KB, shared with TerminalModal). Wrapping it in React.lazy keeps xterm
- * off the always-loaded session panel chunk and defers its import to the first
- * render of an embedded terminal, which only `claude-code-cli` sessions ever
- * trigger. The public API matches EmbeddedTerminal exactly.
+ * off the always-loaded UI chunk and defers its import to the first render of
+ * an embedded terminal. The public API matches EmbeddedTerminal exactly.
  */
 import { lazy, Suspense } from 'react';
 import type { EmbeddedTerminalProps } from './EmbeddedTerminal';

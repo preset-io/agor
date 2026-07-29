@@ -14,8 +14,12 @@ import type {
   AgorClient,
   Branch,
   ChannelType,
+  DefaultModelConfig,
+  EffortLevel,
   GatewayAgenticConfig,
   GatewayChannel,
+  GatewayChannelCreateData,
+  GatewayChannelPatchData,
   GatewayConnectionTestResult,
   GatewayEnvVar,
   MCPServer,
@@ -26,6 +30,7 @@ import type {
 } from '@agor-live/client';
 import {
   GATEWAY_REDACTED_SENTINEL,
+  isAgenticToolName,
   resolveSlackAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
 } from '@agor-live/client';
@@ -78,6 +83,7 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
+import { buildModelConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
@@ -97,8 +103,8 @@ interface GatewayChannelsTableProps {
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
-  onCreate?: (data: Partial<GatewayChannel>) => void;
-  onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  onCreate?: (data: GatewayChannelCreateData) => void;
+  onUpdate?: (channelId: string, updates: GatewayChannelPatchData) => void;
   onDelete?: (channelId: string) => void;
 }
 
@@ -833,6 +839,55 @@ const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
     <Tag style={{ marginInlineStart: 8 }}>Not set</Tag>
   );
 
+const GatewayAgentConfigurationFields: React.FC<{
+  client: AgorClient | null;
+  form: FormInstance;
+  userById: Map<string, User>;
+  mcpServerById: Map<string, MCPServer>;
+  selectedAgent: AgenticToolName | null;
+  onAgentChange: (agent: AgenticToolName) => void;
+  requiresSupportedToolSelection: boolean;
+}> = ({
+  client,
+  form,
+  userById,
+  mcpServerById,
+  selectedAgent,
+  onAgentChange,
+  requiresSupportedToolSelection,
+}) => (
+  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      Configure which agent and settings to use for sessions created from this channel.
+    </Typography.Text>
+    {requiresSupportedToolSelection && (
+      <Alert
+        type="warning"
+        showIcon
+        title="This channel uses a removed agentic tool"
+        description="Its saved configuration is preserved, but it cannot create or resume sessions. Choose a supported tool to migrate the channel explicitly."
+      />
+    )}
+    <AgentSelectionGrid
+      agents={AVAILABLE_AGENTS}
+      selectedAgentId={selectedAgent}
+      onSelect={(agent) => onAgentChange(agent as AgenticToolName)}
+      columns={2}
+      showHelperText={false}
+      showComparisonLink={false}
+    />
+    {selectedAgent && (
+      <GatewayAgenticConfigurationPicker
+        form={form}
+        tool={selectedAgent}
+        userById={userById}
+        mcpServerById={mcpServerById}
+        client={client}
+      />
+    )}
+  </Space>
+);
+
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
  * and navigation lives in the unified modal footer. Selections drive a live
@@ -844,8 +899,9 @@ const SlackSetupWizard: React.FC<{
   form: FormInstance;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
-  selectedAgent: string;
-  onAgentChange: (agent: string) => void;
+  selectedAgent: AgenticToolName | null;
+  onAgentChange: (agent: AgenticToolName) => void;
+  requiresSupportedToolSelection: boolean;
   /** Slack sub-step within the unified create wizard (0=Options, 1=Create app, 2=Tokens). */
   step: number;
   testResult: GatewayConnectionTestResult | null;
@@ -858,6 +914,7 @@ const SlackSetupWizard: React.FC<{
   mcpServerById,
   selectedAgent,
   onAgentChange,
+  requiresSupportedToolSelection,
   step,
   testResult,
   testLoading,
@@ -1300,31 +1357,19 @@ const SlackSetupWizard: React.FC<{
                 <SectionLabel
                   icon={<ThunderboltOutlined />}
                   title="Agent Configuration"
-                  subtitle={selectedAgent}
+                  subtitle={selectedAgent ?? 'Choose a supported tool'}
                 />
               ),
               children: (
-                <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Configure which agent and settings to use for sessions created from this
-                    channel.
-                  </Typography.Text>
-                  <AgentSelectionGrid
-                    agents={AVAILABLE_AGENTS}
-                    selectedAgentId={selectedAgent}
-                    onSelect={onAgentChange}
-                    columns={2}
-                    showHelperText={false}
-                    showComparisonLink={false}
-                  />
-                  <GatewayAgenticConfigurationPicker
-                    form={form}
-                    tool={selectedAgent as AgenticToolName}
-                    userById={userById}
-                    mcpServerById={mcpServerById}
-                    client={client}
-                  />
-                </Space>
+                <GatewayAgentConfigurationFields
+                  client={client}
+                  form={form}
+                  userById={userById}
+                  mcpServerById={mcpServerById}
+                  selectedAgent={selectedAgent}
+                  onAgentChange={onAgentChange}
+                  requiresSupportedToolSelection={requiresSupportedToolSelection}
+                />
               ),
             },
             {
@@ -1368,8 +1413,9 @@ const ChannelFormFields: React.FC<{
   branchById: Map<string, Branch>;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
-  selectedAgent: string;
-  onAgentChange: (agent: string) => void;
+  selectedAgent: AgenticToolName | null;
+  onAgentChange: (agent: AgenticToolName) => void;
+  requiresSupportedToolSelection: boolean;
   editingChannel?: GatewayChannel | null;
   /** Current step in the unified create wizard (0 = universal "Channel" step). */
   createStep: number;
@@ -1394,6 +1440,7 @@ const ChannelFormFields: React.FC<{
   mcpServerById,
   selectedAgent,
   onAgentChange,
+  requiresSupportedToolSelection,
   editingChannel,
   createStep,
   githubLoading,
@@ -1951,31 +1998,19 @@ const ChannelFormFields: React.FC<{
                       <SectionLabel
                         icon={<ThunderboltOutlined />}
                         title="Agent Configuration"
-                        subtitle={selectedAgent}
+                        subtitle={selectedAgent ?? 'Choose a supported tool'}
                       />
                     ),
                     children: (
-                      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          Configure which agent and settings to use for sessions created from this
-                          channel.
-                        </Typography.Text>
-                        <AgentSelectionGrid
-                          agents={AVAILABLE_AGENTS}
-                          selectedAgentId={selectedAgent}
-                          onSelect={onAgentChange}
-                          columns={2}
-                          showHelperText={false}
-                          showComparisonLink={false}
-                        />
-                        <GatewayAgenticConfigurationPicker
-                          form={form}
-                          tool={selectedAgent as AgenticToolName}
-                          userById={userById}
-                          mcpServerById={mcpServerById}
-                          client={client}
-                        />
-                      </Space>
+                      <GatewayAgentConfigurationFields
+                        client={client}
+                        form={form}
+                        userById={userById}
+                        mcpServerById={mcpServerById}
+                        selectedAgent={selectedAgent}
+                        onAgentChange={onAgentChange}
+                        requiresSupportedToolSelection={requiresSupportedToolSelection}
+                      />
                     ),
                   },
                   // ── Environment Variables ──
@@ -2177,31 +2212,19 @@ const ChannelFormFields: React.FC<{
                   <SectionLabel
                     icon={<ThunderboltOutlined />}
                     title="Agent Configuration"
-                    subtitle={selectedAgent}
+                    subtitle={selectedAgent ?? 'Choose a supported tool'}
                   />
                 ),
                 children: (
-                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Configure which agent and settings to use for sessions created from this
-                      channel.
-                    </Typography.Text>
-                    <AgentSelectionGrid
-                      agents={AVAILABLE_AGENTS}
-                      selectedAgentId={selectedAgent}
-                      onSelect={onAgentChange}
-                      columns={2}
-                      showHelperText={false}
-                      showComparisonLink={false}
-                    />
-                    <GatewayAgenticConfigurationPicker
-                      form={form}
-                      tool={selectedAgent as AgenticToolName}
-                      userById={userById}
-                      mcpServerById={mcpServerById}
-                      client={client}
-                    />
-                  </Space>
+                  <GatewayAgentConfigurationFields
+                    client={client}
+                    form={form}
+                    userById={userById}
+                    mcpServerById={mcpServerById}
+                    selectedAgent={selectedAgent}
+                    onAgentChange={onAgentChange}
+                    requiresSupportedToolSelection={requiresSupportedToolSelection}
+                  />
                 ),
               },
 
@@ -2420,31 +2443,19 @@ const ChannelFormFields: React.FC<{
                   <SectionLabel
                     icon={<ThunderboltOutlined />}
                     title="Agent Configuration"
-                    subtitle={selectedAgent}
+                    subtitle={selectedAgent ?? 'Choose a supported tool'}
                   />
                 ),
                 children: (
-                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Configure which agent and settings to use for sessions created from this
-                      channel.
-                    </Typography.Text>
-                    <AgentSelectionGrid
-                      agents={AVAILABLE_AGENTS}
-                      selectedAgentId={selectedAgent}
-                      onSelect={onAgentChange}
-                      columns={2}
-                      showHelperText={false}
-                      showComparisonLink={false}
-                    />
-                    <GatewayAgenticConfigurationPicker
-                      form={form}
-                      tool={selectedAgent as AgenticToolName}
-                      userById={userById}
-                      mcpServerById={mcpServerById}
-                      client={client}
-                    />
-                  </Space>
+                  <GatewayAgentConfigurationFields
+                    client={client}
+                    form={form}
+                    userById={userById}
+                    mcpServerById={mcpServerById}
+                    selectedAgent={selectedAgent}
+                    onAgentChange={onAgentChange}
+                    requiresSupportedToolSelection={requiresSupportedToolSelection}
+                  />
                 ),
               },
 
@@ -2486,6 +2497,7 @@ const ChannelFormFields: React.FC<{
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}
             onAgentChange={onAgentChange}
+            requiresSupportedToolSelection={requiresSupportedToolSelection}
             step={createStep - 1}
             testResult={connectionTestResult}
             testLoading={connectionTestLoading}
@@ -2891,31 +2903,19 @@ const ChannelFormFields: React.FC<{
                   <SectionLabel
                     icon={<ThunderboltOutlined />}
                     title="Agent Configuration"
-                    subtitle={selectedAgent}
+                    subtitle={selectedAgent ?? 'Choose a supported tool'}
                   />
                 ),
                 children: (
-                  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Configure which agent and settings to use for sessions created from this
-                      channel.
-                    </Typography.Text>
-                    <AgentSelectionGrid
-                      agents={AVAILABLE_AGENTS}
-                      selectedAgentId={selectedAgent}
-                      onSelect={onAgentChange}
-                      columns={2}
-                      showHelperText={false}
-                      showComparisonLink={false}
-                    />
-                    <GatewayAgenticConfigurationPicker
-                      form={form}
-                      tool={selectedAgent as AgenticToolName}
-                      userById={userById}
-                      mcpServerById={mcpServerById}
-                      client={client}
-                    />
-                  </Space>
+                  <GatewayAgentConfigurationFields
+                    client={client}
+                    form={form}
+                    userById={userById}
+                    mcpServerById={mcpServerById}
+                    selectedAgent={selectedAgent}
+                    onAgentChange={onAgentChange}
+                    requiresSupportedToolSelection={requiresSupportedToolSelection}
+                  />
                 ),
               },
               // ── Environment Variables ──
@@ -2989,8 +2989,21 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
-  const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
+  const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(false);
+  // One-shot flag consumed by the "pre-populate agentic config" effect below —
+  // set whenever handleEdit hydrates the edit form from a channel's persisted
+  // config, so that hydration is never immediately overwritten by the user's
+  // global defaults. Value-based guards (e.g. comparing selectedAgent to the
+  // channel's persisted agent) can't distinguish "just opened" from "switched
+  // away and back", so a one-shot ref is used instead.
+  const skipAgentDefaultsAfterEditHydrationRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const handleAgentChange = useCallback((agent: AgenticToolName) => {
+    setSelectedAgent(agent);
+    setRequiresSupportedToolSelection(false);
+  }, []);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [referencedBranchesById, setReferencedBranchesById] = useState<Map<string, Branch>>(
@@ -3232,11 +3245,29 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     await runConnectionProbe('slack', {}, editingChannel.id);
   }, [editingChannel, runConnectionProbe]);
 
+  // Pre-populate agentic config form with user defaults when agent changes.
+  // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
+  // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
+  // otherwise applying the user's *global* defaults would stomp the channel's own
+  // saved config (including the independently hydrated MCP selection). Every subsequent
+  // agent change — including switching
+  // back to the channel's original agent — legitimately re-applies that agent's
+  // defaults, so the form never holds a silent mix of stale fields.
+  useEffect(() => {
+    if (skipAgentDefaultsAfterEditHydrationRef.current) {
+      skipAgentDefaultsAfterEditHydrationRef.current = false;
+      return;
+    }
+    if (!selectedAgent) return;
+    const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent];
+    const activeForm = editModalOpen ? editForm : createForm;
+    activeForm.setFieldsValue(getFormValuesFromConfig(selectedAgent, agentDefaults));
+  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
   const extractFormData = (
     values: Record<string, unknown>,
     existingConfig?: Record<string, unknown>,
-    agent?: string
-  ): Partial<GatewayChannel> => {
+    agent?: AgenticToolName
+  ): GatewayChannelCreateData => {
     // Strip redacted sentinel values from existingConfig so they're never sent
     // back to the server. The API redacts tokens to '••••••••' — if we spread
     // that into the config object, the backend would save the sentinel as the
@@ -3346,8 +3377,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
         ? (values.agenticToolPresetId as NonNullable<GatewayAgenticConfig['presetId']>)
         : undefined;
+    const modelConfig = !presetId
+      ? buildModelConfigFromFormValues({
+          modelConfig: values.modelConfig as DefaultModelConfig | undefined,
+          effort: values.effort as EffortLevel | undefined,
+        })
+      : undefined;
     const commonAgenticConfig = {
-      agent: (agent || 'claude-code') as AgenticToolName,
+      agent: agent ?? 'claude-code',
       // Include env vars — filter out empty-key entries only.
       // Sentinel values ('••••••••') are sent through so the backend can
       // substitute real values from the database. Empty array = delete all.
@@ -3364,9 +3401,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           ...(values.permissionMode
             ? { permissionMode: values.permissionMode as PermissionMode }
             : {}),
-          ...(values.modelConfig
-            ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
-            : {}),
+          ...(modelConfig ? { modelConfig } : {}),
           ...(values.codexSandboxMode
             ? {
                 codexSandboxMode:
@@ -3400,6 +3435,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleCreate = async () => {
+    if (!selectedAgent) {
+      showError('Choose a supported agentic tool before creating this channel');
+      return;
+    }
     setCreating(true);
     try {
       await createForm.validateFields();
@@ -3469,6 +3508,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setCreateModalOpen(false);
     setChannelType('slack');
     setSelectedAgent('claude-code');
+    setRequiresSupportedToolSelection(false);
     resetCreateFlow();
   };
 
@@ -3476,8 +3516,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     resetConnectionTest();
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
-    const agent = channel.agentic_config?.agent || 'claude-code';
+    const persistedAgent = channel.agentic_config?.agent ?? 'claude-code';
+    const agent = isAgenticToolName(persistedAgent) ? persistedAgent : null;
+    skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
+    setRequiresSupportedToolSelection(agent === null);
     resetConnectionTest();
     // Resolve the Slack app id behind the stored bot token (best-effort; the
     // backend returns nulls rather than erroring). Fire-and-forget so the modal
@@ -3515,6 +3558,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
+      effort: channel.agentic_config?.modelConfig?.effort,
       mcpServerIds: channel.mcp_server_ids ?? [],
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
@@ -3579,6 +3623,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const handleUpdate = () => {
     if (!editingChannel) return;
+    if (!selectedAgent) {
+      showError('Choose a supported agentic tool before saving this historical channel');
+      return;
+    }
     editForm
       .validateFields()
       .then(() => {
@@ -3595,6 +3643,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         setEditModalOpen(false);
         setEditingChannel(null);
         setChannelType('slack');
+        setRequiresSupportedToolSelection(false);
       })
       .catch((error) => {
         console.error('Form validation failed:', error);
@@ -3858,7 +3907,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             userById={userById}
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}
-            onAgentChange={setSelectedAgent}
+            onAgentChange={handleAgentChange}
+            requiresSupportedToolSelection={requiresSupportedToolSelection}
             createStep={createStep}
             githubLoading={githubLoading}
             githubError={githubError}
@@ -3882,11 +3932,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           setEditingChannel(null);
           setChannelType('slack');
           setSelectedAgent('claude-code');
+          setRequiresSupportedToolSelection(false);
           resetConnectionTest();
         }}
         okText="Save"
+        okButtonProps={{ disabled: requiresSupportedToolSelection }}
         width={600}
       >
+        {requiresSupportedToolSelection && (
+          <Alert
+            type="warning"
+            showIcon
+            title="This channel uses a removed agentic tool"
+            description="Its saved configuration is preserved. Choose a supported tool before saving any changes."
+            style={{ marginTop: 16 }}
+          />
+        )}
         <Form
           form={editForm}
           layout="vertical"
@@ -3904,7 +3965,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             userById={userById}
             mcpServerById={mcpServerById}
             selectedAgent={selectedAgent}
-            onAgentChange={setSelectedAgent}
+            onAgentChange={handleAgentChange}
+            requiresSupportedToolSelection={requiresSupportedToolSelection}
             editingChannel={editingChannel}
             createStep={0}
             githubLoading={false}

@@ -9,6 +9,22 @@ interface LocalStorageChangeDetail {
 }
 
 /**
+ * Write a value to localStorage AND notify mounted `useLocalStorage` hooks on
+ * the same key in this tab. Use this for writes that happen outside React
+ * (e.g. store event handlers) so hook consumers don't go stale.
+ */
+export function writeSharedLocalStorageJson<T>(key: string, value: T): void {
+  writeLocalStorageJson(key, value);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_CHANGE_EVENT, {
+        detail: { key, value },
+      })
+    );
+  }
+}
+
+/**
  * Hook for persisting state to localStorage with type safety.
  * The setter is referentially stable (safe to use in dependency arrays).
  */

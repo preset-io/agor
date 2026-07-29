@@ -34,15 +34,15 @@ import {
 import type { ModelConfigInput } from '@agor/core/models';
 import {
   formatModelToolMismatchWarning,
-  formatUnsupportedAgorCodexModelMessage,
+  getCodexModelSelectionError,
   hasCompleteOpenCodeModelConfig,
   InvalidModelConfigError,
-  isUnsupportedAgorCodexModel,
   lintModelToolMatch,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
 } from '@agor/core/models';
 import type {
   AgenticToolConfigurationSource,
+  AgenticToolName,
   AuthenticatedParams,
   Branch,
   BranchPermissionLevel,
@@ -53,12 +53,14 @@ import type {
   QueryParams,
   Session,
   SessionID,
+  SessionUpdate,
   TaskID,
   UserID,
   UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
@@ -204,7 +206,7 @@ export type SessionArchiveResult = {
 /**
  * Extended sessions service with custom methods
  */
-export class SessionsService extends DrizzleService<Session, Partial<Session>, SessionParams> {
+export class SessionsService extends DrizzleService<Session, SessionUpdate, SessionParams> {
   private sessionRepo: SessionRepository;
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
@@ -225,17 +227,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (agenticTool === 'opencode' && modelConfig != null && modelConfig.mode !== 'exact') {
       throw new BadRequest('OpenCode model_config mode must be exact');
     }
-    if (
-      agenticTool === 'codex' &&
-      modelConfig?.model &&
-      isUnsupportedAgorCodexModel(modelConfig.model)
-    ) {
-      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(modelConfig.model));
+    if (agenticTool === 'codex' && modelConfig) {
+      const modelError = getCodexModelSelectionError({
+        mode: modelConfig.mode ?? 'alias',
+        model: modelConfig.model ?? '',
+      });
+      if (modelError) throw new BadRequest(modelError);
     }
   }
 
   private async materializeConfiguration(
-    agenticTool: Session['agentic_tool'],
+    agenticTool: AgenticToolName,
     source: AgenticToolConfigurationSource,
     executionOwnerId: string | UserID | UUID | null | undefined,
     parent?: AgenticConfigParent
@@ -295,11 +297,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    * session's existing tasks/messages. Enforce it here so the constraint
    * holds regardless of caller.
    */
-  private async assertAgenticToolMutable(sessionId: string, nextTool: unknown): Promise<void> {
+  private async assertAgenticToolMutable(
+    sessionId: string,
+    nextTool: AgenticToolName
+  ): Promise<void> {
     if (nextTool === undefined) return;
 
     const existing = await this.sessionRepo.findById(sessionId);
     if (!existing || existing.agentic_tool === nextTool) return;
+    requireActiveAgenticTool(existing.agentic_tool);
 
     const taskCount = await this.taskRepo.countBySession(sessionId);
     if (taskCount > 0) {
@@ -325,7 +331,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (Array.isArray(data)) {
       return Promise.all(data.map((session) => this.create(session, params))) as Promise<Session[]>;
     }
-    const agenticTool = data.agentic_tool ?? 'claude-code';
+    const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
@@ -370,6 +376,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     session: Session,
     _params?: SessionParams
   ): Promise<Session> {
+    const agenticTool = requireActiveAgenticTool(session.agentic_tool);
     const tenantId = getCurrentTenantId();
     if (!tenantId) {
       throw new Error('Missing active tenant context for agentic tool preset materialization');
@@ -382,7 +389,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         ? ((await this.sessionRepo.findById(lineageId)) ?? undefined)
         : undefined;
       const materialized = await materializeAgenticToolConfiguration(tenantDb, {
-        tool: session.agentic_tool,
+        tool: agenticTool,
         source: session.agentic_tool_preset_id
           ? { reference: session.agentic_tool_preset_id }
           : {
@@ -394,7 +401,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         executionOwnerId: session.created_by as UserID,
         parent,
       });
-      this.assertSupportedModelConfig(session.agentic_tool, materialized.model_config);
+      this.assertSupportedModelConfig(agenticTool, materialized.model_config);
       return this.sessionRepo.update(
         session.session_id,
         {
@@ -403,7 +410,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           model_config:
             !session.agentic_tool_preset_id &&
             session.model_config == null &&
-            session.agentic_tool !== 'opencode'
+            agenticTool !== 'opencode'
               ? null
               : materialized.model_config,
         },
@@ -619,6 +626,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     params?: SessionParams
   ): Promise<Session> {
     const parent = await this.get(id, params);
+    const parentTool = requireActiveAgenticTool(parent.agentic_tool);
 
     // Default: attribute the child to the MCP-authenticated caller, not the
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
@@ -627,7 +635,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     const forkedSession = await this.create(
       {
-        agentic_tool: parent.agentic_tool,
+        agentic_tool: parentTool,
         agentic_tool_preset_id: parent.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
@@ -724,7 +732,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       throw new Error('Spawn requires a prompt');
     }
     const parent = await this.get(id, params);
-    const targetTool = data.agent || parent.agentic_tool;
+    requireActiveAgenticTool(parent.agentic_tool);
+    const targetTool = requireActiveAgenticTool(data.agent || parent.agentic_tool);
     const hasInlineSource =
       data.permissionMode !== undefined ||
       data.modelConfig !== undefined ||
@@ -1246,7 +1255,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
    */
   async patch(
     id: import('@agor/core/types').NullableId,
-    data: Partial<Session>,
+    data: SessionUpdate,
     params?: SessionParams
   ): Promise<Session | Session[]> {
     let replaceAgenticConfig = false;
@@ -1259,15 +1268,17 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     ) {
       throw new BadRequest('Agentic configuration cannot be changed with a multi-session patch');
     }
-    if (data.agentic_tool && !(await isTenantAgenticToolEnabled(data.agentic_tool, this.db))) {
-      throw new BadRequest(`${data.agentic_tool} is disabled for this workspace`);
+    const patchedAgenticTool =
+      data.agentic_tool === undefined ? undefined : requireActiveAgenticTool(data.agentic_tool);
+    if (patchedAgenticTool && !(await isTenantAgenticToolEnabled(patchedAgenticTool, this.db))) {
+      throw new BadRequest(`${patchedAgenticTool} is disabled for this workspace`);
     }
     // `agentic_tool` is immutable once a session has tasks. Multi-session and
     // array patches that touch it are already rejected above, so the single-id
     // path is the only one that can reach the actual mutation — enforce the
     // guard there, matching the exact target the patch will modify.
     if (data.agentic_tool !== undefined && id !== null && !Array.isArray(id)) {
-      await this.assertAgenticToolMutable(String(id), data.agentic_tool);
+      await this.assertAgenticToolMutable(String(id), patchedAgenticTool!);
     }
     if (id && !Array.isArray(id)) {
       const current = await this.get(String(id), params);
@@ -1299,10 +1310,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         data.permission_config !== undefined ||
         data.agentic_tool !== undefined;
       if (changesConfiguration) {
-        const tool = data.agentic_tool ?? current.agentic_tool;
-        if (data.model_config !== undefined) {
-          this.assertSupportedModelConfig(tool, data.model_config);
-        }
+        const tool = requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool);
         const sameTool = tool === current.agentic_tool;
         const currentPermission = sameTool ? current.permission_config : undefined;
         const inlinePermission =
@@ -1349,6 +1357,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           current.created_by,
           parent
         );
+        this.assertSupportedModelConfig(tool, materialized.model_config);
         data = {
           ...data,
           agentic_tool_preset_id: materialized.agentic_tool_preset_id,
@@ -1383,7 +1392,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     return result;
   }
 
-  async update(id: string, data: Partial<Session>, params?: SessionParams): Promise<Session> {
+  async update(id: string, data: SessionUpdate, params?: SessionParams): Promise<Session> {
     return (await this.patch(id, data, params)) as Session;
   }
 

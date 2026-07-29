@@ -12,6 +12,7 @@ import type {
 } from './realtime-access-cache';
 import {
   configureRealtimePublish,
+  executorTaskChannelName,
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
 } from './realtime-publish';
@@ -74,6 +75,84 @@ function session(id: string, branchId: string): Session {
 }
 
 const scopeOnlyDb = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
+
+describe('configureRealtimePublish executor control scope', () => {
+  it('routes termination only to the private room for that Task', async () => {
+    const browser = { user: user('browser') };
+    const executor = { user: user('executor') };
+    const room = executorTaskChannelName('tenant-a', 'task-1');
+    const app = makeApp([browser, executor], {}, { [room]: [executor] });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+
+    const result = (await app.runPublish(
+      { task_id: 'task-1', status: 'stopping' },
+      {
+        path: 'tasks',
+        method: 'patch',
+        event: 'termination_requested',
+        params: {},
+      }
+    )) as unknown as FakeChannel[];
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.connections).toEqual([executor]);
+  });
+
+  it('does not materialize a room when Stop wins before executor connect', async () => {
+    const app = makeApp([]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+
+    await expect(
+      app.runPublish(
+        { task_id: 'task-1', status: 'stopping' },
+        {
+          path: 'tasks',
+          method: 'patch',
+          event: 'termination_requested',
+          params: {},
+        }
+      )
+    ).resolves.toEqual([]);
+    expect(app.channels).not.toContain(executorTaskChannelName('tenant-a', 'task-1'));
+  });
+
+  it('does not deliver a tenant A Stop to the same Task room in tenant B', async () => {
+    const tenantBExecutor = { user: user('executor-b') };
+    const tenantBRoom = executorTaskChannelName('tenant-b', 'task-1');
+    const app = makeApp([tenantBExecutor], {}, { [tenantBRoom]: [tenantBExecutor] });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+
+    await expect(
+      app.runPublish(
+        { task_id: 'task-1', status: 'stopping' },
+        {
+          path: 'tasks',
+          method: 'patch',
+          event: 'termination_requested',
+          params: {},
+        }
+      )
+    ).resolves.toEqual([]);
+  });
+});
 
 function repos(options: {
   branch: Branch;

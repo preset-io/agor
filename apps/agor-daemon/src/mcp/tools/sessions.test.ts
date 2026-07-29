@@ -13,6 +13,7 @@
  * calls, and assert on the session payload + attach calls.
  */
 
+import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -395,7 +396,9 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.model).toBe('claude-opus-4-6');
     expect(created.model_config.mode).toBe('alias');
     expect(created.model_config.effort).toBe('max');
-    expect(typeof created.model_config.updated_at).toBe('string');
+    // The SessionsService is the canonical materialization boundary and adds
+    // updated_at after the MCP adapter hands off this explicit source.
+    expect(created.model_config.updated_at).toBeUndefined();
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.session).not.toHaveProperty('mcp_token');
@@ -505,13 +508,13 @@ describe('agor_sessions_create', () => {
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.created_by).toBe('user-b');
     expect(created.unix_username).toBe('bob');
-    expect(created.permission_config.mode).toBe('acceptEdits');
-    expect(created.model_config.model).toBe('claude-sonnet-5');
-    expect(created.model_config.effort).toBe('high');
-    expect(created.model_config.model).not.toBe('claude-parent');
+    // Defaults are resolved by SessionsService for the acting creator rather
+    // than snapshotted by the MCP adapter.
+    expect(created.permission_config).toBeUndefined();
+    expect(created.model_config).toBeUndefined();
   });
 
-  it('falls back to user default modelConfig when none is explicitly provided', async () => {
+  it('leaves an omitted modelConfig for SessionsService to resolve from user defaults', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
@@ -543,8 +546,7 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
-    expect(created.model_config.effort).toBe('medium');
+    expect(created.model_config).toBeUndefined();
   });
 
   it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
@@ -1283,7 +1285,9 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias'); // default applied by resolveModelConfig
+    // String shorthand is normalized to a model-only inline source. The
+    // SessionsService applies the default alias mode.
+    expect(created.model_config.mode).toBeUndefined();
   });
 });
 
@@ -1297,9 +1301,7 @@ describe('agor_models_list', () => {
     const result = await agor_models_list({});
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(parsed['claude-code']).toBeDefined();
-    expect(parsed.codex).toBeDefined();
-    expect(parsed.gemini).toBeDefined();
+    expect(Object.keys(parsed)).toEqual(AGENTIC_TOOL_NAMES);
 
     expect(parsed['claude-code'].default).toBe('claude-sonnet-5');
     expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
@@ -1312,6 +1314,11 @@ describe('agor_models_list', () => {
     const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
     expect(claudeIds).toContain('claude-opus-4-6');
     expect(claudeIds).toContain('claude-sonnet-5');
+    expect(parsed.opencode).toMatchObject({
+      default: null,
+      models: [],
+      note: expect.stringContaining('provider-specific'),
+    });
   });
 
   it('filters to a single agenticTool when requested', async () => {
@@ -1333,15 +1340,73 @@ describe('agor_models_list', () => {
     expect(parsed.codex.note).toContain('omit modelConfig');
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
-    expect(codexIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-    expect(codexIds).not.toContain('gpt-5.5');
-    expect(codexIds).not.toContain('gpt-5.4-mini');
-    expect(codexIds).not.toContain('gpt-5.4');
+    expect(codexIds.slice(0, 3)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(codexIds).toContain('gpt-5.5');
+    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).toContain('gpt-5.4');
     expect(codexIds).not.toContain('gpt-5-codex');
+    expect(
+      parsed.codex.models.find((model: { id: string }) => model.id === 'gpt-5.5')
+    ).toMatchObject({
+      status: 'known',
+      availability: 'provider-dependent',
+    });
   });
 });
 
 describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
+  it('accepts every active tool and rejects historical tools on session creation boundaries', async () => {
+    const tools = await registerAndCaptureTools(
+      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_sessions_create', 'agor_sessions_spawn', 'agor_sessions_prompt', 'agor_models_list']
+    );
+
+    for (const agenticTool of AGENTIC_TOOL_NAMES) {
+      expect(
+        tools.agor_sessions_create.cfg.inputSchema!.safeParse({
+          branchId: 'branch-1',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_sessions_spawn.cfg.inputSchema!.safeParse({
+          prompt: 'delegate',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_sessions_prompt.cfg.inputSchema!.safeParse({
+          sessionId: 'session-1',
+          prompt: 'delegate',
+          mode: 'subsession',
+          agenticTool,
+        }).success
+      ).toBe(true);
+      expect(
+        tools.agor_models_list.cfg.inputSchema!.safeParse({
+          agenticTool,
+        }).success
+      ).toBe(true);
+    }
+
+    for (const tool of Object.values(tools)) {
+      expect(
+        tool.cfg.inputSchema!.safeParse({
+          branchId: 'branch-1',
+          sessionId: 'session-1',
+          prompt: 'delegate',
+          mode: 'subsession',
+          agenticTool: 'claude-code-cli',
+        }).success
+      ).toBe(false);
+    }
+    expect(
+      tools.agor_models_list.cfg.inputSchema!.safeParse({
+        agenticTool: 'claude-code-cli',
+      }).success
+    ).toBe(false);
+  });
+
   // Regression: a Zod `.transform()` on `modelConfig` made `toJSONSchema` throw
   // ("Transforms cannot be represented in JSON Schema"). The catch in
   // `mcp/server.ts` then degraded the *entire* containing tool's schema to

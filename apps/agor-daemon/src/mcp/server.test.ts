@@ -1,4 +1,5 @@
 import { request as httpRequest } from 'node:http';
+import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -97,6 +98,26 @@ describe('MCP tool registry', () => {
         ).toBeDefined();
       }
     }
+  });
+
+  it('does not advertise configured proxy tools, domains, or artifact grants', () => {
+    const registry = buildRegistry();
+
+    expect(registry.listDomains().map(({ domain }) => domain)).not.toContain('proxies');
+    expect(
+      registry
+        .search(undefined, { maxResults: Number.MAX_SAFE_INTEGER })
+        .some(({ name }) => name.startsWith('agor_proxies_'))
+    ).toBe(false);
+
+    const publishSchema = registry.get('agor_artifacts_publish')?.inputSchema;
+    const agorGrants = (
+      publishSchema?.properties as
+        | Record<string, { properties?: Record<string, unknown> }>
+        | undefined
+    )?.agorGrants;
+    expect(agorGrants?.properties).not.toHaveProperty('agor_proxies');
+    expect(agorGrants?.properties).not.toHaveProperty('agor_token');
   });
 });
 
@@ -222,7 +243,10 @@ describe('POST /mcp token source', () => {
   });
 
   it('rejects an internal MCP token replayed under a conflicting trusted tenant', async () => {
-    initMcpTokens({ db: testSqliteDb() });
+    initMcpTokens({
+      db: testSqliteDb(),
+      multiTenancy: resolveMultiTenancyConfig({}),
+    });
     const now = Math.floor(Date.now() / 1000);
     const token = jwt.sign(
       {

@@ -6,11 +6,7 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import {
-  materializeAgenticToolConfiguration,
-  PublicBaseUrlNotConfiguredError,
-  requirePublicBaseUrl,
-} from '@agor/core/config';
+import { getBaseUrl, materializeAgenticToolConfiguration } from '@agor/core/config';
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
@@ -72,6 +68,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
@@ -1683,12 +1680,12 @@ export class GatewayService {
     user: User
   ): Promise<string | null> {
     try {
-      const baseUrl = await requirePublicBaseUrl();
-      return getSessionUrl(sessionId, baseUrl);
+      const baseUrl = await getBaseUrl();
+      const sessionUrl = getSessionUrl(sessionId, baseUrl);
+      if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
+      return sessionUrl;
     } catch (error) {
-      if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
-        console.warn('[gateway] Failed to build public session URL:', error);
-      }
+      console.warn('[gateway] Failed to build public session URL:', error);
     }
 
     try {
@@ -2004,7 +2001,9 @@ export class GatewayService {
 
     // Resolve the channel's one source against the actual execution owner.
     const agenticConfig = channel.agentic_config;
-    const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const agenticTool: AgenticToolName = requireActiveAgenticTool(
+      agenticConfig?.agent ?? 'claude-code'
+    );
     const inlineAgenticConfiguration = {
       modelConfig: agenticConfig?.modelConfig,
       permissionMode: agenticConfig?.permissionMode,
@@ -2444,6 +2443,7 @@ export class GatewayService {
           const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
+            tenantId: getCurrentTenantId(),
           });
           failedAttachments = failed;
           if (paths.length > 0) {

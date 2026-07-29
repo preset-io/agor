@@ -41,7 +41,10 @@ function appDouble(tool = 'codex') {
       return { outcome, task: value };
     });
   };
-  return { app, claim, settle, claimTermination, settleTermination, sessionGet };
+  const setCurrent = (value: ReturnType<typeof task>) => {
+    current = value;
+  };
+  return { app, claim, settle, setCurrent, claimTermination, settleTermination, sessionGet };
 }
 
 const stopping = (cause: 'user_stop' | 'sdk_health_failure' | 'heartbeat_lost') =>
@@ -84,6 +87,80 @@ describe('termination coordinator', () => {
       task: { status: TaskStatus.STOPPED },
     });
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
+  });
+
+  it('accepts a scoped remote executor quiescence report without local signaling', async () => {
+    const state = appDouble();
+    const remoteStopping = {
+      ...stopping('user_stop'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+      termination_request: {
+        ...stopping('user_stop').termination_request,
+        executor_quiesced_at: '2026-01-01T00:00:01.100Z',
+      },
+    };
+    state.claim(remoteStopping);
+    state.settle(task(TaskStatus.STOPPED));
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.STOPPED },
+    });
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('observes a remote socket-stop report during the cooperative grace window', async () => {
+    const state = appDouble();
+    const remoteStopping = {
+      ...stopping('user_stop'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+    };
+    state.claim(remoteStopping);
+    state.settle(task(TaskStatus.STOPPED));
+
+    const result = requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      cooperativeGraceMs: 100,
+    });
+    setTimeout(() => {
+      state.setCurrent({
+        ...remoteStopping,
+        termination_request: {
+          ...remoteStopping.termination_request,
+          executor_quiesced_at: '2026-01-01T00:00:01.100Z',
+        },
+      });
+    }, 5);
+
+    await expect(result).resolves.toMatchObject({ status: 'terminal' });
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('still verifies local process absence after executor quiescence', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    const localStopping = {
+      ...stopping('user_stop'),
+      executor_mode: 'local',
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+      termination_request: {
+        ...stopping('user_stop').termination_request,
+        executor_quiesced_at: '2026-01-01T00:00:01.100Z',
+      },
+    };
+    state.claim(localStopping);
+    state.settle(task(TaskStatus.STOPPED));
+
+    await request(state.app, 'user_stop');
+
+    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {
+      preSignalGraceMs: 250,
+    });
   });
 
   it('contains a terminal task before releasing its tracked executor', async () => {

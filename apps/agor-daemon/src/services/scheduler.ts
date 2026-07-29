@@ -38,6 +38,7 @@
  */
 
 import {
+  InvalidScheduleAgenticToolConfigError,
   materializeAgenticToolConfiguration,
   normalizeScheduleAgenticToolConfig,
 } from '@agor/core/config';
@@ -68,7 +69,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { isAgenticToolName, SessionStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import {
   getNextRunTime,
@@ -171,6 +172,18 @@ export async function materializeScheduleAgenticToolConfig(
   }
 > {
   const cfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
+  return materializeNormalizedScheduleAgenticToolConfig(db, cfg, schedule.created_by);
+}
+
+async function materializeNormalizedScheduleAgenticToolConfig(
+  db: TenantScopeAwareDatabase,
+  cfg: ScheduleAgenticToolConfig,
+  createdBy: UUID
+): Promise<
+  Omit<ScheduleAgenticToolConfig, 'model_config'> & {
+    model_config?: Session['model_config'];
+  }
+> {
   const materialized = await materializeAgenticToolConfiguration(db, {
     tool: cfg.agentic_tool,
     source: cfg.configuration_reference
@@ -186,7 +199,7 @@ export async function materializeScheduleAgenticToolConfig(
               codexNetworkAccess: cfg.codex_network_access,
             },
           },
-    executionOwnerId: schedule.created_by as UserID,
+    executionOwnerId: createdBy as UserID,
   });
   return {
     agentic_tool: cfg.agentic_tool,
@@ -222,8 +235,19 @@ export class ScheduleBusyError extends Error {
  * runnable (disabled, missing entity, etc.).
  */
 export class ScheduleNotReadyError extends Error {
-  public readonly code: 'schedule_disabled' | 'schedule_incomplete';
-  constructor(code: 'schedule_disabled' | 'schedule_incomplete', message: string) {
+  public readonly code:
+    | 'schedule_disabled'
+    | 'schedule_incomplete'
+    | 'schedule_agentic_tool_removed'
+    | 'schedule_invalid_config';
+  constructor(
+    code:
+      | 'schedule_disabled'
+      | 'schedule_incomplete'
+      | 'schedule_agentic_tool_removed'
+      | 'schedule_invalid_config',
+    message: string
+  ) {
     super(message);
     this.name = 'ScheduleNotReadyError';
     this.code = code;
@@ -607,6 +631,22 @@ export class SchedulerService {
   ): Promise<Session | null> {
     const { source, triggeredBy } = options;
     const manual = source === 'manual';
+    let persistedCfg: ScheduleAgenticToolConfig;
+    try {
+      persistedCfg = normalizeScheduleAgenticToolConfig(schedule.agentic_tool_config);
+    } catch (error) {
+      if (!(error instanceof InvalidScheduleAgenticToolConfigError)) throw error;
+      const removedTool = !isAgenticToolName(schedule.agentic_tool_config.agentic_tool);
+      if (!manual) {
+        await this.advanceScheduleCursor(schedule, now);
+      }
+      throw new ScheduleNotReadyError(
+        removedTool ? 'schedule_agentic_tool_removed' : 'schedule_invalid_config',
+        removedTool
+          ? 'This schedule uses the removed experimental Claude Code CLI integration. Choose a supported agentic tool before running it.'
+          : error.message
+      );
+    }
 
     const branch = await this.withTenantDatabase(() =>
       this.branchRepo.findById(schedule.branch_id)
@@ -671,7 +711,7 @@ export class SchedulerService {
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
       const cfg = await this.withTenantDatabase(() =>
-        materializeScheduleAgenticToolConfig(this.db, schedule)
+        materializeNormalizedScheduleAgenticToolConfig(this.db, persistedCfg, schedule.created_by)
       );
 
       // 6. Create session with schedule metadata + FK back to schedule.
@@ -850,6 +890,19 @@ export class SchedulerService {
       console.error(`      ❌ Failed to update schedule metadata:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Advance a rejected cron schedule to its next real fire without pretending
+   * a run occurred. This prevents an enabled historical/corrupt schedule from
+   * being retried on every scheduler tick while preserving it for migration.
+   */
+  private async advanceScheduleCursor(schedule: Schedule, now: number): Promise<void> {
+    const tz = resolveScheduleTz(schedule.timezone_mode, schedule.timezone);
+    const nextRunAt = getNextRunTime(schedule.cron_expression, new Date(now), tz);
+    await this.withTenantDatabase(() =>
+      this.scheduleRepo.update(schedule.schedule_id, { next_run_at: nextRunAt })
+    );
   }
 
   /**

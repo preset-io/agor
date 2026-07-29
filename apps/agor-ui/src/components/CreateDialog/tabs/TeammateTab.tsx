@@ -4,6 +4,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   CreateRepoRequest,
+  DefaultModelConfig,
   EffortLevel,
   MCPServer,
   PermissionMode,
@@ -18,14 +19,13 @@ import { slugify } from '@/utils/repoSlug';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
-import { getFormValuesFromConfig } from '../../AgenticToolConfigForm';
+import { buildConfigFromFormValues, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
 } from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import { TeammateFormFields } from '../../forms/TeammateFormFields';
-import type { ModelConfig } from '../../ModelSelector';
 
 export interface TeammateTabResult {
   displayName: string;
@@ -36,7 +36,7 @@ export interface TeammateTabResult {
   sourceBranch?: string;
   agent: AgenticToolName;
   agenticToolPresetId?: string;
-  modelConfig?: ModelConfig;
+  modelConfig?: DefaultModelConfig;
   effort?: EffortLevel;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
@@ -110,8 +110,22 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         (values.permissionMode as PermissionMode | undefined) ??
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
-      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = isInline ? values.modelConfig : undefined;
+      const isInline =
+        !values.agenticToolPresetId || values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const hasCompleteOpenCodeModel = Boolean(
+        values.modelConfig?.provider?.trim() && values.modelConfig?.model?.trim()
+      );
+      const inlineAgentConfig =
+        isInline && (selectedAgent !== 'opencode' || hasCompleteOpenCodeModel)
+          ? buildConfigFromFormValues(selectedAgent, {
+              modelConfig: values.modelConfig,
+              effort: values.effort,
+              permissionMode: values.permissionMode,
+              codexSandboxMode: values.codexSandboxMode,
+              codexApprovalPolicy: values.codexApprovalPolicy,
+              codexNetworkAccess: values.codexNetworkAccess,
+            })
+          : undefined;
 
       const result: TeammateTabResult = {
         displayName: values.displayName.trim(),
@@ -122,13 +136,8 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         sourceBranch: values.sourceBranch || 'main',
         agent: selectedAgent,
         agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
-        modelConfig: selectedModelConfig,
-        effort:
-          isInline &&
-          (selectedAgent !== 'opencode' ||
-            Boolean(selectedModelConfig?.provider?.trim() && selectedModelConfig?.model?.trim()))
-            ? ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort)
-            : undefined,
+        modelConfig: isInline ? inlineAgentConfig?.modelConfig : undefined,
+        effort: undefined,
         mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
         permissionMode: isInline ? permissionMode : undefined,
       };
@@ -190,6 +199,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                         onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
                         variant="select"
                         showComparisonLink
+                        fallbackToFirstVisibleAgent
                       />
                     </Form.Item>
 

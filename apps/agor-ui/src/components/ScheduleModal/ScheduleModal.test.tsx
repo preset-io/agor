@@ -87,8 +87,11 @@ function makeSchedule(): Schedule {
   } as Schedule;
 }
 
-function renderModal(patch: ReturnType<typeof vi.fn>, onClose = vi.fn()) {
-  const schedule = makeSchedule();
+function renderModal(
+  patch: ReturnType<typeof vi.fn>,
+  onClose = vi.fn(),
+  schedule = makeSchedule()
+) {
   const executionOwner = { user_id: schedule.created_by } as User;
   const client = {
     service: () => ({
@@ -132,6 +135,24 @@ describe('ScheduleModal agentic configuration payload', () => {
     );
   });
 
+  it('preserves a removed tool as historical configuration until explicitly replaced', async () => {
+    const historicalSchedule = {
+      ...makeSchedule(),
+      agentic_tool_config: {
+        agentic_tool: 'claude-code-cli',
+        permission_mode: 'auto',
+      },
+    } as Schedule;
+
+    renderModal(vi.fn(), vi.fn(), historicalSchedule);
+
+    expect(
+      await screen.findByText('This schedule uses a removed agentic tool')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByTestId('configuration-picker')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['Choose user default', USER_DEFAULT_AGENTIC_CONFIGURATION],
     ['Choose workspace default', WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION],
@@ -144,6 +165,7 @@ describe('ScheduleModal agentic configuration payload', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('branch_id');
     expect(patch.mock.calls[0][1].agentic_tool_config).toEqual({
       agentic_tool: 'codex',
       configuration_reference: reference,

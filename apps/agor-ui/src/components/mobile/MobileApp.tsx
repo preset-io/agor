@@ -2,7 +2,6 @@ import type { AgorClient, User } from '@agor-live/client';
 import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
-import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBoardById,
@@ -13,6 +12,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { BrandMark } from '../BrandMark';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
@@ -107,16 +107,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                   gap: 24,
                 }}
               >
-                <img
-                  src={brandMarkHref()}
-                  alt={BRAND.name}
-                  style={{
-                    width: 160,
-                    height: 160,
-                    opacity: 0.5,
-                    borderRadius: '50%',
-                  }}
-                />
+                <BrandMark size={160} style={{ opacity: 0.5 }} />
                 <Text type="secondary" style={{ textAlign: 'center' }}>
                   Tap the menu icon to browse boards and sessions
                 </Text>

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ModelSelector } from './ModelSelector';
 
 describe('ModelSelector (Claude)', () => {
-  it('renders curated aliases by display name and offers a pin affordance', () => {
+  it('renders aliases by display name and offers a pin affordance', () => {
     render(
       <ModelSelector
         agentic_tool="claude-code"
@@ -91,5 +91,30 @@ describe('ModelSelector (Claude)', () => {
     expect(screen.getByText(/Frontier model for complex reasoning/)).toHaveStyle({
       whiteSpace: 'normal',
     });
+  });
+
+  it('offers previous aliases alongside the preferred models', () => {
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+
+    expect(screen.getByText('Claude Opus 4.7')).toBeInTheDocument();
+    expect(screen.getByText('Claude Sonnet 4.6')).toBeInTheDocument();
+  });
+});
+
+describe('ModelSelector (Codex)', () => {
+  it('marks older aliases whose availability depends on the provider account', () => {
+    render(<ModelSelector agentic_tool="codex" value={{ mode: 'alias', model: 'gpt-5.6-sol' }} />);
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+
+    expect(screen.getAllByText('account-dependent').length).toBeGreaterThan(0);
   });
 });

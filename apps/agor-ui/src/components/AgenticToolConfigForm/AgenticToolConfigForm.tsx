@@ -15,7 +15,7 @@
  */
 
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
-import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
+import { AGENTIC_TOOL_CAPABILITIES, DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -72,6 +72,8 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
+  const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[agenticTool];
+  const effortLevels = toolCapabilities.reasoningEffortLevels;
 
   return (
     <>
@@ -112,17 +114,23 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
       </Form.Item>
 
-      {(agenticTool === 'claude-code' || agenticTool === 'claude-code-cli') && (
+      {effortLevels && (
         <Form.Item
           name="effort"
           label="Reasoning Effort"
           help={
             showHelpText
-              ? 'Control how much reasoning Claude applies (low = fast, high = thorough, max = Opus only)'
+              ? toolCapabilities.defaultReasoningEffort
+                ? 'Control how much reasoning the agent applies'
+                : 'Control how much reasoning the agent applies; inherited uses the runtime configuration'
               : undefined
           }
         >
-          <EffortSelector />
+          <EffortSelector
+            levels={effortLevels}
+            fallbackValue={toolCapabilities.defaultReasoningEffort}
+            allowInherited={!toolCapabilities.defaultReasoningEffort}
+          />
         </Form.Item>
       )}
 

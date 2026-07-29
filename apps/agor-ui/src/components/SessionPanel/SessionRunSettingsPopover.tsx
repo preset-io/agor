@@ -1,4 +1,5 @@
 import type {
+  AgenticToolName,
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -17,12 +18,12 @@ import { Tag } from '../Tag';
 
 export interface SessionRunSettingsPopoverProps {
   client: AgorClient | null;
-  session: Session;
+  session: Session & { agentic_tool: AgenticToolName };
   modelLabel?: string;
   modelConfig?: ModelConfig;
   onModelConfigChange: (config: ModelConfig | undefined) => void;
-  effortLevel: EffortLevel;
-  onEffortChange: (effort: EffortLevel) => void;
+  effortLevel?: EffortLevel;
+  onEffortChange: (effort: EffortLevel | undefined) => void;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   codexSandboxMode: CodexSandboxMode;

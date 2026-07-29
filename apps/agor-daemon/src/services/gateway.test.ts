@@ -1,4 +1,4 @@
-import { materializeAgenticToolConfiguration } from '@agor/core/config';
+import { getBaseUrl, materializeAgenticToolConfiguration } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
@@ -47,6 +47,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
         mcp_server_ids: args.mcpServerIds ?? [],
       };
     }),
+    getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
   };
 });
 
@@ -228,9 +229,49 @@ function makeGatewayHarness(args: {
 }
 
 afterEach(() => {
+  vi.mocked(getBaseUrl).mockReset();
+  vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');
   vi.mocked(getConnector).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
   vi.mocked(materializeAgenticToolConfiguration).mockClear();
+});
+
+describe('GatewayService session links', () => {
+  it('builds browser-facing links from the configured UI origin', async () => {
+    vi.mocked(getBaseUrl).mockResolvedValueOnce('http://localhost:5173');
+    const { service } = makeGatewayHarness({});
+    const sessionId = '01927f9d-0000-7000-8000-000000000001' as SessionID;
+
+    const sessionUrl = await (
+      service as unknown as {
+        fetchExistingSessionUrlForGatewayUser: (
+          sessionId: SessionID,
+          user: User
+        ) => Promise<string | null>;
+      }
+    ).fetchExistingSessionUrlForGatewayUser(sessionId, user);
+
+    expect(sessionUrl).toBe(`http://localhost:5173/ui/s/${shortId(sessionId)}/`);
+  });
+
+  it('does not expose a 0.0.0.0 gateway link', async () => {
+    vi.mocked(getBaseUrl).mockResolvedValueOnce('http://0.0.0.0:5173');
+    const { service } = makeGatewayHarness({});
+
+    const sessionUrl = await (
+      service as unknown as {
+        fetchExistingSessionUrlForGatewayUser: (
+          sessionId: SessionID,
+          user: User
+        ) => Promise<string | null>;
+      }
+    ).fetchExistingSessionUrlForGatewayUser(
+      '01927f9d-0000-7000-8000-000000000001' as SessionID,
+      user
+    );
+
+    expect(sessionUrl).toBeNull();
+  });
 });
 
 describe('gateway tenant metadata helpers', () => {
@@ -1352,18 +1393,21 @@ describe('GatewayService Slack attachment ingestion', () => {
       connector: {},
     });
 
-    const result = await service.create({
-      channel_key: 'slack-key',
-      thread_id: 'D123-100.000000',
-      text: 'what does this screenshot show?',
-      files: inboundFiles,
-      metadata: dmMetadata,
-    });
+    const result = await runWithTenantContext('tenant-channel', () =>
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'D123-100.000000',
+        text: 'what does this screenshot show?',
+        files: inboundFiles,
+        metadata: dmMetadata,
+      })
+    );
 
     expect(result).toMatchObject({ success: true, sessionId: 'sess-1' });
     expect(ingestInboundAttachments).toHaveBeenCalledWith({
       files: inboundFiles,
       botToken: 'xoxb-test',
+      tenantId: 'tenant-channel',
     });
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/screenshot_1.png');

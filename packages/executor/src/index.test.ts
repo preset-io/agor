@@ -113,4 +113,97 @@ describe('AgorExecutor watchdog handoff', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(exit).toHaveBeenCalledWith(70);
   });
+
+  it('aborts immediately on the durable stopping patch and reports quiescence', async () => {
+    const reportTerminationComplete = vi.fn().mockResolvedValue({});
+    const heartbeatStop = vi.fn();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service: () => { reportTerminationComplete: typeof reportTerminationComplete };
+      };
+      heartbeat: { stop: typeof heartbeatStop } | null;
+      abortController: AbortController;
+      handleTaskLifecycleUpdate(task: unknown): void;
+      reportTerminationComplete(): Promise<void>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete }) };
+    executor.heartbeat = { stop: heartbeatStop };
+
+    executor.handleTaskLifecycleUpdate({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    expect(executor.abortController.signal.aborted).toBe(true);
+    expect(heartbeatStop).toHaveBeenCalledOnce();
+    await executor.reportTerminationComplete();
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    });
+  });
+
+  it('handles the private task-scoped termination socket event', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const heartbeatStop = vi.fn();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service(path: string): {
+          on(event: string, listener: (data: unknown) => void): void;
+        };
+      };
+      heartbeat: { stop: typeof heartbeatStop } | null;
+      abortController: AbortController;
+      setupEventListeners(): void;
+    };
+    executor.client = {
+      service(path) {
+        return {
+          on(event, listener) {
+            listeners.set(`${path}:${event}`, listener);
+          },
+        };
+      },
+    };
+    executor.heartbeat = { stop: heartbeatStop };
+    executor.setupEventListeners();
+
+    listeners.get('tasks:termination_requested')?.({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+    listeners.get('tasks:termination_requested')?.({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    expect(executor.abortController.signal.aborted).toBe(true);
+    expect(heartbeatStop).toHaveBeenCalledOnce();
+  });
 });

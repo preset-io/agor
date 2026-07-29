@@ -27,8 +27,8 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
-import { isSdkHealthAbort } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -391,10 +391,9 @@ function hasProviderCredential(
   tool: AgenticToolName,
   connection: Record<string, string | undefined>
 ): boolean {
-  const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
-  if (!(canonicalTool in PROVIDER_CREDENTIAL_FIELDS)) return false;
-  return PROVIDER_CREDENTIAL_FIELDS[canonicalTool as keyof typeof PROVIDER_CREDENTIAL_FIELDS].some(
-    (field) => connection[field]?.trim()
+  if (!(tool in PROVIDER_CREDENTIAL_FIELDS)) return false;
+  return PROVIDER_CREDENTIAL_FIELDS[tool as keyof typeof PROVIDER_CREDENTIAL_FIELDS].some((field) =>
+    connection[field]?.trim()
   );
 }
 
@@ -420,11 +419,12 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
-  const coordinatorOwnsTerminality = () => isSdkHealthAbort(params.abortController);
+  const daemonOwnsTerminality = () => isDaemonOwnedAbort(params.abortController);
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
   let abortHandler: (() => Promise<void>) | undefined;
+  let abortCompletion: Promise<void> | undefined;
 
   try {
     // Ensure plain git commands launched by the agent SDK inherit safe.directory
@@ -475,29 +475,36 @@ export async function executeToolTask(params: {
     // Pass the resolved key (or empty string) and useNativeAuth flag
     const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
 
-    // Wire up abort signal to tool's stopTask method.
-    // Triggered by SIGTERM handler calling abortController.abort().
-    abortHandler = async () => {
-      console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
-      if (tool.stopTask) {
-        try {
-          const stopResult = await tool.stopTask(sessionId, taskId);
-          if (stopResult.success) {
-            console.log(`[${toolName}] Tool stopped successfully`);
-          } else {
-            console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+    // Wire up abort signal to tool's stopTask method. The primary path is a
+    // durable STOPPING patch over the socket; SIGTERM remains a fallback.
+    abortHandler = () => {
+      abortCompletion ??= (async () => {
+        console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+        if (tool.stopTask) {
+          try {
+            const stopResult = await tool.stopTask(sessionId, taskId);
+            if (stopResult.success) {
+              console.log(`[${toolName}] Tool stopped successfully`);
+            } else {
+              console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+            }
+          } catch (error) {
+            console.error(`[${toolName}] Error calling stopTask:`, error);
           }
-        } catch (error) {
-          console.error(`[${toolName}] Error calling stopTask:`, error);
+        } else {
+          console.warn(`[${toolName}] Tool does not implement stopTask method`);
         }
-      } else {
-        console.warn(`[${toolName}] Tool does not implement stopTask method`);
-      }
+      })();
+      return abortCompletion;
     };
 
     // Handle race condition: if signal is already aborted, call handler immediately
     if (params.abortController.signal.aborted) {
       await abortHandler();
+      // Cancellation may arrive during git setup or credential resolution,
+      // before the provider has registered any active work for stopTask().
+      // Never launch fresh SDK work after that durable cancellation.
+      return;
     }
 
     // Listen for abort signal
@@ -515,7 +522,7 @@ export async function executeToolTask(params: {
       params.messageSource
     );
 
-    if (coordinatorOwnsTerminality()) return;
+    if (daemonOwnsTerminality()) return;
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
@@ -626,7 +633,7 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    if (coordinatorOwnsTerminality()) return;
+    if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
     console.error(`[${toolName}] Execution failed:`, err);
 
@@ -691,5 +698,8 @@ export async function executeToolTask(params: {
     if (abortHandler) {
       params.abortController.signal.removeEventListener('abort', abortHandler);
     }
+    // AbortSignal dispatch does not await async listeners. Do not report the
+    // executor quiesced until the provider-specific stop hook has completed.
+    await abortCompletion;
   }
 }

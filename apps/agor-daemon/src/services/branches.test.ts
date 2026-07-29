@@ -20,6 +20,7 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
     ...actual,
     spawnExecutor: vi.fn(),
     runExecutorCommand: vi.fn(),
+    generateScopedServiceToken: vi.fn(() => 'service-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
@@ -199,6 +200,10 @@ const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
   mockedRunExecutorCommand.mockReset();
+  mockedRunExecutorCommand.mockResolvedValue({
+    success: true,
+    data: { exists: true, kind: 'directory' },
+  });
 });
 
 function createFindHarness(opts: {

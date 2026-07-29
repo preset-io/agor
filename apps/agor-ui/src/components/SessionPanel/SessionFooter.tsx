@@ -1,4 +1,6 @@
 import type {
+  AgenticToolCapabilities,
+  AgenticToolName,
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -44,7 +46,7 @@ import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 export interface SessionFooterProps {
   // Session data for chips
-  session: Session;
+  session: Session & { agentic_tool: AgenticToolName };
   currentUserId?: string;
   footerTimerTask: Task | null;
   tokenBreakdown: {
@@ -70,9 +72,9 @@ export interface SessionFooterProps {
   composerAttachmentsPresent?: boolean;
   composerAttachmentUploading?: boolean;
   connectionDisabled: boolean;
-  toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
+  toolCaps?: AgenticToolCapabilities;
   // Settings state
-  effortLevel: EffortLevel;
+  effortLevel?: EffortLevel;
   permissionMode: PermissionMode;
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
@@ -90,7 +92,7 @@ export interface SessionFooterProps {
   onSpawnOpen: () => void;
   onAttachFiles: () => void;
   onUploadOpen: () => void;
-  onEffortChange: (v: EffortLevel) => void;
+  onEffortChange: (v: EffortLevel | undefined) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   // Prompt textarea rendered between the two bars
@@ -144,6 +146,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   promptInputSlot,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
+  const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
@@ -294,8 +297,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       </div>
 
-      {/* Effort — only for claude-code */}
-      {session.agentic_tool === 'claude-code' && (
+      {supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <PercentageOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -322,6 +324,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             <EffortSelector
               value={effortLevel}
               onChange={onEffortChange}
+              levels={toolCaps.reasoningEffortLevels}
+              fallbackValue={toolCaps.defaultReasoningEffort}
+              allowInherited={!toolCaps.defaultReasoningEffort}
               size="small"
               compact
               plain
@@ -1248,7 +1253,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
 
   const stopTooltip = stopRequestInFlight
-    ? 'Sending stop request...'
+    ? 'Stopping...'
     : isStopping
       ? 'Stopping... (Click again to retry if stuck)'
       : 'Stop Execution';
@@ -1617,7 +1622,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   danger
                   size="small"
                   icon={
-                    isStopping && !stopRequestInFlight ? <Spin size="small" /> : <StopOutlined />
+                    stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
                   onClick={onStop}
                   disabled={!isRunning || stopRequestInFlight}

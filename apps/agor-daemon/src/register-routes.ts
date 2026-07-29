@@ -59,7 +59,6 @@ import type {
   SessionMCPServer,
   StreamingEventType,
   Task,
-  TaskID,
   User,
   UUID,
 } from '@agor/core/types';
@@ -102,8 +101,11 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
-import { registerProxies } from './setup/proxies.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
+import {
+  REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
+  requireActiveAgenticTool,
+} from './utils/agentic-tool-runtime.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
@@ -125,7 +127,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { canControlCliSession } from './utils/mcp-token-authorization.js';
+import {
+  buildPromptTaskMetadata,
+  type PromptTaskMetadataInput,
+} from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
   deferWithSessionQueueTenantScope,
@@ -138,7 +143,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
-import { assertStatelessFsModeCompatible } from './utils/stateless-fs-compatibility.js';
+import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -196,6 +201,11 @@ export interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+}
+
+/** Compatibility tombstone retained for stale Claude CLI restart clients. */
+export function rejectRemovedClaudeCliRestart(): never {
+  throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
 }
 
 function isServiceAccountRoute(params: RouteParams): boolean {
@@ -350,6 +360,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ...options,
       around: [tenantIdentityAround, ...(options.around ?? [])],
     });
+
+  // Long routes carry tenant identity without holding a route-wide database
+  // transaction. Bind direct repository dependencies to short units of work;
+  // hooked service calls establish their own scopes.
+  const stopRouteRepositories = bindStopRouteRepositories(db, {
+    taskRepo: new TaskRepository(db),
+    branchRepo: branchRepository,
+  });
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
@@ -669,12 +687,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // HTTP proxies (off by default; mounted only when config.proxies has entries)
-  // ============================================================================
-
-  registerProxies(app, config, jwtSecret);
-
-  // ============================================================================
   // Messages bulk + streaming routes
   // ============================================================================
 
@@ -879,138 +891,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  /**
-   * Restart the Zellij pane for a Claude Code CLI session.
-   *
-   * Closes the existing `cli-<short>` tab (if any) and re-spawns `claude`
-   * inside a fresh tab against the same JSONL. The session's
-   * `cli_state.watcher_offset` is preserved so the watcher resumes
-   * tailing from wherever it left off — no events are lost across the
-   * restart.
-   *
-   * Use this when claude has crashed / been Ctrl-C'd inside the pane,
-   * when auth changes and you want a clean process, or when the Zellij
-   * pane's foreground has fallen back to bash after `claude` exited.
-   */
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/restart-cli',
     {
-      async create(_data: unknown, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Session ID required');
-        const session = await sessionsService.get(id, params);
-        if (session.agentic_tool !== 'claude-code-cli') {
-          throw new Error(
-            `Restart is only supported for claude-code-cli sessions; this session is ${session.agentic_tool}`
-          );
-        }
-        const targetUserId = session.created_by;
-        if (!targetUserId) throw new Error('Session has no created_by — cannot route restart');
-        if (
-          params.provider &&
-          !canControlCliSession({
-            callerUserId: params.user?.user_id,
-            callerRole: params.user?.role,
-            sessionCreatedBy: session.created_by,
-          })
-        ) {
-          throw new Forbidden('You can only restart Claude CLI sessions you created.');
-        }
-
-        const tabName = `cli-${shortId(session.session_id)}`;
-        const channel = `user/${targetUserId}/terminal`;
-
-        // 1) Hard-kill any live `claude` process bound to this session.
-        //    Zellij's `close-tab` SHOULD propagate SIGHUP to its
-        //    foreground, but in practice claude sometimes survives the
-        //    pane death long enough to collide on session-id uniqueness
-        //    ("Session ID … is already in use") when the new spawn
-        //    fires. `pkill -f` against the argv pattern is the reliable
-        //    kill. Match BOTH `--session-id <X>` (first launch) and
-        //    `--resume <X>` (post-restart spawn) — same code path
-        //    `buildClaudeCliSpawn` emits.
-        try {
-          const { spawn: spawnProc } = await import('node:child_process');
-          const killProc = spawnProc(
-            'pkill',
-            ['-f', `claude .*(--session-id|--resume) ${session.session_id}`],
-            { stdio: 'ignore' }
-          );
-          await new Promise<void>((resolve) => {
-            killProc.on('exit', () => resolve());
-            killProc.on('error', () => resolve());
-            // Defensive cap — pkill should be <100ms.
-            setTimeout(() => {
-              try {
-                killProc.kill();
-              } catch {
-                /* already exited */
-              }
-              resolve();
-            }, 2000);
-          });
-        } catch (err) {
-          console.warn('[claude-cli-integration] pkill failed, proceeding anyway', err);
-        }
-
-        // 2) Atomic close-all + create-with-command via `forceRecreate`.
-        //
-        // Previous implementation emitted `close` then waited 800ms
-        // then re-ran `onCliSessionCreated` which emitted `create`.
-        // Two problems:
-        //   - `close` only closed the focused tab (one of potentially
-        //     several duplicates from earlier racing executors), so
-        //     the subsequent `create` would see surviving siblings
-        //     and auto-converse to `focus` — restart "succeeded" but
-        //     claude never actually respawned.
-        //   - The 800ms timer was a guess against an uncoordinated
-        //     race between executors.
-        //
-        // With `forceRecreate: true` the executor closes EVERY tab
-        // matching `tabName` first, then issues `new-tab --layout`
-        // with the freshly-built claude argv — atomic in the
-        // executor's tab-event loop. No timer, no surviving stale
-        // tab, no auto-converse. Restart actually restarts.
-        const branch = (await app.service('branches').get(session.branch_id, params)) as {
-          path?: string;
-        };
-        const cwd = branch?.path;
-        if (!cwd) throw new Error('Branch has no path; cannot restart');
-        const {
-          buildSpawnConfigForSession,
-          resolveClaudeCliProviderSpawn,
-          writeClaudeCliMcpConfigForSession,
-        } = await import('./services/claude-cli-integration.js');
-        const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
-        const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session, {
-          actor: params.user ?? null,
-        });
-        const spawnCfg = buildSpawnConfigForSession(session, cwd, { mcpConfigPath });
-        const built = await resolveClaudeCliProviderSpawn(
-          app,
-          session,
-          buildClaudeCliSpawn(spawnCfg)
-        );
-        if (!built) throw new Error('No scoped Claude credential is configured');
-        if (app.io) {
-          app.io.to(channel).emit('terminal:tab', {
-            userId: targetUserId,
-            action: 'create',
-            tabName,
-            cwd,
-            command: built.bin,
-            commandArgs: built.args,
-            forceRecreate: true,
-          });
-        }
-
-        return { ok: true, tabName };
+      async create() {
+        return rejectRemovedClaudeCliRestart();
       },
-      // biome-ignore lint/suspicious/noExplicitAny: FeathersJS route handler type mismatch
-    } as any,
+    },
     {
-      create: { role: ROLES.MEMBER, action: 'restart claude CLI session' },
+      create: { role: ROLES.MEMBER, action: 'restart sessions' },
     },
     requireAuth
   );
@@ -1082,7 +972,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `dispatching` (or directly to `running` for CLI).
+   * `created` / `queued` → `dispatching`.
    *
    * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
    * drainer call this helper. Centralising the transition guarantees that:
@@ -1124,9 +1014,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       session: loadedSession,
     } = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
       const session = await sessionsService.get(task.session_id, params);
+      const agenticTool = requireActiveAgenticTool(session.agentic_tool);
       return {
         session,
-        agenticToolEnabled: await isTenantAgenticToolEnabled(session.agentic_tool, tenantDb),
+        agenticToolEnabled: await isTenantAgenticToolEnabled(agenticTool, tenantDb),
         // Recompute message_range.start_index against the live message count.
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
       };
@@ -1138,16 +1029,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       loadedSession,
       params
     );
+    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
+    const runtimeMessageSource =
+      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
+        ? persistedMessageSource
+        : undefined;
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
-    // before executor spawn. Non-CLI executors claim DISPATCHING → RUNNING after
-    // authenticating; claude-code-cli has no executor connection and stays direct.
+    // before executor spawn. Executors claim DISPATCHING → RUNNING after
+    // authenticating.
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
     const launchState = buildTaskLaunchState(
-      session.agentic_tool,
       startTimestamp,
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
@@ -1189,9 +1084,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Prefer task.metadata.source (set when the task was queued) over
         // the request's messageSource — the latter applies only to the
         // current draining tick, the former to where the prompt originated.
-        const source = task.metadata?.source ?? options.messageSource;
-        if (source) {
-          messageMetadata.source = source;
+        if (runtimeMessageSource) {
+          messageMetadata.source = runtimeMessageSource;
         }
 
         const userMessage = buildInitialUserMessage({
@@ -1255,97 +1149,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const sessionId = task.session_id;
     const taskId = task.task_id;
 
-    // Claude Code CLI: there is no in-process executor. The `claude` REPL
-    // is already running in the user's Zellij pane. "Prompting" the
-    // session = injecting the prompt text + a newline into that pane's
-    // PTY stdin, exactly as if the user typed it. The watcher (which is
-    // already tailing the session's JSONL) picks up the resulting turn.
-    //
-    // The Agor textarea + MCP `agor_sessions_prompt` both flow through
-    // this code path; for CLI sessions we short-circuit before
-    // `executeTask` and emit `terminal:input` instead.
-    if (session.agentic_tool === 'claude-code-cli') {
-      // Hand the task off to the watcher BEFORE we PTY-inject. The watcher
-      // claims this task on the next `user_message` JSONL line and links
-      // every subsequent assistant/tool message to it — then closes it on
-      // `turn_end`. Without this stash, the watcher would mint a *new*
-      // task on that user line and we'd end up with two task rows per
-      // turn (the empty one from /prompt + the one the watcher minted).
-      //
-      // Import lazily to avoid pulling claude-cli-integration into the
-      // hot-path of every non-CLI prompt.
-      const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
-      setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
-
-      deferInFreshTenantScope(params, async () => {
-        try {
-          const targetUserId = session.created_by;
-          if (!targetUserId) {
-            throw new Error('CLI session has no created_by — cannot route PTY injection');
-          }
-          const channel = `user/${targetUserId}/terminal`;
-          const tabName = `cli-${shortId(session.session_id)}`;
-          const io = (
-            app as unknown as {
-              io?: { to(r: string): { emit(ev: string, p: unknown): void } };
-            }
-          ).io;
-
-          // Focus the session's tab BEFORE injecting input. Zellij sends
-          // terminal:input to whichever pane is currently focused, so
-          // without this step a prompt typed in the Agor textarea while
-          // the user happens to be viewing a sibling tab (e.g. the
-          // branch's `test-branch` bash) would land in bash and
-          // produce `bash: hello: command not found`. The 150ms delay
-          // gives Zellij time to process the focus before the input
-          // bytes arrive.
-          io?.to(channel).emit('terminal:tab', {
-            userId: targetUserId,
-            action: 'focus',
-            tabName,
-          });
-          await new Promise((r) => setTimeout(r, 150));
-
-          // Append \r so the REPL submits. Zellij forwards raw bytes
-          // unchanged to claude's pseudo-tty. If the user is currently
-          // mid-typing into the REPL, the bytes interleave — documented
-          // race per the analysis doc § Blind spot #2.
-          const payload = `${promptForExecutor}\r`;
-          io?.to(channel).emit('terminal:input', { userId: targetUserId, input: payload });
-          console.log(
-            `[claude-cli] PTY-injected prompt into ${channel} → tab ${tabName} (task ${shortId(taskId)}, ${promptForExecutor.length} chars)`
-          );
-          // Task lifecycle is now owned by the watcher's sink: it closes
-          // the task through TasksService on `turn_end`.
-          // We deliberately do NOT pre-complete here.
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[claude-cli] PTY injection failed for task ${shortId(taskId)}: ${msg}`);
-          await safePatch(
-            'tasks',
-            taskId,
-            {
-              status: TaskStatus.FAILED,
-              completed_at: new Date().toISOString(),
-              error_message: `PTY injection failed: ${msg}`,
-            },
-            'Task',
-            params
-          );
-          // Failure path: also flip the session back to IDLE so the user
-          // can retry. The success path lets the watcher handle this on
-          // turn_end.
-          await app
-            .service('sessions')
-            .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params)
-            .catch(() => {
-              /* best-effort */
-            });
-        }
-      });
-      return updatedTask;
-    }
-
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
     // response should not block on the executor process being live.
@@ -1364,7 +1167,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             prompt: promptForExecutor,
             permissionMode: options.permissionMode,
             stream: useStreaming,
-            messageSource: options.messageSource,
+            messageSource: runtimeMessageSource,
           },
           params
         );
@@ -1451,10 +1254,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * External callers receive no validation on this field — it's
-           * trusted because the route is RBAC-gated.
+           * Transport provenance (`source`) is daemon-owned and deliberately
+           * excluded/sanitized even for stale or untyped clients.
            */
-          metadata?: Partial<import('@agor/core/types').TaskMetadata>;
+          metadata?: PromptTaskMetadataInput;
         },
         params: RouteParams
       ) {
@@ -1479,11 +1282,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
+        const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
 
-        if (!(await isTenantAgenticToolEnabled(session.agentic_tool ?? 'claude-code', db))) {
-          throw new Forbidden(
-            `${session.agentic_tool ?? 'claude-code'} is disabled for this workspace`
-          );
+        if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
+          throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
         }
         session = await sessionsService.materializeAgenticToolConfiguration(session, params);
         if (
@@ -1493,11 +1295,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         ) {
           throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
         }
-
-        assertStatelessFsModeCompatible(
-          session.agentic_tool as import('@agor/core/types').AgenticToolName,
-          config.execution?.stateless_fs_mode
-        );
 
         // Auto-unarchive on prompt
         if (session.archived) {
@@ -1559,12 +1356,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 full_prompt: data.prompt,
                 created_by: createdBy,
                 status: TaskStatus.QUEUED,
-                metadata: {
-                  ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-                  ...(messageSource ? { source: messageSource } : {}),
-                  ...(data.metadata ?? {}),
-                },
+                metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
               });
+              await tasksService.autoTitleSession(queuedTask, params);
 
               console.log(
                 `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
@@ -1602,10 +1396,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // writes the user-message row, and spawns the executor. Both this
             // path and processNextQueuedTask go through that helper so behavior
             // stays in lockstep.
-            const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
-              ...(messageSource ? { source: messageSource } : {}),
-              ...(data.metadata ?? {}),
-            };
+            const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
               full_prompt: data.prompt,
@@ -1613,6 +1404,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               status: TaskStatus.CREATED,
               metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
             });
+            await tasksService.autoTitleSession(task, params);
             // Bypassing the service means no native 'created' emit; do it here
             // so reactive clients see the new task before the executor spawns.
             emitServiceEvent(app, {
@@ -2225,7 +2017,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Stop endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  // Stop coordinates durable state with an external executor and may wait for
+  // its socket acknowledgement. It must not hold the route-wide tenant DB
+  // transaction while waiting: emitServiceEvent correctly defers realtime
+  // publication until commit, so a long transaction here would withhold the
+  // Stop event until after the cooperative grace expired and containment had
+  // already fallen back to SIGTERM. Internal service calls still use their
+  // normal short tenant transactions.
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
     {
@@ -2257,7 +2056,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const userId = params.user?.user_id;
             const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
             const isOwner =
-              !!userId && (await branchRepository.isOwner(session.branch_id, userId as UUID));
+              !!userId &&
+              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
             if (!isAdmin && !isOwner) {
               throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
             }
@@ -2285,7 +2085,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stopSessionPreserveQueue(
             {
               app,
-              taskRepo: new TaskRepository(db),
+              taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
             },
             id as SessionID,
@@ -2294,7 +2094,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           )
         );
 
-        if (result.success && !result.queueHandled) {
+        if (result.success) {
           triggerPreservedQueue();
         }
 
@@ -2517,7 +2317,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // message_range/git_state, writes the user-message row, appends to
     // session.tasks, spawns the executor). We pass the messageSource from
     // task.metadata so callback styling survives the queue → run hop.
-    const source = nextTask.metadata?.source;
+    const persistedSource = nextTask.metadata?.source;
+    const source =
+      persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
     await spawnTaskExecutor(
       stillQueued,
       {

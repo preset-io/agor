@@ -74,6 +74,32 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();
   });
 
+  it('rejects startup for a historical removed-runtime session before policy lookup', async () => {
+    const db = { run: vi.fn() } as never;
+    const historicalSession = {
+      ...session,
+      agentic_tool: 'claude-code-cli',
+    } as Session;
+    const sessionsService = {
+      get: vi.fn(async () => historicalSession),
+      materializeAgenticToolConfiguration: vi.fn(),
+    };
+
+    await expect(
+      runWithTenantContext('tenant-x', () =>
+        prepareSessionForExecutorStart(
+          db,
+          sessionsService as never,
+          historicalSession.session_id,
+          {} as never
+        )
+      )
+    ).rejects.toThrow(/removed experimental Claude Code CLI integration/i);
+
+    expect(mocks.isTenantAgenticToolEnabled).not.toHaveBeenCalled();
+    expect(sessionsService.materializeAgenticToolConfiguration).not.toHaveBeenCalled();
+  });
+
   it('joins an existing tenant database scope', async () => {
     const db = { run: vi.fn() } as never;
     const sessionsService = createSessionsService();

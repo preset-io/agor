@@ -8,8 +8,8 @@
 import type {
   AgenticToolPresetID,
   BranchID,
+  PersistedScheduleAgenticToolConfig,
   Schedule,
-  ScheduleAgenticToolConfig,
   ScheduleID,
   SessionID,
   TimezoneMode,
@@ -62,10 +62,10 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
   private rowToSchedule(row: ScheduleRow): Schedule {
     const storedConfig =
       typeof row.agentic_tool_config === 'string'
-        ? (JSON.parse(row.agentic_tool_config) as ScheduleAgenticToolConfig)
-        : (row.agentic_tool_config as ScheduleAgenticToolConfig);
+        ? (JSON.parse(row.agentic_tool_config) as PersistedScheduleAgenticToolConfig)
+        : (row.agentic_tool_config as PersistedScheduleAgenticToolConfig);
     const storedPresetId = row.agentic_tool_preset_id as AgenticToolPresetID | null;
-    const config: ScheduleAgenticToolConfig = storedPresetId
+    const config: PersistedScheduleAgenticToolConfig = storedPresetId
       ? {
           agentic_tool: storedConfig.agentic_tool,
           preset_id: storedPresetId,

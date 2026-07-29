@@ -20,9 +20,6 @@ describe('getModelSelectorFallbackModel', () => {
     expect(getModelSelectorFallbackModel('claude-code', AVAILABLE_CLAUDE_MODEL_ALIASES)).toBe(
       DEFAULT_CLAUDE_MODEL
     );
-    expect(getModelSelectorFallbackModel('claude-code-cli', AVAILABLE_CLAUDE_MODEL_ALIASES)).toBe(
-      DEFAULT_CLAUDE_MODEL
-    );
   });
 
   it('uses canonical non-Claude defaults even when model lists are newest-first', () => {
@@ -52,20 +49,21 @@ describe('getModelSelectorFallbackModel', () => {
 describe('curateModelOptions (Claude)', () => {
   const normalized = AVAILABLE_CLAUDE_MODEL_ALIASES.map(normalizeModelOption);
 
-  it('keeps only the latest alias per model line and drops [1m]/legacy versions', () => {
+  it('keeps preferred and previous aliases available', () => {
     const ids = curateModelOptions('claude-code', normalized, DEFAULT_CLAUDE_MODEL).map(
       (m) => m.id
     );
-    // Exactly one entry per line: the newest Opus/Sonnet/Haiku/Fable.
-    expect(ids).toContain('claude-opus-4-8');
+
+    expect(ids).toContain('claude-opus-5');
     expect(ids).toContain('claude-sonnet-5');
     expect(ids).toContain('claude-haiku-4-5');
     expect(ids).toContain('claude-fable-5');
-    // Superseded, dated, and 1M variants are excluded from the top-level list.
-    expect(ids).not.toContain('claude-opus-4-7');
-    expect(ids).not.toContain('claude-sonnet-4-6');
-    expect(ids).not.toContain('claude-opus-4-1');
-    expect(ids.some((id) => id.includes('[1m]'))).toBe(false);
+    expect(ids).toContain('claude-opus-4-8');
+    expect(ids).toContain('claude-opus-4-7');
+    expect(ids).toContain('claude-sonnet-4-6');
+    expect(ids).toContain('claude-opus-4-1');
+    expect(ids).toContain('claude-sonnet-4-5[1m]');
+    expect(ids).toHaveLength(normalized.length);
   });
 
   it('surfaces the default/recommended model first', () => {
@@ -75,10 +73,10 @@ describe('curateModelOptions (Claude)', () => {
     expect(ids[0]).toBe(DEFAULT_CLAUDE_MODEL);
   });
 
-  it('never drops the current default even if it is a superseded version', () => {
+  it('surfaces a previous alias first when it is the configured default', () => {
     const ids = curateModelOptions('claude-code', normalized, 'claude-sonnet-4-5').map((m) => m.id);
-    expect(ids).toContain('claude-sonnet-4-5');
     expect(ids[0]).toBe('claude-sonnet-4-5');
+    expect(ids).toHaveLength(normalized.length);
   });
 
   it('passes non-Claude lists through unchanged aside from default-first ordering', () => {
@@ -91,10 +89,25 @@ describe('curateModelOptions (Claude)', () => {
   });
 });
 
+describe('normalizeModelOption', () => {
+  it('preserves provider availability metadata for picker presentation', () => {
+    expect(
+      normalizeModelOption({
+        id: 'older-model',
+        label: 'Older model',
+        availability: 'provider-dependent',
+      })
+    ).toMatchObject({
+      id: 'older-model',
+      displayName: 'Older model',
+      availability: 'provider-dependent',
+    });
+  });
+});
+
 describe('getModelDisplayName', () => {
   it('resolves Claude ids to their friendly display name', () => {
     expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5');
-    expect(getModelDisplayName('claude-code-cli', 'claude-opus-4-8')).toBe('Claude Opus 4.8');
   });
 
   it('annotates the 1M context variant', () => {

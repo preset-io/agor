@@ -10,6 +10,7 @@ import type {
   AgorClient,
   Branch,
   BranchID,
+  DefaultModelConfig,
   MCPServer,
   PermissionMode,
   Session,
@@ -20,7 +21,7 @@ import type {
 // zone / session). Shared with the daemon's fire-zone-trigger route and the
 // MCP `agor_branches_set_zone` path so all three render against the same
 // shape.
-import { buildZoneTriggerContext } from '@agor-live/client';
+import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -29,13 +30,12 @@ import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
 // the page doesn't need CSP `script-src 'unsafe-eval'`.
 import { renderTemplate } from '../../../utils/templates';
-import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
+import { AgenticToolConfigForm, buildModelConfigFromFormValues } from '../../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
 } from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
-import type { ModelConfig } from '../../ModelSelector';
 
 interface ZoneTriggerModalProps {
   open: boolean;
@@ -59,7 +59,7 @@ interface ZoneTriggerModalProps {
     // New session config (only when sessionId === 'new')
     agent?: string;
     agenticToolPresetId?: string;
-    modelConfig?: ModelConfig;
+    modelConfig?: DefaultModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
   }) => Promise<void>;
@@ -88,7 +88,9 @@ export const ZoneTriggerModal = ({
   const [mode, setMode] = useState<'create_new' | 'reuse_existing'>('create_new');
 
   // Agent selection (only for create_new mode)
-  const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
+  const requiresSupportedToolSelection =
+    mode === 'create_new' && selectedAgent === null && trigger.agent !== undefined;
 
   // Session selection (only for reuse mode)
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
@@ -105,7 +107,10 @@ export const ZoneTriggerModal = ({
 
   // Filter sessions for this branch using O(1) Map lookup
   const branchSessions = useMemo(() => {
-    return sessionsByBranch.get(branchId) || [];
+    return (sessionsByBranch.get(branchId) || []).filter(
+      (session): session is Session & { agentic_tool: AgenticToolName } =>
+        isAgenticToolName(session.agentic_tool)
+    );
   }, [sessionsByBranch, branchId]);
 
   // Smart default: Most recent active/completed session
@@ -143,9 +148,16 @@ export const ZoneTriggerModal = ({
       setMode(branchSessions.length > 0 ? 'reuse_existing' : 'create_new');
       setSelectedSessionId(smartDefaultSession);
       setSelectedAction('prompt');
+      setSelectedAgent(
+        trigger.agent === undefined
+          ? 'claude-code'
+          : isAgenticToolName(trigger.agent)
+            ? trigger.agent
+            : null
+      );
       form.resetFields();
     }
-  }, [open, smartDefaultSession, form, branchSessions.length]);
+  }, [open, smartDefaultSession, form, branchSessions.length, trigger.agent]);
 
   // Pre-populate the form when creating a new session.
   // Priority: Most recent session > User defaults > System defaults
@@ -163,6 +175,8 @@ export const ZoneTriggerModal = ({
 
       // Get user defaults for this agent as fallback
       const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
+      const recentAgentSession =
+        mostRecentSession?.agentic_tool === selectedAgent ? mostRecentSession : undefined;
 
       // MCP inheritance: branch config > user defaults
       const effectiveMcpServerIds =
@@ -172,10 +186,10 @@ export const ZoneTriggerModal = ({
 
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
-        permissionMode: mostRecentSession?.permission_config?.mode || agentDefaults?.permissionMode,
-        modelConfig:
-          mostRecentSession?.model_config ||
-          (agentDefaults?.modelConfig as ModelConfig | undefined),
+        permissionMode:
+          recentAgentSession?.permission_config?.mode || agentDefaults?.permissionMode,
+        modelConfig: recentAgentSession?.model_config || agentDefaults?.modelConfig,
+        effort: recentAgentSession?.model_config?.effort ?? agentDefaults?.modelConfig?.effort,
         mcpServerIds: form.getFieldValue('mcpServerIds') ?? effectiveMcpServerIds,
       };
 
@@ -191,6 +205,7 @@ export const ZoneTriggerModal = ({
         agent: selectedSession.agentic_tool,
         permissionMode: selectedSession.permission_config?.mode,
         modelConfig: selectedSession.model_config,
+        effort: selectedSession.model_config?.effort,
         // Note: mcpServerIds would need to be fetched separately if we want to show them
       });
     }
@@ -259,17 +274,23 @@ export const ZoneTriggerModal = ({
       return;
     }
     if (mode === 'create_new') {
+      if (!selectedAgent) return;
       const formValues = form.getFieldsValue(true);
-      const isInline = formValues.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const selectedModelConfig = isInline ? formValues.modelConfig : undefined;
-
+      const isInline =
+        !formValues.agenticToolPresetId ||
+        formValues.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
       await onExecute({
         sessionId: 'new',
         action: 'prompt',
         renderedTemplate: editableTemplate,
         agent: selectedAgent,
         agenticToolPresetId: isInline ? undefined : formValues.agenticToolPresetId,
-        modelConfig: selectedModelConfig,
+        modelConfig: isInline
+          ? buildModelConfigFromFormValues({
+              modelConfig: formValues.modelConfig,
+              effort: formValues.effort,
+            })
+          : undefined,
         permissionMode: isInline ? formValues.permissionMode : undefined,
         mcpServerIds: formValues.mcpServerIds,
       });
@@ -290,7 +311,10 @@ export const ZoneTriggerModal = ({
       if (selectedAction === 'fork' || selectedAction === 'spawn') {
         // Include additional config for fork/spawn (eventual support for changing config)
         params.agent = formValues.agent || selectedSession?.agentic_tool;
-        params.modelConfig = formValues.modelConfig;
+        params.modelConfig = buildModelConfigFromFormValues({
+          modelConfig: formValues.modelConfig,
+          effort: formValues.effort,
+        });
         params.mcpServerIds = formValues.mcpServerIds;
       }
 
@@ -305,7 +329,7 @@ export const ZoneTriggerModal = ({
       onCancel={onCancel}
       onOk={handleExecute}
       okText="Execute Trigger"
-      okButtonProps={{ disabled: isRendering }}
+      okButtonProps={{ disabled: isRendering || requiresSupportedToolSelection }}
       cancelText="Cancel"
       width={700}
     >
@@ -384,13 +408,22 @@ export const ZoneTriggerModal = ({
         <Form form={form} layout="vertical">
           {mode === 'create_new' && (
             <div>
+              {requiresSupportedToolSelection && (
+                <Alert
+                  title="This zone uses a removed agentic tool"
+                  description="Choose a supported tool before creating a new session. Existing sessions remain available for reuse."
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+              )}
               <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
                 Select Agent
               </Typography.Text>
               <AgentSelectionGrid
                 agents={availableAgents}
                 selectedAgentId={selectedAgent}
-                onSelect={setSelectedAgent}
+                onSelect={(agent) => setSelectedAgent(agent as AgenticToolName)}
                 columns={2}
                 showHelperText={false}
                 showComparisonLink={false}
@@ -422,23 +455,21 @@ export const ZoneTriggerModal = ({
                         showIcon
                       />
                     )}
-                    {mode === 'create_new' ? (
+                    {mode === 'create_new' && selectedAgent ? (
                       <AgenticToolConfigurationPicker
-                        tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+                        tool={selectedAgent}
                         mcpServerById={mcpServerById}
                         showHelpText={true}
                         client={client}
                         branchId={branchId}
                         currentUser={currentUser}
                       />
-                    ) : (
+                    ) : mode === 'reuse_existing' ? (
                       <AgenticToolConfigForm
-                        agenticTool={
-                          (selectedSession?.agentic_tool as AgenticToolName) || 'claude-code'
-                        }
+                        agenticTool={selectedSession?.agentic_tool || 'claude-code'}
                         showHelpText={true}
                       />
-                    )}
+                    ) : null}
                   </Space>
                 ),
               },

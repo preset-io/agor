@@ -31,7 +31,7 @@
 import type { ScheduleRepository } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext, Schedule } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isTimezoneMode, ROLES } from '@agor/core/types';
 
 /**
  * Lazy-load the current schedule into `context.params.schedule` on
@@ -60,8 +60,25 @@ export function ensureCurrentScheduleLoaded(scheduleRepo: ScheduleRepository) {
  */
 export function validateScheduleConfig() {
   return async (context: HookContext) => {
-    const data = context.data as Partial<Schedule> | undefined;
-    if (!data) return context;
+    const rawData = context.data as Record<string, unknown> | undefined;
+    if (!rawData) return context;
+
+    const suppliedTimezoneMode = rawData.timezone_mode;
+    if (context.method === 'create' && suppliedTimezoneMode === undefined) {
+      throw new BadRequest('Schedule timezone_mode is required.');
+    }
+    if (suppliedTimezoneMode !== undefined && !isTimezoneMode(suppliedTimezoneMode)) {
+      throw new BadRequest("Schedule timezone_mode must be either 'local' or 'utc'.");
+    }
+    if (
+      context.method === 'create' &&
+      suppliedTimezoneMode === 'utc' &&
+      rawData.timezone !== undefined
+    ) {
+      throw new BadRequest("timezone must be omitted when timezone_mode='utc'.");
+    }
+
+    const data = rawData as Partial<Schedule>;
 
     const current =
       context.method === 'patch' ? (context.params.schedule as Schedule | undefined) : undefined;
@@ -78,10 +95,16 @@ export function validateScheduleConfig() {
       }
     }
 
-    if (merged.timezone_mode === 'local' && !merged.timezone) {
+    if (
+      merged.timezone_mode === 'local' &&
+      (typeof merged.timezone !== 'string' || merged.timezone.trim() === '')
+    ) {
       throw new BadRequest("timezone_mode='local' requires a non-empty IANA timezone.");
     }
-    if (data.timezone) {
+    if (data.timezone !== undefined) {
+      if (typeof data.timezone !== 'string' || data.timezone.trim() === '') {
+        throw new BadRequest('Schedule timezone must be a non-empty IANA timezone.');
+      }
       // Cheap IANA validation via Intl.DateTimeFormat — throws RangeError
       // on unknown zones. No external dep required.
       try {

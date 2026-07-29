@@ -1149,10 +1149,13 @@ export class CodexPromptService {
       );
 
       // Clear SDK session ID to force fresh start with new MCP config
-      await this.sessionsRepo.update(sessionId, { sdk_session_id: undefined });
+      await this.sessionsRepo.update(sessionId, { sdk_session_id: null });
       // Update local session object to reflect the change
       session.sdk_session_id = undefined;
     }
+
+    const resumeThreadId = session.sdk_session_id;
+    const startedFreshThread = !resumeThreadId;
 
     // Check if we need to update thread settings due to approval policy change
     const previousApprovalPolicy = session.permission_config?.codex?.approvalPolicy || 'on-request';
@@ -1160,10 +1163,10 @@ export class CodexPromptService {
 
     // Start or resume thread
     let thread: Thread;
-    if (session.sdk_session_id) {
-      codexDebug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
+    if (resumeThreadId) {
+      codexDebug(`🔄 [Codex] Resuming thread: ${resumeThreadId}`);
 
-      thread = this.getCodexClient().resumeThread(session.sdk_session_id, threadOptions);
+      thread = this.getCodexClient().resumeThread(resumeThreadId, threadOptions);
 
       // If approval policy changed, send slash command to update thread settings
       if (approvalPolicyChanged) {
@@ -1195,6 +1198,15 @@ export class CodexPromptService {
       }
       thread = this.getCodexClient().startThread(threadOptions);
     }
+
+    let receivedTerminalEvent = false;
+    const clearFreshThreadResumeState = async () => {
+      if (startedFreshThread) {
+        await this.sessionsRepo.update(sessionId, {
+          sdk_session_id: null,
+        });
+      }
+    };
 
     try {
       codexDebug(
@@ -1300,6 +1312,7 @@ export class CodexPromptService {
           if (payloadType === 'task_complete' || payloadType === 'turn_complete') {
             // Terminal completion event from new Codex rollout format.
             // Treat as equivalent to turn.completed.
+            receivedTerminalEvent = true;
             threadId = thread.id || '';
             const taskCompleteUsage = extractCodexTokenUsage(
               (eventPayload?.usage ?? eventPayload?.token_usage) as unknown
@@ -1479,6 +1492,7 @@ export class CodexPromptService {
 
           case 'turn.completed': {
             // Turn complete, emit final message
+            receivedTerminalEvent = true;
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
             const contextUsage =
@@ -1502,6 +1516,7 @@ export class CodexPromptService {
           }
 
           case 'turn.failed': {
+            receivedTerminalEvent = true;
             // Classify error for better user-facing messages
             const errorMessage =
               typeof event.error === 'string' ? event.error : JSON.stringify(event.error, null, 2);
@@ -1528,7 +1543,16 @@ export class CodexPromptService {
             throw new Error(`Codex execution failed: ${errorMessage}`);
           }
 
-          case 'error':
+          case 'error': {
+            const streamErrorMessage = (event as { message?: unknown }).message;
+            if (
+              typeof streamErrorMessage === 'string' &&
+              /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+\b/.test(streamErrorMessage)
+            ) {
+              console.warn(`⚠️  [Codex] ${streamErrorMessage}`);
+              break;
+            }
+
             // Fatal stream-level error from Codex SDK.
             // Surface this as a task failure so users see it in the conversation.
             throw new Error(
@@ -1538,6 +1562,7 @@ export class CodexPromptService {
                 'unknown'
               }`
             );
+          }
 
           default:
             // Ignore other event types silently
@@ -1557,12 +1582,10 @@ export class CodexPromptService {
         );
       }
     } catch (error) {
-      // Check if this is an AbortError from AbortController.abort()
-      // This is EXPECTED during stop - the SDK throws AbortError when cancelled
-      if (
-        error instanceof Error &&
-        (error.name === 'AbortError' || error.message.includes('abort'))
-      ) {
+      const wasCancelled =
+        abortController?.signal.aborted === true ||
+        (error instanceof Error && error.name === 'AbortError');
+      if (wasCancelled) {
         console.log(
           `🛑 [Stop] Codex query aborted for session ${shortId(sessionId)} - this is expected`
         );
@@ -1570,6 +1593,10 @@ export class CodexPromptService {
         yield { type: 'stopped', threadId: thread.id || undefined };
         // Don't throw - this is a clean stop, not an error
         return;
+      }
+
+      if (!receivedTerminalEvent) {
+        await clearFreshThreadResumeState();
       }
 
       // Don't log here — error will be logged by the caller (base-executor)

@@ -18,6 +18,7 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   materializeScheduleAgenticToolConfig,
   renderSchedulePrompt,
+  type ScheduleNotReadyError,
   SchedulerService,
 } from './scheduler';
 
@@ -403,6 +404,68 @@ describe('materializeScheduleAgenticToolConfig', () => {
           triggeredBy: creator.user_id,
         })
       ).rejects.toThrow(/cannot contain.*inline/i);
+      expect(createSession).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+    }
+  );
+
+  dbTest(
+    'returns an actionable compatibility error for a manual historical CLI schedule',
+    async ({ db }) => {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-legacy-manual-${Date.now()}-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code-cli' }
+      );
+      const { app, createSession, prompt } = createSchedulerApp(db);
+
+      const run = new SchedulerService(db, app).executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: creator.user_id,
+      });
+
+      await expect(run).rejects.toMatchObject({
+        name: 'ScheduleNotReadyError',
+        code: 'schedule_agentic_tool_removed',
+      } satisfies Partial<ScheduleNotReadyError>);
+      expect(createSession).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+    }
+  );
+
+  dbTest(
+    'advances a historical CLI cron cursor without recording or creating a run',
+    async ({ db }) => {
+      const { schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-legacy-cron-${Date.now()}-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code-cli' }
+      );
+      const { app, createSession, prompt } = createSchedulerApp(db);
+      const scheduler = new SchedulerService(db, app);
+      const cronNow = NOW + 30_000;
+
+      await expect(
+        (
+          scheduler as unknown as {
+            processSchedule(schedule: Schedule, now: number): Promise<void>;
+          }
+        ).processSchedule(schedule, cronNow)
+      ).rejects.toMatchObject({
+        name: 'ScheduleNotReadyError',
+        code: 'schedule_agentic_tool_removed',
+      } satisfies Partial<ScheduleNotReadyError>);
+
+      const updated = await new ScheduleRepository(db).findById(schedule.schedule_id);
+      expect(updated?.next_run_at).toBeGreaterThan(cronNow);
+      expect(updated?.last_run_at).toBeUndefined();
+      expect(updated?.last_run_session_id).toBeUndefined();
       expect(createSession).not.toHaveBeenCalled();
       expect(prompt).not.toHaveBeenCalled();
     }

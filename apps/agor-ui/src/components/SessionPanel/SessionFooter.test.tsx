@@ -5,6 +5,7 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor-live/client';
 import {
   act,
   fireEvent,
@@ -20,6 +21,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { SessionFooter } from './SessionFooter';
 
+vi.mock('../EffortSelector', () => ({
+  EffortSelector: ({ value }: { value?: EffortLevel }) => (
+    <div data-testid="effort-selector-stub">{value ?? 'Inherited'}</div>
+  ),
+}));
 // TimerPill uses complex internal state not needed for footer layout tests
 vi.mock('../Pill', () => ({
   TimerPill: () => <span data-testid="timer-pill-stub" />,
@@ -125,6 +131,16 @@ describe('SessionFooter', () => {
   it('Stop button is rendered when session is running', () => {
     render(<SessionFooter {...baseProps} isRunning={true} />, { wrapper: Wrapper });
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('shows stopping feedback immediately while the Stop request is in flight', () => {
+    const { container } = render(
+      <SessionFooter {...baseProps} isRunning={true} stopRequestInFlight={true} />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
+    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
   it('Model chip is hidden when no model is present', () => {
@@ -293,6 +309,23 @@ describe('SessionFooter', () => {
 
     expect(await screen.findByText('Session MCP servers')).toBeInTheDocument();
     expect(screen.queryByText('Open session settings')).not.toBeInTheDocument();
+  });
+
+  it('shows inherited reasoning effort for Codex in session settings', async () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={{ ...baseSession, agentic_tool: 'codex' } as Session}
+        toolCaps={AGENTIC_TOOL_CAPABILITIES.codex}
+        effortLevel={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    expect(within(overflowOptions).getByText('Effort')).toBeInTheDocument();
+    expect(within(overflowOptions).getByText('Inherited')).toBeInTheDocument();
   });
 });
 

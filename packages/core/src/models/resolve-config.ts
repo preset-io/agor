@@ -134,7 +134,6 @@ export function resolveModelConfigPrecedence(
 export function getDefaultModelForTool(tool: AgenticToolName): string | undefined {
   switch (tool) {
     case 'claude-code':
-    case 'claude-code-cli':
       return DEFAULT_CLAUDE_MODEL;
     case 'codex':
       return DEFAULT_CODEX_MODEL;

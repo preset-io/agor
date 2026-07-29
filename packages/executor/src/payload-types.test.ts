@@ -424,6 +424,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
       },
     };
 
@@ -440,6 +441,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
         force: true,
       },
     };
@@ -618,6 +620,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/branches/feature',
+        branchesRoot: '/data/branches',
       },
     };
     expect(isGitBranchRemovePayload(payload)).toBe(true);
@@ -648,6 +651,15 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('git.branch.clean');
     expect(commands).toContain('branch.files.list');
+    expect(commands).toContain('branch.files.browse');
+    expect(commands).toContain('branch.files.read');
+    expect(commands).toContain('branch.filesystem.status');
+    expect(commands).toContain('branch.artifact.publish');
+    expect(commands).toContain('branch.artifact.land');
+    expect(commands).toContain('branch.artifact.validate');
+    expect(commands).toContain('branch.knowledge.write');
+    expect(commands).toContain('branch.knowledge.read');
+    expect(commands).toContain('branch.gateway.slack-file-upload');
     expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
@@ -662,6 +674,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('opencode.auth');
-    expect(commands.length).toBe(20);
+    expect(commands.length).toBe(29);
   });
 });
