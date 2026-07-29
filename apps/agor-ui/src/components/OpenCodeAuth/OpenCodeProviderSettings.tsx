@@ -22,6 +22,56 @@ function providerListEmptyText(settings: Settings | null, error: string | undefi
   return settings ? 'Choose a provider to connect' : 'Loading providers';
 }
 
+function pollOAuthAttempt(input: {
+  client: AgorClient;
+  attemptId: string;
+  ownsSelection: () => boolean;
+  currentAttempt: () => OpenCodeOAuthAttempt | undefined;
+  isCancelling: () => boolean;
+  onResult: (attempt: OpenCodeOAuthAttempt) => void;
+  onError: () => void;
+}): () => void {
+  let disposed = false;
+  let timer: number | undefined;
+  const remainsActive = () => {
+    const attempt = input.currentAttempt();
+    return attempt?.attemptId === input.attemptId && isActiveOAuthAttempt(attempt);
+  };
+  const schedule = () => {
+    timer = window.setTimeout(async () => {
+      timer = undefined;
+      if (disposed || !input.ownsSelection() || !remainsActive()) return;
+      if (input.isCancelling()) {
+        schedule();
+        return;
+      }
+      try {
+        const next = await input.client.service('opencode-auth').get(input.attemptId);
+        if (
+          !disposed &&
+          input.ownsSelection() &&
+          !input.isCancelling() &&
+          remainsActive() &&
+          next.attemptId === input.attemptId
+        ) {
+          input.onResult(next);
+        }
+      } catch {
+        if (!disposed && input.ownsSelection() && !input.isCancelling() && remainsActive()) {
+          input.onError();
+        }
+      } finally {
+        if (!disposed && input.ownsSelection() && remainsActive()) schedule();
+      }
+    }, 1000);
+  };
+  schedule();
+  return () => {
+    disposed = true;
+    if (timer !== undefined) window.clearTimeout(timer);
+  };
+}
+
 export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
@@ -121,56 +171,25 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     const generation = scopeGeneration;
     const selectionGeneration = selectionGenerationRef.current;
     const actionId = actionIdRef.current;
-    const active = Object.entries(oauthAttempts).filter(
-      ([providerId, attempt]) => providerId === selectedProviderId && isActiveOAuthAttempt(attempt)
-    );
-    if (active.length === 0 || busyProvider) return;
-    let disposed = false;
-    const timers = new Set<number>();
-    const ownsSelection = (providerId: string) =>
-      !disposed &&
+    if (!selectedProviderId || busyProvider) return;
+    const attempt = oauthAttempts[selectedProviderId];
+    if (!attempt || !isActiveOAuthAttempt(attempt)) return;
+
+    const ownsSelection = () =>
       actionIdRef.current === actionId &&
-      isCurrentSelection(generation, selectionGeneration, providerId);
-    const activeAttempt = (providerId: string, attemptId: string) => {
-      const attempt = oauthAttemptsRef.current[providerId];
-      return attempt?.attemptId === attemptId && isActiveOAuthAttempt(attempt)
-        ? attempt
-        : undefined;
-    };
-    const canCommitAttempt = (providerId: string, attemptId: string) =>
-      ownsSelection(providerId) &&
-      !cancellingAttemptsRef.current.has(attemptId) &&
-      Boolean(activeAttempt(providerId, attemptId));
-    const schedule = (providerId: string, attemptId: string) => {
-      const timer = window.setTimeout(async () => {
-        timers.delete(timer);
-        if (!ownsSelection(providerId)) return;
-        if (!activeAttempt(providerId, attemptId) || cancellingAttemptsRef.current.has(attemptId)) {
-          if (activeAttempt(providerId, attemptId)) schedule(providerId, attemptId);
-          return;
-        }
-        try {
-          const next = await client.service('opencode-auth').get(attemptId);
-          if (!canCommitAttempt(providerId, attemptId) || next.attemptId !== attemptId) return;
-          storeAttempt(providerId, next, generation);
-          if (next.phase === 'configured' && next.settings) setSettings(next.settings);
-        } catch {
-          if (canCommitAttempt(providerId, attemptId)) {
-            setError('OpenCode authorization status could not be refreshed.');
-          }
-        } finally {
-          if (ownsSelection(providerId) && activeAttempt(providerId, attemptId)) {
-            schedule(providerId, attemptId);
-          }
-        }
-      }, 1000);
-      timers.add(timer);
-    };
-    for (const [providerId, attempt] of active) schedule(providerId, attempt.attemptId);
-    return () => {
-      disposed = true;
-      for (const timer of timers) window.clearTimeout(timer);
-    };
+      isCurrentSelection(generation, selectionGeneration, selectedProviderId);
+    return pollOAuthAttempt({
+      client,
+      attemptId: attempt.attemptId,
+      ownsSelection,
+      currentAttempt: () => oauthAttemptsRef.current[selectedProviderId],
+      isCancelling: () => cancellingAttemptsRef.current.has(attempt.attemptId),
+      onResult: (next) => {
+        storeAttempt(selectedProviderId, next, generation);
+        if (next.phase === 'configured' && next.settings) setSettings(next.settings);
+      },
+      onError: () => setError('OpenCode authorization status could not be refreshed.'),
+    });
   }, [
     busyProvider,
     client,

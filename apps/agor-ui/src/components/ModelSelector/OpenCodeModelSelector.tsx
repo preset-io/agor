@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, OpenCodeModelCatalog } from '@agor-live/client';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -58,6 +58,140 @@ function compactWarning(
     return 'The stored pair is not in the current configured catalog.';
   }
   return undefined;
+}
+
+const modelPairValue = (providerId: string, modelId: string) =>
+  JSON.stringify([providerId, modelId]);
+
+function compactModelOptions(
+  catalog: OpenCodeModelCatalog | null,
+  value: OpenCodeModelConfig | undefined,
+  storedUnavailable: boolean
+) {
+  const groups =
+    catalog?.providers.map((provider) => ({
+      label: provider.runtimeAvailable ? provider.name : `${provider.name} · unavailable`,
+      options: provider.models.map((model) => ({
+        value: modelPairValue(provider.id, model.id),
+        label: provider.runtimeAvailable ? model.name : `${model.name} · provider unavailable`,
+        disabled: !provider.runtimeAvailable,
+        searchText:
+          `${provider.name} ${provider.id} ${model.name} ${model.id} ${model.status}`.toLowerCase(),
+      })),
+    })) ?? [];
+  const selectedValue = value ? modelPairValue(value.provider, value.model) : undefined;
+  const includesStoredValue = groups.some((group) =>
+    group.options.some((option) => option.value === selectedValue)
+  );
+  if (value && !includesStoredValue) {
+    groups.splice(1, 0, {
+      label: 'Stored selection',
+      options: [
+        {
+          value: modelPairValue(value.provider, value.model),
+          label: `${value.provider}/${value.model}${storedUnavailable ? ' (unavailable)' : ''}`,
+          disabled: false,
+          searchText:
+            `${value.provider} ${value.model}${storedUnavailable ? ' unavailable' : ''}`.toLowerCase(),
+        },
+      ],
+    });
+  }
+  return { groups, selectedValue };
+}
+
+interface CompactOpenCodeModelSelectorProps {
+  value?: OpenCodeModelConfig;
+  catalog: OpenCodeModelCatalog | null;
+  catalogEnabled: boolean;
+  client?: AgorClient | null;
+  loading: boolean;
+  refreshFailed: boolean;
+  storedAvailable: boolean;
+  manualFields: React.ReactNode;
+  manualOpen: boolean;
+  setManualOpen: (open: boolean) => void;
+  refresh: () => Promise<void>;
+  selectPair: (provider: string, model: string) => void;
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
+}
+
+function CompactOpenCodeModelSelector({
+  value,
+  catalog,
+  catalogEnabled,
+  client,
+  loading,
+  refreshFailed,
+  storedAvailable,
+  manualFields,
+  manualOpen,
+  setManualOpen,
+  refresh,
+  selectPair,
+  getPopupContainer,
+}: CompactOpenCodeModelSelectorProps) {
+  const storedUnavailable = Boolean(value && catalog && !storedAvailable);
+  const { groups, selectedValue } = compactModelOptions(catalog, value, storedUnavailable);
+  const warning = compactWarning(catalogEnabled, refreshFailed, storedUnavailable);
+
+  return (
+    <Flex align="center" gap={2} style={{ width: '100%', minWidth: 0 }}>
+      <Select
+        aria-label="OpenCode model"
+        showSearch
+        value={selectedValue}
+        placeholder="Select provider/model"
+        options={groups}
+        optionFilterProp="searchText"
+        popupMatchSelectWidth={false}
+        getPopupContainer={getPopupContainer}
+        listHeight={256}
+        size="small"
+        loading={loading}
+        onChange={(next) => {
+          const [nextProvider, nextModel] = JSON.parse(next) as [string, string];
+          selectPair(nextProvider, nextModel);
+        }}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      {catalogEnabled && client && (
+        <Tooltip title="Refresh configured models">
+          <Button
+            aria-label="Refresh configured models"
+            type="text"
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={loading}
+            onClick={() => void refresh()}
+          />
+        </Tooltip>
+      )}
+      <Popover
+        open={manualOpen}
+        onOpenChange={setManualOpen}
+        trigger="click"
+        placement="topRight"
+        getPopupContainer={getPopupContainer}
+        title="Exact OpenCode model"
+        content={<div style={{ width: 260 }}>{manualFields}</div>}
+      >
+        <Tooltip title="Enter exact provider and model IDs">
+          <Button
+            aria-label="Enter exact OpenCode IDs"
+            type="text"
+            size="small"
+            icon={<SettingOutlined />}
+          />
+        </Tooltip>
+      </Popover>
+      {warning && (
+        <Tooltip title={warning}>
+          <WarningOutlined aria-label="OpenCode model warning" />
+        </Tooltip>
+      )}
+    </Flex>
+  );
 }
 
 /**
@@ -173,103 +307,22 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   );
 
   if (compact) {
-    const pairValue = (providerId: string, modelId: string) =>
-      JSON.stringify([providerId, modelId]);
-    const compactOptions = [
-      ...(catalog?.providers.map((entry) => ({
-        label: entry.runtimeAvailable ? entry.name : `${entry.name} · unavailable`,
-        options: entry.models.map((candidate) => ({
-          value: pairValue(entry.id, candidate.id),
-          label: entry.runtimeAvailable
-            ? candidate.name
-            : `${candidate.name} · provider unavailable`,
-          disabled: !entry.runtimeAvailable,
-          searchText:
-            `${entry.name} ${entry.id} ${candidate.name} ${candidate.id} ${candidate.status}`.toLowerCase(),
-        })),
-      })) ?? []),
-    ];
-    const selectedValue = value ? pairValue(value.provider, value.model) : undefined;
-    const storedConfirmedUnavailable = Boolean(value && catalog && !storedAvailable);
-    const warning = compactWarning(catalogEnabled, refreshFailed, storedConfirmedUnavailable);
-    if (
-      value &&
-      !compactOptions.some((group) =>
-        group.options.some((option) => option.value === selectedValue)
-      )
-    ) {
-      compactOptions.splice(1, 0, {
-        label: 'Stored selection',
-        options: [
-          {
-            value: pairValue(value.provider, value.model),
-            label: `${value.provider}/${value.model}${
-              storedConfirmedUnavailable ? ' (unavailable)' : ''
-            }`,
-            disabled: false,
-            searchText:
-              `${value.provider} ${value.model}${storedConfirmedUnavailable ? ' unavailable' : ''}`.toLowerCase(),
-          },
-        ],
-      });
-    }
-
     return (
-      <Flex align="center" gap={2} style={{ width: '100%', minWidth: 0 }}>
-        <Select
-          aria-label="OpenCode model"
-          showSearch
-          value={selectedValue}
-          placeholder="Select provider/model"
-          options={compactOptions}
-          optionFilterProp="searchText"
-          popupMatchSelectWidth={false}
-          getPopupContainer={getPopupContainer}
-          listHeight={256}
-          size="small"
-          loading={loading}
-          onChange={(next) => {
-            const [nextProvider, nextModel] = JSON.parse(next) as [string, string];
-            selectPair(nextProvider, nextModel);
-          }}
-          style={{ flex: 1, minWidth: 0 }}
-        />
-        {catalogEnabled && client && (
-          <Tooltip title="Refresh configured models">
-            <Button
-              aria-label="Refresh configured models"
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={loading}
-              onClick={() => void refresh()}
-            />
-          </Tooltip>
-        )}
-        <Popover
-          open={compactManualOpen}
-          onOpenChange={setCompactManualOpen}
-          trigger="click"
-          placement="topRight"
-          getPopupContainer={getPopupContainer}
-          title="Exact OpenCode model"
-          content={<div style={{ width: 260 }}>{manualFields}</div>}
-        >
-          <Tooltip title="Enter exact provider and model IDs">
-            <Button
-              aria-label="Enter exact OpenCode IDs"
-              type="text"
-              size="small"
-              icon={<SettingOutlined />}
-            />
-          </Tooltip>
-        </Popover>
-        {warning && (
-          <Tooltip title={warning}>
-            <WarningOutlined aria-label="OpenCode model warning" />
-          </Tooltip>
-        )}
-      </Flex>
+      <CompactOpenCodeModelSelector
+        value={value}
+        catalog={catalog}
+        catalogEnabled={catalogEnabled}
+        client={client}
+        loading={loading}
+        refreshFailed={refreshFailed}
+        storedAvailable={storedAvailable}
+        manualFields={manualFields}
+        manualOpen={compactManualOpen}
+        setManualOpen={setCompactManualOpen}
+        refresh={refresh}
+        selectPair={selectPair}
+        getPopupContainer={getPopupContainer}
+      />
     );
   }
 
