@@ -7,6 +7,7 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
+  assertUnixUsernameSatisfiesMode,
   isTenantAgenticToolEnabled,
   PAGINATION,
   presetConfigurationToSessionPatch,
@@ -60,7 +61,6 @@ import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
-  assertUnixUsernameSatisfiesMode,
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
@@ -500,9 +500,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
     // Internal call (no transport provider) → service-to-service or scheduler.
-    // Preserve parent attribution; helper-level identity checks don't apply.
+    // Preserve parent attribution. The strict/delegated unix_username
+    // requirement still applies: an internal fork/spawn of a null-stamped
+    // parent must fail here, not later at prompt time.
     if (!params?.provider) {
-      return { created_by: parent.created_by, unix_username: parent.unix_username ?? null };
+      const inheritedUnixUsername = parent.unix_username ?? null;
+      assertUnixUsernameSatisfiesMode(
+        inheritedUnixUsername,
+        resolveExecutionSecurityMode().unixUserMode,
+        `the parent session's owner (${parent.created_by})`
+      );
+      return { created_by: parent.created_by, unix_username: inheritedUnixUsername };
     }
 
     const caller = params.user;
@@ -566,7 +574,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // inheriting a null stamp from a pre-migration parent.
     assertUnixUsernameSatisfiesMode(
       unixUsername,
-      resolveExecutionSecurityMode(),
+      resolveExecutionSecurityMode().unixUserMode,
       `the attributed user (${createdBy})`
     );
 

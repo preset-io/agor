@@ -22,12 +22,13 @@ This page covers the **four deployment modes** Agor supports, what each enforces
 
 ## Pick a Deployment Mode
 
-Agor has four canonical modes. Choose based on **who shares the daemon** and **how much you trust them**.
+Agor has five canonical modes. Choose based on **who shares the daemon** and **how much you trust them**.
 
 | Mode | `branch_rbac` | `unix_user_mode` | Who's it for? |
 |---|---|---|---|
 | **Dev / Solo** | `false` | `simple` | Personal machine, trusted team of one |
 | **Local Team** | `true` | `simple` | Small team, RBAC for organization, no Unix isolation |
+| **Delegated** | `true` | `delegated` | Hosted/containerized deployments — per-user `unix_username` is required and handed to the orchestration layer (via the `{unix_user}` template variable), which enforces OS identity |
 | **Insulated** | `true` | `insulated` | Shared dev box, filesystem protection, no per-user processes |
 | **Strict** | `true` | `strict` | Production / compliance, full per-user OS isolation |
 
@@ -35,7 +36,7 @@ Agor has four canonical modes. Choose based on **who shares the daemon** and **h
 # ~/.agor/config.yaml
 execution:
   branch_rbac: false        # default: false
-  unix_user_mode: simple       # simple | insulated | strict
+  unix_user_mode: simple       # simple | delegated | insulated | strict
   executor_unix_user: agor_executor   # required for insulated
 ```
 
@@ -194,15 +195,16 @@ If unset, Agor falls back to plaintext storage and logs a warning. Never run a s
 
 ### Web Terminal Trust Boundary
 
-The browser terminal is enabled by default for `member+` users. **In `unix_user_mode: simple`, the terminal runs as the daemon user.** That means a member-tier user can shell out and read `~/.agor/config.yaml`, `agor.db`, the JWT secret, and every API key the daemon knows about.
+The browser terminal is enabled by default for `member+` users. **In `unix_user_mode: simple` — and in `delegated` without an executor command template — the terminal runs as the daemon user.** That means a member-tier user can shell out and read `~/.agor/config.yaml`, `agor.db`, the JWT secret, and every API key the daemon knows about.
 
-Three ways to handle this:
+Ways to handle this:
 
 1. **`unix_user_mode: strict`** runs the terminal as the user's Unix account. Safe.
 2. **`unix_user_mode: insulated`** runs the terminal as the executor user, scoped by branch group. Mostly safe.
-3. **`execution.allow_web_terminal: false`** disables the terminal entirely.
+3. **`unix_user_mode: delegated` with an executor command template** routes the terminal into the execution substrate under the user's identity. Safe when the substrate enforces it.
+4. **`execution.allow_web_terminal: false`** disables the terminal entirely.
 
-The daemon prints a startup warning when the unsafe combination is active.
+The daemon prints a startup warning when an unsafe combination is active.
 
 ### Message Gateway is High-Trust
 

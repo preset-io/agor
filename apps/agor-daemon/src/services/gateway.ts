@@ -8,6 +8,7 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
+  assertUnixUsernameSatisfiesMode,
   getBaseUrl,
   resolveAgenticToolPreset,
   resolveExecutionSecurityMode,
@@ -74,10 +75,7 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import {
-  assertUnixUsernameSatisfiesMode,
-  hasBranchPermission,
-} from '../utils/branch-authorization.js';
+import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
@@ -2195,7 +2193,7 @@ export class GatewayService {
       // share an identity in hosted deployments).
       assertUnixUsernameSatisfiesMode(
         user.unix_username,
-        resolveExecutionSecurityMode(),
+        resolveExecutionSecurityMode().unixUserMode,
         `gateway user ${user.user_id}`
       );
 

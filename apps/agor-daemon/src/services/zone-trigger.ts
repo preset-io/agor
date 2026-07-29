@@ -11,7 +11,7 @@
  * same session-defaults resolution, same MCP-attach behaviour.
  */
 
-import { resolveExecutionSecurityMode } from '@agor/core/config';
+import { assertUnixUsernameSatisfiesMode, resolveExecutionSecurityMode } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
@@ -25,7 +25,6 @@ import type {
   User,
 } from '@agor/core/types';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { assertUnixUsernameSatisfiesMode } from '../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 
@@ -114,7 +113,7 @@ export async function fireAlwaysNewZoneTrigger(
   // an identity in hosted deployments).
   assertUnixUsernameSatisfiesMode(
     user.unix_username,
-    resolveExecutionSecurityMode(),
+    resolveExecutionSecurityMode().unixUserMode,
     `user ${userId}`
   );
 

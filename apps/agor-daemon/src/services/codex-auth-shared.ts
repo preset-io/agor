@@ -16,7 +16,7 @@
  *   ownership and 0600 permissions hold in insulated/strict modes.
  */
 
-import { loadConfigSync } from '@agor/core/config';
+import { loadConfigSync, unixUserModeRequiresUsername } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { AgenticAuthMethods, AuthenticatedParams, User, UserID } from '@agor/core/types';
@@ -44,7 +44,11 @@ interface UsersServiceLike {
 
 export type CodexUnixIdentityResolution =
   | { ok: true; unixUser: string | null }
-  | { ok: false; reason: 'missing-username' | 'resolve-failed'; message: string };
+  | {
+      ok: false;
+      reason: 'missing-username' | 'resolve-failed' | 'unsupported-mode';
+      message: string;
+    };
 
 /**
  * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
@@ -63,12 +67,30 @@ export async function resolveCodexUnixIdentity(
   const config = loadConfigSync();
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
+  // Delegated + templated execution: the executor's home (and therefore the
+  // auth.json Codex actually reads) lives in the execution substrate's
+  // per-user mount, not on the daemon host. Touching the daemon-home file
+  // here would silently share one credential file across users AND never
+  // reach the executor — reject explicitly until substrate-aware credential
+  // routing exists.
+  if (mode === 'delegated' && config.execution?.executor_command_template) {
+    return {
+      ok: false,
+      reason: 'unsupported-mode',
+      message:
+        'In delegated Unix user mode with templated execution, Codex credentials live in the ' +
+        "execution substrate's per-user home — the daemon cannot import, verify, or remove them. " +
+        'Sign in to Codex from within a session instead.',
+    };
+  }
+
   let unixUsername: string | null = null;
   // Both strict and delegated require a per-user unix_username. In strict the
-  // resolver impersonates it; in delegated it resolves to no impersonation
-  // (auth.json lives in the daemon user's home, like simple), but a missing
-  // username must still surface as the actionable `missing-username` result.
-  if (mode === 'strict' || mode === 'delegated') {
+  // resolver impersonates it; in delegated (non-templated) it resolves to no
+  // impersonation (auth.json lives in the daemon user's home, like simple),
+  // but a missing username must still surface as the actionable
+  // `missing-username` result.
+  if (unixUserModeRequiresUsername(mode)) {
     if (!userId) {
       return {
         ok: false,

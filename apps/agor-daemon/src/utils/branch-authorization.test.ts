@@ -10,7 +10,6 @@ import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  assertUnixUsernameSatisfiesMode,
   ensureCanPromptInSession,
   hasBranchPermission,
   isSuperAdmin,
@@ -575,35 +574,6 @@ describe('scopeSessionQuery — $sort handling', () => {
   });
 });
 
-describe('assertUnixUsernameSatisfiesMode', () => {
-  const delegated = { unixUserMode: 'delegated', requiresUserUnixUsername: true };
-  const strict = { unixUserMode: 'strict', requiresUserUnixUsername: true };
-  const simple = { unixUserMode: 'simple', requiresUserUnixUsername: false };
-
-  it('passes when the mode does not require a unix_username', () => {
-    expect(() => assertUnixUsernameSatisfiesMode(null, simple)).not.toThrow();
-    expect(() => assertUnixUsernameSatisfiesMode(undefined, simple)).not.toThrow();
-  });
-
-  it('passes when a unix_username is present', () => {
-    expect(() => assertUnixUsernameSatisfiesMode('alice', delegated)).not.toThrow();
-    expect(() => assertUnixUsernameSatisfiesMode('alice', strict)).not.toThrow();
-  });
-
-  it('throws with the mode name and subject when required and missing', () => {
-    expect(() => assertUnixUsernameSatisfiesMode(null, delegated, 'gateway user u-1')).toThrow(
-      /unix_user_mode 'delegated' requires a unix_username, but gateway user u-1 has none/
-    );
-    expect(() => assertUnixUsernameSatisfiesMode(undefined, strict)).toThrow(
-      /unix_user_mode 'strict' requires a unix_username/
-    );
-  });
-
-  it('tolerates an undefined execution mode (callers without resolved config)', () => {
-    expect(() => assertUnixUsernameSatisfiesMode(null, undefined)).not.toThrow();
-  });
-});
-
 describe('setSessionUnixUsername', () => {
   const makeCreateContext = () =>
     ({
@@ -625,21 +595,15 @@ describe('setSessionUnixUsername', () => {
 
   it('stamps null silently when the mode does not require a unix_username', async () => {
     const ctx = makeCreateContext();
-    await setSessionUnixUsername(repoWithUsername(null), {
-      unixUserMode: 'simple',
-      requiresUserUnixUsername: false,
-    })(ctx);
+    await setSessionUnixUsername(repoWithUsername(null), 'simple')(ctx);
     expect((ctx.data as { unix_username?: string | null }).unix_username).toBeNull();
   });
 
   it('rejects a creator without unix_username when the mode requires one', async () => {
     const ctx = makeCreateContext();
-    await expect(
-      setSessionUnixUsername(repoWithUsername(null), {
-        unixUserMode: 'delegated',
-        requiresUserUnixUsername: true,
-      })(ctx)
-    ).rejects.toThrow(/unix_user_mode 'delegated' requires a unix_username/);
+    await expect(setSessionUnixUsername(repoWithUsername(null), 'delegated')(ctx)).rejects.toThrow(
+      /unix_user_mode 'delegated' requires a unix_username/
+    );
   });
 
   it('skips internal calls even when the mode requires a unix_username', async () => {
@@ -649,10 +613,7 @@ describe('setSessionUnixUsername', () => {
       params: {},
       data: {},
     } as unknown as HookContext;
-    await setSessionUnixUsername(repoWithUsername(null), {
-      unixUserMode: 'delegated',
-      requiresUserUnixUsername: true,
-    })(ctx);
+    await setSessionUnixUsername(repoWithUsername(null), 'delegated')(ctx);
     expect((ctx.data as { unix_username?: string | null }).unix_username).toBeUndefined();
   });
 });

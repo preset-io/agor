@@ -9,6 +9,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import { assertUnixUsernameSatisfiesMode, type UnixUserMode } from '@agor/core/config';
 import type {
   BoardRepository,
   BranchRepository,
@@ -1131,34 +1132,6 @@ export async function loadUnixUsernameForUser(
 }
 
 /**
- * Minimal slice of `ResolvedExecutionSecurityMode` needed by the session
- * identity checks below (kept structural so tests don't have to build the
- * full resolved config).
- */
-export interface UnixUsernameRequirement {
-  unixUserMode: string;
-  requiresUserUnixUsername: boolean;
-}
-
-/**
- * Fail loudly when the configured Unix user mode treats `unix_username` as
- * load-bearing identity (`strict`, `delegated`) and the resolved value is
- * missing. Creating a session without one would only defer the failure to
- * prompt time — or, in hosted deployments, silently share an identity.
- */
-export function assertUnixUsernameSatisfiesMode(
-  unixUsername: string | null | undefined,
-  executionMode: UnixUsernameRequirement | undefined,
-  subject = 'your account'
-): void {
-  if (!executionMode?.requiresUserUnixUsername || unixUsername) return;
-  throw new Forbidden(
-    `unix_user_mode '${executionMode.unixUserMode}' requires a unix_username, but ${subject} has none. ` +
-      'Ask an admin to set one before creating sessions.'
-  );
-}
-
-/**
  * Set session unix_username from creator's current unix_username
  *
  * When a session is created, stamp it with the creator's current unix_username.
@@ -1174,14 +1147,14 @@ export function assertUnixUsernameSatisfiesMode(
  * {@link loadUnixUsernameForUser} to keep the two paths in sync.
  *
  * @param userRepo - UserRepository instance
- * @param executionMode - When the mode requires per-user unix_username
+ * @param unixUserMode - When the mode requires per-user unix_username
  *   (strict/delegated), a creator without one is rejected at create time
  *   instead of failing later at prompt time.
  */
 export function setSessionUnixUsername(
   // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
   userRepo: any,
-  executionMode?: UnixUsernameRequirement
+  unixUserMode?: UnixUserMode
 ) {
   return async (context: HookContext) => {
     // Only for session creation
@@ -1205,7 +1178,9 @@ export function setSessionUnixUsername(
     // Stamp session with creator's current unix_username.
     // IMMUTABLE - even if user's unix_username changes later, session keeps this value.
     data.unix_username = await loadUnixUsernameForUser(userRepo, userId);
-    assertUnixUsernameSatisfiesMode(data.unix_username, executionMode);
+    if (unixUserMode) {
+      assertUnixUsernameSatisfiesMode(data.unix_username, unixUserMode);
+    }
 
     return context;
   };

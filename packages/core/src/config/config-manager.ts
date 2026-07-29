@@ -8,6 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Forbidden } from '@feathersjs/errors';
 import * as yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
@@ -1212,8 +1213,38 @@ export function resolveExecutionSecurityMode(
     unixGroupRefreshNeeded: unixIsolationEnabled,
     requiresDaemonUnixUser: unixIsolationEnabled,
     shouldInitUnixGroups: unixIsolationEnabled,
-    requiresUserUnixUsername: unixUserMode === 'strict' || unixUserMode === 'delegated',
+    requiresUserUnixUsername: unixUserModeRequiresUsername(unixUserMode),
   };
+}
+
+/**
+ * Whether a Unix user mode treats per-user `unix_username` as load-bearing
+ * identity. Single predicate shared by `resolveExecutionSecurityMode()` and
+ * call sites that only have the raw mode, so the strict/delegated pairing
+ * cannot drift.
+ */
+export function unixUserModeRequiresUsername(mode: import('./types').UnixUserMode): boolean {
+  return mode === 'strict' || mode === 'delegated';
+}
+
+/**
+ * Fail loudly when the configured Unix user mode requires a per-user
+ * `unix_username` (`strict`, `delegated`) and the resolved value is missing.
+ * Creating a session without one would only defer the failure to prompt time —
+ * or, in hosted deployments, silently share an identity. Requiredness is
+ * derived from the mode here so callers cannot fabricate inconsistent
+ * combinations.
+ */
+export function assertUnixUsernameSatisfiesMode(
+  unixUsername: string | null | undefined,
+  mode: import('./types').UnixUserMode,
+  subject = 'your account'
+): void {
+  if (!unixUserModeRequiresUsername(mode) || unixUsername) return;
+  throw new Forbidden(
+    `unix_user_mode '${mode}' requires a unix_username, but ${subject} has none. ` +
+      'Ask an admin to set one before creating sessions.'
+  );
 }
 
 /**

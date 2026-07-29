@@ -44,6 +44,7 @@ import {
   presetConfigurationToScheduleConfig,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
+  unixUserModeRequiresUsername,
 } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
@@ -570,10 +571,7 @@ export class SchedulerService {
 
     const unixUsername = creator.unix_username || null;
 
-    if (
-      !unixUsername &&
-      (this.config.unixUserMode === 'strict' || this.config.unixUserMode === 'delegated')
-    ) {
+    if (!unixUsername && unixUserModeRequiresUsername(this.config.unixUserMode)) {
       console.error(
         `      ❌ Cannot spawn scheduled session: Creator has no unix_username (${this.config.unixUserMode} mode)`,
         {

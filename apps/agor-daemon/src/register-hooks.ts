@@ -2449,7 +2449,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // unix_username load-bearing — otherwise sessions would be stamped
         // null and fail only at prompt time.
         ...(branchRbacEnabled || executionMode.requiresUserUnixUsername
-          ? [setSessionUnixUsername(usersRepository, executionMode)]
+          ? [setSessionUnixUsername(usersRepository, executionMode.unixUserMode)]
           : []),
         ...(branchRbacEnabled
           ? [
