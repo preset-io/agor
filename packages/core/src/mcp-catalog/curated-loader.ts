@@ -63,7 +63,13 @@ const curatedEntrySchema = z
 
 const curatedFileSchema = z
   .object({
+    /** Servers the registry publishes under exactly the given `name`. */
     entries: z.array(curatedEntrySchema).min(1),
+    /**
+     * Servers whose vendor runs a public endpoint but has not published to the
+     * registry, so `name` is Agor's reverse-DNS guess at the identity.
+     */
+    unpublished: z.array(curatedEntrySchema).default([]),
   })
   .strict();
 
@@ -79,9 +85,17 @@ export function curatedCatalogPath(): string {
 /**
  * Parse curation YAML.
  *
- * Rejects duplicate `name`s and duplicate `popularity_rank`s: both would make
- * the marketplace's ordering depend on file order, which is not something a
- * reviewer can see in a diff.
+ * Rejects duplicate `name`s and duplicate `popularity_rank`s across both lists:
+ * either would make the marketplace's ordering depend on file order, which is
+ * not something a reviewer can see in a diff.
+ *
+ * Also refuses `verified: true` on an unpublished entry. `verified` is a
+ * user-facing trust badge and the backing store for the marketplace's
+ * "verified only" filter, so it has to mean that Agor vouches this name
+ * identifies the vendor's own server — and under `unpublished:` nothing has
+ * confirmed that mapping, because the name is Agor's inference from a domain.
+ * Enforcing it here rather than relying on the file staying honest is the point:
+ * the data fix alone decays as entries are added.
  */
 export function parseCuratedCatalog(source: string): CuratedCatalogEntry[] {
   let document: unknown;
@@ -101,7 +115,19 @@ export function parseCuratedCatalog(source: string): CuratedCatalogEntry[] {
     throw new CuratedCatalogError(`curated.yaml failed validation: ${issues}`);
   }
 
-  const entries = parsed.data.entries;
+  for (const entry of parsed.data.unpublished) {
+    if (entry.verified) {
+      throw new CuratedCatalogError(
+        `curated.yaml marks ${entry.name} as verified, but it is listed under ` +
+          '`unpublished:` — nothing has confirmed that name identifies the ' +
+          "vendor's own server. Set `verified: false`, or move the entry to " +
+          '`entries:` once the registry publishes it under exactly this name.'
+      );
+    }
+  }
+
+  // Both lists are one catalog downstream; uniqueness has to hold across them.
+  const entries = [...parsed.data.entries, ...parsed.data.unpublished];
 
   const seenNames = new Set<string>();
   const seenRanks = new Map<number, string>();

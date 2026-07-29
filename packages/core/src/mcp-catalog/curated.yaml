@@ -6,14 +6,21 @@
 # Curation lives here rather than in an admin UI so every change is reviewed in
 # a pull request and rolls back like code.
 #
-# `name` is the reverse-DNS registry identity. Many entries below are already
-# published to the registry under exactly this name, so the overlay lands on the
-# mirrored row. Several major vendors — Sentry, Slack, Datadog, MongoDB,
-# Context7, DeepWiki, HubSpot, PagerDuty and others — run a public MCP server but
-# have not published to the registry at all; their `name` here uses the
-# reverse-DNS form of a domain the vendor owns, which is the name the registry's
-# own rules would require them to publish under. If they later publish under it,
-# the mirrored row merges with this overlay.
+# `name` is the reverse-DNS registry identity, and it is also the join key onto
+# the mirrored registry row. Entries are split by whether that name is something
+# the registry confirms or something Agor inferred:
+#
+#   entries:      the registry publishes a server under exactly this name.
+#   unpublished:  the vendor runs a public MCP endpoint but has not published to
+#                 the registry, so the name is Agor's reverse-DNS guess.
+#
+# `verified` is a user-facing trust badge and backs the marketplace's
+# "verified only" filter, so it has to mean something narrower than "we like
+# this one": Agor vouches that this name identifies the vendor's own server. It
+# can only be true under `entries:`, because only there has anything confirmed
+# the name-to-vendor mapping. The loader enforces that rather than trusting the
+# file to stay honest as entries are added. It does not mean the vendor endorses
+# Agor.
 #
 # `remote_url` and `transport` are recorded for every entry with a public remote,
 # including ones the registry already carries. That makes a fresh install
@@ -28,11 +35,10 @@
 # number would be wrong.
 #
 # Every `remote_url` here was reached with an unauthenticated `initialize` at
-# time of writing. `verified` means Agor vouches for the entry as the vendor's
-# own server, not that the vendor endorses Agor.
+# time of writing.
 
+# Entries the registry publishes under exactly this `name`.
 entries:
-  # ---------------------------------------------------------------- dev tools
   - name: io.github.github/github-mcp-server
     category: dev-tools
     capabilities: [code-repos, issues, pull-requests, code-search, automations]
@@ -55,42 +61,6 @@ entries:
     verified: true
     popularity_rank: 2
     remote_url: https://mcp.linear.app/mcp
-    transport: streamable-http
-
-  - name: io.sentry/mcp
-    category: dev-tools
-    capabilities: [logs, issues, deployments, traces]
-    benefit: Hand an agent a Sentry issue and let it read the stack trace, the release, and the surrounding events before it starts fixing.
-    starter_prompt: Find the error that has affected the most users in the last 24 hours and explain what is throwing it.
-    permission_disclosure: Reads issues, events, stack traces, and release metadata from the Sentry organisations you authorise.
-    icon_url: https://api.smithery.ai/servers/sentry/icon
-    verified: true
-    popularity_rank: 3
-    remote_url: https://mcp.sentry.dev/mcp
-    transport: streamable-http
-
-  - name: com.context7/mcp
-    category: dev-tools
-    capabilities: [docs]
-    benefit: Pull version-correct library documentation into context so an agent stops inventing APIs that no longer exist.
-    starter_prompt: Fetch the current documentation for the library I am using and check my code against its latest API.
-    permission_disclosure: Reads public library documentation only. No account data is accessed.
-    icon_url: https://www.google.com/s2/favicons?domain=context7.com&sz=64
-    verified: true
-    popularity_rank: 4
-    remote_url: https://mcp.context7.com/mcp
-    transport: streamable-http
-
-  - name: com.deepwiki/mcp
-    category: dev-tools
-    capabilities: [docs, code-search, code-repos]
-    benefit: Ask questions about any public GitHub repository and get answers grounded in its actual source.
-    starter_prompt: Explain how authentication is implemented in a public repository I name, citing the files involved.
-    permission_disclosure: Reads public GitHub repository content only. No account data is accessed.
-    icon_url: https://api.smithery.ai/servers/deepwiki/icon
-    verified: true
-    popularity_rank: 5
-    remote_url: https://mcp.deepwiki.com/mcp
     transport: streamable-http
 
   - name: com.atlassian/atlassian-mcp-server
@@ -141,42 +111,6 @@ entries:
     remote_url: https://mcp.vercel.com
     transport: streamable-http
 
-  - name: com.cloudflare/mcp
-    category: dev-tools
-    capabilities: [deployments, files, logs]
-    benefit: Manage Workers, DNS, and storage bindings without switching to the dashboard.
-    starter_prompt: List my Workers and show which ones have thrown errors in the last day.
-    permission_disclosure: Reads and manages Workers, DNS records, and storage bindings in the Cloudflare accounts you authorise.
-    icon_url: https://api.smithery.ai/servers/cloudflare/icon
-    verified: true
-    popularity_rank: 10
-    remote_url: https://mcp.cloudflare.com/mcp
-    transport: streamable-http
-
-  - name: com.semgrep/mcp
-    category: dev-tools
-    capabilities: [security-scan, code-search]
-    benefit: Run static analysis over a change and get findings back as structured results an agent can act on.
-    starter_prompt: Scan the files I changed on this branch and explain any security findings.
-    permission_disclosure: Sends the code you ask it to scan to Semgrep, and reads findings from the Semgrep organisations you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=semgrep.dev&sz=64
-    verified: true
-    popularity_rank: 24
-    remote_url: https://mcp.semgrep.ai/mcp
-    transport: streamable-http
-
-  - name: com.buildkite/mcp
-    category: dev-tools
-    capabilities: [ci-cd, logs]
-    benefit: Read build logs and job state so an agent can work out why CI is red before you do.
-    starter_prompt: Show the last failed build on my main pipeline and quote the log lines that caused it.
-    permission_disclosure: Reads pipelines, builds, job logs, and artifacts in the Buildkite organisations you authorise.
-    icon_url: https://api.smithery.ai/servers/buildkite/icon
-    verified: true
-    popularity_rank: 31
-    remote_url: https://mcp.buildkite.com/mcp
-    transport: streamable-http
-
   - name: com.auth0/mcp
     category: dev-tools
     capabilities: [deployments, logs]
@@ -197,7 +131,6 @@ entries:
     verified: true
     popularity_rank: 44
 
-    # ------------------------------------------------------------- data storage
     remote_url: https://mcp.wix.com/mcp
     transport: streamable-http
 
@@ -213,18 +146,6 @@ entries:
     remote_url: https://mcp.supabase.com/mcp
     transport: streamable-http
 
-  - name: com.mongodb/mcp
-    category: data-storage
-    capabilities: [files, databases, schema, sql]
-    benefit: Explore collections and run aggregations without hand-writing shell commands.
-    starter_prompt: List my collections, describe the shape of the largest one, and suggest an index for my slowest query.
-    permission_disclosure: Reads and writes documents, collections, and indexes in the MongoDB clusters you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=mongodb.com&sz=64
-    verified: true
-    popularity_rank: 16
-    remote_url: https://mcp.mongodb.com/mcp
-    transport: streamable-http
-
   - name: io.prisma/mcp
     category: data-storage
     capabilities: [schema, databases]
@@ -235,18 +156,6 @@ entries:
     verified: true
     popularity_rank: 18
     remote_url: https://mcp.prisma.io/mcp
-    transport: streamable-http
-
-  - name: tech.neon/mcp
-    category: data-storage
-    capabilities: [databases, sql, schema]
-    benefit: Spin up a database branch per agent session so experiments never touch production data.
-    starter_prompt: Create a database branch from main and describe the schema it starts with.
-    permission_disclosure: Creates, reads, and deletes projects, branches, and data in the Neon accounts you authorise.
-    icon_url: https://api.smithery.ai/servers/neon/icon
-    verified: true
-    popularity_rank: 19
-    remote_url: https://mcp.neon.tech/mcp
     transport: streamable-http
 
   - name: com.airtable/mcp
@@ -271,30 +180,6 @@ entries:
     verified: true
     popularity_rank: 30
 
-  - name: com.dropbox/mcp
-    category: data-storage
-    capabilities: [files, web-search]
-    benefit: Give an agent read access to project files without copying them into the repository.
-    starter_prompt: Find the most recently modified documents in my Dropbox and summarise each one.
-    permission_disclosure: Reads, writes, and shares files and folders in the Dropbox accounts you authorise.
-    icon_url: https://logos.composio.dev/api/dropbox
-    verified: true
-    popularity_rank: 34
-    remote_url: https://mcp.dropbox.com/mcp
-    transport: streamable-http
-
-  - name: com.box/mcp
-    category: data-storage
-    capabilities: [files, web-search]
-    benefit: Search and read Box content so an agent can work from the documents your team already keeps there.
-    starter_prompt: Search my Box account for documents about the project I name and summarise what they cover.
-    permission_disclosure: Reads and writes files, folders, and metadata in the Box accounts you authorise.
-    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/box.svg
-    verified: true
-    popularity_rank: 40
-    remote_url: https://mcp.box.com/mcp
-    transport: streamable-http
-
   - name: co.huggingface/hf-mcp-server
     category: data-storage
     capabilities: [datasets, web-search]
@@ -307,7 +192,7 @@ entries:
     remote_url: https://huggingface.co/mcp
     transport: streamable-http
 
-  - name: io.sanity/mcp
+  - name: io.sanity.www/mcp
     category: data-storage
     capabilities: [content-cms, schema, files]
     benefit: Read and edit structured content in Sanity so an agent can update a site's copy safely.
@@ -319,7 +204,6 @@ entries:
     remote_url: https://mcp.sanity.io/mcp
     transport: streamable-http
 
-  # -------------------------------------------------------------- productivity
   - name: com.notion/mcp
     category: productivity
     capabilities: [notes, databases, web-search]
@@ -332,18 +216,6 @@ entries:
     remote_url: https://mcp.notion.com/mcp
     transport: streamable-http
 
-  - name: com.asana/mcp
-    category: productivity
-    capabilities: [tasks, projects, notes]
-    benefit: Keep Asana in sync with what the agents actually finished, without manual status updates.
-    starter_prompt: List my tasks due this week and draft a status comment for each.
-    permission_disclosure: Reads and writes tasks, projects, and comments in the Asana workspaces you authorise.
-    icon_url: https://api.smithery.ai/servers/asana/icon
-    verified: true
-    popularity_rank: 22
-    remote_url: https://mcp.asana.com/sse
-    transport: sse
-
   - name: com.monday/monday.com
     category: productivity
     capabilities: [projects, tasks]
@@ -354,18 +226,6 @@ entries:
     verified: true
     popularity_rank: 33
     remote_url: https://mcp.monday.com/mcp
-    transport: streamable-http
-
-  - name: com.clickup/mcp
-    category: productivity
-    capabilities: [tasks, docs, notes]
-    benefit: Create and update ClickUp tasks from the session rather than transcribing them afterwards.
-    starter_prompt: List my open ClickUp tasks and group them by which ones are blocked.
-    permission_disclosure: Reads and writes tasks, lists, docs, and comments in the ClickUp workspaces you authorise.
-    icon_url: https://api.smithery.ai/servers/clickup/icon
-    verified: true
-    popularity_rank: 36
-    remote_url: https://mcp.clickup.com/mcp
     transport: streamable-http
 
   - name: com.zapier/mcp
@@ -404,54 +264,6 @@ entries:
     remote_url: https://mcp.paypal.com/mcp
     transport: streamable-http
 
-  - name: com.squareup/mcp
-    category: productivity
-    capabilities: [payments, crm]
-    benefit: Read Square orders and catalog data so an agent can reconcile sales without exporting CSVs.
-    starter_prompt: Summarise my Square orders from the last week and identify the best-selling items.
-    permission_disclosure: Reads and writes payments, catalog, orders, and customers in the Square accounts you authorise.
-    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master//squareup.svg
-    verified: true
-    popularity_rank: 43
-    remote_url: https://mcp.squareup.com/mcp
-    transport: streamable-http
-
-  - name: com.hubspot/mcp
-    category: productivity
-    capabilities: [crm]
-    benefit: Query the CRM in plain language instead of building a report for every question.
-    starter_prompt: Summarise the deals in my pipeline that have not moved in two weeks.
-    permission_disclosure: Reads and writes contacts, companies, deals, and tickets in the HubSpot portals you authorise.
-    icon_url: https://api.smithery.ai/servers/hubspot/icon
-    verified: true
-    popularity_rank: 27
-    remote_url: https://mcp.hubspot.com/anthropic
-    transport: streamable-http
-
-  - name: com.intercom/mcp
-    category: productivity
-    capabilities: [crm, docs]
-    benefit: Read support conversations so an agent can turn recurring complaints into concrete issues.
-    starter_prompt: Find the themes in my last fifty support conversations and rank them by how often they recur.
-    permission_disclosure: Reads and writes conversations, contacts, and help-centre articles in the Intercom workspaces you authorise.
-    icon_url: https://logos.composio.dev/api/intercom
-    verified: true
-    popularity_rank: 35
-    remote_url: https://mcp.intercom.com/mcp
-    transport: streamable-http
-
-  - name: com.canva/mcp
-    category: productivity
-    capabilities: [design]
-    benefit: Generate and export Canva designs from a session instead of switching to the editor.
-    starter_prompt: List my recent Canva designs and describe what each one is for.
-    permission_disclosure: Reads and writes designs and assets in the Canva accounts you authorise.
-    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/canva.jpeg
-    verified: true
-    popularity_rank: 42
-    remote_url: https://mcp.canva.com/mcp
-    transport: streamable-http
-
   - name: com.webflow/mcp
     category: productivity
     capabilities: [deployments, content-cms, databases]
@@ -462,46 +274,7 @@ entries:
     verified: true
     popularity_rank: 39
 
-    # ----------------------------------------------------------------- messaging
     remote_url: https://mcp.webflow.com/mcp
-    transport: streamable-http
-
-  - name: com.slack/mcp
-    category: messaging
-    capabilities: [messages, channels, web-search]
-    benefit: Search channel history for the decision nobody wrote down, and post results where the team will see them.
-    starter_prompt: Search my Slack for discussion about the feature I name and summarise what was decided.
-    permission_disclosure: Reads and posts messages in the Slack channels you authorise, including their history.
-    icon_url: https://api.smithery.ai/servers/node2flow/slack/icon
-    verified: true
-    popularity_rank: 13
-    remote_url: https://mcp.slack.com/mcp
-    transport: streamable-http
-
-  - name: com.resend/mcp
-    category: messaging
-    capabilities: [email, deployments]
-    benefit: Send transactional email from a session and check whether earlier sends actually landed.
-    starter_prompt: Show my recent email sends and flag any that bounced.
-    permission_disclosure: Sends email as your verified domains and reads delivery history for the Resend accounts you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=resend.com&sz=64
-    verified: true
-    popularity_rank: 37
-
-    # ------------------------------------------------------------- observability
-    remote_url: https://mcp.resend.com/mcp
-    transport: streamable-http
-
-  - name: com.datadoghq/mcp
-    category: observability
-    capabilities: [metrics, logs, alerts, traces, incidents]
-    benefit: Give an agent the dashboards and logs it needs to explain an incident rather than speculate about one.
-    starter_prompt: Show the monitors that alerted in the last day and correlate them with error logs from the same window.
-    permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=datadoghq.com&sz=64
-    verified: true
-    popularity_rank: 14
-    remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
     transport: streamable-http
 
   - name: io.github.grafana/mcp-grafana
@@ -540,18 +313,6 @@ entries:
     remote_url: https://mcp.honeycomb.io/mcp
     transport: streamable-http
 
-  - name: com.pagerduty/mcp
-    category: observability
-    capabilities: [incidents, deployments]
-    benefit: Read incident history and on-call state so an agent knows who was paged and what changed.
-    starter_prompt: Summarise the incidents from the last week and identify which service caused the most pages.
-    permission_disclosure: Reads and writes incidents, schedules, and service configuration in the PagerDuty accounts you authorise.
-    icon_url: https://logos.composio.dev/api/pagerduty
-    verified: true
-    popularity_rank: 46
-    remote_url: https://mcp.pagerduty.com/mcp
-    transport: streamable-http
-
   - name: io.github.PostHog/mcp
     category: observability
     capabilities: [analytics, feature-flags]
@@ -576,7 +337,7 @@ entries:
     remote_url: https://mcp.amplitude.com/mcp
     transport: streamable-http
 
-  - name: dev.globalping/mcp
+  - name: io.globalping/mcp
     category: observability
     capabilities: [network-checks, deployments]
     benefit: Run network checks from real locations worldwide to tell a regional outage from a local one.
@@ -588,7 +349,6 @@ entries:
     remote_url: https://mcp.globalping.dev/mcp
     transport: streamable-http
 
-  # -------------------------------------------------------------------- search
   - name: ai.exa/exa
     category: search
     capabilities: [web-search, content-cms]
@@ -599,18 +359,6 @@ entries:
     verified: true
     popularity_rank: 15
     remote_url: https://mcp.exa.ai/mcp
-    transport: streamable-http
-
-  - name: com.firecrawl/mcp
-    category: search
-    capabilities: [web-scrape]
-    benefit: Turn any site into clean markdown an agent can actually read, including JavaScript-rendered pages.
-    starter_prompt: Crawl the documentation site I name and summarise its structure.
-    permission_disclosure: Fetches the public URLs you supply and returns their content. No account data is accessed.
-    icon_url: https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=64
-    verified: true
-    popularity_rank: 26
-    remote_url: https://mcp.firecrawl.dev/mcp
     transport: streamable-http
 
   - name: com.apify/apify-mcp-server
@@ -625,6 +373,268 @@ entries:
     remote_url: https://mcp.apify.com/
     transport: streamable-http
 
+# Servers whose vendor runs a public MCP endpoint but has not published to the
+# registry. Their `name` is the reverse-DNS form of a domain the vendor owns —
+# the name the registry's own rules would require them to use — but nothing has
+# confirmed that mapping, so it is Agor's guess. `verified` is therefore false
+# here and the loader refuses to let it be anything else.
+#
+# Every field means the same as it does above. When a vendor publishes under
+# this exact name, moving the entry into `entries:` is the only change needed.
+unpublished:
+  - name: io.sentry/mcp
+    category: dev-tools
+    capabilities: [logs, issues, deployments, traces]
+    benefit: Hand an agent a Sentry issue and let it read the stack trace, the release, and the surrounding events before it starts fixing.
+    starter_prompt: Find the error that has affected the most users in the last 24 hours and explain what is throwing it.
+    permission_disclosure: Reads issues, events, stack traces, and release metadata from the Sentry organisations you authorise.
+    icon_url: https://api.smithery.ai/servers/sentry/icon
+    verified: false
+    popularity_rank: 3
+    remote_url: https://mcp.sentry.dev/mcp
+    transport: streamable-http
+
+  - name: com.context7/mcp
+    category: dev-tools
+    capabilities: [docs]
+    benefit: Pull version-correct library documentation into context so an agent stops inventing APIs that no longer exist.
+    starter_prompt: Fetch the current documentation for the library I am using and check my code against its latest API.
+    permission_disclosure: Reads public library documentation only. No account data is accessed.
+    icon_url: https://www.google.com/s2/favicons?domain=context7.com&sz=64
+    verified: false
+    popularity_rank: 4
+    remote_url: https://mcp.context7.com/mcp
+    transport: streamable-http
+
+  - name: com.deepwiki/mcp
+    category: dev-tools
+    capabilities: [docs, code-search, code-repos]
+    benefit: Ask questions about any public GitHub repository and get answers grounded in its actual source.
+    starter_prompt: Explain how authentication is implemented in a public repository I name, citing the files involved.
+    permission_disclosure: Reads public GitHub repository content only. No account data is accessed.
+    icon_url: https://api.smithery.ai/servers/deepwiki/icon
+    verified: false
+    popularity_rank: 5
+    remote_url: https://mcp.deepwiki.com/mcp
+    transport: streamable-http
+
+  - name: com.cloudflare/mcp
+    category: dev-tools
+    capabilities: [deployments, files, logs]
+    benefit: Manage Workers, DNS, and storage bindings without switching to the dashboard.
+    starter_prompt: List my Workers and show which ones have thrown errors in the last day.
+    permission_disclosure: Reads and manages Workers, DNS records, and storage bindings in the Cloudflare accounts you authorise.
+    icon_url: https://api.smithery.ai/servers/cloudflare/icon
+    verified: false
+    popularity_rank: 10
+    remote_url: https://mcp.cloudflare.com/mcp
+    transport: streamable-http
+
+  - name: com.semgrep/mcp
+    category: dev-tools
+    capabilities: [security-scan, code-search]
+    benefit: Run static analysis over a change and get findings back as structured results an agent can act on.
+    starter_prompt: Scan the files I changed on this branch and explain any security findings.
+    permission_disclosure: Sends the code you ask it to scan to Semgrep, and reads findings from the Semgrep organisations you authorise.
+    icon_url: https://www.google.com/s2/favicons?domain=semgrep.dev&sz=64
+    verified: false
+    popularity_rank: 24
+    remote_url: https://mcp.semgrep.ai/mcp
+    transport: streamable-http
+
+  - name: com.buildkite/mcp
+    category: dev-tools
+    capabilities: [ci-cd, logs]
+    benefit: Read build logs and job state so an agent can work out why CI is red before you do.
+    starter_prompt: Show the last failed build on my main pipeline and quote the log lines that caused it.
+    permission_disclosure: Reads pipelines, builds, job logs, and artifacts in the Buildkite organisations you authorise.
+    icon_url: https://api.smithery.ai/servers/buildkite/icon
+    verified: false
+    popularity_rank: 31
+    remote_url: https://mcp.buildkite.com/mcp
+    transport: streamable-http
+
+  - name: com.mongodb/mcp
+    category: data-storage
+    capabilities: [files, databases, schema, sql]
+    benefit: Explore collections and run aggregations without hand-writing shell commands.
+    starter_prompt: List my collections, describe the shape of the largest one, and suggest an index for my slowest query.
+    permission_disclosure: Reads and writes documents, collections, and indexes in the MongoDB clusters you authorise.
+    icon_url: https://www.google.com/s2/favicons?domain=mongodb.com&sz=64
+    verified: false
+    popularity_rank: 16
+    remote_url: https://mcp.mongodb.com/mcp
+    transport: streamable-http
+
+  - name: tech.neon/mcp
+    category: data-storage
+    capabilities: [databases, sql, schema]
+    benefit: Spin up a database branch per agent session so experiments never touch production data.
+    starter_prompt: Create a database branch from main and describe the schema it starts with.
+    permission_disclosure: Creates, reads, and deletes projects, branches, and data in the Neon accounts you authorise.
+    icon_url: https://api.smithery.ai/servers/neon/icon
+    verified: false
+    popularity_rank: 19
+    remote_url: https://mcp.neon.tech/mcp
+    transport: streamable-http
+
+  - name: com.dropbox/mcp
+    category: data-storage
+    capabilities: [files, web-search]
+    benefit: Give an agent read access to project files without copying them into the repository.
+    starter_prompt: Find the most recently modified documents in my Dropbox and summarise each one.
+    permission_disclosure: Reads, writes, and shares files and folders in the Dropbox accounts you authorise.
+    icon_url: https://logos.composio.dev/api/dropbox
+    verified: false
+    popularity_rank: 34
+    remote_url: https://mcp.dropbox.com/mcp
+    transport: streamable-http
+
+  - name: com.box/mcp
+    category: data-storage
+    capabilities: [files, web-search]
+    benefit: Search and read Box content so an agent can work from the documents your team already keeps there.
+    starter_prompt: Search my Box account for documents about the project I name and summarise what they cover.
+    permission_disclosure: Reads and writes files, folders, and metadata in the Box accounts you authorise.
+    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/box.svg
+    verified: false
+    popularity_rank: 40
+    remote_url: https://mcp.box.com/mcp
+    transport: streamable-http
+
+  - name: com.asana/mcp
+    category: productivity
+    capabilities: [tasks, projects, notes]
+    benefit: Keep Asana in sync with what the agents actually finished, without manual status updates.
+    starter_prompt: List my tasks due this week and draft a status comment for each.
+    permission_disclosure: Reads and writes tasks, projects, and comments in the Asana workspaces you authorise.
+    icon_url: https://api.smithery.ai/servers/asana/icon
+    verified: false
+    popularity_rank: 22
+    remote_url: https://mcp.asana.com/sse
+    transport: sse
+
+  - name: com.clickup/mcp
+    category: productivity
+    capabilities: [tasks, docs, notes]
+    benefit: Create and update ClickUp tasks from the session rather than transcribing them afterwards.
+    starter_prompt: List my open ClickUp tasks and group them by which ones are blocked.
+    permission_disclosure: Reads and writes tasks, lists, docs, and comments in the ClickUp workspaces you authorise.
+    icon_url: https://api.smithery.ai/servers/clickup/icon
+    verified: false
+    popularity_rank: 36
+    remote_url: https://mcp.clickup.com/mcp
+    transport: streamable-http
+
+  - name: com.squareup/mcp
+    category: productivity
+    capabilities: [payments, crm]
+    benefit: Read Square orders and catalog data so an agent can reconcile sales without exporting CSVs.
+    starter_prompt: Summarise my Square orders from the last week and identify the best-selling items.
+    permission_disclosure: Reads and writes payments, catalog, orders, and customers in the Square accounts you authorise.
+    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master//squareup.svg
+    verified: false
+    popularity_rank: 43
+    remote_url: https://mcp.squareup.com/mcp
+    transport: streamable-http
+
+  - name: com.hubspot/mcp
+    category: productivity
+    capabilities: [crm]
+    benefit: Query the CRM in plain language instead of building a report for every question.
+    starter_prompt: Summarise the deals in my pipeline that have not moved in two weeks.
+    permission_disclosure: Reads and writes contacts, companies, deals, and tickets in the HubSpot portals you authorise.
+    icon_url: https://api.smithery.ai/servers/hubspot/icon
+    verified: false
+    popularity_rank: 27
+    remote_url: https://mcp.hubspot.com/anthropic
+    transport: streamable-http
+
+  - name: com.intercom/mcp
+    category: productivity
+    capabilities: [crm, docs]
+    benefit: Read support conversations so an agent can turn recurring complaints into concrete issues.
+    starter_prompt: Find the themes in my last fifty support conversations and rank them by how often they recur.
+    permission_disclosure: Reads and writes conversations, contacts, and help-centre articles in the Intercom workspaces you authorise.
+    icon_url: https://logos.composio.dev/api/intercom
+    verified: false
+    popularity_rank: 35
+    remote_url: https://mcp.intercom.com/mcp
+    transport: streamable-http
+
+  - name: com.canva/mcp
+    category: productivity
+    capabilities: [design]
+    benefit: Generate and export Canva designs from a session instead of switching to the editor.
+    starter_prompt: List my recent Canva designs and describe what each one is for.
+    permission_disclosure: Reads and writes designs and assets in the Canva accounts you authorise.
+    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/canva.jpeg
+    verified: false
+    popularity_rank: 42
+    remote_url: https://mcp.canva.com/mcp
+    transport: streamable-http
+
+  - name: com.slack/mcp
+    category: messaging
+    capabilities: [messages, channels, web-search]
+    benefit: Search channel history for the decision nobody wrote down, and post results where the team will see them.
+    starter_prompt: Search my Slack for discussion about the feature I name and summarise what was decided.
+    permission_disclosure: Reads and posts messages in the Slack channels you authorise, including their history.
+    icon_url: https://api.smithery.ai/servers/node2flow/slack/icon
+    verified: false
+    popularity_rank: 13
+    remote_url: https://mcp.slack.com/mcp
+    transport: streamable-http
+
+  - name: com.resend/mcp
+    category: messaging
+    capabilities: [email, deployments]
+    benefit: Send transactional email from a session and check whether earlier sends actually landed.
+    starter_prompt: Show my recent email sends and flag any that bounced.
+    permission_disclosure: Sends email as your verified domains and reads delivery history for the Resend accounts you authorise.
+    icon_url: https://www.google.com/s2/favicons?domain=resend.com&sz=64
+    verified: false
+    popularity_rank: 37
+
+    remote_url: https://mcp.resend.com/mcp
+    transport: streamable-http
+
+  - name: com.datadoghq/mcp
+    category: observability
+    capabilities: [metrics, logs, alerts, traces, incidents]
+    benefit: Give an agent the dashboards and logs it needs to explain an incident rather than speculate about one.
+    starter_prompt: Show the monitors that alerted in the last day and correlate them with error logs from the same window.
+    permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
+    icon_url: https://www.google.com/s2/favicons?domain=datadoghq.com&sz=64
+    verified: false
+    popularity_rank: 14
+    remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+    transport: streamable-http
+
+  - name: com.pagerduty/mcp
+    category: observability
+    capabilities: [incidents, deployments]
+    benefit: Read incident history and on-call state so an agent knows who was paged and what changed.
+    starter_prompt: Summarise the incidents from the last week and identify which service caused the most pages.
+    permission_disclosure: Reads and writes incidents, schedules, and service configuration in the PagerDuty accounts you authorise.
+    icon_url: https://logos.composio.dev/api/pagerduty
+    verified: false
+    popularity_rank: 46
+    remote_url: https://mcp.pagerduty.com/mcp
+    transport: streamable-http
+
+  - name: com.firecrawl/mcp
+    category: search
+    capabilities: [web-scrape]
+    benefit: Turn any site into clean markdown an agent can actually read, including JavaScript-rendered pages.
+    starter_prompt: Crawl the documentation site I name and summarise its structure.
+    permission_disclosure: Fetches the public URLs you supply and returns their content. No account data is accessed.
+    icon_url: https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=64
+    verified: false
+    popularity_rank: 26
+    remote_url: https://mcp.firecrawl.dev/mcp
+    transport: streamable-http
+
   - name: com.kagi/mcp
     category: search
     capabilities: [web-search]
@@ -632,7 +642,7 @@ entries:
     starter_prompt: Search for recent authoritative coverage of the topic I name and summarise the consensus.
     permission_disclosure: Sends your search queries to Kagi under the account you authorise, which may consume search credits.
     icon_url: https://www.google.com/s2/favicons?domain=kagi.com&sz=64
-    verified: true
+    verified: false
     popularity_rank: 50
     remote_url: https://mcp.kagi.com/mcp
     transport: streamable-http
