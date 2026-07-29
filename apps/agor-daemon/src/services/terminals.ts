@@ -26,6 +26,7 @@ import path from 'node:path';
 import {
   createUserProcessEnvironment,
   loadConfig,
+  loadConfigSync,
   resolveUserEnvironment,
 } from '@agor/core/config';
 import {
@@ -249,8 +250,9 @@ export class TerminalsService {
       }
     );
 
-    // Check if Zellij is available - warn but don't fail
-    this.zellijAvailable = isZellijAvailable();
+    // Templated execution runs the PTY in the executor image, not the daemon host.
+    const executionOffloaded = Boolean(loadConfigSync().execution?.executor_command_template);
+    this.zellijAvailable = executionOffloaded || isZellijAvailable();
 
     if (!this.zellijAvailable) {
       if (!zellijWarningShown) {
