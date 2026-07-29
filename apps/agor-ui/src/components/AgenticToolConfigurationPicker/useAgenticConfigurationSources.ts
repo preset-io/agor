@@ -73,6 +73,18 @@ interface AgenticConfigurationSourceOption {
   disabled?: boolean;
 }
 
+function preferredConfigurationSource(
+  hasUserDefault: boolean,
+  inlineAllowed: boolean,
+  workspacePreset: AgenticToolPreset | undefined,
+  presets: AgenticToolPreset[]
+): string | undefined {
+  if (hasUserDefault) return USER_DEFAULT_AGENTIC_CONFIGURATION;
+  if (inlineAllowed) return INLINE_AGENTIC_CONFIGURATION;
+  if (workspacePreset) return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+  return presets[0]?.preset_id;
+}
+
 /**
  * Owns preset loading and default-source resolution for every configuration
  * picker. Consumers keep their own rendering and inline form state.
@@ -215,13 +227,12 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     [hasUserDefault, inlineAllowed, isSourceAllowedByPolicy, presets, workspacePreset]
   );
 
-  const preferredSource = hasUserDefault
-    ? USER_DEFAULT_AGENTIC_CONFIGURATION
-    : inlineAllowed
-      ? INLINE_AGENTIC_CONFIGURATION
-      : workspacePreset
-        ? WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-        : presets[0]?.preset_id;
+  const preferredSource = preferredConfigurationSource(
+    hasUserDefault,
+    inlineAllowed,
+    workspacePreset,
+    presets
+  );
 
   const sourceOptions = useMemo<AgenticConfigurationSourceOption[]>(
     () => [

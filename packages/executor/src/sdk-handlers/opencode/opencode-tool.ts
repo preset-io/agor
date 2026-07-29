@@ -231,6 +231,157 @@ async function applyPermissionEffect(input: {
   }
 }
 
+function createOpenCodeEffectConsumer(input: {
+  client: OpenCodeClient;
+  turn: RunOpenCodeTurnInput;
+  context: TurnContext;
+  streamingCallbacks?: StreamingCallbacks;
+  canUseTool?: CanUseToolCallback;
+  settle: (error?: Error) => void;
+  promptFailure: () => Error;
+}) {
+  let textStarted = false;
+  let thinkingStarted = false;
+  let sequence = 0;
+
+  return {
+    get textStarted() {
+      return textStarted;
+    },
+    get thinkingStarted() {
+      return thinkingStarted;
+    },
+    async apply(effects: OpenCodeEventEffect[]): Promise<void> {
+      for (const effect of effects) {
+        switch (effect.type) {
+          case 'text-delta':
+            if (!input.streamingCallbacks) break;
+            if (!textStarted) {
+              textStarted = true;
+              await input.streamingCallbacks.onStreamStart(input.turn.agorAssistantMessageId, {
+                session_id: input.turn.agorSessionId,
+                task_id: input.turn.taskId,
+                role: 'assistant',
+                timestamp: new Date().toISOString(),
+              });
+            }
+            await input.streamingCallbacks.onStreamChunk(
+              input.turn.agorAssistantMessageId,
+              effect.delta,
+              sequence++
+            );
+            break;
+          case 'reasoning-delta':
+            if (!input.streamingCallbacks?.onThinkingChunk) break;
+            if (!thinkingStarted) {
+              thinkingStarted = true;
+              await input.streamingCallbacks.onThinkingStart?.(
+                input.turn.agorAssistantMessageId,
+                {}
+              );
+            }
+            await input.streamingCallbacks.onThinkingChunk(
+              input.turn.agorAssistantMessageId,
+              effect.delta
+            );
+            break;
+          case 'tool-activity':
+            input.streamingCallbacks?.onPulse?.('progress', `opencode_tool_${effect.status}`);
+            break;
+          case 'permission':
+            input.streamingCallbacks?.onPulse?.('waiting', 'permission.request');
+            await applyPermissionEffect({
+              client: input.client,
+              turn: input.turn,
+              context: input.context,
+              effect,
+              canUseTool: input.canUseTool,
+            });
+            break;
+          case 'idle':
+            input.settle();
+            break;
+          case 'error':
+            input.settle(input.promptFailure());
+            break;
+        }
+      }
+    },
+  };
+}
+
+async function loadOpenCodeMessageBaseline(
+  client: OpenCodeClient,
+  request: Parameters<OpenCodeClient['session']['messages']>[0]
+): Promise<Set<string>> {
+  const response = await client.session.messages(request);
+  if (('error' in response && response.error) || !Array.isArray(response.data)) {
+    throw new Error('OpenCode failed to capture the pre-turn message baseline');
+  }
+  return new Set(
+    response.data.flatMap((entry) =>
+      entry?.info && typeof entry.info.id === 'string' ? [entry.info.id] : []
+    )
+  );
+}
+
+function createOpenCodeEventCollector(input: {
+  client: OpenCodeClient;
+  context: TurnContext;
+  signal: AbortSignal;
+  baselineMessageIds: Set<string>;
+  applyEffects: (effects: OpenCodeEventEffect[]) => Promise<void>;
+  isTerminalSettled: () => boolean;
+  settle: (error: Error) => void;
+}) {
+  const controller = new AbortController();
+  let subscription: Awaited<ReturnType<OpenCodeClient['event']['subscribe']>> | undefined;
+  let collector: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
+
+  const stop = () => {
+    stopPromise ??= (async () => {
+      controller.abort(input.signal.reason);
+      if (subscription) await subscription.stream.return?.(undefined);
+      if (collector) await collector;
+    })();
+    return stopPromise;
+  };
+  const start = async () => {
+    subscription = await input.client.event.subscribe({
+      query: input.context.branchPath ? { directory: input.context.branchPath } : undefined,
+      signal: controller.signal,
+    });
+    const translator = createOpenCodeEventTranslator({
+      sessionId: input.context.opencodeSessionId,
+      baselineMessageIds: input.baselineMessageIds,
+    });
+    const iterator = asUnknownAsyncIterable(subscription.stream)[Symbol.asyncIterator]();
+    collector = (async () => {
+      try {
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) {
+            if (!input.isTerminalSettled() && !controller.signal.aborted) {
+              input.settle(
+                new Error('OpenCode event stream closed before the active turn became idle')
+              );
+            }
+            return;
+          }
+          await input.applyEffects(translator.translate(next.value));
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          input.settle(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    })();
+  };
+
+  return { start, stop };
+}
+
 export class OpenCodeTool {
   private readonly dependencies: Pick<
     OpenCodeToolDependencies,
@@ -278,6 +429,79 @@ export class OpenCodeTool {
     };
   }
 
+  private createPermissionCallback(
+    sessionId: SessionID,
+    taskId: TaskID
+  ): CanUseToolCallback | undefined {
+    const {
+      permissionService,
+      messagesRepo,
+      messagesService,
+      tasksService,
+      sessionsService,
+      sessionMCPRepo,
+      mcpServerRepo,
+    } = this;
+    if (!permissionService) return undefined;
+    if (!messagesRepo) return undefined;
+    if (!messagesService) return undefined;
+    if (!tasksService) return undefined;
+    if (!sessionsService) return undefined;
+    if (!sessionMCPRepo) return undefined;
+    if (!mcpServerRepo) return undefined;
+
+    return createCanUseToolCallback(sessionId, taskId, {
+      permissionService,
+      tasksService,
+      messagesRepo,
+      messagesService,
+      sessionsService,
+      permissionLocks: this.permissionLocks,
+      mcpServerRepo,
+      sessionMCPRepo,
+      deferDeniedTerminalState: true,
+    });
+  }
+
+  private protectedInvocationConfig(resolved: InvocationConfig): InvocationConfig {
+    const configuredAgents =
+      typeof resolved.agent === 'object' && resolved.agent !== null ? resolved.agent : {};
+    return {
+      ...resolved,
+      permission: AGOR_PERMISSION_INTERCEPTION,
+      agent: {
+        ...configuredAgents,
+        [AGOR_MANAGED_AGENT]: {
+          mode: 'primary',
+          permission: AGOR_PERMISSION_INTERCEPTION,
+        },
+      },
+    };
+  }
+
+  private async resolveSession(
+    client: OpenCodeClient,
+    input: RunOpenCodeTurnInput
+  ): Promise<{ openCodeSessionId: string; sessionWasCreated: boolean }> {
+    if (!input.existingOpenCodeSessionId) {
+      const openCodeSessionId = await this.createSession(client, input.title, input.directory);
+      await input.persistOpenCodeSessionId(openCodeSessionId);
+      return { openCodeSessionId, sessionWasCreated: true };
+    }
+
+    const openCodeSessionId = input.existingOpenCodeSessionId;
+    const response = await client.session.get({
+      path: { id: openCodeSessionId },
+      query: { directory: input.directory },
+    });
+    if (response.error || !response.data || response.data.id !== openCodeSessionId) {
+      throw new Error(
+        `Unable to resume stored OpenCode session ${openCodeSessionId}; verify that its state is available under the executor identity`
+      );
+    }
+    return { openCodeSessionId, sessionWasCreated: false };
+  }
+
   async runTurn(
     input: RunOpenCodeTurnInput,
     streamingCallbacks?: StreamingCallbacks
@@ -300,20 +524,7 @@ export class OpenCodeTool {
     // OPENCODE_CONFIG_CONTENT is the highest-precedence, invocation-scoped
     // configuration. Force every interceptable permission through Agor even if
     // the repository's opencode.json contains permissive rules.
-    const invocationConfig: InvocationConfig = {
-      ...resolvedInvocationConfig,
-      permission: AGOR_PERMISSION_INTERCEPTION,
-      agent: {
-        ...(typeof resolvedInvocationConfig.agent === 'object' &&
-        resolvedInvocationConfig.agent !== null
-          ? resolvedInvocationConfig.agent
-          : {}),
-        [AGOR_MANAGED_AGENT]: {
-          mode: 'primary',
-          permission: AGOR_PERMISSION_INTERCEPTION,
-        },
-      },
-    };
+    const invocationConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
     const configContent = JSON.stringify(invocationConfig);
     let managedServer: ManagedOpenCodeServer;
     try {
@@ -394,23 +605,7 @@ export class OpenCodeTool {
       });
       await this.assertExplicitModelAvailable(client, input.directory, provider, model);
 
-      let openCodeSessionId = input.existingOpenCodeSessionId;
-      let sessionWasCreated = false;
-      if (openCodeSessionId) {
-        const response = await client.session.get({
-          path: { id: openCodeSessionId },
-          query: { directory: input.directory },
-        });
-        if (response.error || !response.data || response.data.id !== openCodeSessionId) {
-          throw new Error(
-            `Unable to resume stored OpenCode session ${openCodeSessionId}; verify that its state is available under the executor identity`
-          );
-        }
-      } else {
-        openCodeSessionId = await this.createSession(client, input.title, input.directory);
-        sessionWasCreated = true;
-        await input.persistOpenCodeSessionId(openCodeSessionId);
-      }
+      const { openCodeSessionId, sessionWasCreated } = await this.resolveSession(client, input);
 
       activeOpenCodeSessionId = openCodeSessionId;
       if (input.signal.aborted)
@@ -655,29 +850,7 @@ export class OpenCodeTool {
       query: context.branchPath ? { directory: context.branchPath } : undefined,
     };
 
-    const collectorController = new AbortController();
-    let subscription: Awaited<ReturnType<OpenCodeClient['event']['subscribe']>> | undefined;
-    let collector: Promise<void> | undefined;
-    let collectorStopPromise: Promise<void> | undefined;
-    const stopEventCollector = () => {
-      collectorStopPromise ??= (async () => {
-        collectorController.abort(input.signal.reason);
-        if (subscription) await subscription.stream.return?.(undefined);
-        if (collector) await collector;
-      })();
-      return collectorStopPromise;
-    };
-    registerStopEventCollector(stopEventCollector);
-
-    const baselineResponse = await client.session.messages(transcriptRequest);
-    if (baselineResponse.error || !Array.isArray(baselineResponse.data)) {
-      throw new Error('OpenCode failed to capture the pre-turn message baseline');
-    }
-    const baselineMessageIds = new Set(
-      baselineResponse.data.flatMap((entry) =>
-        entry?.info && typeof entry.info.id === 'string' ? [entry.info.id] : []
-      )
-    );
+    const baselineMessageIds = await loadOpenCodeMessageBaseline(client, transcriptRequest);
 
     if (input.signal.aborted) throw new Error('OpenCode turn was aborted before event collection');
     let protocolError: Error | undefined;
@@ -686,29 +859,7 @@ export class OpenCodeTool {
     const terminal = new Promise<{ error?: Error }>((resolve) => {
       settleTerminal = resolve;
     });
-    let textStarted = false;
-    let thinkingStarted = false;
-    let sequence = 0;
-    const canUseTool =
-      this.permissionService &&
-      this.messagesRepo &&
-      this.messagesService &&
-      this.tasksService &&
-      this.sessionsService &&
-      this.sessionMCPRepo &&
-      this.mcpServerRepo
-        ? createCanUseToolCallback(input.agorSessionId, input.taskId, {
-            permissionService: this.permissionService,
-            tasksService: this.tasksService,
-            messagesRepo: this.messagesRepo,
-            messagesService: this.messagesService,
-            sessionsService: this.sessionsService,
-            permissionLocks: this.permissionLocks,
-            mcpServerRepo: this.mcpServerRepo,
-            sessionMCPRepo: this.sessionMCPRepo,
-            deferDeniedTerminalState: true,
-          })
-        : undefined;
+    const canUseTool = this.createPermissionCallback(input.agorSessionId, input.taskId);
 
     const settle = (error?: Error) => {
       if (terminalSettled) return;
@@ -719,83 +870,34 @@ export class OpenCodeTool {
     input.signal.addEventListener('abort', settleAbort, { once: true });
     if (input.signal.aborted) settleAbort();
 
-    const applyEffects = async (effects: OpenCodeEventEffect[]) => {
-      for (const effect of effects) {
-        switch (effect.type) {
-          case 'text-delta':
-            if (!streamingCallbacks) break;
-            if (!textStarted) {
-              textStarted = true;
-              await streamingCallbacks.onStreamStart(input.agorAssistantMessageId, {
-                session_id: input.agorSessionId,
-                task_id: input.taskId,
-                role: 'assistant',
-                timestamp: new Date().toISOString(),
-              });
-            }
-            await streamingCallbacks.onStreamChunk(
-              input.agorAssistantMessageId,
-              effect.delta,
-              sequence++
-            );
-            break;
-          case 'reasoning-delta':
-            if (!streamingCallbacks?.onThinkingChunk) break;
-            if (!thinkingStarted) {
-              thinkingStarted = true;
-              await streamingCallbacks.onThinkingStart?.(input.agorAssistantMessageId, {});
-            }
-            await streamingCallbacks.onThinkingChunk(input.agorAssistantMessageId, effect.delta);
-            break;
-          case 'tool-activity':
-            streamingCallbacks?.onPulse?.('progress', `opencode_tool_${effect.status}`);
-            break;
-          case 'permission':
-            streamingCallbacks?.onPulse?.('waiting', 'permission.request');
-            await applyPermissionEffect({ client, turn: input, context, effect, canUseTool });
-            break;
-          case 'idle':
-            settle();
-            break;
-          case 'error':
-            protocolError = promptFailure();
-            settle(protocolError);
-            break;
-        }
-      }
-    };
+    const effects = createOpenCodeEffectConsumer({
+      client,
+      turn: input,
+      context,
+      streamingCallbacks,
+      canUseTool,
+      settle: (error) => {
+        if (error) protocolError = error;
+        settle(error);
+      },
+      promptFailure,
+    });
+    const eventCollector = createOpenCodeEventCollector({
+      client,
+      context,
+      signal: input.signal,
+      baselineMessageIds,
+      applyEffects: effects.apply,
+      isTerminalSettled: () => terminalSettled,
+      settle: (error) => {
+        protocolError = error;
+        settle(error);
+      },
+    });
+    registerStopEventCollector(eventCollector.stop);
 
     try {
-      subscription = await client.event.subscribe({
-        query: context.branchPath ? { directory: context.branchPath } : undefined,
-        signal: collectorController.signal,
-      });
-      const translator = createOpenCodeEventTranslator({
-        sessionId: context.opencodeSessionId,
-        baselineMessageIds,
-      });
-      const iterator = asUnknownAsyncIterable(subscription.stream)[Symbol.asyncIterator]();
-      collector = (async () => {
-        try {
-          for (;;) {
-            const next = await iterator.next();
-            if (next.done) {
-              if (!terminalSettled && !collectorController.signal.aborted) {
-                settle(
-                  new Error('OpenCode event stream closed before the active turn became idle')
-                );
-              }
-              return;
-            }
-            await applyEffects(translator.translate(next.value));
-          }
-        } catch (error) {
-          if (!collectorController.signal.aborted) {
-            protocolError = error instanceof Error ? error : new Error(String(error));
-            settle(protocolError);
-          }
-        }
-      })();
+      await eventCollector.start();
 
       const promptResponse = await client.session.prompt(request);
       if (promptResponse.error) throw promptFailure();
@@ -805,7 +907,7 @@ export class OpenCodeTool {
 
       await new Promise((resolve) => setTimeout(resolve, this.dependencies.eventDrainMs));
       await this.settleWithinOrThrow(
-        stopEventCollector(),
+        eventCollector.stop(),
         this.dependencies.shutdownTimeoutMs,
         'OpenCode event collector did not settle within the shutdown timeout'
       );
@@ -821,14 +923,14 @@ export class OpenCodeTool {
       });
       enrichContentBlocks(finalMessage.contentBlocks);
 
-      if (thinkingStarted) {
+      if (effects.thinkingStarted) {
         await streamingCallbacks?.onThinkingEnd?.(input.agorAssistantMessageId);
       }
-      if (textStarted) await streamingCallbacks?.onStreamEnd(input.agorAssistantMessageId);
+      if (effects.textStarted) await streamingCallbacks?.onStreamEnd(input.agorAssistantMessageId);
       return finalMessage;
     } catch (error) {
       const failure = sanitizer.error(error);
-      if (textStarted) {
+      if (effects.textStarted) {
         await streamingCallbacks?.onStreamError(input.agorAssistantMessageId, failure);
       }
       throw failure;

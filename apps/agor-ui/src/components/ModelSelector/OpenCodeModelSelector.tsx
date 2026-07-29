@@ -43,6 +43,23 @@ export interface OpenCodeModelSelectorProps {
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }
 
+function compactWarning(
+  catalogEnabled: boolean,
+  refreshFailed: boolean,
+  storedUnavailable: boolean
+): string | undefined {
+  if (!catalogEnabled) {
+    return 'Configured models are private to the session owner. Their stored exact pair remains usable.';
+  }
+  if (refreshFailed) {
+    return 'Configured models could not be refreshed. The stored selection was not changed.';
+  }
+  if (storedUnavailable) {
+    return 'The stored pair is not in the current configured catalog.';
+  }
+  return undefined;
+}
+
 /**
  * Configured OpenCode model selection. Discovery is a disposable, protected
  * read; manual exact entry remains usable when it is unavailable.
@@ -174,6 +191,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     ];
     const selectedValue = value ? pairValue(value.provider, value.model) : undefined;
     const storedConfirmedUnavailable = Boolean(value && catalog && !storedAvailable);
+    const warning = compactWarning(catalogEnabled, refreshFailed, storedConfirmedUnavailable);
     if (
       value &&
       !compactOptions.some((group) =>
@@ -246,16 +264,8 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
             />
           </Tooltip>
         </Popover>
-        {(refreshFailed || (value && catalog && !storedAvailable) || !catalogEnabled) && (
-          <Tooltip
-            title={
-              !catalogEnabled
-                ? 'Configured models are private to the session owner. Their stored exact pair remains usable.'
-                : refreshFailed
-                  ? 'Configured models could not be refreshed. The stored selection was not changed.'
-                  : 'The stored pair is not in the current configured catalog.'
-            }
-          >
+        {warning && (
+          <Tooltip title={warning}>
             <WarningOutlined aria-label="OpenCode model warning" />
           </Tooltip>
         )}

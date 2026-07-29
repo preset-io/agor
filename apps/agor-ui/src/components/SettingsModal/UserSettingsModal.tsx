@@ -1,5 +1,6 @@
 import type {
   AgenticAuthMethod,
+  AgenticAuthMethods,
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
@@ -7,6 +8,7 @@ import type {
   EnvVarScope,
   Group,
   GroupMembership,
+  ProviderResolutionPolicy,
   TenantAgenticToolName,
   UpdateUserInput,
   User,
@@ -83,6 +85,65 @@ type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] &
 
 const isAgenticToolTab = (value: string): value is AgenticToolName =>
   AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
+
+type EffectiveCredentialSource =
+  | 'Personal configuration'
+  | 'Workspace configuration'
+  | 'Unavailable';
+
+function effectiveCredentialSource(
+  policy: ProviderResolutionPolicy,
+  personalConfigured: boolean,
+  workspaceConfigured: boolean
+): EffectiveCredentialSource {
+  switch (policy) {
+    case 'user_required':
+      return personalConfigured ? 'Personal configuration' : 'Unavailable';
+    case 'tenant_required':
+      return workspaceConfigured ? 'Workspace configuration' : 'Unavailable';
+    case 'tenant_preferred':
+      if (workspaceConfigured) return 'Workspace configuration';
+      return personalConfigured ? 'Personal configuration' : 'Unavailable';
+    case 'user_preferred':
+      if (personalConfigured) return 'Personal configuration';
+      return workspaceConfigured ? 'Workspace configuration' : 'Unavailable';
+  }
+}
+
+function agenticDefaultSelection(values: AgenticConfigFormValues) {
+  if (values.defaultSelectionSource === 'preset' && values.defaultPresetId) {
+    return { source: 'preset' as const, preset_id: values.defaultPresetId as never };
+  }
+  if (values.defaultSelectionSource === 'inline') return { source: 'inline' as const };
+  return { source: 'workspace_default' as const };
+}
+
+function authMethodForTool(
+  tool: TenantAgenticToolName,
+  configuredMethods: AgenticAuthMethods,
+  fieldStatus: FieldStatus
+): AgenticAuthMethod | undefined {
+  if (tool === 'claude-code') {
+    return (
+      configuredMethods['claude-code'] ??
+      (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key')
+    );
+  }
+  if (tool === 'codex') return configuredMethods.codex ?? 'api_key';
+  return undefined;
+}
+
+function personalPolicyDescription(policy: ProviderResolutionPolicy): string {
+  switch (policy) {
+    case 'user_required':
+      return 'Your personal configuration is required. Workspace credentials will not be used.';
+    case 'user_preferred':
+      return 'Your personal configuration is used first, with workspace configuration as fallback.';
+    case 'tenant_preferred':
+    case 'tenant_required':
+      return 'Workspace configuration is used first. Your personal configuration is retained as fallback.';
+  }
+}
 
 export interface UserSettingsModalProps {
   open: boolean;
@@ -390,12 +451,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       } else if (values.defaultSelectionSource === 'inline') {
         nextConfig[tool] = buildConfigFromFormValues(tool, values);
       }
-      nextSelections[tool] =
-        values.defaultSelectionSource === 'preset' && values.defaultPresetId
-          ? { source: 'preset', preset_id: values.defaultPresetId as never }
-          : values.defaultSelectionSource === 'inline'
-            ? { source: 'inline' }
-            : { source: 'workspace_default' };
+      nextSelections[tool] = agenticDefaultSelection(values);
     }
 
     const mcpSourceTool = tools[0];
@@ -1021,13 +1077,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         // expose an explicit method so dormant credentials are never selected by accident.
         const allToolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];
         const fieldStatus: FieldStatus = agenticToolStatus[credentialToolName] ?? {};
-        const authMethod =
-          canonicalTool === 'claude-code'
-            ? (agenticAuthMethods['claude-code'] ??
-              (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
-            : canonicalTool === 'codex'
-              ? (agenticAuthMethods.codex ?? 'api_key')
-              : undefined;
+        const authMethod = authMethodForTool(canonicalTool, agenticAuthMethods, fieldStatus);
         const toolFields = allToolFields.filter((field) => {
           if (canonicalTool === 'claude-code') {
             return authMethod === 'subscription'
@@ -1046,26 +1096,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
           ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
         );
-        const effectiveSource =
-          resolutionPolicy === 'user_required'
-            ? personalConfigured
-              ? 'Personal configuration'
-              : 'Unavailable'
-            : resolutionPolicy === 'tenant_required'
-              ? workspaceConfigured
-                ? 'Workspace configuration'
-                : 'Unavailable'
-              : resolutionPolicy === 'tenant_preferred'
-                ? workspaceConfigured
-                  ? 'Workspace configuration'
-                  : personalConfigured
-                    ? 'Personal configuration'
-                    : 'Unavailable'
-                : personalConfigured
-                  ? 'Personal configuration'
-                  : workspaceConfigured
-                    ? 'Workspace configuration'
-                    : 'Unavailable';
+        const effectiveSource = effectiveCredentialSource(
+          resolutionPolicy,
+          personalConfigured,
+          workspaceConfigured
+        );
         const savingForTool: Partial<Record<AgenticToolConfigField, boolean>> = Object.fromEntries(
           toolFields.map((c) => [c.field, !!savingToolField[`${credentialToolName}.${c.field}`]])
         );
@@ -1095,23 +1130,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
         if (canonicalTool === 'opencode') {
           const managesOwnSettings = user?.user_id === currentUser?.user_id;
+          let providersPane = (
+            <Alert
+              type="info"
+              showIcon
+              title="OpenCode connections can only be managed by that user."
+            />
+          );
+          if (managesOwnSettings && client) {
+            providersPane = <OpenCodeProviderSettings key={currentUser?.user_id} client={client} />;
+          } else if (managesOwnSettings) {
+            providersPane = <Alert type="warning" showIcon title="Not connected to Agor." />;
+          }
           return (
             <Tabs
               items={[
                 {
                   key: 'auth',
                   label: 'Providers',
-                  children: !managesOwnSettings ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      title="OpenCode connections can only be managed by that user."
-                    />
-                  ) : client ? (
-                    <OpenCodeProviderSettings key={currentUser?.user_id} client={client} />
-                  ) : (
-                    <Alert type="warning" showIcon title="Not connected to Agor." />
-                  ),
+                  children: providersPane,
                 },
                 { key: 'defaults', label: 'Defaults', children: defaultsPane },
               ]}
@@ -1124,12 +1161,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           return defaultsPane;
         }
 
-        const personalPolicyDescription =
-          resolutionPolicy === 'user_required'
-            ? 'Your personal configuration is required. Workspace credentials will not be used.'
-            : resolutionPolicy === 'user_preferred'
-              ? 'Your personal configuration is used first, with workspace configuration as fallback.'
-              : 'Workspace configuration is used first. Your personal configuration is retained as fallback.';
+        const policyDescription = personalPolicyDescription(resolutionPolicy);
         const managedByWorkspace = resolutionPolicy === 'tenant_required';
         const authPane = (
           <>
@@ -1140,7 +1172,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               description={
                 managedByWorkspace
                   ? 'Authentication is managed by this workspace. Personal configuration is never used.'
-                  : personalPolicyDescription
+                  : policyDescription
               }
               style={{ marginBottom: 16 }}
             />

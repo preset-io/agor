@@ -30,6 +30,7 @@ import type {
   BranchID,
   MCPServer,
   Schedule,
+  ScheduleAgenticToolConfig,
   ScheduleCreateData,
   SchedulePatchData,
   User,
@@ -138,6 +139,32 @@ interface ScheduleFormValues extends AgenticFormValues {
   enabled?: boolean;
   retention?: number;
   allow_concurrent_runs?: boolean;
+}
+
+function scheduleAgenticToolConfig(
+  values: ScheduleFormValues,
+  tool: AgenticToolName,
+  previous: Schedule['agentic_tool_config'] | undefined
+): ScheduleAgenticToolConfig {
+  if (values.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION) {
+    return {
+      agentic_tool: tool,
+      configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
+    };
+  }
+  if (values.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION) {
+    return {
+      agentic_tool: tool,
+      configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+    };
+  }
+  if (values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION) {
+    return {
+      agentic_tool: tool,
+      preset_id: values.agenticToolPresetId as NonNullable<ScheduleAgenticToolConfig['preset_id']>,
+    };
+  }
+  return buildScheduleConfigFromFormValues(tool, values, previous);
 }
 
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
@@ -287,36 +314,11 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         prompt: (all.prompt ?? '').trim(),
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
         ...timezoneConfig,
-        agentic_tool_config:
-          all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION
-            ? {
-                agentic_tool: agentTool,
-                configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
-              }
-            : all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-              ? {
-                  agentic_tool: agentTool,
-                  configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-                }
-              : all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
-                ? {
-                    agentic_tool: agentTool,
-                    preset_id: all.agenticToolPresetId as NonNullable<
-                      Schedule['agentic_tool_config']['preset_id']
-                    >,
-                  }
-                : buildScheduleConfigFromFormValues(
-                    agentTool,
-                    {
-                      modelConfig: all.modelConfig,
-                      effort: all.effort,
-                      permissionMode: all.permissionMode,
-                      codexSandboxMode: all.codexSandboxMode,
-                      codexApprovalPolicy: all.codexApprovalPolicy,
-                      codexNetworkAccess: all.codexNetworkAccess,
-                    },
-                    schedule?.agentic_tool_config
-                  ),
+        agentic_tool_config: scheduleAgenticToolConfig(
+          all,
+          agentTool,
+          schedule?.agentic_tool_config
+        ),
         mcp_server_ids: all.mcpServerIds ?? [],
         enabled: all.enabled ?? true,
         retention: all.retention ?? 5,

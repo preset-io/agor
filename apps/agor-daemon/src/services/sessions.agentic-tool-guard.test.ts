@@ -218,6 +218,54 @@ describe('SessionsService.patch — agentic_tool immutability guard', () => {
     const result = (await service.patch(sessionId, { title: 'New title' })) as Session;
     expect(result.title).toBe('New title');
   });
+
+  dbTest('preserves nested Codex permission fields during a partial patch', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const sessionId = await createSession(db, branchId, {
+      agentic_tool: 'codex',
+      permission_config: {
+        mode: 'ask',
+        codex: {
+          sandboxMode: 'read-only',
+          approvalPolicy: 'untrusted',
+          networkAccess: false,
+        },
+      },
+    });
+
+    const result = (await service.patch(sessionId, {
+      permission_config: {
+        codex: { approvalPolicy: 'never' },
+      } as Session['permission_config'],
+    })) as Session;
+
+    expect(result.permission_config).toEqual({
+      mode: 'ask',
+      codex: {
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        networkAccess: false,
+      },
+    });
+  });
+
+  dbTest('rejects an inline patch to a preset-backed session', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const preset = await new AgenticToolPresetRepository(db).create(
+      { tool: 'codex', name: 'Protected preset', configuration: {} },
+      'test-user' as UUID
+    );
+    const sessionId = await createSession(db, branchId, {
+      agentic_tool: 'codex',
+      agentic_tool_preset_id: preset.preset_id,
+    });
+
+    await expect(service.patch(sessionId, { permission_config: { mode: 'ask' } })).rejects.toThrow(
+      /preset-backed.*selecting a preset/i
+    );
+  });
 });
 
 describe('SessionsService OpenCode model_config validation', () => {

@@ -83,6 +83,42 @@ const oauthAttempts = new Map<string, StoredOAuthAttempt>();
 const OAUTH_TIMEOUT_MS = 10 * 60_000;
 const OAUTH_TERMINAL_RETENTION_MS = 10 * 60_000;
 
+type ValidatedOAuthRequest = {
+  providerId: string;
+  method: number;
+  inputs?: Record<string, string>;
+};
+
+function validateOAuthRequest(data: OpenCodeOAuthConnectRequest): ValidatedOAuthRequest {
+  const supportedFields = new Set(['operation', 'providerId', 'method', 'inputs']);
+  const unsupported = Object.keys(data).find((field) => !supportedFields.has(field));
+  if (unsupported) throw new BadRequest(`Unsupported field: ${unsupported}`);
+
+  const providerId = data.providerId?.trim();
+  if (!providerId || !Number.isInteger(data.method) || data.method < 0) {
+    throw new BadRequest('Provider and OAuth method are required.');
+  }
+  assertOptionalStringRecord(data.inputs);
+  return { providerId, method: data.method, inputs: data.inputs };
+}
+
+function createOAuthAttempt(providerId: string, namespaceKey: string): StoredOAuthAttempt {
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  return {
+    attemptId: crypto.randomUUID(),
+    providerId,
+    phase: 'authorizing',
+    expiresAt: new Date(Date.now() + OAUTH_TIMEOUT_MS).toISOString(),
+    namespaceKey,
+    cancelRequested: false,
+    ready,
+    resolveReady,
+  };
+}
+
 function isTerminalAttempt(attempt: StoredOAuthAttempt): boolean {
   return ['configured', 'cancelled', 'expired', 'failed'].includes(attempt.phase);
 }
@@ -234,54 +270,30 @@ export class OpenCodeAuthService {
     return attempt;
   }
 
-  private async startOAuth(
-    data: OpenCodeOAuthConnectRequest,
-    params?: AuthenticatedParams
-  ): Promise<OpenCodeOAuthAttempt> {
-    const unsupported = Object.keys(data).find(
-      (field) =>
-        field !== 'operation' && field !== 'providerId' && field !== 'method' && field !== 'inputs'
-    );
-    if (unsupported) throw new BadRequest(`Unsupported field: ${unsupported}`);
-    const providerId = data.providerId?.trim();
-    if (!providerId || !Number.isInteger(data.method) || data.method < 0) {
-      throw new BadRequest('Provider and OAuth method are required.');
-    }
-    assertOptionalStringRecord(data.inputs);
-
-    const context = await this.credentialContext(params);
-    let resolveReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
-    const attempt: StoredOAuthAttempt = {
-      attemptId: crypto.randomUUID(),
-      providerId,
-      phase: 'authorizing',
-      expiresAt: new Date(Date.now() + OAUTH_TIMEOUT_MS).toISOString(),
-      namespaceKey: context.namespaceKey,
-      cancelRequested: false,
-      ready,
-      resolveReady,
-    };
-    oauthAttempts.set(attempt.attemptId, attempt);
-
-    void inMutationSlot(context.namespaceKey, async () => {
+  private async runOAuthAttempt(
+    attempt: StoredOAuthAttempt,
+    context: AuthenticatedOpenCodeSubjectContext,
+    request: ValidatedOAuthRequest
+  ): Promise<void> {
+    await inMutationSlot(context.namespaceKey, async () => {
       if (attempt.cancelRequested) {
         attempt.phase = 'cancelled';
         attempt.resolveReady();
         scheduleAttemptPrune(attempt);
         return;
       }
+
       const handle = startOpenCodeOAuthExecutor(
         {
           command: 'opencode.auth',
           dataHome: context.dataHome,
           params: {
             operation: 'connect-oauth',
-            providerId,
-            method: data.method,
-            ...(data.inputs && Object.keys(data.inputs).length > 0 ? { inputs: data.inputs } : {}),
+            providerId: request.providerId,
+            method: request.method,
+            ...(request.inputs && Object.keys(request.inputs).length > 0
+              ? { inputs: request.inputs }
+              : {}),
           },
         },
         {
@@ -297,23 +309,40 @@ export class OpenCodeAuthService {
             attempt.authorization = event.authorization;
             attempt.phase = 'awaiting_callback';
             attempt.resolveReady();
-          } else {
-            attempt.phase = 'completing';
+            return;
           }
+          attempt.phase = 'completing';
         }
       );
       attempt.handle = handle;
+
       const result = await handle.result;
       if (result.error?.code === 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED') {
         blockedNamespaces.set(context.namespaceKey, () => handle.verifyAbsence());
       }
       this.settleAttempt(attempt, result, context);
       scheduleAttemptPrune(attempt);
-    }).catch(() => {
-      if (!attempt.cancelRequested) attempt.phase = 'failed';
-      attempt.resolveReady();
-      scheduleAttemptPrune(attempt);
     });
+  }
+
+  private failOAuthAttempt(attempt: StoredOAuthAttempt): void {
+    if (!attempt.cancelRequested) attempt.phase = 'failed';
+    attempt.resolveReady();
+    scheduleAttemptPrune(attempt);
+  }
+
+  private async startOAuth(
+    data: OpenCodeOAuthConnectRequest,
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeOAuthAttempt> {
+    const request = validateOAuthRequest(data);
+    const context = await this.credentialContext(params);
+    const attempt = createOAuthAttempt(request.providerId, context.namespaceKey);
+    oauthAttempts.set(attempt.attemptId, attempt);
+
+    void this.runOAuthAttempt(attempt, context, request).catch(() =>
+      this.failOAuthAttempt(attempt)
+    );
 
     await attempt.ready;
     return this.publicAttempt(attempt);

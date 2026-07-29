@@ -17,6 +17,32 @@ import {
 import type { CommandOptions } from './index.js';
 
 type V2Client = ReturnType<typeof createOpencodeClient>;
+type ProviderAuthMethods = NonNullable<Awaited<ReturnType<V2Client['provider']['auth']>>['data']>;
+type ProviderAuthPrompt = NonNullable<ProviderAuthMethods[string][number]['prompts']>[number];
+
+function safeAuthPrompt(prompt: ProviderAuthPrompt) {
+  const condition = prompt.when ? { when: prompt.when } : {};
+  if (prompt.type === 'select') {
+    return {
+      type: prompt.type,
+      key: prompt.key,
+      message: prompt.message,
+      options: prompt.options.map(({ label, value, hint }) => ({
+        label,
+        value,
+        ...(hint ? { hint } : {}),
+      })),
+      ...condition,
+    };
+  }
+  return {
+    type: prompt.type,
+    key: prompt.key,
+    message: prompt.message,
+    ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+    ...condition,
+  };
+}
 
 function safeMethods(
   methods: Awaited<ReturnType<V2Client['provider']['auth']>>['data'] | undefined,
@@ -28,30 +54,18 @@ function safeMethods(
     label: method.label,
     ...(method.prompts
       ? {
-          prompts: method.prompts.map((prompt) =>
-            prompt.type === 'select'
-              ? {
-                  type: prompt.type,
-                  key: prompt.key,
-                  message: prompt.message,
-                  options: prompt.options.map(({ label, value, hint }) => ({
-                    label,
-                    value,
-                    ...(hint ? { hint } : {}),
-                  })),
-                  ...(prompt.when ? { when: prompt.when } : {}),
-                }
-              : {
-                  type: prompt.type,
-                  key: prompt.key,
-                  message: prompt.message,
-                  ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
-                  ...(prompt.when ? { when: prompt.when } : {}),
-                }
-          ),
+          prompts: method.prompts.map(safeAuthPrompt),
         }
       : {}),
   }));
+}
+
+function credentialPresence(
+  providerIds: Set<string> | null,
+  providerId: string
+): OpenCodeProviderConnection['credentialPresence'] {
+  if (providerIds === null) return 'unknown';
+  return providerIds.has(providerId) ? 'present' : 'absent';
 }
 
 async function withFreshClient<T>(
@@ -191,12 +205,7 @@ async function discover(dataHome: string): Promise<OpenCodeProviderDiscovery> {
         id: provider.id,
         name: provider.name,
         runtimeAvailable: connected.has(provider.id),
-        credentialPresence:
-          credentialProviderIds === null
-            ? 'unknown'
-            : credentialProviderIds.has(provider.id)
-              ? 'present'
-              : 'absent',
+        credentialPresence: credentialPresence(credentialProviderIds, provider.id),
         authMethods: safeMethods(authResponse.data, provider.id),
       })
     );

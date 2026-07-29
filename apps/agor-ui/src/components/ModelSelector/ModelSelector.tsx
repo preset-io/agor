@@ -73,6 +73,8 @@ interface DynamicModelsResponse {
   source: 'dynamic' | 'static';
 }
 
+type RawModelOption = Parameters<typeof normalizeModelOption>[0];
+
 // Codex model options (derived from @agor/core metadata)
 const CODEX_MODEL_OPTIONS = Object.entries(CODEX_MODEL_METADATA).map(([modelId, meta]) => ({
   id: modelId,
@@ -115,6 +117,30 @@ function preferDefaultModel<T extends { id: string }>(models: T[], defaultModel:
     ...models.slice(0, defaultIndex),
     ...models.slice(defaultIndex + 1),
   ];
+}
+
+interface ModelOptionsByTool {
+  claude: RawModelOption[] | null;
+  copilot: RawModelOption[] | null;
+  cursor: RawModelOption[] | null;
+  cursorDefaultModel: string;
+}
+
+function modelOptionsForTool(tool: AgenticToolName, options: ModelOptionsByTool): RawModelOption[] {
+  switch (tool) {
+    case 'codex':
+      return CODEX_MODEL_OPTIONS;
+    case 'gemini':
+      return GEMINI_MODEL_OPTIONS;
+    case 'opencode':
+      return [];
+    case 'copilot':
+      return options.copilot ?? COPILOT_STATIC_MODEL_OPTIONS;
+    case 'cursor':
+      return preferDefaultModel(options.cursor ?? CURSOR_MODEL_OPTIONS, options.cursorDefaultModel);
+    default:
+      return options.claude ?? AVAILABLE_CLAUDE_MODEL_ALIASES;
+  }
 }
 
 const PIN_PLACEHOLDERS: Record<string, string> = {
@@ -261,18 +287,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
   }, [effectiveTool, client]);
 
-  const rawModelList =
-    effectiveTool === 'codex'
-      ? CODEX_MODEL_OPTIONS
-      : effectiveTool === 'gemini'
-        ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // OpenCode doesn't use this list
-          : effectiveTool === 'copilot'
-            ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
-            : effectiveTool === 'cursor'
-              ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
-              : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
+  const rawModelList = modelOptionsForTool(effectiveTool, {
+    claude: claudeServerOptions,
+    copilot: copilotServerOptions,
+    cursor: cursorServerOptions,
+    cursorDefaultModel,
+  });
 
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a discovered alias selection.

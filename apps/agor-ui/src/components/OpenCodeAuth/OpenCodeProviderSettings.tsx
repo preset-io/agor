@@ -17,6 +17,11 @@ interface ProviderAction {
   actionId: number;
 }
 
+function providerListEmptyText(settings: Settings | null, error: string | undefined): string {
+  if (error) return 'No provider status available';
+  return settings ? 'Choose a provider to connect' : 'Loading providers';
+}
+
 export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
@@ -215,8 +220,24 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     setError(undefined);
   };
 
+  const runProviderAction = async <T,>(
+    providerId: string,
+    failureMessage: string,
+    operation: () => Promise<T>,
+    onSuccess: (result: T, generation: number) => void
+  ) => {
+    const action = beginAction(providerId, scopeGeneration);
+    try {
+      const result = await operation();
+      if (isCurrentAction(action)) onSuccess(result, action.generation);
+    } catch {
+      if (isCurrentAction(action)) setError(failureMessage);
+    } finally {
+      if (isCurrentAction(action)) setBusyProvider(undefined);
+    }
+  };
+
   const connect = async (providerId: string) => {
-    const generation = scopeGeneration;
     const trimmedApiKey = apiKey.trim();
     if (!trimmedApiKey) return;
     const provider = settings?.providers.find((candidate) => candidate.id === providerId);
@@ -229,28 +250,24 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     const metadata = Object.fromEntries(
       visiblePrompts.map((prompt) => [prompt.key, promptValues[prompt.key].trim()])
     );
-    const action = beginAction(providerId, generation);
-    try {
-      const next = (await client.service('opencode-auth').create({
-        providerId,
-        apiKey: trimmedApiKey,
-        ...(Object.keys(metadata).length ? { metadata } : {}),
-      })) as Settings;
-      if (!isCurrentAction(action)) return;
-      setSettings(next);
-      setApiKey('');
-      setPromptValues({});
-    } catch {
-      if (isCurrentAction(action)) {
-        setError('OpenCode could not configure that provider.');
+    await runProviderAction(
+      providerId,
+      'OpenCode could not configure that provider.',
+      () =>
+        client.service('opencode-auth').create({
+          providerId,
+          apiKey: trimmedApiKey,
+          ...(Object.keys(metadata).length ? { metadata } : {}),
+        }) as Promise<Settings>,
+      (next) => {
+        setSettings(next);
+        setApiKey('');
+        setPromptValues({});
       }
-    } finally {
-      if (isCurrentAction(action)) setBusyProvider(undefined);
-    }
+    );
   };
 
   const connectOAuth = async (providerId: string) => {
-    const generation = scopeGeneration;
     const provider = settings?.providers.find((candidate) => candidate.id === providerId);
     if (!provider) return;
     const methodPosition = selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods);
@@ -261,88 +278,67 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     const inputs = Object.fromEntries(
       visiblePrompts.map((prompt) => [prompt.key, promptValues[prompt.key].trim()])
     );
-    const action = beginAction(providerId, generation);
-    try {
-      const attempt = (await client.service('opencode-auth').create({
-        operation: 'connect-oauth',
-        providerId,
-        method: method.index,
-        ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-      })) as OpenCodeOAuthAttempt;
-      if (!isCurrentAction(action) || !storeAttempt(providerId, attempt, generation)) return;
-      if (attempt.phase === 'configured' && attempt.settings) setSettings(attempt.settings);
-    } catch {
-      if (isCurrentAction(action)) {
-        setError('OpenCode could not start native authorization.');
+    await runProviderAction(
+      providerId,
+      'OpenCode could not start native authorization.',
+      () =>
+        client.service('opencode-auth').create({
+          operation: 'connect-oauth',
+          providerId,
+          method: method.index,
+          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+        }) as Promise<OpenCodeOAuthAttempt>,
+      (attempt, generation) => {
+        if (!storeAttempt(providerId, attempt, generation)) return;
+        if (attempt.phase === 'configured' && attempt.settings) setSettings(attempt.settings);
       }
-    } finally {
-      if (isCurrentAction(action)) setBusyProvider(undefined);
-    }
+    );
   };
 
   const cancelOAuth = async (providerId: string) => {
-    const generation = scopeGeneration;
     const attempt = oauthAttempts[providerId];
     if (!attempt) return;
     cancellingAttemptsRef.current.add(attempt.attemptId);
-    const action = beginAction(providerId, generation);
     try {
-      const cancelled = await client
-        .service('opencode-auth')
-        .patch(attempt.attemptId, { cancel: true });
-      if (
-        isCurrentAction(action) &&
-        oauthAttemptsRef.current[providerId]?.attemptId === attempt.attemptId
-      ) {
-        storeAttempt(providerId, cancelled, generation);
-      }
-    } catch {
-      if (isCurrentAction(action)) {
-        setError('OpenCode authorization could not be cancelled.');
-      }
+      await runProviderAction(
+        providerId,
+        'OpenCode authorization could not be cancelled.',
+        () => client.service('opencode-auth').patch(attempt.attemptId, { cancel: true }),
+        (cancelled, generation) => {
+          if (oauthAttemptsRef.current[providerId]?.attemptId === attempt.attemptId) {
+            storeAttempt(providerId, cancelled, generation);
+          }
+        }
+      );
     } finally {
       cancellingAttemptsRef.current.delete(attempt.attemptId);
-      if (isCurrentAction(action)) setBusyProvider(undefined);
     }
   };
 
   const submitOAuthCode = async (providerId: string) => {
-    const generation = scopeGeneration;
     const attempt = oauthAttemptsRef.current[providerId];
     const code = oauthCode.trim();
     if (!attempt || !code) return;
     setOAuthCode('');
-    const action = beginAction(providerId, generation);
-    try {
-      const next = await client.service('opencode-auth').patch(attempt.attemptId, { code });
-      if (
-        isCurrentAction(action) &&
-        oauthAttemptsRef.current[providerId]?.attemptId === attempt.attemptId
-      ) {
-        storeAttempt(providerId, next, generation);
+    await runProviderAction(
+      providerId,
+      'OpenCode authorization code could not be submitted.',
+      () => client.service('opencode-auth').patch(attempt.attemptId, { code }),
+      (next, generation) => {
+        if (oauthAttemptsRef.current[providerId]?.attemptId === attempt.attemptId) {
+          storeAttempt(providerId, next, generation);
+        }
       }
-    } catch {
-      if (isCurrentAction(action)) {
-        setError('OpenCode authorization code could not be submitted.');
-      }
-    } finally {
-      if (isCurrentAction(action)) setBusyProvider(undefined);
-    }
+    );
   };
 
   const disconnect = async (providerId: string) => {
-    const generation = scopeGeneration;
-    const action = beginAction(providerId, generation);
-    try {
-      const next = await client.service('opencode-auth').remove(providerId);
-      if (isCurrentAction(action)) setSettings(next);
-    } catch {
-      if (isCurrentAction(action)) {
-        setError('OpenCode could not disconnect that provider.');
-      }
-    } finally {
-      if (isCurrentAction(action)) setBusyProvider(undefined);
-    }
+    await runProviderAction(
+      providerId,
+      'OpenCode could not disconnect that provider.',
+      () => client.service('opencode-auth').remove(providerId),
+      (next) => setSettings(next)
+    );
   };
 
   return (
@@ -386,13 +382,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       <List
         loading={!settings && !error}
         dataSource={visibleProviders}
-        locale={{
-          emptyText: error
-            ? 'No provider status available'
-            : settings
-              ? 'Choose a provider to connect'
-              : 'Loading providers',
-        }}
+        locale={{ emptyText: providerListEmptyText(settings, error) }}
         renderItem={(provider) => (
           <OpenCodeProviderListItem
             provider={provider}

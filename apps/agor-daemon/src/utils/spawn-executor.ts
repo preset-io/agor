@@ -534,53 +534,64 @@ function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'>
   };
 }
 
+function definedEnvironment(values: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+}
+
+function executorEnvironmentForImpersonation(env: Record<string, string>): Record<string, string> {
+  return definedEnvironment({
+    PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    NODE_ENV: env.NODE_ENV,
+    LOG_LEVEL: env.LOG_LEVEL,
+    ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+    ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
+    CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
+    OPENAI_API_KEY: env.OPENAI_API_KEY,
+    OPENAI_BASE_URL: env.OPENAI_BASE_URL,
+    GEMINI_API_KEY: env.GEMINI_API_KEY,
+    GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+    GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
+  });
+}
+
+function resolveLocalExecutorEnvironment(
+  options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>,
+  asUser: string | undefined
+): Record<string, string> {
+  const env = options.env ?? (process.env as Record<string, string>);
+  const source = options.preparedEnv ?? (asUser ? executorEnvironmentForImpersonation(env) : env);
+  return withDaemonExecutorEnv(source, getDaemonUrl());
+}
+
+function prepareLocalExecutorImpersonation(
+  asUser: string | undefined,
+  env: Record<string, string>,
+  preparedEnvFilePath: string | undefined
+): { inlineEnv?: Record<string, string>; envFilePath?: string } {
+  if (!asUser) return {};
+  if (!preparedEnvFilePath) return prepareImpersonationEnv({ asUser, env });
+  return {
+    inlineEnv: Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretEnvKey(key))),
+    envFilePath: preparedEnvFilePath,
+  };
+}
+
 function prepareLocalExecutorSpawn(
   options: SpawnExecutorOptions,
   mode: '--stdin' | '--opencode-oauth',
   location = resolveLocalExecutorLocation(options)
 ) {
   const { executorPath, cwd } = location;
-  const {
-    env = process.env as Record<string, string>,
-    asUser: rawAsUser,
-    preparedEnv,
-    preparedEnvFilePath,
-  } = options;
-  const asUser = rawAsUser || undefined;
-  const daemonUrl = getDaemonUrl();
-  const envWithDaemonUrl: Record<string, string> = preparedEnv
-    ? withDaemonExecutorEnv(preparedEnv, daemonUrl)
-    : asUser
-      ? withDaemonExecutorEnv(
-          Object.fromEntries(
-            Object.entries({
-              PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-              NODE_ENV: env.NODE_ENV,
-              LOG_LEVEL: env.LOG_LEVEL,
-              ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-              ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-              ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-              CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-              OPENAI_API_KEY: env.OPENAI_API_KEY,
-              OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-              GEMINI_API_KEY: env.GEMINI_API_KEY,
-              GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-              GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-            }).filter(([_, value]) => value !== undefined)
-          ),
-          daemonUrl
-        )
-      : withDaemonExecutorEnv(env, daemonUrl);
-  const prepared = asUser
-    ? preparedEnvFilePath
-      ? {
-          inlineEnv: Object.fromEntries(
-            Object.entries(envWithDaemonUrl).filter(([key]) => !isSecretEnvKey(key))
-          ),
-          envFilePath: preparedEnvFilePath,
-        }
-      : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
-    : { inlineEnv: undefined, envFilePath: undefined };
+  const asUser = options.asUser || undefined;
+  const envWithDaemonUrl = resolveLocalExecutorEnvironment(options, asUser);
+  const prepared = prepareLocalExecutorImpersonation(
+    asUser,
+    envWithDaemonUrl,
+    options.preparedEnvFilePath
+  );
   const command = buildSpawnArgs('node', [executorPath, mode], {
     asUser,
     env: asUser ? prepared.inlineEnv : undefined,
@@ -655,6 +666,91 @@ function localOAuthRequiredHandle(): OpenCodeOAuthExecutorHandle {
   };
 }
 
+interface JsonLineInput {
+  deliver(value: unknown, end?: boolean): Promise<boolean>;
+  end(): boolean;
+  failPending(transportFailure: boolean): void;
+}
+
+function createJsonLineInput(
+  child: ChildProcess,
+  isFinalized: () => boolean,
+  onTransportFailure: () => void
+): JsonLineInput {
+  let pendingFailure: ((transportFailure: boolean) => void) | undefined;
+
+  const failPending = (transportFailure: boolean) => {
+    pendingFailure?.(transportFailure);
+  };
+  const end = (): boolean => {
+    const stream = child.stdin;
+    if (!stream || stream.destroyed) {
+      onTransportFailure();
+      return false;
+    }
+    if (stream.writableEnded || stream.writableFinished) return true;
+    try {
+      stream.end();
+      return true;
+    } catch {
+      failPending(true);
+      onTransportFailure();
+      return false;
+    }
+  };
+  const deliver = (value: unknown, shouldEnd = false): Promise<boolean> => {
+    const stream = child.stdin;
+    if (
+      !stream?.writable ||
+      stream.destroyed ||
+      stream.writableEnded ||
+      stream.writableFinished ||
+      isFinalized()
+    ) {
+      onTransportFailure();
+      return Promise.resolve(false);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        if (pendingFailure === fail) pendingFailure = undefined;
+        resolve(true);
+      };
+      const fail = (transportFailure: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (pendingFailure === fail) pendingFailure = undefined;
+        if (transportFailure) onTransportFailure();
+        resolve(false);
+      };
+      pendingFailure = fail;
+
+      try {
+        stream.write(`${JSON.stringify(value)}\n`, (error?: Error | null) => {
+          if (error) return fail(true);
+          if (settled) return;
+          if (!shouldEnd) return succeed();
+          try {
+            stream.end((endError?: Error | null) => {
+              if (endError) return fail(true);
+              succeed();
+            });
+          } catch {
+            fail(true);
+          }
+        });
+      } catch {
+        fail(true);
+      }
+    });
+  };
+
+  return { deliver, end, failPending };
+}
+
 /**
  * Starts the one bounded, local executor process used by native OpenCode OAuth.
  *
@@ -702,22 +798,18 @@ export function startOpenCodeOAuthExecutor(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let finalization: Promise<ExecutorCommandResult> | undefined;
   let codeSubmitted = false;
-  let pendingInput:
-    | {
-        fail: (ownTransportFailure: boolean) => void;
-      }
-    | undefined;
   let resolveClose!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClose = resolve;
   });
+  let input!: JsonLineInput;
 
   const finalize = (
     fallback?: ExecutorCommandResult,
     leaderExited = false
   ): Promise<ExecutorCommandResult> => {
     finalization ??= (async () => {
-      pendingInput?.fail(false);
+      input.failPending(false);
       if (timer) clearTimeout(timer);
       if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
       const containment = await containExecutorProcess(attemptId, taskId);
@@ -747,78 +839,11 @@ export function startOpenCodeOAuthExecutor(
     'OPENCODE_OAUTH_STDIN_FAILED',
     'OpenCode OAuth executor input could not be delivered.'
   );
-  const endInput = (): boolean => {
-    const stream = child.stdin;
-    if (!stream || stream.destroyed) {
-      void finalize(stdinFailure);
-      return false;
-    }
-    if (stream.writableEnded || stream.writableFinished) return true;
-    try {
-      stream.end();
-      return true;
-    } catch {
-      pendingInput?.fail(true);
-      void finalize(stdinFailure);
-      return false;
-    }
-  };
-  const deliverInput = (value: unknown, end = false): Promise<boolean> => {
-    const stream = child.stdin;
-    if (
-      !stream?.writable ||
-      stream.destroyed ||
-      stream.writableEnded ||
-      stream.writableFinished ||
-      finalization
-    ) {
-      void finalize(stdinFailure);
-      return Promise.resolve(false);
-    }
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const succeed = () => {
-        if (settled) return;
-        settled = true;
-        if (pendingInput?.fail === fail) pendingInput = undefined;
-        resolve(true);
-      };
-      const fail = (ownTransportFailure: boolean) => {
-        if (settled) return;
-        settled = true;
-        if (pendingInput?.fail === fail) pendingInput = undefined;
-        if (ownTransportFailure) void finalize(stdinFailure);
-        resolve(false);
-      };
-      pendingInput = { fail };
-      try {
-        stream.write(`${JSON.stringify(value)}\n`, (error?: Error | null) => {
-          if (error) {
-            fail(true);
-            return;
-          }
-          if (settled) return;
-          if (!end) {
-            succeed();
-            return;
-          }
-          try {
-            stream.end((endError?: Error | null) => {
-              if (endError) {
-                fail(true);
-                return;
-              }
-              succeed();
-            });
-          } catch {
-            fail(true);
-          }
-        });
-      } catch {
-        fail(true);
-      }
-    });
-  };
+  input = createJsonLineInput(
+    child,
+    () => Boolean(finalization),
+    () => void finalize(stdinFailure)
+  );
 
   if (!child.pid) {
     const spawnFailure = executorCommandFailure(
@@ -846,7 +871,7 @@ export function startOpenCodeOAuthExecutor(
       if (event) {
         onEvent(event);
         if (event.type === 'authorized' && event.authorization.method === 'auto') {
-          endInput();
+          input.end();
         }
       }
     }
@@ -855,7 +880,7 @@ export function startOpenCodeOAuthExecutor(
     stderrSeen = true;
   });
   child.stdin?.on('error', () => {
-    pendingInput?.fail(true);
+    input.failPending(true);
     void finalize(stdinFailure);
   });
   child.on('error', () => {
@@ -864,11 +889,11 @@ export function startOpenCodeOAuthExecutor(
     );
   });
   child.on('exit', () => {
-    pendingInput?.fail(false);
+    input.failPending(false);
     void finalize(undefined, true);
   });
   child.on('close', () => {
-    pendingInput?.fail(false);
+    input.failPending(false);
     markExecutorProcessExited(attemptId, child.pid);
     resolveClose();
     void finalize(undefined, true);
@@ -879,7 +904,7 @@ export function startOpenCodeOAuthExecutor(
       executorCommandFailure('OPENCODE_OAUTH_TIMEOUT', 'OpenCode OAuth authorization timed out.')
     );
   }, timeoutMs);
-  void deliverInput(withResolvedConfig(payload));
+  void input.deliver(withResolvedConfig(payload));
 
   return {
     result,
@@ -893,7 +918,7 @@ export function startOpenCodeOAuthExecutor(
     submitCode: async (code: string) => {
       if (finalization || codeSubmitted || !code.trim()) return false;
       codeSubmitted = true;
-      return deliverInput({ code }, true);
+      return input.deliver({ code }, true);
     },
     verifyAbsence: async () => {
       const containment = await containExecutorProcess(attemptId, taskId);
