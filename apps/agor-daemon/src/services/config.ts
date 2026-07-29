@@ -6,7 +6,7 @@
  */
 
 import { type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AgenticToolName,
@@ -227,12 +227,14 @@ export class ConfigService {
       }
     }
 
-    // Use core resolveApiKey with database access
-    const result = await resolveApiKey(keyName, {
-      userId,
-      db: this.db,
-      tool,
-    });
+    // Resolve the key inside the request's tenant database scope. This service
+    // carries no ambient scope of its own, and in required_from_auth mode the
+    // resolver's DB read fails closed without one.
+    const result = await runWithTenantDatabaseScope(
+      this.db,
+      internalParams.tenant?.tenant_id,
+      (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
+    );
     if (result.useNativeAuth) {
       const config = await loadConfig();
       if (config.multi_tenancy?.mode === 'required_from_auth') {
