@@ -1,66 +1,16 @@
 import type {
   AgorClient,
   OpenCodeOAuthAttempt,
-  OpenCodeProviderAuthPrompt,
   OpenCodeProviderSettings as Settings,
 } from '@agor-live/client';
-import { Alert, Button, Input, List, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { Alert, List, Select, Space, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
-const ACTIVE_OAUTH_PHASES = new Set(['authorizing', 'awaiting_callback', 'completing']);
-
-function isActiveOAuthAttempt(attempt?: OpenCodeOAuthAttempt): boolean {
-  return Boolean(attempt && ACTIVE_OAUTH_PHASES.has(attempt.phase));
-}
-
-function visibleAuthPrompts(
-  prompts: OpenCodeProviderAuthPrompt[] | undefined,
-  values: Record<string, string>
-): OpenCodeProviderAuthPrompt[] {
-  return (
-    prompts?.filter((prompt) => {
-      if (!prompt.when) return true;
-      const matches = values[prompt.when.key] === prompt.when.value;
-      return prompt.when.op === 'eq' ? matches : !matches;
-    }) ?? []
-  );
-}
-
-function AuthPromptFields({
-  prompts,
-  values,
-  onChange,
-}: {
-  prompts: OpenCodeProviderAuthPrompt[];
-  values: Record<string, string>;
-  onChange: (key: string, value: string) => void;
-}) {
-  return prompts.map((prompt) =>
-    prompt.type === 'select' ? (
-      <Select
-        key={prompt.key}
-        aria-label={prompt.message}
-        placeholder={prompt.message}
-        value={values[prompt.key]}
-        options={prompt.options}
-        onChange={(value) => onChange(prompt.key, value)}
-      />
-    ) : (
-      <Input
-        key={prompt.key}
-        aria-label={prompt.message}
-        placeholder={prompt.placeholder ?? prompt.message}
-        value={values[prompt.key] ?? ''}
-        onChange={(event) => onChange(prompt.key, event.target.value)}
-      />
-    )
-  );
-}
-
-function preferredOAuthMethodIndex(methods: Array<{ label: string }>): number {
-  const headless = methods.findIndex((method) => /headless/i.test(method.label));
-  return headless >= 0 ? headless : 0;
-}
+import {
+  isActiveOAuthAttempt,
+  OpenCodeProviderListItem,
+  preferredOAuthMethodIndex,
+  visibleAuthPrompts,
+} from './OpenCodeProviderListItem';
 
 interface ProviderAction {
   generation: number;
@@ -443,198 +393,34 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
               ? 'Choose a provider to connect'
               : 'Loading providers',
         }}
-        renderItem={(provider) => {
-          const methodIndex =
-            provider.id === selectedProviderId
-              ? (selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods))
-              : preferredOAuthMethodIndex(provider.authMethods);
-          const method = provider.authMethods[methodIndex];
-          const apiKeyAvailable =
-            method?.type === 'api' ||
-            (!method && (!provider.runtimeAvailable || provider.credentialPresence !== 'absent'));
-          const values = provider.id === selectedProviderId ? promptValues : {};
-          const visiblePrompts = visibleAuthPrompts(method?.prompts, values);
-          const promptsComplete = visiblePrompts.every((prompt) => values[prompt.key]?.trim());
-          const oauthMethod = method?.type === 'oauth' ? method : undefined;
-          const oauthAttempt = oauthAttempts[provider.id];
-          const oauthActive = isActiveOAuthAttempt(oauthAttempt);
-
-          return (
-            <List.Item
-              actions={[
-                provider.credentialPresence === 'present' ? (
-                  <Popconfirm
-                    key="remove-credential"
-                    title={`Remove the saved credential for ${provider.name}?`}
-                    onConfirm={() => disconnect(provider.id)}
-                  >
-                    <Button danger loading={busyProvider === provider.id}>
-                      Remove
-                    </Button>
-                  </Popconfirm>
-                ) : apiKeyAvailable ? (
-                  <Button
-                    key="connect"
-                    type="primary"
-                    loading={busyProvider === provider.id}
-                    disabled={!apiKey.trim() || !promptsComplete}
-                    onClick={() => connect(provider.id)}
-                  >
-                    Connect
-                  </Button>
-                ) : null,
-                provider.credentialPresence !== 'present' && oauthMethod && !oauthActive ? (
-                  <Button
-                    key="oauth-connect"
-                    loading={busyProvider === provider.id}
-                    disabled={!promptsComplete}
-                    onClick={() => connectOAuth(provider.id)}
-                  >
-                    Connect with {oauthMethod.label}
-                  </Button>
-                ) : null,
-                provider.credentialPresence !== 'present' && oauthActive ? (
-                  <Button
-                    key="oauth-cancel"
-                    danger
-                    loading={busyProvider === provider.id}
-                    onClick={() => cancelOAuth(provider.id)}
-                  >
-                    Cancel authorization
-                  </Button>
-                ) : null,
-              ].filter(Boolean)}
-              style={{ alignItems: 'flex-end' }}
-            >
-              <List.Item.Meta
-                title={
-                  <Space>
-                    <Typography.Text strong>{provider.name}</Typography.Text>
-                    {provider.runtimeAvailable && <Tag color="blue">Available in runtime</Tag>}
-                    {provider.credentialPresence === 'present' && (
-                      <Tag color="green">Saved credential</Tag>
-                    )}
-                    {provider.credentialPresence === 'unknown' && (
-                      <Tag color="gold">Credential state unknown</Tag>
-                    )}
-                  </Space>
-                }
-                description={
-                  provider.credentialPresence === 'present' ? (
-                    <Typography.Text type="secondary">
-                      A saved credential exists; provider access is not verified here.
-                    </Typography.Text>
-                  ) : (
-                    <Space orientation="vertical" style={{ width: '100%' }}>
-                      {provider.credentialPresence === 'unknown' ? (
-                        <Typography.Text type="secondary">
-                          Saved credential presence could not be determined. Removal is unavailable
-                          until discovery can read the native credential store.
-                        </Typography.Text>
-                      ) : provider.runtimeAvailable ? (
-                        <Typography.Text type="secondary">
-                          Available in the OpenCode runtime without a saved credential. Runtime
-                          availability may be built in and does not imply removable credentials.
-                        </Typography.Text>
-                      ) : null}
-                      {oauthActive && oauthAttempt.authorization && (
-                        <Alert
-                          type="info"
-                          showIcon
-                          title="Authorization in progress"
-                          description={
-                            <Space orientation="vertical">
-                              <Typography.Text>
-                                {oauthAttempt.authorization.instructions}
-                              </Typography.Text>
-                              <Typography.Link
-                                href={oauthAttempt.authorization.url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Open authorization page
-                              </Typography.Link>
-                              {oauthAttempt.authorization.method === 'code' &&
-                                oauthAttempt.phase === 'awaiting_callback' && (
-                                  <Space.Compact>
-                                    <Input.Password
-                                      aria-label={`${provider.name} authorization code`}
-                                      autoComplete="one-time-code"
-                                      placeholder="Authorization code"
-                                      value={oauthCode}
-                                      onChange={(event) => setOAuthCode(event.target.value)}
-                                      onPressEnter={() => void submitOAuthCode(provider.id)}
-                                    />
-                                    <Button
-                                      loading={busyProvider === provider.id}
-                                      disabled={!oauthCode.trim()}
-                                      onClick={() => submitOAuthCode(provider.id)}
-                                    >
-                                      Submit authorization code
-                                    </Button>
-                                  </Space.Compact>
-                                )}
-                            </Space>
-                          }
-                        />
-                      )}
-                      {oauthAttempt &&
-                        ['failed', 'expired', 'cancelled'].includes(oauthAttempt.phase) && (
-                          <Alert
-                            type={oauthAttempt.phase === 'cancelled' ? 'info' : 'error'}
-                            showIcon
-                            title={
-                              oauthAttempt.phase === 'expired'
-                                ? 'Authorization expired.'
-                                : oauthAttempt.phase === 'cancelled'
-                                  ? 'Authorization cancelled.'
-                                  : 'Authorization failed.'
-                            }
-                          />
-                        )}
-                      {provider.authMethods.length > 1 && !oauthActive && (
-                        <Select
-                          aria-label={`${provider.name} authentication method`}
-                          value={methodIndex}
-                          options={provider.authMethods.map((candidate, index) => ({
-                            label: candidate.label,
-                            value: index,
-                          }))}
-                          onChange={(index) => {
-                            setSelectedMethodIndex(index);
-                            setApiKey('');
-                            setPromptValues({});
-                            setOAuthCode('');
-                          }}
-                          style={{ width: '100%' }}
-                        />
-                      )}
-                      {!oauthActive && (
-                        <AuthPromptFields
-                          prompts={visiblePrompts}
-                          values={values}
-                          onChange={(key, value) =>
-                            setPromptValues((current) => ({ ...current, [key]: value }))
-                          }
-                        />
-                      )}
-                      {apiKeyAvailable && !oauthActive && (
-                        <Input.Password
-                          aria-label={`${provider.name} API key`}
-                          autoComplete="new-password"
-                          placeholder="API key"
-                          value={apiKey}
-                          onChange={(event) => setApiKey(event.target.value)}
-                          onPressEnter={() => void connect(provider.id)}
-                        />
-                      )}
-                    </Space>
-                  )
-                }
-              />
-            </List.Item>
-          );
-        }}
+        renderItem={(provider) => (
+          <OpenCodeProviderListItem
+            provider={provider}
+            selected={provider.id === selectedProviderId}
+            selectedMethodIndex={selectedMethodIndex}
+            promptValues={promptValues}
+            apiKey={apiKey}
+            oauthCode={oauthCode}
+            oauthAttempt={oauthAttempts[provider.id]}
+            busy={busyProvider === provider.id}
+            onConnect={() => connect(provider.id)}
+            onConnectOAuth={() => connectOAuth(provider.id)}
+            onCancelOAuth={() => cancelOAuth(provider.id)}
+            onDisconnect={() => disconnect(provider.id)}
+            onSubmitOAuthCode={() => void submitOAuthCode(provider.id)}
+            onMethodChange={(index) => {
+              setSelectedMethodIndex(index);
+              setApiKey('');
+              setPromptValues({});
+              setOAuthCode('');
+            }}
+            onPromptChange={(key, value) =>
+              setPromptValues((current) => ({ ...current, [key]: value }))
+            }
+            onApiKeyChange={setApiKey}
+            onOAuthCodeChange={setOAuthCode}
+          />
+        )}
       />
       {settings && (
         <Typography.Text type="secondary">

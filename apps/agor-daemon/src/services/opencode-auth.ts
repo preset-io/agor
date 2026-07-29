@@ -83,6 +83,10 @@ const oauthAttempts = new Map<string, StoredOAuthAttempt>();
 const OAUTH_TIMEOUT_MS = 10 * 60_000;
 const OAUTH_TERMINAL_RETENTION_MS = 10 * 60_000;
 
+function isTerminalAttempt(attempt: StoredOAuthAttempt): boolean {
+  return ['configured', 'cancelled', 'expired', 'failed'].includes(attempt.phase);
+}
+
 function scheduleAttemptPrune(attempt: StoredOAuthAttempt): void {
   const timer = setTimeout(() => {
     if (oauthAttempts.get(attempt.attemptId) === attempt) {
@@ -319,47 +323,43 @@ export class OpenCodeAuthService {
     return this.publicAttempt(await this.ownedAttempt(id, params));
   }
 
-  async patch(
-    id: string,
-    data: OpenCodeOAuthAttemptPatch,
+  private async submitOAuthCode(
+    attempt: StoredOAuthAttempt,
+    data: { code: string },
     params?: AuthenticatedParams
   ): Promise<OpenCodeOAuthAttempt> {
-    const attempt = await this.ownedAttempt(id, params);
+    if (Object.keys(data).some((field) => field !== 'code')) {
+      throw new BadRequest('Unsupported OAuth callback field.');
+    }
+    const code = data.code?.trim();
     if (
-      attempt.phase === 'configured' ||
-      attempt.phase === 'cancelled' ||
-      attempt.phase === 'expired' ||
-      attempt.phase === 'failed'
+      !code ||
+      attempt.phase !== 'awaiting_callback' ||
+      attempt.authorization?.method !== 'code' ||
+      !attempt.handle
     ) {
+      throw new BadRequest('This OAuth attempt is not awaiting a code.');
+    }
+    if (!(await attempt.handle.submitCode(code))) {
+      throw new BadRequest('This OAuth attempt no longer accepts a code.');
+    }
+    if (attempt.cancelRequested) {
+      this.settleAttempt(
+        attempt,
+        await attempt.handle.result,
+        await this.credentialContext(params)
+      );
       return this.publicAttempt(attempt);
     }
-    if ('code' in data) {
-      if (Object.keys(data).some((field) => field !== 'code')) {
-        throw new BadRequest('Unsupported OAuth callback field.');
-      }
-      const code = data.code?.trim();
-      if (
-        !code ||
-        attempt.phase !== 'awaiting_callback' ||
-        attempt.authorization?.method !== 'code' ||
-        !attempt.handle
-      ) {
-        throw new BadRequest('This OAuth attempt is not awaiting a code.');
-      }
-      if (!(await attempt.handle.submitCode(code))) {
-        throw new BadRequest('This OAuth attempt no longer accepts a code.');
-      }
-      if (attempt.cancelRequested) {
-        this.settleAttempt(
-          attempt,
-          await attempt.handle.result,
-          await this.credentialContext(params)
-        );
-        return this.publicAttempt(attempt);
-      }
-      attempt.phase = 'completing';
-      return this.publicAttempt(attempt);
-    }
+    attempt.phase = 'completing';
+    return this.publicAttempt(attempt);
+  }
+
+  private async cancelOAuthAttempt(
+    attempt: StoredOAuthAttempt,
+    data: { cancel: true },
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeOAuthAttempt> {
     if (data.cancel !== true || Object.keys(data).some((field) => field !== 'cancel')) {
       throw new BadRequest('Only OAuth cancellation or code submission is supported.');
     }
@@ -372,6 +372,19 @@ export class OpenCodeAuthService {
     const result = await attempt.handle.cancel();
     this.settleAttempt(attempt, result, await this.credentialContext(params));
     return this.publicAttempt(attempt);
+  }
+
+  async patch(
+    id: string,
+    data: OpenCodeOAuthAttemptPatch,
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeOAuthAttempt> {
+    const attempt = await this.ownedAttempt(id, params);
+    if (isTerminalAttempt(attempt)) return this.publicAttempt(attempt);
+    if ('code' in data) {
+      return this.submitOAuthCode(attempt, data, params);
+    }
+    return this.cancelOAuthAttempt(attempt, data, params);
   }
 
   async remove(id: string, params?: AuthenticatedParams): Promise<OpenCodeProviderSettings> {

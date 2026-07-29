@@ -224,6 +224,13 @@ describe('OpenCode event translator', () => {
       })
     ).toEqual([{ type: 'error', message: 'provider failed' }]);
   });
+
+  it('ignores unrecognized event names, including object-prototype keys', () => {
+    const events = translator();
+
+    expect(events.translate({ type: 'unsupported', properties: {} })).toEqual([]);
+    expect(events.translate({ type: 'toString', properties: {} })).toEqual([]);
+  });
 });
 
 describe('OpenCode transcript reconciliation', () => {

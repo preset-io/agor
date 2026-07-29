@@ -631,6 +631,30 @@ function parseOpenCodeOAuthEvent(line: string): OpenCodeOAuthProcessEvent | unde
   return undefined;
 }
 
+function executorCommandFailure(
+  code: string,
+  message: string,
+  details?: unknown
+): ExecutorCommandResult {
+  return {
+    success: false,
+    error: { code, message, ...(details === undefined ? {} : { details }) },
+  };
+}
+
+function localOAuthRequiredHandle(): OpenCodeOAuthExecutorHandle {
+  const failure = executorCommandFailure(
+    'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
+    'OpenCode OAuth requires a locally containable executor process.'
+  );
+  return {
+    result: Promise.resolve(failure),
+    cancel: async () => failure,
+    submitCode: async () => false,
+    verifyAbsence: async () => true,
+  };
+}
+
 /**
  * Starts the one bounded, local executor process used by native OpenCode OAuth.
  *
@@ -648,26 +672,7 @@ export function startOpenCodeOAuthExecutor(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  if (executorCommandTemplate) {
-    return {
-      result: Promise.resolve({
-        success: false,
-        error: {
-          code: 'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
-          message: 'OpenCode OAuth requires a locally containable executor process.',
-        },
-      }),
-      cancel: async () => ({
-        success: false,
-        error: {
-          code: 'OPENCODE_OAUTH_LOCAL_EXECUTOR_REQUIRED',
-          message: 'OpenCode OAuth requires a locally containable executor process.',
-        },
-      }),
-      submitCode: async () => false,
-      verifyAbsence: async () => true,
-    };
-  }
+  if (executorCommandTemplate) return localOAuthRequiredHandle();
 
   const { timeoutMs = 10 * 60_000 } = options;
   const rawAsUser = options.asUser;
@@ -717,39 +722,31 @@ export function startOpenCodeOAuthExecutor(
       if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
       const containment = await containExecutorProcess(attemptId, taskId);
       if (containment.status !== 'verified_absent') {
-        return {
-          success: false,
-          error: {
-            code: 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED',
-            message: 'OpenCode OAuth cleanup could not be verified.',
-          },
-        };
+        return executorCommandFailure(
+          'OPENCODE_OAUTH_CLEANUP_UNVERIFIED',
+          'OpenCode OAuth cleanup could not be verified.'
+        );
       }
       await closed;
       untrackExecutorProcess(attemptId, taskId);
       return (
         fallback ??
-        parseExecutorResultFromStdout(stdout) ?? {
-          success: false,
-          error: {
-            code: 'EXECUTOR_RESULT_MISSING',
-            message: 'OpenCode OAuth executor did not emit a result.',
-            details: { stderr: stderrSeen ? '[redacted]' : '' },
-          },
-        }
+        parseExecutorResultFromStdout(stdout) ??
+        executorCommandFailure(
+          'EXECUTOR_RESULT_MISSING',
+          'OpenCode OAuth executor did not emit a result.',
+          { stderr: stderrSeen ? '[redacted]' : '' }
+        )
       );
     })();
     void finalization.then(resolveResult);
     return finalization;
   };
 
-  const stdinFailure: ExecutorCommandResult = {
-    success: false,
-    error: {
-      code: 'OPENCODE_OAUTH_STDIN_FAILED',
-      message: 'OpenCode OAuth executor input could not be delivered.',
-    },
-  };
+  const stdinFailure = executorCommandFailure(
+    'OPENCODE_OAUTH_STDIN_FAILED',
+    'OpenCode OAuth executor input could not be delivered.'
+  );
   const endInput = (): boolean => {
     const stream = child.stdin;
     if (!stream || stream.destroyed) {
@@ -824,13 +821,10 @@ export function startOpenCodeOAuthExecutor(
   };
 
   if (!child.pid) {
-    const spawnFailure = {
-      success: false,
-      error: {
-        code: 'EXECUTOR_SPAWN_ERROR',
-        message: 'OpenCode OAuth executor did not start.',
-      },
-    };
+    const spawnFailure = executorCommandFailure(
+      'EXECUTOR_SPAWN_ERROR',
+      'OpenCode OAuth executor did not start.'
+    );
     resolveResult(spawnFailure);
     return {
       result,
@@ -865,13 +859,9 @@ export function startOpenCodeOAuthExecutor(
     void finalize(stdinFailure);
   });
   child.on('error', () => {
-    void finalize({
-      success: false,
-      error: {
-        code: 'EXECUTOR_SPAWN_ERROR',
-        message: 'OpenCode OAuth executor failed to start.',
-      },
-    });
+    void finalize(
+      executorCommandFailure('EXECUTOR_SPAWN_ERROR', 'OpenCode OAuth executor failed to start.')
+    );
   });
   child.on('exit', () => {
     pendingInput?.fail(false);
@@ -885,26 +875,21 @@ export function startOpenCodeOAuthExecutor(
   });
 
   timer = setTimeout(() => {
-    void finalize({
-      success: false,
-      error: {
-        code: 'OPENCODE_OAUTH_TIMEOUT',
-        message: 'OpenCode OAuth authorization timed out.',
-      },
-    });
+    void finalize(
+      executorCommandFailure('OPENCODE_OAUTH_TIMEOUT', 'OpenCode OAuth authorization timed out.')
+    );
   }, timeoutMs);
   void deliverInput(withResolvedConfig(payload));
 
   return {
     result,
     cancel: () =>
-      finalize({
-        success: false,
-        error: {
-          code: 'OPENCODE_OAUTH_CANCELLED',
-          message: 'OpenCode OAuth authorization was cancelled.',
-        },
-      }),
+      finalize(
+        executorCommandFailure(
+          'OPENCODE_OAUTH_CANCELLED',
+          'OpenCode OAuth authorization was cancelled.'
+        )
+      ),
     submitCode: async (code: string) => {
       if (finalization || codeSubmitted || !code.trim()) return false;
       codeSubmitted = true;

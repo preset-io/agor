@@ -1,4 +1,4 @@
-import type { AgorClient, OpenCodeModelCatalog } from '@agor-live/client';
+import type { AgorClient } from '@agor-live/client';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -17,7 +17,8 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
 
 const { Text } = Typography;
 
@@ -42,13 +43,6 @@ export interface OpenCodeModelSelectorProps {
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }
 
-type ScopedCatalog = {
-  catalog: OpenCodeModelCatalog;
-  client: AgorClient;
-  branchId?: string;
-  catalogEnabled: boolean;
-};
-
 /**
  * Configured OpenCode model selection. Discovery is a disposable, protected
  * read; manual exact entry remains usable when it is unavailable.
@@ -64,63 +58,22 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
 }) => {
   const [provider, setProvider] = useState(value?.provider ?? '');
   const [model, setModel] = useState(value?.model ?? '');
-  const [catalogState, setCatalogState] = useState<ScopedCatalog | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [refreshFailed, setRefreshFailed] = useState(false);
   const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
   const [compactManualOpen, setCompactManualOpen] = useState(false);
-  const requestSequence = useRef(0);
-  const catalog =
-    catalogState &&
-    catalogState.client === client &&
-    catalogState.branchId === branchId &&
-    catalogState.catalogEnabled === catalogEnabled
-      ? catalogState.catalog
-      : null;
+  const { catalog, loading, refreshFailed, refresh } = useOpenCodeModelCatalog({
+    client,
+    branchId,
+    catalogEnabled,
+  });
 
   useEffect(() => {
     setProvider(value?.provider ?? '');
     setModel(value?.model ?? '');
   }, [value?.provider, value?.model]);
 
-  const refresh = useCallback(async () => {
-    if (!client || !catalogEnabled) return;
-    const sequence = ++requestSequence.current;
-    setLoading(true);
-    setRefreshFailed(false);
-    try {
-      const next = await client
-        .service('opencode-models')
-        .find(branchId ? { query: { branch_id: branchId } } : undefined);
-      if (requestSequence.current !== sequence) return;
-      setCatalogState({ catalog: next, client, branchId, catalogEnabled });
-    } catch {
-      if (requestSequence.current !== sequence) return;
-      setRefreshFailed(true);
-    } finally {
-      if (requestSequence.current === sequence) setLoading(false);
-    }
-  }, [branchId, catalogEnabled, client]);
-
   useEffect(() => {
-    if (!catalogEnabled) {
-      requestSequence.current += 1;
-      setCatalogState(null);
-      setRefreshFailed(false);
-      setLoading(false);
-      setManualOpen(!compact);
-      return;
-    }
-    // A catalog is valid only for the client/branch/enabled tuple that produced it.
-    // Dependency-driven scope changes must not retain a prior branch result;
-    // the explicit Refresh action can preserve the current scoped result.
-    setCatalogState(null);
-    setRefreshFailed(false);
-    void refresh();
-    return () => {
-      requestSequence.current += 1;
-    };
-  }, [catalogEnabled, compact, refresh]);
+    if (!catalogEnabled) setManualOpen(!compact);
+  }, [catalogEnabled, compact]);
 
   const storedAvailable = useMemo(() => {
     if (!value || !catalog) return true;

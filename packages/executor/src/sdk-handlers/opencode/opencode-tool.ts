@@ -182,6 +182,55 @@ interface TurnContext {
   branchPath: string;
 }
 
+type OpenCodePermissionEffect = Extract<OpenCodeEventEffect, { type: 'permission' }>;
+type CanUseToolCallback = ReturnType<typeof createCanUseToolCallback>;
+
+async function applyPermissionEffect(input: {
+  client: OpenCodeClient;
+  turn: RunOpenCodeTurnInput;
+  context: TurnContext;
+  effect: OpenCodePermissionEffect;
+  canUseTool?: CanUseToolCallback;
+}): Promise<void> {
+  const { client, turn, context, effect, canUseTool } = input;
+  let response: 'once' | 'always' | 'reject' = 'reject';
+  let handledByAgor = false;
+
+  if (canUseTool) {
+    if (automaticallyAllowsOpenCodePermission(turn.permissionMode, effect.request.permission)) {
+      response = 'once';
+    } else {
+      handledByAgor = true;
+      const decision = await canUseTool(
+        effect.request.permission,
+        { ...effect.request.metadata, patterns: effect.request.patterns },
+        { signal: turn.signal }
+      );
+      if (decision.behavior === 'allow') {
+        const remembered = decision.updatedPermissions?.some(
+          (update) => update.destination !== 'session'
+        );
+        response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
+      }
+    }
+  }
+
+  const reply = await client.postSessionIdPermissionsPermissionId({
+    path: {
+      id: context.opencodeSessionId,
+      permissionID: effect.request.id,
+    },
+    query: { directory: context.branchPath },
+    body: { response },
+  });
+  if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
+  if (response === 'reject') {
+    throw handledByAgor
+      ? new OpenCodePermissionRejectedError('OpenCode permission was rejected')
+      : new Error('OpenCode permission was rejected');
+  }
+}
+
 export class OpenCodeTool {
   private readonly dependencies: Pick<
     OpenCodeToolDependencies,
@@ -703,47 +752,7 @@ export class OpenCodeTool {
             break;
           case 'permission':
             streamingCallbacks?.onPulse?.('waiting', 'permission.request');
-            {
-              let response: 'once' | 'always' | 'reject' = 'reject';
-              let handledByAgor = false;
-              if (canUseTool) {
-                if (
-                  automaticallyAllowsOpenCodePermission(
-                    input.permissionMode,
-                    effect.request.permission
-                  )
-                ) {
-                  response = 'once';
-                } else {
-                  handledByAgor = true;
-                  const decision = await canUseTool(
-                    effect.request.permission,
-                    { ...effect.request.metadata, patterns: effect.request.patterns },
-                    { signal: input.signal }
-                  );
-                  if (decision.behavior === 'allow') {
-                    const remembered = decision.updatedPermissions?.some(
-                      (update) => update.destination !== 'session'
-                    );
-                    response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
-                  }
-                }
-              }
-              const reply = await client.postSessionIdPermissionsPermissionId({
-                path: {
-                  id: context.opencodeSessionId,
-                  permissionID: effect.request.id,
-                },
-                query: context.branchPath ? { directory: context.branchPath } : undefined,
-                body: { response },
-              });
-              if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
-              if (response === 'reject') {
-                throw handledByAgor
-                  ? new OpenCodePermissionRejectedError('OpenCode permission was rejected')
-                  : new Error('OpenCode permission was rejected');
-              }
-            }
+            await applyPermissionEffect({ client, turn: input, context, effect, canUseTool });
             break;
           case 'idle':
             settle();
