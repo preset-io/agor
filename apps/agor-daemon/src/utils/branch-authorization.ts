@@ -9,7 +9,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import { assertUnixUsernameSatisfiesMode, type UnixUserMode } from '@agor/core/config';
+import type { UnixUserMode } from '@agor/core/config';
 import type {
   BoardRepository,
   BranchRepository,
@@ -28,6 +28,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).

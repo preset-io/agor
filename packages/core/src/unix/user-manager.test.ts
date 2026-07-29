@@ -15,6 +15,7 @@ import {
   AGOR_BRANCHES_DIR,
   AGOR_DEFAULT_SHELL,
   AGOR_HOME_BASE,
+  assertUnixUsernameSatisfiesMode,
   generateUnixUsername,
   getUserBranchesDir,
   getUserHomeDir,
@@ -516,6 +517,27 @@ describe('user-manager', () => {
   // =========================================================================
   // Validation of Resolved Unix User
   // =========================================================================
+
+  describe('assertUnixUsernameSatisfiesMode', () => {
+    it('passes when the mode does not require a unix_username', () => {
+      expect(() => assertUnixUsernameSatisfiesMode(null, 'simple')).not.toThrow();
+      expect(() => assertUnixUsernameSatisfiesMode(undefined, 'insulated')).not.toThrow();
+    });
+
+    it('passes when a unix_username is present', () => {
+      expect(() => assertUnixUsernameSatisfiesMode('alice', 'delegated')).not.toThrow();
+      expect(() => assertUnixUsernameSatisfiesMode('alice', 'strict')).not.toThrow();
+    });
+
+    it('throws with the mode name and subject when required and missing', () => {
+      expect(() => assertUnixUsernameSatisfiesMode(null, 'delegated', 'gateway user u-1')).toThrow(
+        /unix_user_mode 'delegated' requires a unix_username, but gateway user u-1 has none/
+      );
+      expect(() => assertUnixUsernameSatisfiesMode(undefined, 'strict')).toThrow(
+        /unix_user_mode 'strict' requires a unix_username/
+      );
+    });
+  });
 
   describe('validateResolvedUnixUser', () => {
     it('does nothing for simple mode', () => {

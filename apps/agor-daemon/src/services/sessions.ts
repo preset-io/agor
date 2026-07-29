@@ -7,7 +7,6 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
-  assertUnixUsernameSatisfiesMode,
   isTenantAgenticToolEnabled,
   PAGINATION,
   presetConfigurationToSessionPatch,
@@ -58,6 +57,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {

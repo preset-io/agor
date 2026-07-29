@@ -8,6 +8,8 @@
  */
 
 import { execSync } from 'node:child_process';
+import { Forbidden } from '@feathersjs/errors';
+import { unixUserModeRequiresUsername } from '../config/config-manager.js';
 import type { UnixUserMode } from '../config/types.js';
 import { toShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
@@ -358,6 +360,28 @@ export function unixUserExists(username: string): boolean {
  * Node-only module.
  */
 export type { UnixUserMode };
+
+/**
+ * Fail loudly when the configured Unix user mode requires a per-user
+ * `unix_username` (`strict`, `delegated`) and the resolved value is missing.
+ * Creating a session without one would only defer the failure to prompt time —
+ * or, in hosted deployments, silently share an identity. Requiredness is
+ * derived from the mode here so callers cannot fabricate inconsistent
+ * combinations. Lives beside {@link resolveUnixUserForImpersonation} because
+ * both express the same identity policy; throws `Forbidden` so Feathers
+ * create/fork/spawn paths surface it as a 403 without per-caller translation.
+ */
+export function assertUnixUsernameSatisfiesMode(
+  unixUsername: string | null | undefined,
+  mode: UnixUserMode,
+  subject = 'your account'
+): void {
+  if (!unixUserModeRequiresUsername(mode) || unixUsername) return;
+  throw new Forbidden(
+    `unix_user_mode '${mode}' requires a unix_username, but ${subject} has none. ` +
+      'Ask an admin to set one before creating sessions.'
+  );
+}
 
 /**
  * Result of resolving which Unix user to impersonate

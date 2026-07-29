@@ -52,8 +52,11 @@ export type CodexUnixIdentityResolution =
 
 /**
  * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
- * for this user: the daemon user (simple, delegated), the shared executor user
- * (insulated), or the caller's own Unix account (strict).
+ * for this user: the daemon user (simple, and delegated WITHOUT an executor
+ * command template), the shared executor user (insulated), or the caller's own
+ * Unix account (strict). Delegated WITH a command template resolves to
+ * `unsupported-mode`: the credential lives in the execution substrate's
+ * per-user home, which the daemon cannot reach.
  *
  * Returns a discriminated result rather than throwing so callers with
  * different failure semantics (the import endpoint rejects, the check-auth
@@ -80,7 +83,7 @@ export async function resolveCodexUnixIdentity(
       message:
         'In delegated Unix user mode with templated execution, Codex credentials live in the ' +
         "execution substrate's per-user home — the daemon cannot import, verify, or remove them. " +
-        'Sign in to Codex from within a session instead.',
+        'Sign in to Codex from a branch terminal or from within a session instead.',
     };
   }
 

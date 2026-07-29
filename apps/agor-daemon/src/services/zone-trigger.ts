@@ -11,7 +11,7 @@
  * same session-defaults resolution, same MCP-attach behaviour.
  */
 
-import { assertUnixUsernameSatisfiesMode, resolveExecutionSecurityMode } from '@agor/core/config';
+import { resolveExecutionSecurityMode } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
@@ -24,6 +24,7 @@ import type {
   Task,
   User,
 } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';

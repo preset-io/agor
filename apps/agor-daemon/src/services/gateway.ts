@@ -8,7 +8,6 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
-  assertUnixUsernameSatisfiesMode,
   getBaseUrl,
   resolveAgenticToolPreset,
   resolveExecutionSecurityMode,
@@ -73,6 +72,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
