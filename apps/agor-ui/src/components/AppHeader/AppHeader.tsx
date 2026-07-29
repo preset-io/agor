@@ -1,16 +1,12 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
-import {
-  ApiOutlined,
-  BulbOutlined,
-  CommentOutlined,
-  QuestionCircleOutlined,
-  SettingOutlined,
-} from '@ant-design/icons';
-import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
+import { BulbOutlined } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
+import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -20,9 +16,10 @@ import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import { ThemeSwitcher } from '../ThemeSwitcher';
+import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
+import { SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
 
@@ -37,18 +34,13 @@ export interface AppHeaderProps {
   connected?: boolean;
   connecting?: boolean;
   onMenuClick?: () => void;
-  onCommentsClick?: () => void;
   onEventStreamClick?: () => void;
   onSettingsClick?: () => void;
   onUserSettingsClick?: () => void;
   onThemeEditorClick?: () => void;
   onLogout?: () => void;
   onRetryConnection?: () => void;
-  currentBoardName?: string;
-  currentBoardIcon?: string;
-  unreadCommentsCount?: number;
   eventStreamEnabled?: boolean;
-  hasUserMentions?: boolean; // True if current user is mentioned in active comments
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   onHomeClick?: () => void;
@@ -109,18 +101,13 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   presenceMaxVisible,
   connected = false,
   connecting = false,
-  onCommentsClick,
   onEventStreamClick,
   onSettingsClick,
   onUserSettingsClick,
   onThemeEditorClick,
   onLogout,
   onRetryConnection,
-  currentBoardName,
-  currentBoardIcon,
-  unreadCommentsCount = 0,
   eventStreamEnabled = false,
-  hasUserMentions = false,
   currentBoardId,
   onBoardChange,
   onHomeClick,
@@ -131,6 +118,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
+  const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
   // whole-map selector is a stable module-level reference, so the header
@@ -152,11 +140,40 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
   const mutationDisabled = useConnectionDisabled();
-  const headerIconButtonStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  } as const;
+
+  const settingsItems: MenuProps['items'] = [
+    ...(eventStreamEnabled
+      ? [
+          {
+            key: 'event-stream',
+            label: 'Live Events',
+            disabled: mutationDisabled,
+            onClick: onEventStreamClick,
+          },
+          { type: 'divider' as const },
+        ]
+      : []),
+    {
+      key: 'documentation',
+      label: (
+        <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
+          Documentation
+        </a>
+      ),
+    },
+    {
+      key: 'theme',
+      label: 'Theme',
+      children: buildThemeMenuItems(themeMode, setThemeMode, onThemeEditorClick),
+    },
+    { type: 'divider' as const },
+    {
+      key: 'settings',
+      label: 'Settings',
+      disabled: mutationDisabled,
+      onClick: onSettingsClick,
+    },
+  ];
 
   return (
     <Header
@@ -233,26 +250,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             token={token}
           />
         )}
-        {currentBoardName && (
-          <Badge
-            count={unreadCommentsCount}
-            offset={[-2, 2]}
-            style={{
-              backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
-            }}
-            className="app-header-icon-badge"
-          >
-            <Tooltip title="Show comments tab" placement="bottom">
-              <Button
-                type="text"
-                icon={<CommentOutlined style={{ fontSize: token.fontSizeLG }} />}
-                style={headerIconButtonStyle}
-                onClick={onCommentsClick}
-                disabled={mutationDisabled}
-              />
-            </Tooltip>
-          </Badge>
-        )}
       </Space>
 
       <Space>
@@ -277,25 +274,12 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
-        <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
-        {eventStreamEnabled && (
-          <Tooltip title="Live Event Stream" placement="bottom">
-            <Button
-              type="text"
-              icon={<ApiOutlined style={{ fontSize: token.fontSizeLG }} />}
-              style={headerIconButtonStyle}
-              onClick={onEventStreamClick}
-              disabled={mutationDisabled}
-            />
-          </Tooltip>
-        )}
-        <Tooltip title="Knowledge" placement="bottom">
+        <Tooltip title="Knowledge Base">
           <Button
             type="text"
             icon={<BulbOutlined style={{ fontSize: token.fontSizeLG }} />}
-            style={headerIconButtonStyle}
             href={knowledgeHref}
-            aria-label="Knowledge"
+            aria-label="Knowledge Base"
             onClick={(event) => {
               if (event.defaultPrevented) return;
               if (
@@ -310,28 +294,10 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
               event.preventDefault();
               navigate('/knowledge');
             }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           />
         </Tooltip>
-        <Tooltip title="Documentation" placement="bottom">
-          <Button
-            type="text"
-            icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-            style={headerIconButtonStyle}
-            href="https://agor.live/guide/getting-started"
-            target="_blank"
-            rel="noopener noreferrer"
-          />
-        </Tooltip>
-        <ThemeSwitcher onOpenThemeEditor={onThemeEditorClick} />
-        <Tooltip title="Settings" placement="bottom">
-          <Button
-            type="text"
-            icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
-            style={headerIconButtonStyle}
-            onClick={onSettingsClick}
-            disabled={mutationDisabled}
-          />
-        </Tooltip>
+        <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}
           disabled={mutationDisabled}

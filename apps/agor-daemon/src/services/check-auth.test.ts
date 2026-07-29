@@ -2,7 +2,7 @@ import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readCodexAuthFile } from '../utils/codex-auth-file.js';
+import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
@@ -21,13 +21,13 @@ vi.mock('@agor/core/sdk', () => ({
   },
 }));
 
-vi.mock('../utils/codex-auth-file.js', async () => {
-  const actual = await vi.importActual<typeof import('../utils/codex-auth-file.js')>(
-    '../utils/codex-auth-file.js'
+vi.mock('../utils/executor-codex-auth.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(
+    '../utils/executor-codex-auth.js'
   );
   return {
     ...actual,
-    readCodexAuthFile: vi.fn(),
+    inspectCodexAuthViaExecutor: vi.fn(),
   };
 });
 
@@ -38,7 +38,7 @@ vi.mock('./codex-auth-shared.js', () => ({
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const claudeQueryMock = vi.mocked(Claude.query);
-const readCodexAuthFileMock = vi.mocked(readCodexAuthFile);
+const inspectCodexAuthViaExecutorMock = vi.mocked(inspectCodexAuthViaExecutor);
 const resolveCodexUnixIdentityMock = vi.mocked(resolveCodexUnixIdentity);
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -234,50 +234,44 @@ describe('check-auth tri-state', () => {
 describe('check-auth codex auth.json probe', () => {
   const params = { user: { user_id: 'user-1' } } as never;
 
-  function fakeJwt(payload: Record<string, unknown>): string {
-    const enc = (obj: Record<string, unknown>) =>
-      Buffer.from(JSON.stringify(obj)).toString('base64url');
-    return `${enc({ alg: 'RS256' })}.${enc(payload)}.sig`;
-  }
-
   beforeEach(() => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
     resolveCodexUnixIdentityMock.mockResolvedValue({ ok: true, unixUser: null });
   });
 
+  it('reports persisted native auth as unverified without launching an executor by default', async () => {
+    const result = await service().create({ tool: 'codex' }, params);
+    expect(result).toMatchObject({ status: 'unknown', method: 'none' });
+    expect(inspectCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+  });
+
   it('valid ChatGPT tokens → authenticated via oauth with a plan hint', async () => {
-    readCodexAuthFileMock.mockReturnValue({
+    inspectCodexAuthViaExecutorMock.mockResolvedValue({
       ok: true,
-      content: JSON.stringify({
-        OPENAI_API_KEY: null,
-        tokens: {
-          id_token: fakeJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }),
-          access_token: 'a',
-          refresh_token: 'r',
-        },
-      }),
+      authMode: 'chatgpt',
+      planType: 'plus',
     });
 
-    const result = await service().create({ tool: 'codex' }, params);
+    const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result).toMatchObject({ status: 'authenticated', method: 'oauth' });
     expect(result.hint).toContain('plus');
   });
 
   it('genuinely absent auth.json → unauthenticated', async () => {
-    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'not-found' });
-    const result = await service().create({ tool: 'codex' }, params);
+    inspectCodexAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'not-found' });
+    const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result.status).toBe('unauthenticated');
   });
 
   it('unreadable auth.json (sudo/permission failure) → unknown, never unauthenticated', async () => {
-    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
-    const result = await service().create({ tool: 'codex' }, params);
+    inspectCodexAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'unreadable' });
+    const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result.status).toBe('unknown');
   });
 
   it('malformed auth.json → unauthenticated (positive evidence of a broken login)', async () => {
-    readCodexAuthFileMock.mockReturnValue({ ok: true, content: 'not json at all' });
-    const result = await service().create({ tool: 'codex' }, params);
+    inspectCodexAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'malformed' });
+    const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result.status).toBe('unauthenticated');
   });
 
@@ -287,13 +281,17 @@ describe('check-auth codex auth.json probe', () => {
       reason: 'resolve-failed',
       message: 'x',
     });
-    expect((await service().create({ tool: 'codex' }, params)).status).toBe('unknown');
+    expect((await service().create({ tool: 'codex', validateNative: true }, params)).status).toBe(
+      'unknown'
+    );
 
     resolveCodexUnixIdentityMock.mockResolvedValue({
       ok: false,
       reason: 'missing-username',
       message: 'x',
     });
-    expect((await service().create({ tool: 'codex' }, params)).status).toBe('unauthenticated');
+    expect((await service().create({ tool: 'codex', validateNative: true }, params)).status).toBe(
+      'unauthenticated'
+    );
   });
 });

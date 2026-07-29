@@ -33,7 +33,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import { parseCodexAuthJson, readCodexAuthFile } from '../utils/codex-auth-file.js';
+import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
@@ -257,38 +257,43 @@ async function probeCodexAuthFile(
       : unknown('Could not resolve the Unix account that holds the Codex login.');
   }
 
-  const read = readCodexAuthFile(identity.unixUser);
-  if (!read.ok) {
+  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser);
+  if (!inspection.ok) {
     // Only a genuinely absent file proves "no login". Permission/sudo/
     // transport failures mean we could not LOOK, which must never surface as
     // the persistent "credentials aren't working" state.
-    return read.reason === 'not-found'
+    return inspection.reason === 'not-found'
       ? unauthenticated(
           'none',
           'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
         )
-      : unknown('Could not read the Codex auth file — check daemon logs and sudo configuration.');
+      : inspection.reason === 'malformed'
+        ? unauthenticated(
+            'none',
+            'The Codex auth file on this server is malformed — import a fresh auth.json or run `codex login` again.'
+          )
+        : unknown(
+            'Could not inspect the Codex auth file — check executor availability and permissions.'
+          );
   }
 
-  const parsed = parseCodexAuthJson(read.content);
-  if (!parsed.ok) {
-    return unauthenticated(
-      'none',
-      'The Codex auth file on this server is malformed — import a fresh auth.json or run `codex login` again.'
-    );
-  }
-
-  if (parsed.summary.authMode === 'api_key' && parsed.summary.apiKey) {
-    return resultFromKeyStatus(
-      await validateApiKey('codex', parsed.summary.apiKey),
-      'The API key inside the Codex auth file was rejected — import a fresh auth.json.'
+  if (inspection.authMode === 'api_key') {
+    if (inspection.apiKeyStatus === 'authenticated') return authed('api-key');
+    if (inspection.apiKeyStatus === 'unauthenticated') {
+      return unauthenticated(
+        'api-key',
+        'The API key inside the Codex auth file was rejected — import a fresh auth.json.'
+      );
+    }
+    return unknown(
+      'Could not reach the provider to verify the API key inside the Codex auth file.'
     );
   }
 
   return authed(
     'oauth',
-    parsed.summary.planType
-      ? `ChatGPT login found (${parsed.summary.planType} plan).`
+    inspection.planType
+      ? `ChatGPT login found (${inspection.planType} plan).`
       : 'ChatGPT login found.'
   );
 }
@@ -296,7 +301,7 @@ async function probeCodexAuthFile(
 export function createCheckAuthService(db: TenantScopeAwareDatabase) {
   return {
     async create(
-      data: { tool: string; apiKey?: string },
+      data: { tool: string; apiKey?: string; validateNative?: boolean },
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
@@ -374,7 +379,12 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       if (tool === 'codex' && useNativeAuth) {
-        return probeCodexAuthFile(userId, withTenantDatabase);
+        // The persisted method is the cheap default used by app-shell banners.
+        // Filesystem validation can require an ephemeral Cloud executor, so it
+        // is reserved for an explicit user action.
+        return data.validateNative
+          ? probeCodexAuthFile(userId, withTenantDatabase)
+          : unknown('ChatGPT login is configured but has not been validated.');
       }
 
       if (tool === 'claude-code') {

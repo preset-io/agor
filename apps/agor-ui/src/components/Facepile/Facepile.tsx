@@ -16,6 +16,7 @@ export interface FacepileProps {
   activeUsers: ActiveUser[];
   currentUserId?: string;
   maxVisible?: number;
+  avatarSize?: number;
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
@@ -31,6 +32,7 @@ export interface FacepileProps {
 export const Facepile: React.FC<FacepileProps> = ({
   activeUsers,
   maxVisible = 5,
+  avatarSize = 40,
   onUserClick,
   boardById,
   style,
@@ -81,6 +83,7 @@ export const Facepile: React.FC<FacepileProps> = ({
             <Flex component="span" style={{ lineHeight: 1 }}>
               <UserIdentityAvatar
                 user={user}
+                size={avatarSize}
                 style={{
                   cursor: canClick ? 'pointer' : 'default',
                 }}
@@ -111,9 +114,9 @@ export const Facepile: React.FC<FacepileProps> = ({
           <Flex component="span" style={{ lineHeight: 1 }}>
             <Avatar
               shape="square"
-              size={40}
+              size={avatarSize}
               style={{
-                borderRadius: slackAvatarRadius(40),
+                borderRadius: slackAvatarRadius(avatarSize),
                 backgroundColor: token.colorPrimaryBg,
                 color: token.colorText,
                 fontSize: 12,

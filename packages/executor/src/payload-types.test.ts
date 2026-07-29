@@ -469,6 +469,25 @@ describe('ZellijAttachPayloadSchema', () => {
     expect(result.params.userId).toBe('550e8400-e29b-41d4-a716-446655440000');
   });
 
+  it('bounds executor Codex credential writes', () => {
+    expect(() =>
+      parseExecutorPayload(
+        JSON.stringify({
+          command: 'codex.auth-file',
+          params: { operation: 'write', content: 'x'.repeat(64 * 1024 + 1) },
+        })
+      )
+    ).toThrow();
+    expect(
+      parseExecutorPayload(
+        JSON.stringify({
+          command: 'codex.auth-file',
+          params: { operation: 'write', content: 'x'.repeat(64 * 1024) },
+        })
+      ).command
+    ).toBe('codex.auth-file');
+  });
+
   it('should parse with optional fields', () => {
     const payload = {
       command: 'zellij.attach',
@@ -674,6 +693,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('opencode.auth');
-    expect(commands.length).toBe(29);
+    expect(commands).toContain('codex.auth-file');
+    expect(commands.length).toBe(30);
   });
 });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppHeader } from './AppHeader';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
+const mockSetThemeMode = vi.hoisted(() => vi.fn());
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
@@ -15,6 +16,10 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../../contexts/ConnectionContext', () => ({
   useConnectionDisabled: () => false,
+}));
+
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({ themeMode: 'dark', setThemeMode: mockSetThemeMode }),
 }));
 
 vi.mock('../BoardSwitcher', () => ({
@@ -35,55 +40,119 @@ vi.mock('../GlobalUserMenu', () => ({
 vi.mock('../MarkdownRenderer', () => ({
   MarkdownRenderer: () => <div data-testid="markdown-renderer" />,
 }));
-vi.mock('../ThemeSwitcher', () => ({
-  ThemeSwitcher: () => <div data-testid="theme-switcher" />,
-}));
 vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
 }));
 
-function renderHeader() {
+function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader />
+      <AppHeader {...props} />
     </MemoryRouter>
   );
 }
 
-describe('AppHeader Knowledge link', () => {
+describe('AppHeader Knowledge Base button', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
   });
 
-  it('renders a basename-aware href for modified clicks and new tabs', () => {
+  it('renders a standalone Knowledge Base button with correct href', () => {
     renderHeader();
 
-    expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute(
-      'href',
-      '/ui/knowledge'
-    );
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    expect(button).toHaveAttribute('href', '/ui/knowledge');
   });
 
-  it('uses SPA navigation and prevents default for plain left clicks', () => {
+  it('navigates to /knowledge via SPA navigation on plain click', () => {
     renderHeader();
 
-    const eventWasNotCancelled = fireEvent.click(screen.getByRole('link', { name: 'Knowledge' }));
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    fireEvent.click(button);
 
-    expect(eventWasNotCancelled).toBe(false);
     expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/knowledge');
   });
 
-  it('lets modified clicks fall through to the browser', () => {
+  it('lets modifier clicks fall through to the browser', () => {
     renderHeader();
 
-    const knowledgeLink = screen.getByRole('link', { name: 'Knowledge' });
-    // Remove the href after locating the link so jsdom does not attempt real navigation.
-    // This still exercises the click handler's modified-click behavior.
-    knowledgeLink.removeAttribute('href');
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    button.removeAttribute('href');
 
-    const eventWasNotCancelled = fireEvent.click(knowledgeLink, { metaKey: true });
+    const eventWasNotCancelled = fireEvent.click(button, { metaKey: true });
 
     expect(eventWasNotCancelled).toBe(true);
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppHeader settings dropdown', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+    mockSetThemeMode.mockClear();
+  });
+
+  it('does not include Knowledge Base in the dropdown', async () => {
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+
+    await screen.findByText('Settings');
+    expect(screen.queryByText('Knowledge Base')).not.toBeInTheDocument();
+  });
+
+  it('invokes onEventStreamClick when Live Events is clicked', async () => {
+    const onEventStreamClick = vi.fn();
+    renderHeader({ eventStreamEnabled: true, onEventStreamClick });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+
+    const liveEventsItem = await screen.findByText('Live Events');
+    fireEvent.click(liveEventsItem);
+
+    expect(onEventStreamClick).toHaveBeenCalledOnce();
+  });
+
+  it('invokes onSettingsClick when main Settings is clicked', async () => {
+    const onSettingsClick = vi.fn();
+    renderHeader({ onSettingsClick });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+
+    const settingsItem = await screen.findByText('Settings');
+    fireEvent.click(settingsItem);
+
+    expect(onSettingsClick).toHaveBeenCalledOnce();
+  });
+
+  it('calls setThemeMode with the correct argument for each theme option', async () => {
+    renderHeader({ onThemeEditorClick: vi.fn() });
+
+    for (const [label, mode] of [
+      ['Dark', 'dark'],
+      ['Light', 'light'],
+      ['Custom', 'custom'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+      const themeText = await screen.findByText('Theme');
+      fireEvent.mouseOver(themeText);
+      const option = await screen.findByText(label);
+      fireEvent.click(option);
+      expect(mockSetThemeMode).toHaveBeenCalledWith(mode);
+      mockSetThemeMode.mockClear();
+    }
+  });
+
+  it('invokes onThemeEditorClick when Edit Custom Theme is clicked', async () => {
+    const onThemeEditorClick = vi.fn();
+    renderHeader({ onThemeEditorClick });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+    const themeText = await screen.findByText('Theme');
+    fireEvent.mouseOver(themeText);
+    const editItem = await screen.findByText('Edit Custom Theme');
+    fireEvent.click(editItem);
+
+    expect(onThemeEditorClick).toHaveBeenCalledOnce();
   });
 });

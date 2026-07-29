@@ -24,6 +24,7 @@ import type { IPty } from 'node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { resolveEffectiveUserInfo } from '../user-runtime-paths.js';
 import type { CommandOptions } from './index.js';
 
 /**
@@ -211,7 +212,9 @@ export async function handleZellijAttach(
   payload: ZellijAttachPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { userId, sessionName, cwd, tabName, cols, rows, envFile } = payload.params;
+  const { userId, sessionName, tabName, cols, rows } = payload.params;
+  const effectiveUser = resolveEffectiveUserInfo();
+  const cwd = payload.params.cwd || effectiveUser.homedir;
 
   // Dry run mode
   if (options.dryRun) {
@@ -315,26 +318,10 @@ export async function handleZellijAttach(
     delete cleanEnv.ZELLIJ_SESSION_NAME;
     delete cleanEnv.ZELLIJ_PANE_ID;
 
-    // Get actual home directory and shell for current user from passwd
-    // os.homedir() doesn't work correctly with sudo impersonation - it returns the original user's home
-    // We must use getent passwd to get the correct values for the impersonated user
-    const { execSync } = await import('node:child_process');
-
-    let actualHome = '/tmp'; // Fallback
-    let userShell = '/bin/bash'; // Fallback
-    try {
-      const passwdEntry = execSync(`getent passwd $(whoami)`, { encoding: 'utf-8' }).trim();
-      const fields = passwdEntry.split(':');
-      // passwd format: name:password:uid:gid:gecos:home:shell
-      if (fields.length >= 6 && fields[5]) {
-        actualHome = fields[5];
-      }
-      if (fields.length >= 7 && fields[6]) {
-        userShell = fields[6];
-      }
-    } catch (err) {
-      console.error(`[zellij.attach] Failed to get user info from passwd:`, err);
-    }
+    // The executor already runs as the resolved identity. Resolve runtime
+    // paths here rather than asking the daemon to inspect another user's home.
+    const actualHome = effectiveUser.homedir;
+    const userShell = effectiveUser.shell;
     console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
 
     // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
@@ -496,19 +483,6 @@ export async function handleZellijAttach(
         }
       }
     })();
-
-    // Source env file after Zellij initializes (user env vars like API keys)
-    if (envFile && ptyProcess) {
-      // Wait for shell to be ready, then source env file
-      setTimeout(() => {
-        if (ptyProcess) {
-          // Source the env file silently (suppress output, ignore errors if file doesn't exist)
-          const sourceCmd = `[ -f '${envFile}' ] && source '${envFile}' 2>/dev/null; clear\r`;
-          ptyProcess.write(sourceCmd);
-          console.log(`[zellij.attach] Sourced env file: ${envFile}`);
-        }
-      }, 800); // Wait longer than tab creation to ensure shell is ready
-    }
 
     // Return success - executor stays running until PTY exits
     return {

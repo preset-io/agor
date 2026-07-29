@@ -13,6 +13,7 @@ import {
   handleBranchArtifactPublish,
   handleBranchArtifactValidate,
 } from './artifacts.js';
+import { handleCodexAuthFile } from './codex-auth-file.js';
 import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
 import {
   handleBranchFilesBrowse,
@@ -198,3 +199,4 @@ registerCommand('unix.sync-board', handleUnixSyncBoard);
 registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
+registerCommand('codex.auth-file', handleCodexAuthFile);

@@ -369,6 +369,12 @@
       "types": "./dist/templates/teammate-welcome-note.d.ts",
       "import": "./dist/templates/teammate-welcome-note.js",
       "require": "./dist/templates/teammate-welcome-note.cjs"
+    },
+    "./codex/auth-file": {
+      "source": "./src/codex/auth-file.ts",
+      "types": "./dist/codex/auth-file.d.ts",
+      "import": "./dist/codex/auth-file.js",
+      "require": "./dist/codex/auth-file.cjs"
     }
   },
   "scripts": {

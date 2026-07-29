@@ -11,8 +11,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test:runtime": "node scripts/runtime-smoke.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && pnpm test:runtime",
     "test:opencode-runtime": "tsx scripts/opencode-managed-runtime-harness.mjs --module src/sdk-handlers/opencode/opencode-tool.ts --permission-module src/permissions/permission-service.ts --streaming-module src/handlers/sdk/base-executor.ts --containment-module ../../apps/agor-daemon/src/executor-tracking.ts",
     "test:opencode-auth": "tsx scripts/opencode-provider-auth-harness.mjs",
     "test:watch": "vitest"

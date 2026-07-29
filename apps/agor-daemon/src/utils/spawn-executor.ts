@@ -154,6 +154,8 @@ export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
   /** Optional timeout for short-lived command execution. */
   timeoutMs?: number;
+  /** Suppress child stdout/stderr logging because the JSON result may contain credentials. */
+  sensitiveOutput?: boolean;
 }
 
 export type OpenCodeOAuthProcessEvent =
@@ -1028,12 +1030,12 @@ function runExecutorCommandLocal(
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      logChunkedOutput(logPrefix, 'stdout', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
-      logChunkedOutput(logPrefix, 'stderr', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
     });
 
     child.on('error', (error) => {
@@ -1124,12 +1126,12 @@ function runExecutorCommandWithTemplate(
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      logChunkedOutput(logPrefix, 'stdout', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
-      logChunkedOutput(logPrefix, 'stderr', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
     });
 
     child.on('error', (error) => {

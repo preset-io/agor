@@ -26,7 +26,7 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import { isDefiniteAuthFailure } from './auth-errors';
+import { isDefiniteAuthFailure } from './auth-errors.js';
 
 /**
  * Wrap an async function so concurrent invocations share a single in-flight

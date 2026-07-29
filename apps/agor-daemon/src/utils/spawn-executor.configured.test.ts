@@ -296,6 +296,32 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it.each([
+    ['local', undefined],
+    ['configured-template', 'launch {command}'],
+  ])('suppresses sensitive stdout and stderr for %s commands', async (_name, template) => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'codex.auth-file' },
+      {
+        ...(template ? { executorCommandTemplate: template } : {}),
+        sensitiveOutput: true,
+      }
+    );
+    const secret = 'credential-material-must-not-be-logged';
+    proc.stdout.emit(
+      'data',
+      Buffer.from(JSON.stringify({ success: true, data: { content: secret } }))
+    );
+    proc.stderr.emit('data', Buffer.from(secret));
+    proc.emit('exit', 0);
+    await expect(promise).resolves.toMatchObject({ success: true });
+    expect(vi.mocked(console.log).mock.calls.flat().join(' ')).not.toContain(secret);
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
+  });
+
   it('refuses every unscoped executor launch when tenant context is required', async () => {
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
     configureExecutor(null, { requireTenantContext: true });

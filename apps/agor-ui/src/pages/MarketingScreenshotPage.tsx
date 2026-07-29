@@ -13,7 +13,6 @@ import {
   demoBoardId as boardId,
   demoBranches as branches,
   buildDemoStoreMaps,
-  demoComments as comments,
   demoStaticCursors as staticCursors,
   demoUsers as users,
 } from './marketing/fixtureData';
@@ -81,11 +80,7 @@ export const MarketingScreenshotPage = () => {
               staticActiveUsers={activeUsers}
               connected={true}
               connecting={false}
-              currentBoardName={board.name}
-              currentBoardIcon={board.icon}
-              unreadCommentsCount={comments.length}
               eventStreamEnabled={true}
-              hasUserMentions={true}
               currentBoardId={boardId}
             />
             <main className="marketing-product-canvas">

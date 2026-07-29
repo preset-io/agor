@@ -695,8 +695,16 @@ export function OnboardingWizard({
       onCheckAuth(agent)
         .then((result) => {
           // 'unknown' = couldn't verify (transient/transport). Never downgrade a
-          // stored key to "broken" — only a definitive verdict updates the flag.
-          if (result.status === 'unknown') return;
+          // stored key to "broken". A persisted Codex subscription is the
+          // durable result of a device/import flow that already verified its
+          // executor write, so keep that successful registration usable
+          // without turning the onboarding button into "Checking…" forever.
+          if (result.status === 'unknown') {
+            if (agent === 'codex' && user?.agentic_auth_methods?.codex === 'subscription') {
+              setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+            }
+            return;
+          }
           setLlmAuthVerified((prev) => ({ ...prev, [agent]: result.authenticated }));
         })
         .catch(() => {
@@ -707,7 +715,7 @@ export function OnboardingWizard({
           if (authCheckInFlightRef.current.size === 0) setLlmAuthChecking(null);
         });
     }
-  }, [currentStep, onCheckAuth, agentHasKey]);
+  }, [currentStep, onCheckAuth, agentHasKey, user?.agentic_auth_methods?.codex]);
 
   const existingBoardId = user?.preferences?.mainBoardId || null;
   // Subscribe to only THIS board rather than the whole boardById map, so the

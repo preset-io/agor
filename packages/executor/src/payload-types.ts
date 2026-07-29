@@ -965,7 +965,7 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
     sessionName: z.string(),
 
     /** Initial working directory */
-    cwd: z.string(),
+    cwd: z.string().optional(),
 
     /** Initial tab name (branch name) */
     tabName: z.string().optional(),
@@ -973,9 +973,6 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
     /** Terminal dimensions */
     cols: z.number().optional().default(80),
     rows: z.number().optional().default(24),
-
-    /** Path to env file for shell to source (user env vars like API keys) */
-    envFile: z.string().nullable().optional(),
   }),
 });
 
@@ -1005,6 +1002,22 @@ export const ZellijTabPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type ZellijTabPayload = z.infer<typeof ZellijTabPayloadSchema>;
+
+/**
+ * Narrow user-runtime credential filesystem operation. The daemon resolves the
+ * Unix identity and spawns this command as that identity; no username or path
+ * is accepted in the payload.
+ */
+export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('codex.auth-file'),
+  params: z.discriminatedUnion('operation', [
+    z.object({ operation: z.literal('inspect') }),
+    z.object({ operation: z.literal('write'), content: z.string().max(64 * 1024) }),
+    z.object({ operation: z.literal('delete') }),
+  ]),
+});
+
+export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Union Payload Type
@@ -1043,6 +1056,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
   ZellijTabPayloadSchema,
+  CodexAuthFilePayloadSchema,
 ]);
 
 export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
@@ -1118,6 +1132,7 @@ export function getSupportedCommands(): string[] {
     'unix.sync-user',
     'zellij.attach',
     'zellij.tab',
+    'codex.auth-file',
   ];
 }
 

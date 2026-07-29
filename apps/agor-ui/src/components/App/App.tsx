@@ -507,7 +507,6 @@ export const App: React.FC<AppProps> = ({
   );
   const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
-  const headerBoard = isHomeSurface ? undefined : currentBoard;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
   const [homeExitSidePanelDeferred, setHomeExitSidePanelDeferred] = useState(false);
@@ -1255,8 +1254,8 @@ export const App: React.FC<AppProps> = ({
   // Comment-derived header scalars. Subscribing to the derived number/boolean
   // (instead of the comment map) keeps comment edits that don't change them —
   // and all comments on other boards — from waking the shell. Shared between
-  // AppHeader's comments button and the collapsed rail's Comments item so
-  // both surfaces carry the same badge.
+  // the expanded panel's Comments tab and the collapsed rail's Comments item
+  // so both surfaces carry the same badge.
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
   const unreadCommentsCount = useAgorStore(
     useMemo(() => makeUnreadCommentCountSelector(currentBoardId), [currentBoardId])
@@ -1431,18 +1430,13 @@ export const App: React.FC<AppProps> = ({
           connected={connected}
           connecting={connecting}
           onMenuClick={handleToggleBoardPanel}
-          onCommentsClick={handleOpenCommentsPanel}
           onEventStreamClick={handleEventStreamClick}
           onSettingsClick={handleOpenSettingsClick}
           onUserSettingsClick={handleOpenUserSettings}
           onThemeEditorClick={handleOpenThemeEditor}
           onLogout={stableOnLogout}
           onRetryConnection={stableOnRetryConnection}
-          currentBoardName={headerBoard?.name}
-          currentBoardIcon={headerBoard?.icon}
-          unreadCommentsCount={unreadCommentsCount}
           eventStreamEnabled={eventStreamEnabled}
-          hasUserMentions={hasUserMentions}
           currentBoardId={headerBoardId}
           onBoardChange={navigation.goToBoard}
           onHomeClick={handleHomeClick}
@@ -1498,6 +1492,8 @@ export const App: React.FC<AppProps> = ({
                   board={currentBoard || null}
                   activeTab={leftPanelTab}
                   onTabChange={setLeftPanelTab}
+                  unreadCommentsCount={unreadCommentsCount}
+                  hasUserMentions={hasUserMentions}
                   primaryTeammateBranch={primaryTeammateBranch}
                   primaryTeammateRepo={primaryTeammateRepo}
                   primaryTeammateInaccessible={primaryTeammateInaccessible}
