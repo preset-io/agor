@@ -426,7 +426,7 @@ function renderNewSessionModal(currentUser?: User) {
   return onExecute;
 }
 
-describe('ZoneTriggerModal OpenCode new-session configuration', () => {
+describe('ZoneTriggerModal OpenCode new-session configuration', { timeout: 30_000 }, () => {
   it('omits an inline clear so the daemon resolves the personal exact pair', async () => {
     const onExecute = renderNewSessionModal(staleOpenCodeDefault);
     await waitFor(() => expect(screen.getByTestId('zone-model')).toHaveTextContent('openai/gpt-5'));

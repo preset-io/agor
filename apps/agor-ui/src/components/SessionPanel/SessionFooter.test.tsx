@@ -32,7 +32,7 @@ vi.mock('../Pill', () => ({
 }));
 
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <ConfigProvider>
+  <ConfigProvider theme={{ token: { motion: false } }}>
     <App>{children}</App>
   </ConfigProvider>
 );
