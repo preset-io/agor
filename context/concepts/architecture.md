@@ -47,6 +47,7 @@ agor-daemon (FeathersJS server, REST + WS + JSON-RPC /mcp)
 | Git operations         | `packages/core/src/git/index.ts`                                                                   |
 | Auth / RBAC            | `apps/agor-daemon/src/utils/branch-authorization.ts` + `context/guides/rbac-and-unix-isolation.md` |
 | Agent runtime          | `packages/executor/` + `context/explorations/executor-isolation.md`                                |
+| Task runtime state     | `context/concepts/task-runtime-state.md`                                                           |
 | Real-time UI           | `packages/client/` reactive helpers + `apps/agor-ui/src/hooks/`                                    |
 | MCP tools              | `apps/agor-daemon/src/mcp/routes.ts`                                                               |
 
