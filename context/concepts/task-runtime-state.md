@@ -4,6 +4,9 @@
 > SDK activity mapping, watchdog policy, Stop behavior, or session
 > promptability. The code remains ground truth; this is the current-state map.
 
+For the proposed target contract, see
+[task-runtime-desired-architecture.md](../explorations/task-runtime-desired-architecture.md).
+
 ## Mental model
 
 `Task.status` is the durable execution lifecycle. Heartbeats report whether the
