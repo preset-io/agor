@@ -1,4 +1,5 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
+import { BulbOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
@@ -153,30 +154,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         ]
       : []),
     {
-      key: 'knowledge-base',
-      label: (
-        <a
-          href={knowledgeHref}
-          onClick={(event) => {
-            if (event.defaultPrevented) return;
-            if (
-              event.button !== 0 ||
-              event.metaKey ||
-              event.ctrlKey ||
-              event.shiftKey ||
-              event.altKey
-            ) {
-              return;
-            }
-            event.preventDefault();
-            navigate('/knowledge');
-          }}
-        >
-          Knowledge Base
-        </a>
-      ),
-    },
-    {
       key: 'documentation',
       label: (
         <a href="https://agor.live/guide/getting-started" target="_blank" rel="noopener noreferrer">
@@ -307,6 +284,29 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           onSettingsClick={onSettingsClick}
         />
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
+        <Tooltip title="Knowledge Base">
+          <Button
+            type="text"
+            icon={<BulbOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href={knowledgeHref}
+            aria-label="Knowledge Base"
+            onClick={(event) => {
+              if (event.defaultPrevented) return;
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) {
+                return;
+              }
+              event.preventDefault();
+              navigate('/knowledge');
+            }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          />
+        </Tooltip>
         <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}

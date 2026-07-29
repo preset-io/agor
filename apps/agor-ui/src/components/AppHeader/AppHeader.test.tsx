@@ -52,53 +52,53 @@ function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   );
 }
 
+describe('AppHeader Knowledge Base button', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+  });
+
+  it('renders a standalone Knowledge Base button with correct href', () => {
+    renderHeader();
+
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    expect(button).toHaveAttribute('href', '/ui/knowledge');
+  });
+
+  it('navigates to /knowledge via SPA navigation on plain click', () => {
+    renderHeader();
+
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    fireEvent.click(button);
+
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/knowledge');
+  });
+
+  it('lets modifier clicks fall through to the browser', () => {
+    renderHeader();
+
+    const button = screen.getByRole('link', { name: 'Knowledge Base' });
+    button.removeAttribute('href');
+
+    const eventWasNotCancelled = fireEvent.click(button, { metaKey: true });
+
+    expect(eventWasNotCancelled).toBe(true);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
 describe('AppHeader settings dropdown', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
     mockSetThemeMode.mockClear();
   });
 
-  it('shows Knowledge Base as a flat item without Knowledge Settings', async () => {
+  it('does not include Knowledge Base in the dropdown', async () => {
     renderHeader();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
 
-    expect(await screen.findByText('Knowledge Base')).toBeInTheDocument();
-    expect(screen.queryByText('Knowledge Settings')).not.toBeInTheDocument();
-  });
-
-  it('navigates to /knowledge via SPA navigation when Knowledge Base is clicked', async () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
-
-    const knowledgeBase = await screen.findByText('Knowledge Base');
-    fireEvent.click(knowledgeBase);
-
-    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/knowledge');
-  });
-
-  it('renders Knowledge Base as a basename-aware link for modified clicks and new tabs', async () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
-
-    const knowledgeBaseLink = await screen.findByRole('link', { name: 'Knowledge Base' });
-    expect(knowledgeBaseLink).toHaveAttribute('href', '/ui/knowledge');
-  });
-
-  it('lets modified clicks on Knowledge Base fall through to the browser', async () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
-
-    const knowledgeBaseLink = await screen.findByRole('link', { name: 'Knowledge Base' });
-    knowledgeBaseLink.removeAttribute('href');
-
-    const eventWasNotCancelled = fireEvent.click(knowledgeBaseLink, { metaKey: true });
-
-    expect(eventWasNotCancelled).toBe(true);
-    expect(mockNavigate).not.toHaveBeenCalled();
+    await screen.findByText('Settings');
+    expect(screen.queryByText('Knowledge Base')).not.toBeInTheDocument();
   });
 
   it('invokes onEventStreamClick when Live Events is clicked', async () => {
