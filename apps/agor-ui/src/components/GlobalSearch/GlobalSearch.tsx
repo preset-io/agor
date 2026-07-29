@@ -202,7 +202,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   // built-in search-icon button. If the user submits before the 220ms
   // debounce settled, flush instead of navigating — next press will land
   // on fresh rows. Acceptable 2-press UX in the rare stale case.
+  //
+  // A blank submit is a no-op, not "navigate to whatever recent item
+  // happens to be selectedIndex 0" — that row wasn't deliberately chosen,
+  // it's just the default, so treating it as a submit target sends users
+  // to a "random" board any time they hit Enter/click search on an empty
+  // field. Clicking a recent row directly still navigates via its own
+  // onClick in GlobalSearchDropdown, unaffected by this guard.
   const handleSubmit = (value: string) => {
+    if (!value.trim()) return;
     if (value.trim() !== debouncedQuery.trim()) {
       flush();
       return;

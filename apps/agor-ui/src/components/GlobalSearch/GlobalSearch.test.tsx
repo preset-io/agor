@@ -3,9 +3,21 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalSearch } from './GlobalSearch';
 
+const { goToBoard, recentsState } = vi.hoisted(() => ({
+  goToBoard: vi.fn(),
+  recentsState: {
+    session: [] as unknown[],
+    branch: [] as unknown[],
+    teammate: [] as unknown[],
+    artifact: [] as unknown[],
+    board: [] as unknown[],
+    mcp: [] as unknown[],
+  },
+}));
+
 vi.mock('../../hooks/useAppNavigation', () => ({
   useAppNavigation: () => ({
-    goToBoard: vi.fn(),
+    goToBoard,
     goToBranch: vi.fn(),
     goToSession: vi.fn(),
     goToArtifact: vi.fn(),
@@ -30,14 +42,7 @@ vi.mock('./useGlobalSearch', () => ({
 }));
 
 vi.mock('./useRecents', () => ({
-  useRecents: () => ({
-    session: [],
-    branch: [],
-    teammate: [],
-    artifact: [],
-    board: [],
-    mcp: [],
-  }),
+  useRecents: () => recentsState,
 }));
 
 const emptyMaps = {
@@ -59,10 +64,28 @@ function renderSearch() {
 describe('GlobalSearch', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    goToBoard.mockClear();
+    recentsState.board = [];
+    // jsdom doesn't implement scrollIntoView; the keyboard-cursor effect calls
+    // it whenever visibleRows is non-empty.
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('submitting an empty query does not navigate to a recent item', async () => {
+    recentsState.board = [{ type: 'board', item: { board_id: 'board-1', name: 'Recent Board' } }];
+    renderSearch();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open search' }));
+    await vi.advanceTimersByTimeAsync(16);
+
+    const input = screen.getByRole('combobox', { name: 'Global search' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(goToBoard).not.toHaveBeenCalled();
   });
 
   it('renders the search icon button', () => {
