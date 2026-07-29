@@ -7,7 +7,7 @@
 
 import { type AgorClient, createClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
-import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry';
+import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';

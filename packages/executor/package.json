@@ -11,8 +11,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test:runtime": "node scripts/runtime-smoke.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && pnpm test:runtime",
     "test:watch": "vitest"
   },
   "dependencies": {

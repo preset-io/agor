@@ -27,6 +27,9 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "@agor/executor#test": {
+      "dependsOn": ["build"]
+    },
     "clean": {
       "cache": false
     }
