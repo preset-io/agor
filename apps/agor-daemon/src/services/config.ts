@@ -176,12 +176,18 @@ export class ConfigService {
 
     // Fetch task to get creator user ID and session. This is required for
     // executor-token calls and best-effort for internal/service-account calls.
+    // Forward the resolved tenant so the tenant-scoped lookups keep context;
+    // in required_from_auth mode a bare internal call has none and is rejected.
+    const internalParams: AuthenticatedParams = {
+      provider: undefined,
+      tenant: (params as AuthenticatedParams | undefined)?.tenant,
+    };
     let userId: UserID | undefined;
     let sessionId: string | undefined;
     try {
       const tasksService = this.app?.service('tasks');
       if (tasksService) {
-        const task = await tasksService.get(taskId, { provider: undefined });
+        const task = await tasksService.get(taskId, internalParams);
         userId = task?.created_by;
         sessionId = task?.session_id;
       }
@@ -215,7 +221,7 @@ export class ConfigService {
       if (!sessionsService) {
         throw new Forbidden('Executor token tool scope could not be verified');
       }
-      const session = await sessionsService.get(verifiedSessionId, { provider: undefined });
+      const session = await sessionsService.get(verifiedSessionId, internalParams);
       if (session?.agentic_tool !== tool) {
         throw new Forbidden('Executor token tool scope does not match this session');
       }

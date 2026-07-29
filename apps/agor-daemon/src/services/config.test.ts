@@ -128,6 +128,37 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('forwards the resolved tenant into the task and session lookups', async () => {
+    const service = new ConfigService({} as never);
+    const taskGet = vi.fn(async () => ({
+      created_by: 'creator-1' as UserID,
+      session_id: 'session-1',
+    }));
+    const sessionGet = vi.fn(async () => ({ agentic_tool: 'codex' }));
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') return { get: taskGet };
+        if (name === 'sessions') return { get: sessionGet };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const tenant = { tenant_id: 'tenant-1', source: 'auth_claim' };
+    await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        tenant,
+        authentication: {
+          payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+        },
+      } as never
+    );
+
+    expect(taskGet).toHaveBeenCalledWith('task-1', { provider: undefined, tenant });
+    expect(sessionGet).toHaveBeenCalledWith('session-1', { provider: undefined, tenant });
+  });
+
   it('allows executor runtime tokens passed as explicit session-token proof', async () => {
     const service = new ConfigService({} as never);
     service.app = {
