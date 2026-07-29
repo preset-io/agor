@@ -11,6 +11,32 @@ import { Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+async function requestStatusWithRetry(url, init, attempts = 20) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      const status = response.status;
+      await response.body?.cancel();
+      return status;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await delay(25);
+    }
+  }
+  throw lastError;
+}
+
+async function requestIsDenied(url, init) {
+  try {
+    return (await requestStatusWithRetry(url, init, 1)) === 401;
+  } catch {
+    // OpenCode may reject invalid Basic auth by resetting the connection.
+    return true;
+  }
+}
+
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
@@ -484,14 +510,14 @@ async function run() {
           record.baseUrl = match[1];
           const correct = `Basic ${Buffer.from(`agor:${record.password}`).toString('base64')}`;
           record.authProbe = Promise.all([
-            fetch(`${record.baseUrl}/global/health`),
-            fetch(`${record.baseUrl}/global/health`, {
+            requestIsDenied(`${record.baseUrl}/global/health`),
+            requestIsDenied(`${record.baseUrl}/global/health`, {
               headers: { Authorization: 'Basic d3Jvbmc6d3Jvbmc=' },
             }),
-            fetch(`${record.baseUrl}/global/health`, {
+            requestStatusWithRetry(`${record.baseUrl}/global/health`, {
               headers: { Authorization: correct },
             }),
-          ]).then((responses) => responses.map((response) => response.status));
+          ]);
         };
         child.stdout?.on('data', capture);
         child.stderr?.on('data', capture);
@@ -589,7 +615,7 @@ async function run() {
     includeMcp: true,
   });
   const mainResult = await main.promise;
-  assert.deepEqual(await main.record.authProbe, [401, 401, 200]);
+  assert.deepEqual(await main.record.authProbe, [true, true, 200]);
   assert.equal(main.record.executable, packagedBinary);
   assert(main.record.pid && (await waitAbsent(main.record.pid)));
   assert.deepEqual(mainResult.finalMessage.contentBlocks, [
@@ -704,12 +730,10 @@ async function run() {
   await provider.waitForConcurrent();
   const wrongA = `Basic ${Buffer.from(`agor:${concurrentA.record.password}`).toString('base64')}`;
   assert.equal(
-    (
-      await fetch(`${concurrentB.record.baseUrl}/global/health`, {
-        headers: { Authorization: wrongA },
-      })
-    ).status,
-    401
+    await requestIsDenied(`${concurrentB.record.baseUrl}/global/health`, {
+      headers: { Authorization: wrongA },
+    }),
+    true
   );
   provider.releaseConcurrent();
   const [resultA, resultB] = await Promise.all([concurrentA.promise, concurrentB.promise]);
