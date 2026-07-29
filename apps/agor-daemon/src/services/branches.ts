@@ -357,7 +357,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.withTenantDatabase(params, async () => {
       let asUser: string | undefined;
 
-      if (unixUserMode !== 'simple') {
+      // Only insulated/strict impersonate; simple and delegated both run
+      // environment commands as the daemon user.
+      if (unixUserMode === 'insulated' || unixUserMode === 'strict') {
         const usersRepo = new UsersRepository(this.db);
         const user = await usersRepo.findById(branch.created_by);
         const impersonationResult = resolveUnixUserForImpersonation({

@@ -48,7 +48,7 @@ export type CodexUnixIdentityResolution =
 
 /**
  * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
- * for this user: the daemon user (simple), the shared executor user
+ * for this user: the daemon user (simple, delegated), the shared executor user
  * (insulated), or the caller's own Unix account (strict).
  *
  * Returns a discriminated result rather than throwing so callers with
@@ -64,12 +64,16 @@ export async function resolveCodexUnixIdentity(
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
   let unixUsername: string | null = null;
-  if (mode === 'strict') {
+  // Both strict and delegated require a per-user unix_username. In strict the
+  // resolver impersonates it; in delegated it resolves to no impersonation
+  // (auth.json lives in the daemon user's home, like simple), but a missing
+  // username must still surface as the actionable `missing-username` result.
+  if (mode === 'strict' || mode === 'delegated') {
     if (!userId) {
       return {
         ok: false,
         reason: 'resolve-failed',
-        message: 'Strict Unix user mode requires an authenticated user context.',
+        message: `${mode === 'strict' ? 'Strict' : 'Delegated'} Unix user mode requires an authenticated user context.`,
       };
     }
     const row = await withTenantDatabase((tenantDb) =>
@@ -80,8 +84,7 @@ export async function resolveCodexUnixIdentity(
       return {
         ok: false,
         reason: 'missing-username',
-        message:
-          'Strict Unix user mode requires a unix_username — ask an admin to set one for your account.',
+        message: `${mode === 'strict' ? 'Strict' : 'Delegated'} Unix user mode requires a unix_username — ask an admin to set one for your account.`,
       };
     }
   }

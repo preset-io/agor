@@ -74,25 +74,25 @@ agor/
 
 Terms you'll see across the codebase, UI, and docs:
 
-| Term               | What it is                                                                                                                                                                                      |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Branch**         | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 branch = 1 feature/PR. |
-| **Board**          | 2D canvas displaying branches as cards. Has zones.                                                                                                                                              |
-| **Zone**           | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a branch is dropped in.                                                                           |
-| **Card**           | Visual representation of a branch (or note/markdown) on a board.                                                                                                                                |
-| **Session**        | An agent conversation. Required FK to a branch. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window).                                                       |
-| **Task**           | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy.                                                                    |
-| **Message**        | An individual conversation turn (user / assistant / tool / system) within a task.                                                                                                               |
-| **Report**         | Agent-written markdown summary at task completion.                                                                                                                                              |
-| **Environment**    | The runtime instance of a branch's dev server (managed start/stop, ports allocated from `branch.unique_id`).                                                                                    |
-| **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
-| **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs. May run as a separate Unix user.                                              |
-| **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
-| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                |
-| **Unix user mode** | `simple` / `insulated` / `strict` — progressive OS-level isolation tiers. See "Feature Flags" below.                                                                                            |
-| **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
-| **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
-| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                        |
+| Term               | What it is                                                                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**         | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 branch = 1 feature/PR.                      |
+| **Board**          | 2D canvas displaying branches as cards. Has zones.                                                                                                                                                                   |
+| **Zone**           | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a branch is dropped in.                                                                                                |
+| **Card**           | Visual representation of a branch (or note/markdown) on a board.                                                                                                                                                     |
+| **Session**        | An agent conversation. Required FK to a branch. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window).                                                                            |
+| **Task**           | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy.                                                                                         |
+| **Message**        | An individual conversation turn (user / assistant / tool / system) within a task.                                                                                                                                    |
+| **Report**         | Agent-written markdown summary at task completion.                                                                                                                                                                   |
+| **Environment**    | The runtime instance of a branch's dev server (managed start/stop, ports allocated from `branch.unique_id`).                                                                                                         |
+| **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                                             |
+| **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs. May run as a separate Unix user.                                                                   |
+| **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                                                 |
+| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                                     |
+| **Unix user mode** | `simple` / `delegated` / `insulated` / `strict` — progressive OS-level isolation tiers (`delegated` = simple + required per-user `unix_username`, propagated to the execution substrate). See "Feature Flags" below. |
+| **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                                                  |
+| **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).                                   |
+| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                                             |
 
 ## Where to look first
 
@@ -259,6 +259,24 @@ execution:
 
 ---
 
+#### Mode 2.5: Delegated Identity (`delegated`)
+
+```yaml
+execution:
+  unix_user_mode: delegated
+```
+
+Like `simple` on the daemon host (no sudo, no Unix groups, no sudoers), but
+every user MUST have a `unix_username`. The identity is passed to the execution
+substrate — the `{unix_user}` executor-command-template variable, which hosted
+deployments use to select per-user home mounts — and sessions/terminals whose
+user has no `unix_username` fail loudly instead of silently sharing an identity.
+
+**Use cases:** Hosted/containerized deployments (e.g. Agor Cloud) where the
+orchestration layer, not the daemon, enforces OS identity.
+
+---
+
 #### Mode 3: RBAC + Branch Groups (Insulated)
 
 ```yaml
@@ -311,7 +329,7 @@ execution:
   # RBAC toggle
   branch_rbac: boolean # default: false
 
-  # Unix mode: simple | insulated | strict
+  # Unix mode: simple | delegated | insulated | strict
   unix_user_mode: string # default: simple
 
   # Executor user (insulated mode)

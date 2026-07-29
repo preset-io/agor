@@ -343,7 +343,75 @@ describe('user-manager', () => {
         });
 
         expect(result.unixUser).toBeNull();
+        expect(result.reportedUnixUser).toBeNull();
         expect(result.reason).toContain('simple mode');
+      });
+    });
+
+    describe('delegated mode', () => {
+      it('reports the user unix_username without impersonating', () => {
+        const result = resolveUnixUserForImpersonation({
+          mode: 'delegated',
+          userUnixUsername: 'alice',
+          executorUnixUser: 'executor',
+        });
+
+        // No sudo identity — the daemon does not impersonate...
+        expect(result.unixUser).toBeNull();
+        // ...but the identity is still reported to the execution substrate.
+        expect(result.reportedUnixUser).toBe('alice');
+        expect(result.reason).toContain('delegated');
+      });
+
+      it('throws when no user unix_username provided', () => {
+        expect(() =>
+          resolveUnixUserForImpersonation({
+            mode: 'delegated',
+            userUnixUsername: undefined,
+            executorUnixUser: 'executor',
+          })
+        ).toThrow('Delegated Unix user mode requires unix_username');
+      });
+
+      it('throws when user unix_username is null', () => {
+        expect(() =>
+          resolveUnixUserForImpersonation({
+            mode: 'delegated',
+            userUnixUsername: null,
+            executorUnixUser: 'executor',
+          })
+        ).toThrow('Delegated Unix user mode requires unix_username');
+      });
+
+      it('ignores the configured executor user', () => {
+        const result = resolveUnixUserForImpersonation({
+          mode: 'delegated',
+          userUnixUsername: 'alice',
+          executorUnixUser: 'agor_executor',
+        });
+
+        expect(result.unixUser).toBeNull();
+        expect(result.reportedUnixUser).toBe('alice');
+      });
+    });
+
+    describe('reportedUnixUser matrix', () => {
+      it('equals the sudo identity in every mode except delegated', () => {
+        const insulated = resolveUnixUserForImpersonation({
+          mode: 'insulated',
+          userUnixUsername: 'alice',
+          executorUnixUser: 'agor_executor',
+        });
+        expect(insulated.reportedUnixUser).toBe(insulated.unixUser);
+        expect(insulated.reportedUnixUser).toBe('agor_executor');
+
+        const strict = resolveUnixUserForImpersonation({
+          mode: 'strict',
+          userUnixUsername: 'alice',
+          executorUnixUser: 'agor_executor',
+        });
+        expect(strict.reportedUnixUser).toBe(strict.unixUser);
+        expect(strict.reportedUnixUser).toBe('alice');
       });
     });
 
@@ -453,6 +521,11 @@ describe('user-manager', () => {
     it('does nothing for simple mode', () => {
       expect(() => validateResolvedUnixUser('simple', 'alice')).not.toThrow();
       expect(() => validateResolvedUnixUser('simple', null)).not.toThrow();
+    });
+
+    it('does nothing for delegated mode (identity need not exist on the daemon host)', () => {
+      expect(() => validateResolvedUnixUser('delegated', 'alice')).not.toThrow();
+      expect(() => validateResolvedUnixUser('delegated', null)).not.toThrow();
     });
 
     it('validates user exists for strict mode', () => {

@@ -626,6 +626,21 @@ describe('loadConfig cache', () => {
       },
     },
     {
+      // Delegated requires per-user unix_username but performs no OS-level
+      // work on the daemon host: no sudo, no groups, no daemon.unix_user.
+      name: 'delegated (identity enforced by execution substrate)',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'delegated',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+      },
+    },
+    {
       name: 'Unix insulated without app RBAC',
       config: { execution: { branch_rbac: false, unix_user_mode: 'insulated' } } as AgorConfig,
       expected: {

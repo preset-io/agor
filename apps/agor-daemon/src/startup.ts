@@ -655,9 +655,15 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
   if (config.execution?.allow_web_terminal !== false) {
     const unixMode = config.execution?.unix_user_mode ?? 'simple';
-    if (unixMode === 'simple') {
+    // Delegated mode does not impersonate either: without an executor command
+    // template routing terminals elsewhere, a local terminal still runs as the
+    // daemon user, so the same warning applies.
+    const terminalRunsAsDaemon =
+      unixMode === 'simple' ||
+      (unixMode === 'delegated' && !config.execution?.executor_command_template);
+    if (terminalRunsAsDaemon) {
       console.warn(
-        '\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled (default) with unix_user_mode=simple.\x1b[0m\n' +
+        `\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled (default) with unix_user_mode=${unixMode}.\x1b[0m\n` +
           '   Any member-role user can open a shell running as the daemon user, with read\n' +
           '   access to ~/.agor/config.yaml, agor.db, and the JWT secret.\n' +
           "   Recommended: set execution.unix_user_mode to 'insulated' or 'strict' to\n" +

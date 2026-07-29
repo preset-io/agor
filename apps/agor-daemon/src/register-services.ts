@@ -979,7 +979,12 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
-        unix_user: sessionUnixUser || executorUnixUser || undefined,
+        // Mode-resolved identity for the execution substrate: the sudo user in
+        // insulated/strict, the session's unix_username in delegated (no sudo),
+        // and unset in simple. Supersedes the interim
+        // `sessionUnixUser || executorUnixUser` ordering from #2082, which
+        // shadowed insulated mode's configured executor identity.
+        unix_user: impersonationResult.reportedUnixUser || undefined,
       },
       onSpawn: (child, spawnContext) => {
         if (spawnContext.mode === 'local' && child.pid) {
