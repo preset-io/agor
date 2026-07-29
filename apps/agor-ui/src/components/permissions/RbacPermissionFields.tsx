@@ -106,7 +106,11 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
     return ownerId === currentUserId ? `${name} (You)` : name;
   };
   const privateOwnerLabel =
-    value.ownerIds.length === 1 ? `Private (${ownerLabel(value.ownerIds[0])})` : 'Private';
+    value.ownerIds.length === 1
+      ? `Private (${ownerLabel(value.ownerIds[0])})`
+      : value.ownerIds.length > 1
+        ? `Private (${value.ownerIds.length} owners)`
+        : 'Private';
 
   const handleOwnersChange = (newOwnerIds: string[]) => {
     if (newOwnerIds.length === 0) {
@@ -121,13 +125,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
     onChange('visibility', visibility);
     onChange('othersCan', othersCanFromRbacVisibility(visibility, value.othersCan));
     if (visibility === 'private') {
-      const ownerId =
-        value.ownerIds.length === 1
-          ? value.ownerIds[0]
-          : currentUserId && value.ownerIds.includes(currentUserId)
-            ? currentUserId
-            : value.ownerIds[0] || currentUserId;
-      if (ownerId) onChange('ownerIds', [ownerId]);
       onChange('groupGrants', []);
       onChange('othersFsAccess', 'none');
       onChange('allowSessionSharing', false);
@@ -163,47 +160,45 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
         />
       </Form.Item>
 
-      {isShared && (
-        <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
-          <Select
-            key={selectKey}
-            mode="multiple"
-            style={{ width: '100%' }}
-            placeholder="Select owners..."
-            value={value.ownerIds}
-            onChange={handleOwnersChange}
-            loading={loadingOwners}
-            disabled={!canEditOwners}
-            {...searchableSelectProps}
-            options={allUsers
-              .map((user) => {
-                const isCurrentUser = user.user_id === currentUserId;
-                const option = toUserSelectOption(user);
-                const label = isCurrentUser ? `${option.label} (You)` : option.label;
-                return { ...option, label, searchText: selectSearchTextFromLabel(label) };
-              })
-              .sort((a, b) => a.label.localeCompare(b.label))}
-            tagRender={(props) => {
-              const user = allUsers.find((u) => u.user_id === props.value);
-              const isCurrentUser = user?.user_id === currentUserId;
-              return (
-                <Tag
-                  {...props}
-                  color={isCurrentUser ? 'green' : 'default'}
-                  closable={props.closable}
-                  onClose={props.onClose}
-                  style={{ marginRight: 3 }}
-                >
-                  <Space size={4}>
-                    <UserOutlined style={{ fontSize: 11 }} />
-                    <span>{props.label}</span>
-                  </Space>
-                </Tag>
-              );
-            }}
-          />
-        </Form.Item>
-      )}
+      <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
+        <Select
+          key={selectKey}
+          mode="multiple"
+          style={{ width: '100%' }}
+          placeholder="Select owners..."
+          value={value.ownerIds}
+          onChange={handleOwnersChange}
+          loading={loadingOwners}
+          disabled={!canEditOwners}
+          {...searchableSelectProps}
+          options={allUsers
+            .map((user) => {
+              const isCurrentUser = user.user_id === currentUserId;
+              const option = toUserSelectOption(user);
+              const label = isCurrentUser ? `${option.label} (You)` : option.label;
+              return { ...option, label, searchText: selectSearchTextFromLabel(label) };
+            })
+            .sort((a, b) => a.label.localeCompare(b.label))}
+          tagRender={(props) => {
+            const user = allUsers.find((u) => u.user_id === props.value);
+            const isCurrentUser = user?.user_id === currentUserId;
+            return (
+              <Tag
+                {...props}
+                color={isCurrentUser ? 'green' : 'default'}
+                closable={props.closable}
+                onClose={props.onClose}
+                style={{ marginRight: 3 }}
+              >
+                <Space size={4}>
+                  <UserOutlined style={{ fontSize: 11 }} />
+                  <span>{props.label}</span>
+                </Space>
+              </Tag>
+            );
+          }}
+        />
+      </Form.Item>
 
       {isShared && (
         <>

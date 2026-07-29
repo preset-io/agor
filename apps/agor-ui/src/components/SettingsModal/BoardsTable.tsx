@@ -217,8 +217,8 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       .validateFields()
       .then(() => {
         const values = form.getFieldsValue(true);
-        if (values.access_mode === 'private' && (values.owner_ids || []).length !== 1) {
-          showError('Private boards must have exactly one private user');
+        if (values.access_mode === 'private' && (values.owner_ids || []).length < 1) {
+          showError('Private boards must have at least one owner');
           return;
         }
         onUpdate?.(editingBoard.board_id, extractBoardFormValues(form));
