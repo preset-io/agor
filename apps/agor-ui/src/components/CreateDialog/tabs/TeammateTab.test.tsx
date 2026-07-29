@@ -154,6 +154,7 @@ describe('TeammateTab OpenCode first-session configuration', () => {
 
     const result = await submit(formRef);
     expect(result?.modelConfig).toBeUndefined();
+    expect(result?.permissionMode).toBeUndefined();
   });
 
   it('serializes a reference without the prefilled inline model', async () => {

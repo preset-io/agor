@@ -194,6 +194,7 @@ function makeTool(options?: {
       ? undefined
       : (options?.resolveInvocationConfig ?? vi.fn().mockResolvedValue({ mcp: {} })),
     randomBytes: (options?.randomBytes ?? vi.fn().mockReturnValue(uniqueSecret)) as never,
+    fetch: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })),
     readinessTimeoutMs: options?.readinessTimeoutMs ?? 50,
     shutdownTimeoutMs: options?.shutdownTimeoutMs ?? 10,
     permissionService: options?.permissionService as never,

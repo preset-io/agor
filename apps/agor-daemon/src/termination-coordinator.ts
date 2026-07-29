@@ -144,12 +144,8 @@ async function runContainment(
     untrackExecutorProcess(current.session_id, current.task_id);
     return { status: 'terminal', task: current };
   }
-  const providerUnverified = tool === 'opencode';
-  if (containment.status === 'unverified' || providerUnverified) {
-    const reason =
-      containment.status === 'unverified'
-        ? containment.reason
-        : 'OpenCode server-side execution termination is not verified.';
+  if (containment.status === 'unverified') {
+    const reason = containment.reason;
     const diagnosis: SdkFailure = current.sdk_failure
       ? { ...current.sdk_failure, termination: 'unverified' }
       : {

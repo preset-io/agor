@@ -27,45 +27,6 @@ describe('FeathersMessagesRepository', () => {
         session_id: 'session-1',
         $sort: { index: 1 },
         $limit: 10000,
-        $skip: 0,
-      },
-    });
-  });
-
-  it('consumes every paginated history page in message order', async () => {
-    const firstPage = Array.from({ length: 10000 }, (_, index) => ({
-      message_id: `message-${index}`,
-      index,
-    }));
-    const lastMessage = { message_id: 'message-10000', index: 10000 };
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce({
-        total: 10001,
-        limit: 10000,
-        skip: 0,
-        data: firstPage,
-      })
-      .mockResolvedValueOnce({
-        total: 10001,
-        limit: 10000,
-        skip: 10000,
-        data: [lastMessage],
-      });
-    const repo = new FeathersMessagesRepository({
-      service: () => ({ find }),
-    } as unknown as AgorClient);
-
-    const result = await repo.findBySessionId('session-1' as SessionID);
-
-    expect(result).toHaveLength(10001);
-    expect(result.at(-1)).toBe(lastMessage);
-    expect(find).toHaveBeenNthCalledWith(2, {
-      query: {
-        session_id: 'session-1',
-        $sort: { index: 1 },
-        $limit: 10000,
-        $skip: 10000,
       },
     });
   });

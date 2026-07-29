@@ -10,7 +10,7 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import type { BranchID, GatewayChannel, UserID, UUID } from '@agor/core/types';
+import type { AuthenticatedParams, BranchID, GatewayChannel, UserID, UUID } from '@agor/core/types';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -61,16 +61,19 @@ describe('GatewayChannelsService agentic configuration intent', () => {
   });
 
   dbTest('persists and round-trips My default for a stable execution owner', async ({ db }) => {
-    const { data } = await channelContext(db, false);
+    const { data, params } = await channelContext(db, false);
     const service = new GatewayChannelsService(db);
 
-    const created = await service.create({
-      ...data,
-      agentic_config: {
-        agent: 'claude-code',
-        presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+    const created = await service.create(
+      {
+        ...data,
+        agentic_config: {
+          agent: 'claude-code',
+          presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+        },
       },
-    });
+      params
+    );
     await service.patch(created.id, { name: 'Patched channel' });
 
     await expect(service.get(created.id)).resolves.toMatchObject({
@@ -97,7 +100,7 @@ describe('GatewayChannelsService agentic configuration intent', () => {
   });
 
   dbTest('keeps concrete presets in the foreign key', async ({ db }) => {
-    const { data, owner } = await channelContext(db, false);
+    const { data, owner, params } = await channelContext(db, false);
     const preset = await new AgenticToolPresetRepository(db).create(
       {
         tool: 'claude-code',
@@ -108,13 +111,16 @@ describe('GatewayChannelsService agentic configuration intent', () => {
     );
     const service = new GatewayChannelsService(db);
 
-    const created = await service.create({
-      ...data,
-      agentic_config: {
-        agent: 'claude-code',
-        presetId: preset.preset_id,
+    const created = await service.create(
+      {
+        ...data,
+        agentic_config: {
+          agent: 'claude-code',
+          presetId: preset.preset_id,
+        },
       },
-    });
+      params
+    );
 
     expect(created.agentic_config).toEqual({
       agent: 'claude-code',
@@ -179,9 +185,8 @@ describe('GatewayChannelsService agentic configuration intent', () => {
       config: {},
       agentic_config: { agent: 'opencode' as const },
       enabled: false,
-      created_by: owner.user_id,
     };
-    return { owner, data };
+    return { owner, data, params: { user: owner } as AuthenticatedParams };
   }
 
   dbTest('rejects an absent OpenCode pair after channel-owner resolution', async ({ db }) => {
@@ -197,9 +202,9 @@ describe('GatewayChannelsService agentic configuration intent', () => {
   dbTest(
     'accepts an absent inline OpenCode pair resolved from the channel owner',
     async ({ db }) => {
-      const { data } = await channelContext(db, true);
+      const { data, params } = await channelContext(db, true);
 
-      const created = await new GatewayChannelsService(db).create(data);
+      const created = await new GatewayChannelsService(db).create(data, params);
 
       expect(created.agentic_config).toEqual({ agent: 'opencode' });
     }

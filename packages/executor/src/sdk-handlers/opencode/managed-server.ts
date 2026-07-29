@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 export const OPENCODE_VERSION = '1.14.33';
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
+const READINESS_POLL_INTERVAL_MS = 25;
+const HEALTH_REQUEST_TIMEOUT_MS = 500;
 const MAX_STARTUP_OUTPUT = 4_096;
 
 export type ManagedChild = {
@@ -321,6 +323,46 @@ function waitForReadiness(
   });
 }
 
+async function waitForAuthenticatedHealth(
+  child: ManagedChild,
+  baseUrl: string,
+  authorization: string,
+  deadline: number,
+  fetchHealth: typeof globalThis.fetch
+): Promise<void> {
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error('OpenCode server exited before authenticated health readiness');
+    }
+
+    const remainingMs = deadline - Date.now();
+    const controller = new AbortController();
+    const requestTimer = setTimeout(
+      () => controller.abort(),
+      Math.min(HEALTH_REQUEST_TIMEOUT_MS, remainingMs)
+    );
+    try {
+      const response = await fetchHealth(`${baseUrl}/global/health`, {
+        headers: { Authorization: authorization },
+        signal: controller.signal,
+      });
+      if (response.ok) return;
+      await response.body?.cancel();
+    } catch {
+      // The listener can precede HTTP readiness; retry within the startup bound.
+    } finally {
+      clearTimeout(requestTimer);
+    }
+
+    const delayMs = Math.min(READINESS_POLL_INTERVAL_MS, deadline - Date.now());
+    if (delayMs > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    }
+  }
+
+  throw new Error('OpenCode server authenticated health readiness timed out');
+}
+
 export type ManagedOpenCodeServer = {
   baseUrl: string;
   authorization: string;
@@ -332,6 +374,7 @@ export type ManagedOpenCodeServerDependencies = {
   resolveBinary?: () => Promise<string>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   randomBytes?: typeof nodeRandomBytes;
+  fetch?: typeof globalThis.fetch;
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
 };
@@ -383,11 +426,16 @@ export async function startManagedOpenCodeServer(
     child,
     dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS
   );
+  const readinessTimeoutMs = dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const readinessDeadline = Date.now() + readinessTimeoutMs;
   try {
-    const baseUrl = await waitForReadiness(
+    const baseUrl = await waitForReadiness(child, sanitizer, readinessTimeoutMs);
+    await waitForAuthenticatedHealth(
       child,
-      sanitizer,
-      dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS
+      baseUrl,
+      authorization,
+      readinessDeadline,
+      dependencies.fetch ?? globalThis.fetch
     );
     return { baseUrl, authorization, sanitizer, close };
   } catch (error) {

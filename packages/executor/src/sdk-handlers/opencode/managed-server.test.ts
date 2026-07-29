@@ -1,8 +1,15 @@
+import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { ensureOpenCodeDataHome, verifyOpenCodeAuthFileBoundary } from './managed-server';
+import { PassThrough } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  ensureOpenCodeDataHome,
+  type ManagedChild,
+  startManagedOpenCodeServer,
+  verifyOpenCodeAuthFileBoundary,
+} from './managed-server';
 
 const roots: string[] = [];
 
@@ -41,5 +48,42 @@ describe('OpenCode native data boundary', () => {
     await symlink(target, dataHome);
 
     await expect(ensureOpenCodeDataHome(dataHome)).rejects.toThrow(/symbolic link/i);
+  });
+});
+
+describe('managed OpenCode readiness', () => {
+  it('waits for authenticated HTTP health after the listener announcement', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      kill: () => true,
+    }) as ManagedChild;
+    const fetchHealth = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+
+    const started = startManagedOpenCodeServer(
+      { directory: tmpdir() },
+      {
+        resolveBinary: async () => '/packaged/opencode',
+        spawn: () => child,
+        randomBytes: () => Buffer.alloc(32, 1),
+        fetch: fetchHealth,
+        readinessTimeoutMs: 500,
+      }
+    );
+    child.stdout.write('opencode server listening on http://127.0.0.1:43210\n');
+
+    const server = await started;
+
+    expect(fetchHealth).toHaveBeenCalledTimes(2);
+    expect(fetchHealth).toHaveBeenLastCalledWith(
+      'http://127.0.0.1:43210/global/health',
+      expect.objectContaining({
+        headers: { Authorization: server.authorization },
+      })
+    );
   });
 });

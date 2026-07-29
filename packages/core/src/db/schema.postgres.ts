@@ -166,6 +166,7 @@ export const sessions = pgTable(
             approvalPolicy: CodexApprovalPolicy;
           };
         } | null;
+
         // Model config (session-level model selection)
         model_config?: Session['model_config'];
 

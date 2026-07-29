@@ -131,6 +131,7 @@ export type OpenCodeToolDependencies = {
   createClient?: typeof createOpencodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<InvocationConfig>;
   randomBytes?: typeof nodeRandomBytes;
+  fetch?: typeof globalThis.fetch;
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   eventDrainMs?: number;
@@ -187,7 +188,7 @@ export class OpenCodeTool {
   private client: OpenCodeClient | null = null;
   private readonly dependencies: Pick<
     OpenCodeToolDependencies,
-    'resolveBinary' | 'spawn' | 'randomBytes'
+    'resolveBinary' | 'spawn' | 'randomBytes' | 'fetch'
   > & {
     createClient: typeof createOpencodeClient;
     resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<InvocationConfig>;
@@ -225,6 +226,7 @@ export class OpenCodeTool {
         ((input) =>
           this.buildInvocationConfig(input.agorSessionId, input.mcpToken, input.directory)),
       randomBytes: dependencies.randomBytes,
+      fetch: dependencies.fetch,
       readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
       shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
@@ -285,6 +287,7 @@ export class OpenCodeTool {
           resolveBinary: this.dependencies.resolveBinary,
           spawn: this.dependencies.spawn,
           randomBytes: this.dependencies.randomBytes,
+          fetch: this.dependencies.fetch,
           readinessTimeoutMs: this.dependencies.readinessTimeoutMs,
           shutdownTimeoutMs: this.dependencies.shutdownTimeoutMs,
         }

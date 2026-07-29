@@ -110,8 +110,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         (values.permissionMode as PermissionMode | undefined) ??
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
-      const isInline =
-        !values.agenticToolPresetId || values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
       const hasCompleteOpenCodeModel = Boolean(
         values.modelConfig?.provider?.trim() && values.modelConfig?.model?.trim()
       );
