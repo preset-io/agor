@@ -472,6 +472,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('surfaces a panel-content setting via global search and navigates on click', async () => {
     const user = makeUser();
+    // "Volume" is a Preferences control, not a nav name — global search must find it.
     renderWithApp(
       <UserSettingsModal
         open
@@ -483,11 +484,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    // "Volume" is a Preferences control, not a nav name — global search must find it.
     fireEvent.change(screen.getByPlaceholderText('Search settings'), {
       target: { value: 'volume' },
     });
     const hit = await screen.findByRole('menuitem', { name: /volume/i });
+    // Only setting hits (no page match) — no divider should render. (The modal
+    // is portaled to the document body, so query there, not the render root.)
+    expect(document.querySelector('.ant-menu-item-divider')).not.toBeInTheDocument();
     fireEvent.click(hit);
 
     // Clicking the hit lands on the hosting panel and clears the query.
@@ -495,7 +498,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByPlaceholderText('Search settings')).toHaveValue('');
   });
 
-  it('ranks a matching tab above a keyword-only setting hit', async () => {
+  it('ranks tab-membership above label-vs-keyword and divides pages from settings', async () => {
     const user = makeUser();
     renderWithApp(
       <UserSettingsModal
@@ -508,17 +511,25 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    // 'sec' matches the Security tab (label) and 'Minimum task duration' (only
-    // via its 'seconds' keyword). The tab must rank above the keyword-only hit.
+    // 'sec' matches: Security (tab name), Password (only via keyword 'security',
+    // but it lives in the matched Security tab), and Minimum task duration /
+    // Environment variables (keyword-only hits in other tabs).
     fireEvent.change(screen.getByPlaceholderText('Search settings'), {
       target: { value: 'sec' },
     });
 
     const texts = (await screen.findAllByRole('menuitem')).map((el) => el.textContent ?? '');
     const securityIdx = texts.findIndex((t) => /^Security/.test(t));
+    const passwordIdx = texts.findIndex((t) => /^Password/.test(t));
     const minDurationIdx = texts.findIndex((t) => /Minimum task duration/.test(t));
 
-    expect(securityIdx).toBeGreaterThanOrEqual(0);
-    expect(minDurationIdx).toBeGreaterThan(securityIdx);
+    // Security (page) first, then Password (in the matched tab), then the
+    // other-tab keyword hit — tab-membership beats the label-vs-keyword tier.
+    expect(securityIdx).toBe(0);
+    expect(passwordIdx).toBe(securityIdx + 1);
+    expect(minDurationIdx).toBeGreaterThan(passwordIdx);
+
+    // Mixed results (a page + settings) render a divider between the two.
+    expect(document.querySelector('.ant-menu-item-divider')).toBeInTheDocument();
   });
 });

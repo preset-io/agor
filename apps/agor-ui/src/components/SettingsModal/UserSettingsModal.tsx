@@ -165,6 +165,13 @@ const panelTitleForKey = (key: string): string =>
     ? AGENTIC_TOOL_DISPLAY_NAMES[toolFromProviderKey(key)]
     : (STATIC_PANEL_TITLES[key] ?? key);
 
+// A "page" hit: the entry represents a nav tab/panel AND the query matched its
+// visible name (a keyword-only tab hit is not treated as a page match).
+const isPageMatch = (entry: SettingIndexEntry, query: string): boolean => {
+  const labelLc = entry.label.toLowerCase();
+  return labelLc === panelTitleForKey(entry.panelKey).toLowerCase() && labelLc.includes(query);
+};
+
 export interface UserSettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -1045,64 +1052,71 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const searchActive = search.trim().length > 0;
 
-  // Relevance ranking: a matched tab name first (prefix over substring), then
-  // its own matching settings, then label matches in other tabs (prefix over
-  // substring), and finally keyword-only hits (the visible label doesn't
-  // contain the query). Ties fall back to index order for stable output.
+  // Relevance ranking, most significant first: (1) a matched page/tab name;
+  // (2) a setting that lives in a matched tab (tab-membership outranks how the
+  // setting matched, so a keyword-only hit in the matched tab still beats a
+  // label hit elsewhere); (3) a label match over a keyword/alias-only match;
+  // (4) a prefix over a mid-substring; (5) index for a stable, deterministic tie.
   const searchResults = useMemo(() => {
     if (!searchActive) return [];
     const query = search.trim().toLowerCase();
-    return settingsIndex
+    const matched = settingsIndex
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry }) =>
         matchesSettingsSearch(entry, search, [(e) => e.label, (e) => e.keywords])
-      )
+      );
+    const matchedTabKeys = new Set(
+      matched.filter(({ entry }) => isPageMatch(entry, query)).map(({ entry }) => entry.panelKey)
+    );
+    return matched
       .map(({ entry, index }) => {
         const labelLc = entry.label.toLowerCase();
-        const tabTitleLc = panelTitleForKey(entry.panelKey).toLowerCase();
-        const labelHasQuery = labelLc.includes(query);
-        const labelPrefix = labelLc.startsWith(query);
-        const isTabEntry = labelLc === tabTitleLc;
-        const tabHasQuery = tabTitleLc.includes(query);
-        const rank = !labelHasQuery
-          ? 5
-          : isTabEntry
-            ? labelPrefix
-              ? 0
-              : 1
-            : tabHasQuery
-              ? 2
-              : labelPrefix
-                ? 3
-                : 4;
-        return { entry, index, rank };
+        return {
+          entry,
+          index,
+          t1: isPageMatch(entry, query) ? 0 : 1,
+          t2: matchedTabKeys.has(entry.panelKey) ? 0 : 1,
+          t3: labelLc.includes(query) ? 0 : 1,
+          t4: labelLc.startsWith(query) ? 0 : 1,
+        };
       })
-      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .sort((a, b) => a.t1 - b.t1 || a.t2 - b.t2 || a.t3 - b.t3 || a.t4 - b.t4 || a.index - b.index)
       .map(({ entry }) => entry);
   }, [settingsIndex, search, searchActive]);
 
-  const searchMenuItems: MenuProps['items'] = useMemo(
-    () =>
-      searchResults.map((entry, index) => {
-        const panelTitle = panelTitleForKey(entry.panelKey);
-        return {
-          key: String(index),
-          label: (
-            <Space size={6}>
-              <span>
-                <HighlightMatch text={entry.label} query={search} />
-              </span>
-              {panelTitle !== entry.label && (
-                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  · {panelTitle}
-                </Typography.Text>
-              )}
-            </Space>
-          ),
-        };
-      }),
-    [searchResults, search, token.fontSizeSM]
-  );
+  const searchMenuItems: MenuProps['items'] = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    // Page hits are ranked first; drop a divider before the first non-page hit
+    // only when both kinds are present (no dangling divider).
+    const showDivider =
+      searchResults.some((entry) => isPageMatch(entry, query)) &&
+      searchResults.some((entry) => !isPageMatch(entry, query));
+    const items: NonNullable<MenuProps['items']> = [];
+    let dividerPlaced = false;
+    searchResults.forEach((entry, index) => {
+      if (showDivider && !dividerPlaced && !isPageMatch(entry, query)) {
+        items.push({ type: 'divider' });
+        dividerPlaced = true;
+      }
+      const panelTitle = panelTitleForKey(entry.panelKey);
+      items.push({
+        key: String(index),
+        label: (
+          <Space size={6}>
+            <span>
+              <HighlightMatch text={entry.label} query={search} />
+            </span>
+            {panelTitle !== entry.label && (
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                · {panelTitle}
+              </Typography.Text>
+            )}
+          </Space>
+        ),
+      });
+    });
+    return items;
+  }, [searchResults, search, token.fontSizeSM]);
 
   // A search that hides the active panel from the nav keeps the panel rendering
   // (renderContent reads activeKey, not the search) so in-progress edits are
