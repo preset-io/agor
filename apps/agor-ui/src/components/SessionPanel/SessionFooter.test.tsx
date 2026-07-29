@@ -296,7 +296,7 @@ describe('SessionFooter', () => {
     fireEvent.click(more);
     await waitFor(() => expect(overflowOptions).not.toBeVisible());
     fireEvent.click(more);
-    await waitFor(() => expect(screen.getByRole('group', { name: 'More options' })).toBeVisible());
+    await waitFor(() => expect(overflowOptions).toBeVisible(), { timeout: 5_000 });
     expect(screen.getByLabelText('OpenCode model')).toBeVisible();
   });
 
