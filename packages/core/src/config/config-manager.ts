@@ -1180,6 +1180,11 @@ export interface ResolvedExecutionSecurityMode {
   requiresDaemonUnixUser: boolean;
   /** Whether new repos/branches should initialize Unix groups. */
   shouldInitUnixGroups: boolean;
+  /**
+   * Whether every user must have a `unix_username` (strict and delegated).
+   * Session creation and executor/terminal launches fail loudly without one.
+   */
+  requiresUserUnixUsername: boolean;
 }
 
 /**
@@ -1207,6 +1212,7 @@ export function resolveExecutionSecurityMode(
     unixGroupRefreshNeeded: unixIsolationEnabled,
     requiresDaemonUnixUser: unixIsolationEnabled,
     shouldInitUnixGroups: unixIsolationEnabled,
+    requiresUserUnixUsername: unixUserMode === 'strict' || unixUserMode === 'delegated',
   };
 }
 

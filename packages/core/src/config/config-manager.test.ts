@@ -610,6 +610,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: false,
         requiresDaemonUnixUser: false,
         shouldInitUnixGroups: false,
+        requiresUserUnixUsername: false,
       },
     },
     {
@@ -623,6 +624,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: false,
         requiresDaemonUnixUser: false,
         shouldInitUnixGroups: false,
+        requiresUserUnixUsername: false,
       },
     },
     {
@@ -638,6 +640,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: false,
         requiresDaemonUnixUser: false,
         shouldInitUnixGroups: false,
+        requiresUserUnixUsername: true,
       },
     },
     {
@@ -651,6 +654,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: true,
         requiresDaemonUnixUser: true,
         shouldInitUnixGroups: true,
+        requiresUserUnixUsername: false,
       },
     },
     {
@@ -664,6 +668,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: true,
         requiresDaemonUnixUser: true,
         shouldInitUnixGroups: true,
+        requiresUserUnixUsername: true,
       },
     },
   ])('resolves execution security mode: $name', ({ config, expected }) => {

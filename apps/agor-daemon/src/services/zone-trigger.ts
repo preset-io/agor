@@ -11,6 +11,7 @@
  * same session-defaults resolution, same MCP-attach behaviour.
  */
 
+import { resolveExecutionSecurityMode } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
@@ -24,6 +25,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
+import { assertUnixUsernameSatisfiesMode } from '../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 
@@ -106,6 +108,15 @@ export async function fireAlwaysNewZoneTrigger(
     asUser,
     logPrefix: `[zone-trigger ${branch.name}]`,
   });
+
+  // In strict/delegated, refuse to create a zone-triggered session for a user
+  // without a unix_username — it would fail at prompt time (or silently share
+  // an identity in hosted deployments).
+  assertUnixUsernameSatisfiesMode(
+    user.unix_username,
+    resolveExecutionSecurityMode(),
+    `user ${userId}`
+  );
 
   const newSession: Session = await app.service('sessions').create(
     {

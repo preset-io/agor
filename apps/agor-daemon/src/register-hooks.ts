@@ -2444,9 +2444,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
+        // Stamp session with creator's unix_username (MUST run first). Also
+        // registered without RBAC when the Unix mode (strict/delegated) makes
+        // unix_username load-bearing — otherwise sessions would be stamped
+        // null and fail only at prompt time.
+        ...(branchRbacEnabled || executionMode.requiresUserUnixUsername
+          ? [setSessionUnixUsername(usersRepository, executionMode)]
+          : []),
         ...(branchRbacEnabled
           ? [
-              setSessionUnixUsername(usersRepository), // Stamp session with creator's unix_username (MUST run first)
               // Check branch permission BEFORE injecting created_by (need branch_id)
               async (context: HookContext) => {
                 // RBAC: Ensure user can create sessions in this branch ('all' permission)

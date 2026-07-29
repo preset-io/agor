@@ -12,6 +12,7 @@ import {
   presetConfigurationToSessionPatch,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -59,6 +60,7 @@ import { ROLES, SessionStatus } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
+  assertUnixUsernameSatisfiesMode,
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
@@ -557,6 +559,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       callerUnixUsername,
       result.usedLegacySharing
     ) as Session['unix_username'];
+
+    // In strict/delegated, a child stamped null would fail at prompt time (or
+    // silently share an identity in hosted deployments) — reject at fork/spawn
+    // time with an actionable error instead. Also covers legacy sharing
+    // inheriting a null stamp from a pre-migration parent.
+    assertUnixUsernameSatisfiesMode(
+      unixUsername,
+      resolveExecutionSecurityMode(),
+      `the attributed user (${createdBy})`
+    );
 
     return { created_by: createdBy, unix_username: unixUsername };
   }

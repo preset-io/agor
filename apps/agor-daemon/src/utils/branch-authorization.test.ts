@@ -10,6 +10,7 @@ import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertUnixUsernameSatisfiesMode,
   ensureCanPromptInSession,
   hasBranchPermission,
   isSuperAdmin,
@@ -20,6 +21,7 @@ import {
   resolveBranchPermission,
   resolveSessionContext,
   scopeSessionQuery,
+  setSessionUnixUsername,
 } from './branch-authorization';
 
 /** Minimal branch fixture for permission tests */
@@ -570,5 +572,87 @@ describe('scopeSessionQuery — $sort handling', () => {
     const ctx = makeCtx({ $sort: { updated_at: -1 }, $limit: 10 });
     await scopeSessionQuery(repoReturning(sessions))(ctx);
     expect(resultIds(ctx)).toEqual(['u-new', 'u-mid', 'u-old']);
+  });
+});
+
+describe('assertUnixUsernameSatisfiesMode', () => {
+  const delegated = { unixUserMode: 'delegated', requiresUserUnixUsername: true };
+  const strict = { unixUserMode: 'strict', requiresUserUnixUsername: true };
+  const simple = { unixUserMode: 'simple', requiresUserUnixUsername: false };
+
+  it('passes when the mode does not require a unix_username', () => {
+    expect(() => assertUnixUsernameSatisfiesMode(null, simple)).not.toThrow();
+    expect(() => assertUnixUsernameSatisfiesMode(undefined, simple)).not.toThrow();
+  });
+
+  it('passes when a unix_username is present', () => {
+    expect(() => assertUnixUsernameSatisfiesMode('alice', delegated)).not.toThrow();
+    expect(() => assertUnixUsernameSatisfiesMode('alice', strict)).not.toThrow();
+  });
+
+  it('throws with the mode name and subject when required and missing', () => {
+    expect(() => assertUnixUsernameSatisfiesMode(null, delegated, 'gateway user u-1')).toThrow(
+      /unix_user_mode 'delegated' requires a unix_username, but gateway user u-1 has none/
+    );
+    expect(() => assertUnixUsernameSatisfiesMode(undefined, strict)).toThrow(
+      /unix_user_mode 'strict' requires a unix_username/
+    );
+  });
+
+  it('tolerates an undefined execution mode (callers without resolved config)', () => {
+    expect(() => assertUnixUsernameSatisfiesMode(null, undefined)).not.toThrow();
+  });
+});
+
+describe('setSessionUnixUsername', () => {
+  const makeCreateContext = () =>
+    ({
+      method: 'create',
+      path: 'sessions',
+      params: { provider: 'rest', user: { user_id: USER_ID } },
+      data: {} as Record<string, unknown>,
+    }) as unknown as HookContext;
+
+  const repoWithUsername = (unix_username: string | null) => ({
+    findById: vi.fn().mockResolvedValue({ user_id: USER_ID, unix_username }),
+  });
+
+  it('stamps the creator current unix_username', async () => {
+    const ctx = makeCreateContext();
+    await setSessionUnixUsername(repoWithUsername('alice'))(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBe('alice');
+  });
+
+  it('stamps null silently when the mode does not require a unix_username', async () => {
+    const ctx = makeCreateContext();
+    await setSessionUnixUsername(repoWithUsername(null), {
+      unixUserMode: 'simple',
+      requiresUserUnixUsername: false,
+    })(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBeNull();
+  });
+
+  it('rejects a creator without unix_username when the mode requires one', async () => {
+    const ctx = makeCreateContext();
+    await expect(
+      setSessionUnixUsername(repoWithUsername(null), {
+        unixUserMode: 'delegated',
+        requiresUserUnixUsername: true,
+      })(ctx)
+    ).rejects.toThrow(/unix_user_mode 'delegated' requires a unix_username/);
+  });
+
+  it('skips internal calls even when the mode requires a unix_username', async () => {
+    const ctx = {
+      method: 'create',
+      path: 'sessions',
+      params: {},
+      data: {},
+    } as unknown as HookContext;
+    await setSessionUnixUsername(repoWithUsername(null), {
+      unixUserMode: 'delegated',
+      requiresUserUnixUsername: true,
+    })(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBeUndefined();
   });
 });
