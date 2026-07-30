@@ -76,4 +76,24 @@ describe('OpenCode credential namespace routing', () => {
       })
     ).toThrow(/unavailable in hosted multi-tenant mode/i);
   });
+
+  it('rejects delegated execution before deriving native OpenCode paths', () => {
+    expect(() =>
+      assertOpenCodeNativeAuthSupported({
+        execution: { unix_user_mode: 'delegated' },
+      })
+    ).toThrow(/unavailable in delegated Unix user mode/i);
+  });
+
+  it.each([
+    'simple',
+    'insulated',
+    'strict',
+  ] as const)('returns supported %s execution mode for downstream path resolution', (mode) => {
+    expect(
+      assertOpenCodeNativeAuthSupported({
+        execution: { unix_user_mode: mode },
+      })
+    ).toBe(mode);
+  });
 });

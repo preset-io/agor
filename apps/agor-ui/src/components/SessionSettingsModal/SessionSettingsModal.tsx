@@ -152,6 +152,7 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
   } else if (
     !presetId &&
     session.model_config &&
+    isAgenticToolName(session.agentic_tool) &&
     !agenticToolRequiresModelSelection(session.agentic_tool)
   ) {
     updates.model_config = null;

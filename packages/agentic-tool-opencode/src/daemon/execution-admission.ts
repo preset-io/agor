@@ -4,7 +4,7 @@ import { assertOpenCodeNativeAuthSupported } from './credential-namespace.js';
 
 export function assertOpenCodeExecutionAllowed(input: {
   tenantId: string | undefined;
-  config: Pick<AgorConfig, 'multi_tenancy'>;
+  config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
 }): void {
   if (!input.tenantId) {
     throw new NotAuthenticated('Missing tenant context for OpenCode execution');

@@ -441,6 +441,10 @@ placed beneath that namespace.
 - Native OpenCode credential storage is unavailable when multi-tenancy uses
   `required_from_auth`; configuration and task execution reject before starting
   OpenCode.
+- Native OpenCode credential storage is also unavailable in `delegated` Unix
+  user mode. The execution substrate does not yet provide the daemon with a
+  trusted per-user home boundary for native OpenCode state, so authentication,
+  catalog discovery, and task execution reject before starting OpenCode.
 - Task and catalog servers for one user may run concurrently. Credential
   mutations and OAuth attempts are serialized; a mutation is guaranteed for
   later server starts, not an already-running turn.

@@ -1288,9 +1288,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleModelConfigChange = (newConfig: ModelConfig | undefined) => {
     if (session && onUpdateSession) {
       if (
+        !activeSession ||
         !newConfig ||
-        (agenticToolRequiresModelSelection(session.agentic_tool) &&
-          !isAgenticToolModelSelectionComplete(session.agentic_tool, newConfig))
+        (agenticToolRequiresModelSelection(activeSession.agentic_tool) &&
+          !isAgenticToolModelSelectionComplete(activeSession.agentic_tool, newConfig))
       ) {
         // Integrations with atomic selections keep the last runnable persisted
         // value while a replacement is being staged.

@@ -7,6 +7,7 @@ import { assertOpenCodeExecutionAllowed } from './execution-admission.js';
 export {
   assertOpenCodeNativeAuthSupported,
   type OpenCodeCredentialNamespace,
+  type OpenCodeNativeUnixUserMode,
   resolveOpenCodeCredentialNamespace,
   resolveOpenCodeTaskCredentialNamespace,
 } from './credential-namespace.js';
@@ -16,7 +17,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
   name: 'opencode',
   admitExecutor(input: {
     tenantId: string | undefined;
-    config: Pick<AgorConfig, 'multi_tenancy'>;
+    config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
   }) {
     assertOpenCodeExecutionAllowed(input);
   },

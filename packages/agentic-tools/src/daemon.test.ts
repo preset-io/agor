@@ -26,6 +26,30 @@ describe('OpenCode executor admission', () => {
     expect(spawnExecutor).not.toHaveBeenCalled();
   });
 
+  it('rejects delegated native state before token creation or executor spawn', async () => {
+    const generateToken = vi.fn();
+    const spawnExecutor = vi.fn();
+
+    await expect(
+      admitAgenticToolExecutor(
+        {
+          tool: 'opencode',
+          tenantId: 'tenant-a',
+          config: {
+            execution: { unix_user_mode: 'delegated' },
+          },
+        },
+        async () => {
+          await generateToken();
+          spawnExecutor();
+        }
+      )
+    ).rejects.toThrow(/unavailable in delegated Unix user mode/i);
+
+    expect(generateToken).not.toHaveBeenCalled();
+    expect(spawnExecutor).not.toHaveBeenCalled();
+  });
+
   it('contributes an opaque adapter context instead of adding host payload fields', () => {
     const payload = getAgenticToolExecutorPayload('opencode', {
       tenantId: 'tenant-a',

@@ -4,7 +4,7 @@ import type { AgenticToolName, Session } from '@agor/core/types';
 
 type ExecutionAdmission = (input: {
   tenantId: string | undefined;
-  config: Pick<AgorConfig, 'multi_tenancy'>;
+  config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
 }) => void;
 
 type ExecutorPayloadContribution = (input: {
@@ -29,7 +29,7 @@ export async function admitAgenticToolExecutor<T>(
   input: {
     tool: AgenticToolName;
     tenantId: string | undefined;
-    config: Pick<AgorConfig, 'multi_tenancy'>;
+    config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
   },
   admitted: () => Promise<T>
 ): Promise<T> {

@@ -168,6 +168,20 @@ describe('OpenCode provider auth service', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
+  it('rejects delegated mode before executor or provider activity', async () => {
+    loadConfig.mockReturnValue({
+      execution: { unix_user_mode: 'delegated' },
+    } as never);
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).rejects.toThrow(
+        /unavailable in delegated Unix user mode/i
+      );
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it('serializes all mutations for one namespace while another tenant remains independent', async () => {
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {
