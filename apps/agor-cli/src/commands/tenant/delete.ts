@@ -12,13 +12,16 @@ import {
   assertValidTenantId,
   createDatabase,
   deleteTenantData,
+  deleteTenantFilesystemTree,
   getDatabaseUrl,
   InvalidTenantIdError,
+  summarizeTenantFilesystem,
   TenantDeletionUnsupportedError,
   TenantDeletionVerificationError,
 } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import { resolveTenantFilesystem } from '../../lib/tenant-portability.js';
 
 /** Exit code for a rejected / invalid `--tenant-id`. */
 const EXIT_INVALID_INPUT = 2;
@@ -67,7 +70,48 @@ export default class TenantDelete extends Command {
       description: 'Report the row counts that would be deleted without deleting anything',
       default: false,
     }),
+    'database-only': Flags.boolean({
+      description: 'Delete only the database rows, leaving the tenant filesystem tree in place',
+      default: false,
+    }),
   };
+
+  /**
+   * Delete (or, in dry-run, report) the tenant's configured filesystem tree.
+   * Returns a bounded, secret-free outcome describing what was done. When
+   * filesystem isolation is disabled, the tenant has no isolated filesystem root
+   * and nothing is touched.
+   */
+  private async handleFilesystem(
+    tenantId: string,
+    dryRun: boolean,
+    databaseOnly: boolean
+  ): Promise<{ isolationEnabled: boolean; present: boolean; deleted: boolean }> {
+    if (databaseOnly) {
+      return { isolationEnabled: false, present: false, deleted: false };
+    }
+    const resolved = await resolveTenantFilesystem(tenantId);
+    if (!resolved) {
+      this.logToStderr(
+        chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')
+      );
+      return { isolationEnabled: false, present: false, deleted: false };
+    }
+    const inventory = await summarizeTenantFilesystem(resolved.root);
+    if (dryRun) {
+      if (inventory.present) {
+        this.logToStderr(
+          chalk.dim(
+            `  would delete tenant filesystem tree (${inventory.fileCount} file(s), ${inventory.totalBytes} byte(s))`
+          )
+        );
+      }
+      return { isolationEnabled: true, present: inventory.present, deleted: false };
+    }
+    const { deleted } = await deleteTenantFilesystemTree(resolved.root, resolved.base);
+    if (deleted) this.logToStderr(chalk.dim('  deleted tenant filesystem tree'));
+    return { isolationEnabled: true, present: inventory.present, deleted };
+  }
 
   async run(): Promise<void> {
     const { flags } = await this.parse(TenantDelete);
@@ -99,11 +143,19 @@ export default class TenantDelete extends Command {
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
       });
 
+      // Extend the generic deletion contract to the configured tenant filesystem
+      // tree. Filesystem data is tenant-owned only when isolation is enabled;
+      // otherwise the configured root is the shared data home and must be left
+      // untouched (preserving the historical database-only behavior).
+      const filesystem = await this.handleFilesystem(tenantId, dryRun, flags['database-only']);
+
       // Stable machine-readable contract on stdout — the only thing on stdout.
+      // The database result keys are preserved; the filesystem outcome is added
+      // as a nested object so existing database automation keeps working.
       // Await the write so the payload is fully flushed to a pipe before the
       // process.exit(0) below (needed to terminate the lingering postgres-js
       // pool); process.exit can otherwise truncate an in-flight async write.
-      const json = `${JSON.stringify(result)}\n`;
+      const json = `${JSON.stringify({ ...result, filesystem })}\n`;
       await new Promise<void>((resolve, reject) => {
         process.stdout.write(json, (err) => (err ? reject(err) : resolve()));
       });
