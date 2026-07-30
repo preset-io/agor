@@ -1,4 +1,8 @@
-import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  agenticToolRequiresModelSelection,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -785,9 +789,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
 
   const modelLabel =
-    session?.model_config?.model &&
-    session.agentic_tool === 'opencode' &&
-    session.model_config.provider
+    session?.model_config?.model && session.model_config.provider
       ? `${session.model_config.provider}/${session.model_config.model}`
       : session?.model_config?.model;
   const modelConfig: ModelConfig | undefined = React.useMemo(
@@ -1287,11 +1289,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (session && onUpdateSession) {
       if (
         !newConfig ||
-        (session.agentic_tool === 'opencode' &&
-          (!newConfig.provider?.trim() || !newConfig.model?.trim()))
+        (agenticToolRequiresModelSelection(session.agentic_tool) &&
+          !isAgenticToolModelSelectionComplete(session.agentic_tool, newConfig))
       ) {
-        // OpenCode provider changes clear the staged model until a new exact
-        // pair is selected. Keep the last runnable persisted pair meanwhile.
+        // Integrations with atomic selections keep the last runnable persisted
+        // value while a replacement is being staged.
         return;
       }
       const nextConfig: NonNullable<Session['model_config']> = {

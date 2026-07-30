@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { admitAgenticToolExecutor } from '../../src/daemon';
+import { admitAgenticToolExecutor } from './daemon';
 
 describe('OpenCode executor admission', () => {
   it('rejects hosted native auth before token creation or executor spawn', async () => {

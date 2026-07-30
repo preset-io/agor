@@ -1,10 +1,10 @@
 import {
+  type AgenticToolModelConfigurationPolicy,
   InvalidModelConfigError,
   type ModelConfigInput,
   type ResolvedModelConfig,
   resolveModelConfig,
 } from '@agor/core/models';
-import type { AgenticToolModelConfiguration } from '../../src/types.js';
 
 export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =
   'Select an exact OpenCode provider and model in Agor before running this session';
@@ -37,4 +37,4 @@ export const OPENCODE_MODEL_CONFIGURATION = {
   resolveSources: resolveOpenCodeModelConfig,
   isResolved: (input) =>
     input?.mode === 'exact' && Boolean(input.updated_at) && hasCompleteOpenCodeModelConfig(input),
-} satisfies AgenticToolModelConfiguration;
+} satisfies AgenticToolModelConfigurationPolicy;

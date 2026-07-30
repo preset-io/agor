@@ -1,3 +1,4 @@
+import { OPENCODE_INTEGRATION } from '@agor/agentic-tool-opencode';
 import {
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CODEX_MODEL,
@@ -5,14 +6,13 @@ import {
   DEFAULT_GEMINI_MODEL,
 } from '@agor/core/models';
 import type { AgenticToolName, PersistedAgenticToolName } from '@agor/core/types';
-import { OPENCODE_INTEGRATION } from '../opencode/shared/index.js';
 import type {
   AgenticToolDisplayNames,
   AgenticToolIntegration,
   AgenticToolIntegrationRegistry,
 } from './types.js';
 
-export * from '../opencode/shared/index.js';
+export * from '@agor/agentic-tool-opencode';
 export type {
   AgenticToolDisplayNames,
   AgenticToolIntegration,

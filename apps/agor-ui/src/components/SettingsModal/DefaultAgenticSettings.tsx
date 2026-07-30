@@ -5,6 +5,7 @@
  * that will be used to prepopulate session creation forms.
  */
 
+import { agenticToolRequiresModelSelection } from '@agor/agentic-tools';
 import type { AgenticToolName, DefaultAgenticConfig } from '@agor-live/client';
 import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
@@ -74,7 +75,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       const newConfig: DefaultAgenticConfig = {
         ...defaultConfig,
       };
-      if (tool === 'opencode' && !values.modelConfig) {
+      if (agenticToolRequiresModelSelection(tool) && !values.modelConfig) {
         delete newConfig[tool];
       } else {
         newConfig[tool] = buildConfigFromFormValues(tool, values);

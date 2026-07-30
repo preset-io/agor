@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agor/agentic-tool-opencode": "workspace:*",
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",

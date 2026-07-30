@@ -1,4 +1,4 @@
-import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_DISPLAY_NAMES, agenticToolRequiresModelSelection } from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticAuthMethod,
@@ -445,9 +445,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const values: AgenticConfigFormValues =
         agenticConfigDraftByTool[tool] ??
         (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
-      if (tool === 'opencode' && !values.modelConfig) {
-        // Clearing removes the personal source entirely; never persist an
-        // incomplete OpenCode configuration blob.
+      if (agenticToolRequiresModelSelection(tool) && !values.modelConfig) {
+        // Clearing removes atomic personal selections entirely instead of
+        // persisting an incomplete configuration blob.
         delete nextConfig[tool];
       } else if (values.defaultSelectionSource === 'inline') {
         nextConfig[tool] = buildConfigFromFormValues(tool, values);
@@ -693,7 +693,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
     const clearedValues: AgenticConfigFormValues = {
       ...getClearedFormValues(tool),
-      ...(tool === 'opencode' && {
+      ...(agenticToolRequiresModelSelection(tool) && {
         defaultSelectionSource: 'workspace_default',
         defaultPresetId: undefined,
       }),

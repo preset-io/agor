@@ -4,16 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 const coreSrcDir = fileURLToPath(new URL('../core/src', import.meta.url));
-const openCodeSrcDir = fileURLToPath(new URL('../agentic-tool-opencode/src', import.meta.url));
 
 const coreSourceResolver = {
-  name: 'agentic-tools-core-source-resolver',
+  name: 'agentic-tool-opencode-core-source-resolver',
   resolveId(id: string) {
-    const openCodeMatch = id.match(/^@agor\/agentic-tool-opencode(?:\/(.+))?$/);
-    if (openCodeMatch) {
-      const subpath = openCodeMatch[1] ?? 'shared';
-      return path.join(openCodeSrcDir, subpath, 'index.ts');
-    }
     const match = id.match(/^@agor\/core(?:\/(.+))?$/);
     if (!match) return null;
     const subpath = match[1] ?? 'index';

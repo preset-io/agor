@@ -1,4 +1,3 @@
-import type { AgenticToolIntegration } from '../../src/types.js';
 import {
   hasCompleteOpenCodeModelConfig,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
@@ -23,4 +22,4 @@ export const OPENCODE_INTEGRATION = {
   },
   authentication: 'runtime-managed',
   configuration: OPENCODE_MODEL_CONFIGURATION,
-} satisfies AgenticToolIntegration;
+} as const;

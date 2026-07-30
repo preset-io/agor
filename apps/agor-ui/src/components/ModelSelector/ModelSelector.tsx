@@ -127,13 +127,12 @@ interface ModelOptionsByTool {
 }
 
 function modelOptionsForTool(tool: AgenticToolName, options: ModelOptionsByTool): RawModelOption[] {
+  if (getAgenticToolUIIntegration(tool)?.ModelSelector) return [];
   switch (tool) {
     case 'codex':
       return CODEX_MODEL_OPTIONS;
     case 'gemini':
       return GEMINI_MODEL_OPTIONS;
-    case 'opencode':
-      return [];
     case 'copilot':
       return options.copilot ?? COPILOT_STATIC_MODEL_OPTIONS;
     case 'cursor':

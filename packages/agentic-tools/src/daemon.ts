@@ -1,9 +1,6 @@
+import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { AgenticToolName, Session } from '@agor/core/types';
-import {
-  assertOpenCodeExecutionAllowed,
-  resolveOpenCodeTaskCredentialNamespace,
-} from '../opencode/daemon/index.js';
 
 type ExecutionAdmission = (input: {
   tenantId: string | undefined;
@@ -11,7 +8,7 @@ type ExecutionAdmission = (input: {
 }) => void;
 
 const EXECUTION_ADMISSION: Partial<Record<AgenticToolName, ExecutionAdmission>> = {
-  opencode: assertOpenCodeExecutionAllowed,
+  [OPENCODE_DAEMON_CONTRIBUTION.name]: OPENCODE_DAEMON_CONTRIBUTION.admitExecutor,
 };
 
 export async function admitAgenticToolExecutor<T>(
@@ -34,9 +31,7 @@ type ExecutorPayloadContribution = (input: {
 }) => Record<string, unknown>;
 
 const EXECUTOR_PAYLOAD: Partial<Record<AgenticToolName, ExecutorPayloadContribution>> = {
-  opencode: (input) => ({
-    dataHome: resolveOpenCodeTaskCredentialNamespace(input).dataHome,
-  }),
+  [OPENCODE_DAEMON_CONTRIBUTION.name]: OPENCODE_DAEMON_CONTRIBUTION.getExecutorPayload,
 };
 
 export function getAgenticToolExecutorPayload(
@@ -46,4 +41,4 @@ export function getAgenticToolExecutorPayload(
   return EXECUTOR_PAYLOAD[tool]?.(input) ?? {};
 }
 
-export * from '../opencode/daemon/index.js';
+export * from '@agor/agentic-tool-opencode/daemon';

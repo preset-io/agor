@@ -59,17 +59,17 @@ not switch on the tool name.
 
 ## Ownership
 
-| Host owns | Agentic-tool package owns |
-| --- | --- |
-| Durable `Task` lifecycle and terminal transitions | Tool metadata and capabilities |
-| Executor watchdog and finalizer | Tool-specific event interpretation |
-| Termination coordinator and forced containment | Cooperative runtime execution and abort |
-| Session projection and reconciliation | Configuration validation and normalization |
-| Queue, callbacks, and gateway consequences | Model catalog semantics |
-| Tenant, user, branch, and execution context | Permission descriptors and translation |
-| Authentication authorization and credential storage boundary | Tool-specific authentication protocol |
-| Unix/process containment and remote quiescence policy | Managed tool process protocol |
-| Shared persistence and transport | Tool-specific UI contributions |
+| Host owns                                                    | Agentic-tool package owns                  |
+| ------------------------------------------------------------ | ------------------------------------------ |
+| Durable `Task` lifecycle and terminal transitions            | Tool metadata and capabilities             |
+| Executor watchdog and finalizer                              | Tool-specific event interpretation         |
+| Termination coordinator and forced containment               | Cooperative runtime execution and abort    |
+| Session projection and reconciliation                        | Configuration validation and normalization |
+| Queue, callbacks, and gateway consequences                   | Model catalog semantics                    |
+| Tenant, user, branch, and execution context                  | Permission descriptors and translation     |
+| Authentication authorization and credential storage boundary | Tool-specific authentication protocol      |
+| Unix/process containment and remote quiescence policy        | Managed tool process protocol              |
+| Shared persistence and transport                             | Tool-specific UI contributions             |
 
 An integration may return facts and evidence to these owners. It does not
 replace them.
@@ -165,13 +165,12 @@ retains layout, accessibility, loading/error boundaries, and authorization.
 OpenCode should converge on:
 
 ```text
-packages/agentic-tools/opencode/
+packages/agentic-tool-opencode/
   package.json
   src/
-    index.ts               public descriptor
-    shared/                metadata, types, config, permissions
-    runtime/               SDK/server lifecycle and event translation
-    daemon/                auth and model-catalog adapters
+    shared/                public descriptor, metadata, config, permissions
+    runtime/               SDK/server lifecycle, auth, and event translation
+    daemon/                host-facing admission and credential contributions
     ui/                    OpenCode UI contributions
 ```
 
@@ -223,7 +222,7 @@ the host contract is general without expanding the refactor.
 ## Review test
 
 For every file changed outside
-`packages/agentic-tools/opencode/`, reviewers should be able to answer one of:
+`packages/agentic-tool-opencode/`, reviewers should be able to answer one of:
 
 1. it defines or composes a shared host contract;
 2. it removes a replaced tool-name branch;

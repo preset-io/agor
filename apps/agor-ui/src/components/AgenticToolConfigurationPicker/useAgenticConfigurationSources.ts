@@ -51,7 +51,7 @@ export function summarizeAgenticConfiguration(
   const parts: string[] = [];
   if (config.modelConfig?.model) {
     parts.push(
-      tool === 'opencode' && config.modelConfig.provider
+      config.modelConfig.provider
         ? `${config.modelConfig.provider}/${config.modelConfig.model}`
         : getModelDisplayName(tool, config.modelConfig.model)
     );

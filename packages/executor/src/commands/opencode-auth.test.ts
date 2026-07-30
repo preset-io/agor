@@ -20,9 +20,9 @@ vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencodeClient: vi.fn(() => runtime.clients.shift()),
 }));
 
-vi.mock('@agor/agentic-tools/opencode/runtime', async () => {
-  const actual = await vi.importActual<typeof import('@agor/agentic-tools/opencode/runtime')>(
-    '@agor/agentic-tools/opencode/runtime'
+vi.mock('@agor/agentic-tool-opencode/runtime', async () => {
+  const actual = await vi.importActual<typeof import('@agor/agentic-tool-opencode/runtime')>(
+    '@agor/agentic-tool-opencode/runtime'
   );
   return {
     ...actual,

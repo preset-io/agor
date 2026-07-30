@@ -316,6 +316,12 @@ describe('OpenCodeTool managed turn', () => {
     const executorPackage = JSON.parse(
       await readFile(new URL('../../../package.json', import.meta.url), 'utf8')
     );
+    const openCodePackage = JSON.parse(
+      await readFile(
+        new URL('../../../../agentic-tool-opencode/package.json', import.meta.url),
+        'utf8'
+      )
+    );
     const corePackage = JSON.parse(
       await readFile(new URL('../../../../core/package.json', import.meta.url), 'utf8')
     );
@@ -326,7 +332,8 @@ describe('OpenCodeTool managed turn', () => {
       await readFile(new URL('../../../../agor-live/package-lock.json', import.meta.url), 'utf8')
     );
 
-    expect(executorPackage.dependencies).toMatchObject({
+    expect(executorPackage.dependencies['@agor/agentic-tool-opencode']).toBe('workspace:*');
+    expect(openCodePackage.dependencies).toMatchObject({
       '@opencode-ai/sdk': '1.14.33',
       'opencode-ai': '1.14.33',
     });
