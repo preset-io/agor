@@ -45,9 +45,15 @@ export async function countTenantTableRows(
   tenantColumn: string = TENANT_SCOPE_COLUMN
 ): Promise<number> {
   const column = sql.identifier(tenantColumn);
+  // Exclude the reserved write-gate record so inspect's inventory matches what
+  // export/verify account for (both drop this row); see exportTenantTableRows.
+  const excludeGateRow =
+    tableName === 'app_variables'
+      ? sql` AND NOT (namespace = ${TENANT_WRITE_GATE_NAMESPACE} AND key = ${TENANT_WRITE_GATE_KEY})`
+      : sql``;
   const result = await executeRaw(
     db,
-    sql`SELECT pg_catalog.count(*) AS n FROM ${qualifiedTable(tableName)} WHERE ${column} = ${tenantId}`
+    sql`SELECT pg_catalog.count(*) AS n FROM ${qualifiedTable(tableName)} WHERE ${column} = ${tenantId}${excludeGateRow}`
   );
   return Number(rowsOf(result)[0]?.n ?? 0);
 }

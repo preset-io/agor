@@ -130,6 +130,31 @@ function appVariablesTable() {
   return sql`${sql.identifier(TENANT_SCHEMA)}.${sql.identifier(APP_VARIABLES_TABLE)}`;
 }
 
+/**
+ * Take a per-tenant, transaction-scoped PostgreSQL advisory lock so that gate
+ * mutations for one tenant serialize even when NO gate row exists yet.
+ *
+ * `SELECT ... FOR UPDATE` locks an existing row, but at READ COMMITTED there is
+ * no gap/predicate lock: when the gate row is absent, two concurrent initial
+ * acquires can both observe null and both "succeed" (the second's
+ * `INSERT ... ON CONFLICT DO UPDATE` silently overwrites the first). The
+ * advisory lock closes that empty-state race by serializing on a stable key
+ * derived from the gate namespace and the tenant id, so the check-then-act is
+ * atomic against a concurrent acquire/release on the same tenant. It is held
+ * until the surrounding transaction commits (`_xact_` variant).
+ *
+ * Only the mutation paths ({@link acquireTenantWriteGate} /
+ * {@link releaseTenantWriteGate}) take it; the read-only enforcement paths stay
+ * lock-free so reads never block.
+ */
+async function lockTenantGateMutation(scopedDb: Database, tenantId: string): Promise<void> {
+  const lockKey = `${TENANT_WRITE_GATE_NAMESPACE}:${tenantId}`;
+  await executeRaw(
+    scopedDb,
+    sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${lockKey}, 0))`
+  );
+}
+
 interface GatePayload {
   generation: string;
   acquiredAt: string;
@@ -176,11 +201,16 @@ async function readGateRowScoped(
 }
 
 /**
- * Read the gate record for update, taking a row lock (`FOR UPDATE`) so a
- * check-then-act (read the current gate, then acquire or release) is serialized
- * against a concurrent acquire/release on the same tenant. Used ONLY by
- * {@link acquireTenantWriteGate} and {@link releaseTenantWriteGate}; the
- * read-only paths ({@link readTenantWriteGate}/{@link assertTenantWritable} and
+ * Read the gate record for update, taking a row lock (`FOR UPDATE`) on the gate
+ * row WHEN IT EXISTS. This serializes a check-then-act against a concurrent
+ * acquire/release only for the row-exists case: `FOR UPDATE` locks a matched
+ * row, but at READ COMMITTED it takes NO lock when the row is absent (there is
+ * no gap/predicate lock), so it does not by itself serialize two initial
+ * acquires racing from an empty gate. The empty-state race is closed separately
+ * by {@link lockTenantGateMutation} (a per-tenant advisory lock the mutation
+ * paths take first). Used ONLY by {@link acquireTenantWriteGate} and
+ * {@link releaseTenantWriteGate}; the read-only paths
+ * ({@link readTenantWriteGate}/{@link assertTenantWritable} and
  * {@link assertTenantWriteGateGeneration}) stay unlocked so enforcement reads
  * never block. The caller owns the transaction (the surrounding tenant scope),
  * so the lock is held until that transaction commits.
@@ -277,8 +307,14 @@ export async function acquireTenantWriteGate(
 ): Promise<AcquireTenantWriteGateResult> {
   assertPostgres(db, 'acquire');
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    // Locking read: serialize this acquire against a concurrent acquire/release
-    // so two non-force acquires cannot both observe "no gate" and both succeed.
+    // Serialize this acquire against a concurrent acquire/release on the same
+    // tenant BEFORE reading. The per-tenant advisory lock is what makes the
+    // empty-gate case safe: two non-force acquires racing from "no gate" would
+    // both observe null under `FOR UPDATE` alone (which cannot lock an absent
+    // row at READ COMMITTED) and both succeed; with the advisory lock the loser
+    // blocks, then sees the winner's row and rejects.
+    await lockTenantGateMutation(scoped, tenantId);
+    // Locking read: also lock the gate row for the row-exists case.
     const existing = await readGateRowScopedForUpdate(scoped, tenantId);
     if (existing && !options.force) {
       throw new TenantWriteGateHeldError(tenantId, existing.generation);
@@ -368,6 +404,11 @@ export async function releaseTenantWriteGate(
 ): Promise<ReleaseTenantWriteGateResult> {
   assertPostgres(db, 'release');
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    // Serialize against a concurrent acquire/release on the same tenant before
+    // deciding. Same rationale as acquire: the advisory lock covers the case
+    // where the row does not exist (`FOR UPDATE` cannot lock an absent row), so
+    // a release cannot interleave with a concurrent first acquire.
+    await lockTenantGateMutation(scoped, tenantId);
     // Locking read: take the row lock before deciding, so no concurrent
     // acquire/release can change the generation between this read and the delete.
     const existing = await readGateRowScopedForUpdate(scoped, tenantId);

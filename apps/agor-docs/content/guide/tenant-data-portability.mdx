@@ -166,6 +166,14 @@ live tenant data against the archive and detects any straggler write — treat
 (rejecting writes while the gate row exists) is a possible future hardening, not
 current behavior.
 
+Likewise, the filesystem export is **not** hardened against an adversary who
+restructures the tenant tree's directories mid-export — swapping an intermediate
+directory to a symlink between the walk and the copy can still route a read
+outside the tenant root (the `O_NOFOLLOW` protection covers only the terminal
+path component). The quiescence precondition (the write gate) plus the mandatory
+`verify` step are the mitigations: verify re-hashes live data against the archive
+and surfaces any diverted read as a content-hash mismatch.
+
 `agor tenant delete --assert-gate-generation <gen>` binds the **database
 deletion phase only**: it re-checks the gate **inside the deletion transaction**,
 so a gate that was lost or replaced (writes may have resumed) aborts the database

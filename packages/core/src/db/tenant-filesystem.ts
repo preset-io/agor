@@ -139,6 +139,18 @@ export function resolveWithinRoot(root: string, relativePath: string): string {
  * regular file) and the later hash/copy: if the path was swapped to a symlink in
  * between, `open` fails with `ELOOP` and we refuse it instead of reading whatever
  * the link points at. The returned handle must be closed by the caller.
+ *
+ * LIMITATION: `O_NOFOLLOW` guards only the TERMINAL path component. An adversary
+ * who swaps an intermediate DIRECTORY of the tenant tree to a symlink between
+ * the walk and the copy can still route a read outside the tenant root, because
+ * the leading components are resolved normally. Preventing that requires
+ * openat-style, descriptor-relative descent (open each component with
+ * `O_NOFOLLOW` relative to its parent fd), which Node does not portably expose,
+ * so it is left as future hardening. Today this residual window is a
+ * detection-via-verify concern, not prevention: the mandatory verify step
+ * re-hashes live tenant data against the archive and surfaces a content-hash
+ * mismatch if such a swap diverted a read. Callers must run export under
+ * tenant quiescence and always verify.
  */
 async function openRegularFileNoFollow(absolutePath: string): Promise<FileHandle> {
   let handle: FileHandle;

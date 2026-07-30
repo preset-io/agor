@@ -133,6 +133,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
     await deleteTenantData(db, tenant);
   });
 
+  it('serializes two concurrent initial acquires from no gate (advisory lock)', async () => {
+    const tenant = `wg-${generateId()}`;
+    await seedTenant(db, tenant);
+
+    // Two non-force acquires race from an EMPTY gate. `SELECT ... FOR UPDATE`
+    // alone cannot lock an absent row at READ COMMITTED, so without the
+    // per-tenant advisory lock both could observe "no gate" and both succeed.
+    // Exactly one must win; the other must reject with TenantWriteGateHeldError.
+    const [a, b] = await Promise.allSettled([
+      acquireTenantWriteGate(db, tenant),
+      acquireTenantWriteGate(db, tenant),
+    ]);
+
+    const fulfilled = [a, b].filter((r) => r.status === 'fulfilled');
+    const rejected = [a, b].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(TenantWriteGateHeldError);
+
+    // The winning generation is the one actually held.
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ generation: string }>).value;
+    const held = await inspectTenantWriteGate(db, tenant, { expectGeneration: winner.generation });
+    expect(held.active).toBe(true);
+    expect(held.heldContinuously).toBe(true);
+
+    await releaseTenantWriteGate(db, tenant, { generation: winner.generation });
+    await deleteTenantData(db, tenant);
+  });
+
   it('detects replacement and refuses double-acquire without force', async () => {
     const tenant = `wg-${generateId()}`;
     await seedTenant(db, tenant);
