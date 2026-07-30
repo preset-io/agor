@@ -22,6 +22,11 @@ describe('session task state reconciliation', () => {
     expect(sessionCanStartTask(SessionStatus.FAILED, false)).toBe(false);
   });
 
+  it('allows timed-out sessions to retry after the executor marks them ready', () => {
+    expect(sessionCanStartTask(SessionStatus.TIMED_OUT, true)).toBe(true);
+    expect(sessionCanStartTask(SessionStatus.TIMED_OUT, false)).toBe(false);
+  });
+
   it('repairs failed/not-ready sessions when all non-queued tasks are terminal', () => {
     expect(
       shouldReconcileSessionPromptState(baseSession, [

@@ -8,6 +8,8 @@
  */
 
 import { execSync } from 'node:child_process';
+import { Forbidden } from '@feathersjs/errors';
+import { unixUserModeRequiresUsername } from '../config/config-manager.js';
 import type { UnixUserMode } from '../config/types.js';
 import { toShortId } from '../lib/ids.js';
 import type { UserID, UUID } from '../types/index.js';
@@ -360,11 +362,41 @@ export function unixUserExists(username: string): boolean {
 export type { UnixUserMode };
 
 /**
+ * Fail loudly when the configured Unix user mode requires a per-user
+ * `unix_username` (`strict`, `delegated`) and the resolved value is missing.
+ * Creating a session without one would only defer the failure to prompt time —
+ * or, in hosted deployments, silently share an identity. Requiredness is
+ * derived from the mode here so callers cannot fabricate inconsistent
+ * combinations. Lives beside {@link resolveUnixUserForImpersonation} because
+ * both express the same identity policy; throws `Forbidden` so Feathers
+ * create/fork/spawn paths surface it as a 403 without per-caller translation.
+ */
+export function assertUnixUsernameSatisfiesMode(
+  unixUsername: string | null | undefined,
+  mode: UnixUserMode,
+  subject = 'your account'
+): void {
+  if (!unixUserModeRequiresUsername(mode) || unixUsername) return;
+  throw new Forbidden(
+    `unix_user_mode '${mode}' requires a unix_username, but ${subject} has none. ` +
+      'Ask an admin to set one before creating sessions.'
+  );
+}
+
+/**
  * Result of resolving which Unix user to impersonate
  */
 export interface ImpersonationResult {
-  /** Unix username to impersonate, or null for no impersonation */
+  /** Unix username to impersonate (via sudo), or null for no impersonation */
   unixUser: string | null;
+  /**
+   * Unix identity to report to the execution substrate (e.g. the `{unix_user}`
+   * executor-command-template variable), independent of whether the daemon
+   * itself impersonates. Equals `unixUser` in every mode except `delegated`,
+   * where the daemon does not sudo but the identity is still load-bearing —
+   * hosted deployments use it to select per-user home mounts.
+   */
+  reportedUnixUser: string | null;
   /** Human-readable reason for the decision */
   reason: string;
 }
@@ -411,13 +443,32 @@ export function resolveUnixUserForImpersonation(
       // No impersonation - run as current user
       return {
         unixUser: null,
+        reportedUnixUser: null,
         reason: 'simple mode - no impersonation',
+      };
+
+    case 'delegated':
+      // No impersonation, but the identity is load-bearing: the execution
+      // substrate (command template / orchestration) selects the user's home
+      // from it. A missing unix_username must fail loudly here — falling
+      // through would silently collapse the session into a shared/wrong home.
+      if (!userUnixUsername) {
+        throw new Error(
+          'Delegated Unix user mode requires unix_username to be set. ' +
+            'Ensure the user has a unix_username configured.'
+        );
+      }
+      return {
+        unixUser: null,
+        reportedUnixUser: userUnixUsername,
+        reason: `delegated mode - identity delegated to execution substrate: ${userUnixUsername}`,
       };
 
     case 'insulated':
       // Always use executor user from config
       return {
         unixUser: executorUnixUser ?? null,
+        reportedUnixUser: executorUnixUser ?? null,
         reason: executorUnixUser
           ? `insulated mode - using executor: ${executorUnixUser}`
           : 'insulated mode - no executor configured',
@@ -433,6 +484,7 @@ export function resolveUnixUserForImpersonation(
       }
       return {
         unixUser: userUnixUsername,
+        reportedUnixUser: userUnixUsername,
         reason: `strict mode - using unix_username: ${userUnixUsername}`,
       };
 
@@ -440,6 +492,7 @@ export function resolveUnixUserForImpersonation(
       console.warn(`⚠️ Unknown unix_user_mode: ${mode}, falling back to simple mode`);
       return {
         unixUser: null,
+        reportedUnixUser: null,
         reason: 'unknown mode - defaulting to no impersonation',
       };
   }

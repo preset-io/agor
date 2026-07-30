@@ -6,7 +6,7 @@
  */
 
 import { type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AgenticToolName,
@@ -176,12 +176,16 @@ export class ConfigService {
 
     // Fetch task to get creator user ID and session. This is required for
     // executor-token calls and best-effort for internal/service-account calls.
+    const internalParams: AuthenticatedParams = {
+      provider: undefined,
+      tenant: (params as AuthenticatedParams | undefined)?.tenant,
+    };
     let userId: UserID | undefined;
     let sessionId: string | undefined;
     try {
       const tasksService = this.app?.service('tasks');
       if (tasksService) {
-        const task = await tasksService.get(taskId, { provider: undefined });
+        const task = await tasksService.get(taskId, internalParams);
         userId = task?.created_by;
         sessionId = task?.session_id;
       }
@@ -215,18 +219,17 @@ export class ConfigService {
       if (!sessionsService) {
         throw new Forbidden('Executor token tool scope could not be verified');
       }
-      const session = await sessionsService.get(verifiedSessionId, { provider: undefined });
+      const session = await sessionsService.get(verifiedSessionId, internalParams);
       if (session?.agentic_tool !== tool) {
         throw new Forbidden('Executor token tool scope does not match this session');
       }
     }
 
-    // Use core resolveApiKey with database access
-    const result = await resolveApiKey(keyName, {
-      userId,
-      db: this.db,
-      tool,
-    });
+    const result = await runWithTenantDatabaseScope(
+      this.db,
+      internalParams.tenant?.tenant_id,
+      (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
+    );
     if (result.useNativeAuth) {
       const config = await loadConfig();
       if (config.multi_tenancy?.mode === 'required_from_auth') {

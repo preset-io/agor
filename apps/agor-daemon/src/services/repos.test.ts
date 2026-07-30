@@ -1,4 +1,3 @@
-import { assertRemoteRefVisibleForClone } from '@agor/core/git/exec';
 import type { Application } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -28,62 +27,66 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   };
 });
 
-vi.mock('@agor/core/git/exec', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/git/exec')>();
-
+const executorMocks = vi.hoisted(() => ({ runExecutorCommand: vi.fn() }));
+vi.mock('../utils/spawn-executor.js', () => {
   return {
-    ...actual,
-    assertRemoteRefVisibleForClone: vi.fn(),
+    runExecutorCommand: executorMocks.runExecutorCommand,
+    generateScopedServiceToken: vi.fn(() => 'scoped-token'),
+    getDaemonUrl: vi.fn(() => 'http://daemon'),
+    spawnExecutorFireAndForget: vi.fn(),
   };
 });
 
-describe('ReposService.createBranch clone preflight', () => {
-  it('rejects clone-mode local-only source refs before persisting branch state', async () => {
-    const branchesCreate = vi.fn();
-    const getGitEnvironment = vi.fn(async () => ({ GITHUB_TOKEN: 'gh_test_token_for_preflight' }));
-    vi.mocked(assertRemoteRefVisibleForClone).mockRejectedValueOnce(
-      new Error("Clone mode cannot clone local-only or missing branch 'local-only'")
-    );
-
-    const app = {
-      service(path: string) {
-        if (path === 'branches') return { create: branchesCreate };
-        if (path === 'users') return { getGitEnvironment };
-        throw new Error(`Unexpected service: ${path}`);
+describe('ReposService.addLocalRepository executor boundary', () => {
+  it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
+    executorMocks.runExecutorCommand.mockResolvedValueOnce({
+      success: true,
+      data: {
+        path: '/trusted/repo',
+        defaultBranch: 'main',
+        credentialFindingCount: 0,
       },
-    } as unknown as Application;
-
+    });
+    const app = { service: vi.fn() } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'get').mockResolvedValue({
-      repo_id: 'repo-1',
-      slug: 'org/repo',
-      remote_url: 'https://github.com/org/repo.git',
-      local_path: undefined,
-      default_branch: 'main',
+    const create = vi.spyOn(service, 'create').mockResolvedValue({
+      repo_id: 'repo-id',
+      slug: 'local/repo',
     } as never);
 
-    await expect(
-      service.createBranch(
-        'repo-1',
-        {
-          name: 'new-branch',
-          ref: 'new-branch',
-          createBranch: true,
-          sourceBranch: 'local-only',
-          boardId: 'board-1',
-          storage_mode: 'clone',
-        },
-        { user: { user_id: 'user-1' } } as never
-      )
-    ).rejects.toThrow(/Clone mode cannot clone local-only/);
+    await service.addLocalRepository({ path: '/submitted/repo', slug: 'local/repo' }, {
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+    } as never);
 
-    expect(getGitEnvironment).toHaveBeenCalledWith({ userId: 'user-1' }, expect.any(Object));
-    expect(assertRemoteRefVisibleForClone).toHaveBeenCalledWith({
-      remoteUrl: 'https://github.com/org/repo.git',
-      ref: 'local-only',
-      refType: 'branch',
-      env: { GITHUB_TOKEN: 'gh_test_token_for_preflight' },
+    expect(executorMocks.runExecutorCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.repo.inspect',
+        params: { path: '/submitted/repo' },
+      }),
+      expect.any(Object)
+    );
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        local_path: '/trusted/repo',
+        remote_url: undefined,
+        slug: 'local/repo',
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('does not persist when executor inspection fails', async () => {
+    executorMocks.runExecutorCommand.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'GIT_REPO_INSPECT_FAILED', message: 'Not a valid git repository' },
     });
-    expect(branchesCreate).not.toHaveBeenCalled();
+    const service = new ReposService({} as never, { service: vi.fn() } as unknown as Application);
+    const create = vi.spyOn(service, 'create');
+    await expect(
+      service.addLocalRepository({ path: '/bad', slug: 'local/bad' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
+      } as never)
+    ).rejects.toThrow(/Not a valid git repository/);
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -82,16 +82,16 @@ cannot be satisfied by the existing owners.
 
 ## Ownership model
 
-| Owner                         | Owns                                                                                            | Does not own                                                           |
-| ----------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `Task.status`                 | Durable lifecycle and prompt admission                                                          | Wrapper or SDK health                                                  |
-| Agentic-tool runtime adapter  | Tool/SDK event interpretation, normalized turn outcome, and cooperative cleanup evidence         | Durable Task transitions, forced containment, or Session reconciliation |
-| SDK watchdog                  | Executor-local deadlines, meaningful progress, and active operation identities                  | Session state or terminal settlement                                   |
-| Executor finalizer            | Cooperative runtime shutdown, operation settlement, bounded transcript flush, and report        | Forced containment                                                     |
-| Termination coordinator       | Stop, startup timeout, lost heartbeat, enforced stall, and failed cooperative cleanup           | Normal agentic-tool event interpretation                               |
-| Session reconciler            | Session projection, queue/callback continuation, and terminal gateway notification              | SDK observation or containment                                         |
-| Executor heartbeat supervisor | Dispatch and wrapper-liveness suspicion                                                         | Proof of SDK progress or, when stronger evidence exists, process death |
-| Runtime progress projection   | UI/gateway `working`, `waiting`, `stalled`, and terminal presentation derived from shared facts | Durable lifecycle or supervision decisions                             |
+| Owner                         | Owns                                                                                            | Does not own                                                            |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `Task.status`                 | Durable lifecycle and prompt admission                                                          | Wrapper or SDK health                                                   |
+| Agentic-tool runtime adapter  | Tool/SDK event interpretation, normalized turn outcome, and cooperative cleanup evidence        | Durable Task transitions, forced containment, or Session reconciliation |
+| SDK watchdog                  | Executor-local deadlines, meaningful progress, and active operation identities                  | Session state or terminal settlement                                    |
+| Executor finalizer            | Cooperative runtime shutdown, operation settlement, bounded transcript flush, and report        | Forced containment                                                      |
+| Termination coordinator       | Stop, startup timeout, lost heartbeat, enforced stall, and failed cooperative cleanup           | Normal agentic-tool event interpretation                                |
+| Session reconciler            | Session projection, queue/callback continuation, and terminal gateway notification              | SDK observation or containment                                          |
+| Executor heartbeat supervisor | Dispatch and wrapper-liveness suspicion                                                         | Proof of SDK progress or, when stronger evidence exists, process death  |
+| Runtime progress projection   | UI/gateway `working`, `waiting`, `stalled`, and terminal presentation derived from shared facts | Durable lifecycle or supervision decisions                              |
 
 ## Runtime contracts
 

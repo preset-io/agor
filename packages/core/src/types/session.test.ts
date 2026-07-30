@@ -36,10 +36,16 @@ describe('session promptability helpers', () => {
     expect(isSessionPromptable({ status: 'failed', ready_for_prompt: false })).toBe(false);
   });
 
+  it('allows a new prompt after a permission timeout once the executor has exited', () => {
+    expect(sessionCanStartTask('timed_out', true)).toBe(true);
+    expect(sessionCanStartTask('timed_out', false)).toBe(false);
+    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: true })).toBe(true);
+    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: false })).toBe(false);
+  });
+
   it('does not confuse ready_for_prompt attention state with promptability', () => {
-    expect(sessionCanStartTask('timed_out', true)).toBe(false);
     expect(sessionCanStartTask('running', true)).toBe(false);
-    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: true })).toBe(false);
+    expect(isSessionPromptable({ status: 'running', ready_for_prompt: true })).toBe(false);
   });
 
   it('identifies execution states separately from promptability', () => {

@@ -11,10 +11,14 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  ensureBranchStorageModeAllowed,
   getBranchesDir,
   loadConfig,
+  loadConfigSync,
   PAGINATION,
+  resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   BoardRepository,
@@ -37,7 +41,6 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Board,
@@ -354,7 +357,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.withTenantDatabase(params, async () => {
       let asUser: string | undefined;
 
-      if (unixUserMode !== 'simple') {
+      // Only insulated/strict impersonate; simple and delegated both run
+      // environment commands as the daemon user.
+      if (unixUserMode === 'insulated' || unixUserMode === 'strict') {
         const usersRepo = new UsersRepository(this.db);
         const user = await usersRepo.findById(branch.created_by);
         const impersonationResult = resolveUnixUserForImpersonation({
@@ -660,6 +665,29 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
+    const { defaultMode } = resolveBranchStorageConfig();
+    const storageMode = withDefaults.storage_mode ?? defaultMode;
+    ensureBranchStorageModeAllowed(storageMode);
+    if (
+      storageMode === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
+      );
+    }
+    if (withDefaults.clone_depth !== undefined) {
+      if (storageMode !== 'clone') {
+        throw new BadRequest("clone_depth is only meaningful when storage_mode='clone'.");
+      }
+      if (!Number.isInteger(withDefaults.clone_depth) || withDefaults.clone_depth <= 0) {
+        throw new BadRequest('clone_depth must be a positive integer when set.');
+      }
+    }
+    // Persist the effective mode so the executor never reconstructs a
+    // configuration default at the filesystem boundary.
+    withDefaults.storage_mode = storageMode;
+
     // New branches always start aligned with their board. Branch-specific
     // overrides are an explicit post-create action in the Branch modal.
     withDefaults.permission_source = 'board';
@@ -1286,7 +1314,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
@@ -1556,6 +1583,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (
+      (branch.storage_mode ?? 'worktree') === 'worktree' &&
+      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+    ) {
+      throw new BadRequest(
+        'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
+      );
+    }
 
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
@@ -1634,18 +1669,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
       // without creating OS groups.
-      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
-      const { getDaemonUser } = await import('@agor/core/config');
-      const daemonUser = getDaemonUser();
+      const executionMode = resolveExecutionSecurityMode();
+      const initUnixGroup = executionMode.shouldInitUnixGroups;
 
-      // No user impersonation for infrastructure operations — the daemon user
-      // owns all branches and impersonation would resolve getBranchesDir()
-      // to the wrong home directory, causing safety check failures.
-
-      // Mirror the create path's storage-mode forwarding. Without this, a
-      // clone-mode branch that was archived with filesystemAction='deleted'
-      // would silently rebuild as native worktree mode, leaving the DB row
-      // (storage_mode='clone') and disk (.git pointer file) inconsistent.
+      // The executor derives the materialization mode from this persisted row.
       const storageMode = branch.storage_mode ?? 'worktree';
       if (storageMode === 'clone' && !repo.remote_url) {
         const errMsg =
@@ -1661,7 +1688,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         return unarchivedBranch;
       }
-      const safeRemoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
 
       try {
         // Use a service JWT so the executor can patch rendered env command
@@ -1678,34 +1704,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
-              repoPath: repo.local_path,
-              branchName: branch.name,
-              branchPath: branch.path,
-              branch: branch.ref,
-              refType: branch.ref_type || 'branch',
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
               // This is safe because it only creates a new branch when ls-remote confirms
               // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
-              createBranch: false,
               restoreMode: true,
-              sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
               initUnixGroup,
-              othersAccess: branch.others_fs_access || 'read',
-              daemonUser,
-              repoUnixGroup: repo.unix_group,
-              // Branch storage mode — preserves the branch's original
-              // storage_mode across archive → delete → unarchive.
-              storageMode,
-              ...(branch.clone_depth !== undefined ? { cloneDepth: branch.clone_depth } : {}),
-              ...(storageMode === 'clone' && safeRemoteUrl ? { remoteUrl: safeRemoteUrl } : {}),
-              // `--reference` hint: see the create-path call site in
-              // ReposService.createBranch for the rationale and strict-mode
-              // exception.
-              ...(storageMode === 'clone' && repo.local_path && shouldUseCloneReferencePath()
-                ? { referencePath: repo.local_path }
-                : {}),
+              fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
+              useReference:
+                storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
             },
           },
           {

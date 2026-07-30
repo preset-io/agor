@@ -145,10 +145,13 @@ export async function spawnEnvironmentCommand(
   const config = await loadConfig();
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
 
-  // Resolve impersonation user first to determine if we need impersonation-safe env
+  // Resolve impersonation user first to determine if we need impersonation-safe env.
+  // Only insulated/strict impersonate; simple and delegated both run env
+  // commands as the daemon user (delegated's identity requirement applies to
+  // executor/terminal launches, not local env spawns).
   let asUser: string | undefined;
 
-  if (unixUserMode !== 'simple') {
+  if (unixUserMode === 'insulated' || unixUserMode === 'strict') {
     // Look up user's unix_username
     const usersRepo = new UsersRepository(db);
     const user = await usersRepo.findById(branch.created_by);

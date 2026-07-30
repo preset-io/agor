@@ -255,6 +255,11 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                             (no OS isolation)
                           </Typography.Text>
                         )}
+                        {healthInfo.execution.unixUserMode === 'delegated' && (
+                          <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                            (per-user identity, enforced by substrate)
+                          </Typography.Text>
+                        )}
                         {healthInfo.execution.unixUserMode === 'insulated' && (
                           <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
                             (branch groups)

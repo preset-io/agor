@@ -181,7 +181,7 @@ describe('executeCommand - git.clone', () => {
     });
   });
 
-  it('should include optional fields in dry-run response', async () => {
+  it('should include restore intent in dry-run response', async () => {
     const payloadWithOptions: GitClonePayload = {
       ...gitClonePayload,
       params: {
@@ -230,9 +230,8 @@ describe('executeCommand - git.branch.add', () => {
     command: 'git.branch.add',
     sessionToken: 'jwt-token',
     params: {
-      repoPath: '/data/agor/repos/repo.git',
-      branchName: 'feature-x',
-      branchPath: '/data/agor/worktrees/repo/feature-x',
+      branchId: '550e8400-e29b-41d4-a716-446655440002',
+      repoId: '550e8400-e29b-41d4-a716-446655440003',
     },
   };
 
@@ -243,9 +242,6 @@ describe('executeCommand - git.branch.add', () => {
     expect(result.data).toMatchObject({
       dryRun: true,
       command: 'git.branch.add',
-      repoPath: branchAddPayload.params.repoPath,
-      branchName: branchAddPayload.params.branchName,
-      branchPath: branchAddPayload.params.branchPath,
     });
   });
 
@@ -254,9 +250,7 @@ describe('executeCommand - git.branch.add', () => {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        sourceBranch: 'main',
-        createBranch: true,
+        restoreMode: true,
       },
     };
 
@@ -264,25 +258,16 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      branch: 'feature-x',
-      sourceBranch: 'main',
-      createBranch: true,
+      restoreMode: true,
     });
   });
 
-  it('should round-trip storageMode / cloneDepth / remoteUrl in dry-run response', async () => {
-    // PR 1 of the branch→clone storage migration. The daemon forwards
-    // these three knobs; the executor branches on storageMode at run time.
-    // Pin them through the dry-run echo so the daemon-side test fixture
-    // can assert payload-shape correctness without spinning up a real git.
+  it('should round-trip the clone reference policy in dry-run response', async () => {
     const clonePayload: GitBranchAddPayload = {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        storageMode: 'clone',
-        cloneDepth: 100,
-        remoteUrl: 'https://github.com/org/repo.git',
+        useReference: true,
       },
     };
 
@@ -290,9 +275,7 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      storageMode: 'clone',
-      cloneDepth: 100,
-      remoteUrl: 'https://github.com/org/repo.git',
+      useReference: true,
     });
   });
 });

@@ -228,6 +228,10 @@ execution:
   # Unix user mode (default: simple)
   # Options:
   #   - simple: No isolation, all runs as daemon user
+  #   - delegated: Like simple (no sudo, no groups), but every user must have
+  #     a unix_username; it is passed to the executor command template as
+  #     {unix_user} and its absence fails loudly. For hosted/containerized
+  #     deployments where the orchestration layer enforces identity.
   #   - insulated: Branch groups + single executor user
   #   - strict: Full per-user isolation, enforced impersonation
   unix_user_mode: insulated # or strict
@@ -238,21 +242,28 @@ execution:
 
 **Mode Comparison:**
 
-| Mode        | Unix Groups | FS Permissions | Process Impersonation | Use Case                 |
-| ----------- | ----------- | -------------- | --------------------- | ------------------------ |
-| `simple`    | ❌          | ❌             | ❌                    | Single user, dev/testing |
-| `insulated` | ✅          | ✅             | Optional              | Shared dev, FS isolation |
-| `strict`    | ✅          | ✅             | ✅ Required           | Production, compliance   |
+| Mode        | Unix Groups | FS Permissions | Process Impersonation | `unix_username` Required | Use Case                    |
+| ----------- | ----------- | -------------- | --------------------- | ------------------------ | --------------------------- |
+| `simple`    | ❌          | ❌             | ❌                    | ❌                       | Single user, dev/testing    |
+| `delegated` | ❌          | ❌             | ❌                    | ✅                       | Hosted/containerized, identity enforced by orchestration |
+| `insulated` | ✅          | ✅             | Optional              | ❌                       | Shared dev, FS isolation    |
+| `strict`    | ✅          | ✅             | ✅ Required           | ✅                       | Production, compliance      |
 
 **When to use each mode:**
 
 - **`simple`** - Default, single user or fully trusted team, no setup required
+- **`delegated`** - Hosted/containerized deployments where the execution
+  substrate (e.g. per-user home mounts selected via the `{unix_user}` template
+  variable) enforces identity. No sudoers or local Unix accounts needed, but a
+  session whose user has no `unix_username` fails loudly instead of silently
+  sharing an identity
 - **`insulated`** - Recommended for shared development, isolates daemon from executors
 - **`strict`** - Production environments, compliance requirements, full audit trail
 
 `branch_rbac` and `unix_user_mode` are intentionally independent: RBAC controls
-Agor app permissions; non-`simple` Unix modes control OS identities, Unix groups,
-and filesystem permissions.
+Agor app permissions; `insulated`/`strict` Unix modes control OS identities,
+Unix groups, and filesystem permissions. `delegated` performs no OS-level work
+on the daemon host — it only requires and propagates per-user identity.
 
 ### 4b. (Optional) Disable the Web Terminal
 

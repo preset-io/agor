@@ -524,11 +524,16 @@ export type SessionPromptState = Pick<Session, 'status' | 'ready_for_prompt'>;
 
 export type PromptableSessionState =
   | { status: typeof SessionStatus.IDLE; ready_for_prompt: boolean }
-  | { status: typeof SessionStatus.FAILED; ready_for_prompt: true };
+  | {
+      status: typeof SessionStatus.FAILED | typeof SessionStatus.TIMED_OUT;
+      ready_for_prompt: true;
+    };
 
 export function sessionCanStartTask(status: Session['status'], readyForPrompt?: boolean): boolean {
   return (
-    status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+    status === SessionStatus.IDLE ||
+    ((status === SessionStatus.FAILED || status === SessionStatus.TIMED_OUT) &&
+      readyForPrompt === true)
   );
 }
 
