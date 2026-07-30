@@ -1,3 +1,5 @@
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticAuthMethod,
   AgenticAuthMethods,
@@ -13,7 +15,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -59,7 +61,6 @@ import { CodexAuthSettings } from '../CodexAuth';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { SessionMcpServersField } from '../MCPServerSelect';
-import { OpenCodeProviderSettings } from '../OpenCodeAuth/OpenCodeProviderSettings';
 import { ToolIcon } from '../ToolIcon';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
@@ -1128,7 +1129,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           </>
         );
 
-        if (canonicalTool === 'opencode') {
+        const ProviderSettings = getAgenticToolUIIntegration(canonicalTool)?.ProviderSettings;
+        if (ProviderSettings) {
           const managesOwnSettings = user?.user_id === currentUser?.user_id;
           let providersPane = (
             <Alert
@@ -1138,7 +1140,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             />
           );
           if (managesOwnSettings && client) {
-            providersPane = <OpenCodeProviderSettings key={currentUser?.user_id} client={client} />;
+            providersPane = <ProviderSettings key={currentUser?.user_id} client={client} />;
           } else if (managesOwnSettings) {
             providersPane = <Alert type="warning" showIcon title="Not connected to Agor." />;
           }

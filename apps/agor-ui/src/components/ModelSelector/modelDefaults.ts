@@ -1,3 +1,4 @@
+import { getDefaultModelForTool } from '@agor/agentic-tools';
 import type { AgenticToolName } from '@agor-live/client';
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
@@ -7,7 +8,6 @@ import {
   DEFAULT_COPILOT_MODEL,
   DEFAULT_CURSOR_MODEL,
   GEMINI_MODELS,
-  getDefaultModelForTool,
 } from '@agor-live/client';
 
 export { DEFAULT_CURSOR_MODEL };

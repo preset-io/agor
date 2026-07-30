@@ -1,3 +1,4 @@
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import {
   AgenticToolPresetRepository,
   GatewayChannelRepository,
@@ -8,10 +9,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import {
-  hasCompleteOpenCodeModelConfig,
-  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
-} from '@agor/core/models';
+import { InvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolPreset,
   CreateAgenticToolPreset,
@@ -59,8 +57,14 @@ function validateToolConfiguration(
   configuration: AgenticToolPreset['configuration']
 ): void {
   const modelConfig = configuration.modelConfig;
-  if (tool === 'opencode' && modelConfig != null && !hasCompleteOpenCodeModelConfig(modelConfig)) {
-    throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
+  if (modelConfig == null) return;
+  const policy = getAgenticToolIntegration(tool).configuration;
+  if (!policy.resolveSources) return;
+  try {
+    policy.resolveSources([modelConfig]);
+  } catch (error) {
+    if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+    throw error;
   }
 }
 

@@ -9,6 +9,11 @@
  * Used by DefaultAgenticSettings, UserSettingsModal, and NewSessionModal.
  */
 
+import {
+  agenticToolRequiresModelSelection,
+  getAgenticToolIntegration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   DefaultAgenticToolConfig,
@@ -75,17 +80,11 @@ export function buildConfigFromFormValues(
   tool: AgenticToolName,
   values: AgenticFormValues
 ): DefaultAgenticToolConfig {
-  const openCodeProvider =
-    values.modelConfig && 'provider' in values.modelConfig
-      ? values.modelConfig.provider
-      : undefined;
-  const hasCompleteOpenCodeModel = Boolean(
-    typeof openCodeProvider === 'string' &&
-      openCodeProvider.trim() &&
-      values.modelConfig?.model?.trim()
-  );
-  if (tool === 'opencode' && !hasCompleteOpenCodeModel) {
-    throw new Error('Select an exact OpenCode provider and model before saving');
+  if (
+    agenticToolRequiresModelSelection(tool) &&
+    !isAgenticToolModelSelectionComplete(tool, values.modelConfig)
+  ) {
+    throw new Error(getAgenticToolIntegration(tool).configuration.missingSelectionError);
   }
 
   const modelConfig = buildModelConfigFromFormValues(values);

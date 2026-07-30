@@ -51,6 +51,7 @@ describe('resolveChildSessionConfig', () => {
         effectiveTool: 'codex',
         user: makeUser({}),
         now,
+        modelConfiguration: { defaultModel: 'gpt-5.6-sol' },
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
@@ -194,6 +195,7 @@ describe('resolveChildSessionConfig', () => {
         effectiveTool: 'gemini',
         user: null,
         now,
+        modelConfiguration: { defaultModel: 'gemini-2.0-flash' },
       });
       expect(r.model_config).toEqual({
         mode: 'alias',

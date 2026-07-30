@@ -15,6 +15,7 @@
  *   - Advanced (custom context JSON)
  */
 
+import { agenticToolRequiresModelSelection } from '@agor/agentic-tools';
 import type {
   AgorClient,
   CodexApprovalPolicy,
@@ -148,7 +149,11 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
       ...modelConfig,
       updated_at: new Date().toISOString(),
     } as NonNullable<Session['model_config']>;
-  } else if (!presetId && session.model_config && session.agentic_tool !== 'opencode') {
+  } else if (
+    !presetId &&
+    session.model_config &&
+    !agenticToolRequiresModelSelection(session.agentic_tool)
+  ) {
     updates.model_config = null;
   }
 

@@ -1,3 +1,7 @@
+import {
+  agenticToolRequiresModelSelection,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -211,12 +215,14 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
       const isInline =
         !values.agenticToolPresetId || values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const hasCompleteOpenCodeModel = Boolean(
-        values.modelConfig?.provider?.trim() && values.modelConfig?.model?.trim()
+      const selectedTool = selectedAgent as AgenticToolName;
+      const hasCompleteModelSelection = isAgenticToolModelSelectionComplete(
+        selectedTool,
+        values.modelConfig
       );
       const inlineAgentConfig =
-        isInline && (selectedAgent !== 'opencode' || hasCompleteOpenCodeModel)
-          ? buildConfigFromFormValues(selectedAgent as AgenticToolName, {
+        isInline && (!agenticToolRequiresModelSelection(selectedTool) || hasCompleteModelSelection)
+          ? buildConfigFromFormValues(selectedTool, {
               modelConfig: values.modelConfig,
               effort: values.effort,
               permissionMode: values.permissionMode,

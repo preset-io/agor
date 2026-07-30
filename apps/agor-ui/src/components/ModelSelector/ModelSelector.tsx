@@ -1,3 +1,4 @@
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import {
   type AgenticToolName,
   type AgorClient,
@@ -22,7 +23,6 @@ import {
   getModelSelectorFallbackModel,
   normalizeModelOption,
 } from './modelDefaults';
-import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
@@ -301,10 +301,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
 
-  // OpenCode uses bounded exact provider/model entry.
-  if (effectiveTool === 'opencode') {
+  const IntegrationModelSelector = getAgenticToolUIIntegration(effectiveTool)?.ModelSelector;
+  if (IntegrationModelSelector) {
     return (
-      <OpenCodeModelSelector
+      <IntegrationModelSelector
         client={client}
         branchId={branchId}
         catalogEnabled={openCodeCatalogEnabled}
@@ -318,13 +318,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               }
             : undefined
         }
-        onChange={(openCodeConfig: OpenCodeModelConfig | undefined) =>
+        onChange={(integrationConfig) =>
           onChange?.(
-            openCodeConfig
+            integrationConfig
               ? {
                   mode: 'exact',
-                  model: openCodeConfig.model,
-                  provider: openCodeConfig.provider,
+                  model: integrationConfig.model,
+                  provider: integrationConfig.provider,
                 }
               : undefined
           )

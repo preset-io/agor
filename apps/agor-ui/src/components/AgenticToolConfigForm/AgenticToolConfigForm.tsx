@@ -14,8 +14,14 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  agenticToolRequiresModelSelection,
+  getAgenticToolIntegration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES, DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
+import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -81,13 +87,18 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         name="modelConfig"
         label={modelLabel}
         rules={
-          agenticTool === 'opencode'
+          agenticToolRequiresModelSelection(agenticTool)
             ? [
                 {
                   validator: (_, value) =>
-                    value?.provider?.trim() && value?.model?.trim()
+                    isAgenticToolModelSelectionComplete(agenticTool, value)
                       ? Promise.resolve()
-                      : Promise.reject(new Error('Select an exact OpenCode provider and model')),
+                      : Promise.reject(
+                          new Error(
+                            getAgenticToolIntegration(agenticTool).configuration
+                              .missingSelectionError
+                          )
+                        ),
                 },
               ]
             : undefined

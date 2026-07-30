@@ -5,6 +5,7 @@
  * Steps: persona → workspace → llm → integrations → done
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -13,7 +14,6 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
-import { TOOL_API_KEY_NAMES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,

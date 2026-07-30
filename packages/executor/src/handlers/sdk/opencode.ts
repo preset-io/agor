@@ -4,8 +4,8 @@
  * Agor orchestration stays here; the OpenCode module owns the complete managed turn.
  */
 
+import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/agentic-tools/opencode';
 import { generateId, shortId } from '@agor/core';
-import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/core/models';
 import type {
   ExecutorPulseKind,
   MessageID,

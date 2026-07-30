@@ -37,9 +37,9 @@
  *   as a v0.19 backwards-compat alias.
  */
 
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import {
   InvalidScheduleAgenticToolConfigError,
-  materializeAgenticToolConfiguration,
   normalizeScheduleAgenticToolConfig,
 } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';

@@ -5,10 +5,11 @@
  * Uses DrizzleService adapter with SessionRepository.
  */
 
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import {
   AgenticConfigurationResolutionError,
   isTenantAgenticToolEnabled,
-  materializeAgenticToolConfiguration,
   PAGINATION,
 } from '@agor/core/config';
 import {
@@ -31,14 +32,12 @@ import {
   Forbidden,
   NotAuthenticated,
 } from '@agor/core/feathers';
-import type { ModelConfigInput } from '@agor/core/models';
+import type { ResolvedModelConfig } from '@agor/core/models';
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
-  hasCompleteOpenCodeModelConfig,
   InvalidModelConfigError,
   lintModelToolMatch,
-  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
 } from '@agor/core/models';
 import type {
   AgenticToolConfigurationSource,
@@ -388,13 +387,14 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
-    modelConfig: ModelConfigInput | null | undefined
+    modelConfig: Partial<ResolvedModelConfig> | null | undefined
   ): void {
-    if (agenticTool === 'opencode' && !hasCompleteOpenCodeModelConfig(modelConfig)) {
-      throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
-    }
-    if (agenticTool === 'opencode' && modelConfig != null && modelConfig.mode !== 'exact') {
-      throw new BadRequest('OpenCode model_config mode must be exact');
+    const integration = getAgenticToolIntegration(requireActiveAgenticTool(agenticTool));
+    if (
+      integration.configuration.missingSelectionError &&
+      !integration.configuration.isResolved?.(modelConfig)
+    ) {
+      throw new BadRequest(integration.configuration.missingSelectionError);
     }
     if (agenticTool === 'codex' && modelConfig) {
       const modelError = getCodexModelSelectionError({
@@ -571,6 +571,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         parent,
       });
       this.assertSupportedModelConfig(agenticTool, materialized.model_config);
+      const requiresModelSelection = Boolean(
+        getAgenticToolIntegration(agenticTool).configuration.missingSelectionError
+      );
       return this.sessionRepo.update(
         session.session_id,
         {
@@ -579,7 +582,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           model_config:
             !session.agentic_tool_preset_id &&
             session.model_config == null &&
-            agenticTool !== 'opencode'
+            !requiresModelSelection
               ? null
               : materialized.model_config,
         },
@@ -1392,12 +1395,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       parent
     );
     this.assertSupportedModelConfig(tool, materialized.model_config);
+    const requiresModelSelection = Boolean(
+      getAgenticToolIntegration(tool).configuration.missingSelectionError
+    );
 
     return {
       ...update,
       agentic_tool_preset_id: materialized.agentic_tool_preset_id,
       permission_config: materialized.permission_config,
-      model_config: modelConfig === null && tool !== 'opencode' ? null : materialized.model_config,
+      model_config:
+        modelConfig === null && !requiresModelSelection ? null : materialized.model_config,
     };
   }
 

@@ -1,7 +1,7 @@
+import { OpenCodeModelSelector } from '@agor/agentic-tools/ui';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 const catalog = {
   runtimeVersion: '1.14.33',

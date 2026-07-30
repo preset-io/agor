@@ -5,16 +5,16 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import {
-  type AgenticToolName,
-  type AuthenticatedParams,
-  type Params,
-  type TaskID,
-  TOOL_API_KEY_NAMES,
-  type UserID,
+import type {
+  AgenticToolName,
+  AuthenticatedParams,
+  Params,
+  TaskID,
+  UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from './session-token-service.js';

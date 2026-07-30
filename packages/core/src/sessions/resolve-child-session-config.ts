@@ -18,6 +18,7 @@
  * regardless of tool match.
  */
 
+import type { AgenticToolModelConfigurationPolicy } from '../models/resolve-config.js';
 import {
   type AgenticToolName,
   type DefaultAgenticToolConfig,
@@ -44,6 +45,7 @@ export interface ResolveChildSessionConfigArgs {
   source?: DefaultAgenticToolConfig | null;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
 }
 
 export interface ResolvedChildSessionConfig {
@@ -60,7 +62,7 @@ export interface ResolvedChildSessionConfig {
 export function resolveChildSessionConfig(
   args: ResolveChildSessionConfigArgs
 ): ResolvedChildSessionConfig {
-  const { parent, user, source, now } = args;
+  const { parent, user, source, now, modelConfiguration } = args;
   const requestedTool = args.effectiveTool ?? parent.agentic_tool;
   if (!isAgenticToolName(requestedTool)) {
     throw new Error(
@@ -74,6 +76,7 @@ export function resolveChildSessionConfig(
     source,
     parent,
     now,
+    modelConfiguration,
   });
 
   return {

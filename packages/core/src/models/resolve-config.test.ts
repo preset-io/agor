@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  getDefaultModelForTool,
+  type AgenticToolModelConfigurationPolicy,
+  InvalidModelConfigError,
   resolveModelConfig,
   resolveModelConfigPrecedence,
   resolveModelConfigWithFallback,
@@ -105,46 +106,36 @@ describe('resolveModelConfigPrecedence', () => {
   });
 });
 
-describe('getDefaultModelForTool', () => {
-  it('returns the static default for tools that have one', () => {
-    expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-5');
-    expect(getDefaultModelForTool('codex')).toBe('gpt-5.6-sol');
-    expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
-    expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
-  });
-
-  it('returns undefined for cursor / opencode', () => {
-    expect(getDefaultModelForTool('cursor')).toBeUndefined();
-    expect(getDefaultModelForTool('opencode')).toBeUndefined();
-  });
-});
-
 describe('resolveModelConfigWithFallback', () => {
   const now = new Date('2026-04-23T00:00:00.000Z');
+  const defaultPolicy: AgenticToolModelConfigurationPolicy = {
+    defaultModel: 'default-model',
+  };
 
   it('returns the first usable source when one is provided', () => {
-    const result = resolveModelConfigWithFallback(
-      'codex',
-      [{ model: 'gpt-5.5' }, { model: 'gpt-4o' }],
-      { now }
-    );
+    const result = resolveModelConfigWithFallback([{ model: 'gpt-5.5' }, { model: 'gpt-4o' }], {
+      now,
+      policy: defaultPolicy,
+    });
     expect(result?.model).toBe('gpt-5.5');
   });
 
-  it('falls back to the tool default when no source has a model', () => {
-    const result = resolveModelConfigWithFallback('codex', [undefined, null], { now });
+  it('falls back to the integration default when no source has a model', () => {
+    const result = resolveModelConfigWithFallback([undefined, null], {
+      now,
+      policy: defaultPolicy,
+    });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'gpt-5.6-sol',
+      model: 'default-model',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
   });
 
   it('merges effort-only high-priority input onto the next model source', () => {
     const result = resolveModelConfigWithFallback(
-      'claude-code',
       [{ effort: 'max' }, { model: 'claude-opus-4-6', effort: 'high' }],
-      { now }
+      { now, policy: defaultPolicy }
     );
     expect(result).toEqual({
       mode: 'alias',
@@ -156,13 +147,12 @@ describe('resolveModelConfigWithFallback', () => {
 
   it('merges model-less input onto the tool fallback when no source has a model', () => {
     const result = resolveModelConfigWithFallback(
-      'claude-code',
       [{ notes: 'Keep the default model', effort: 'max' }],
-      { now }
+      { now, policy: defaultPolicy }
     );
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-5',
+      model: 'default-model',
       notes: 'Keep the default model',
       effort: 'max',
       updated_at: '2026-04-23T00:00:00.000Z',
@@ -170,26 +160,26 @@ describe('resolveModelConfigWithFallback', () => {
   });
 
   it('merges advisor-only input onto the tool fallback when no source has a model', () => {
-    const result = resolveModelConfigWithFallback('claude-code', [{ advisorModel: 'opus' }], {
+    const result = resolveModelConfigWithFallback([{ advisorModel: 'opus' }], {
       now,
+      policy: defaultPolicy,
     });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-5',
+      model: 'default-model',
       advisorModel: 'opus',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
   });
 
   it('accumulates split model-less overrides onto the tool fallback', () => {
-    const result = resolveModelConfigWithFallback(
-      'claude-code',
-      [{ advisorModel: 'opus' }, { effort: 'max' }],
-      { now }
-    );
+    const result = resolveModelConfigWithFallback([{ advisorModel: 'opus' }, { effort: 'max' }], {
+      now,
+      policy: defaultPolicy,
+    });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-5',
+      model: 'default-model',
       effort: 'max',
       advisorModel: 'opus',
       updated_at: '2026-04-23T00:00:00.000Z',
@@ -198,13 +188,12 @@ describe('resolveModelConfigWithFallback', () => {
 
   it('preserves higher-priority model-less overrides when accumulating', () => {
     const result = resolveModelConfigWithFallback(
-      'claude-code',
       [
         { advisorModel: 'opus' },
         { advisorModel: 'sonnet', effort: 'medium' },
         { model: 'claude-haiku-4-5' },
       ],
-      { now }
+      { now, policy: defaultPolicy }
     );
     expect(result).toEqual({
       mode: 'alias',
@@ -222,9 +211,8 @@ describe('resolveModelConfigWithFallback', () => {
     // default) must NOT leak back in. The high-priority full config wins
     // first-wins, so advisor stays cleared.
     const result = resolveModelConfigWithFallback(
-      'claude-code',
       [{ model: 'claude-opus-4-6' }, { model: 'claude-sonnet-5', advisorModel: 'opus' }],
-      { now }
+      { now, policy: defaultPolicy }
     );
     expect(result).toEqual({
       mode: 'alias',
@@ -236,65 +224,46 @@ describe('resolveModelConfigWithFallback', () => {
 
   it('does not carry model-less mode/provider onto a fallback model', () => {
     const result = resolveModelConfigWithFallback(
-      'claude-code',
       [{ mode: 'exact', provider: 'anthropic', effort: 'max' }],
-      { now }
+      { now, policy: defaultPolicy }
     );
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-5',
+      model: 'default-model',
       effort: 'max',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
     expect(result).not.toHaveProperty('provider');
   });
 
-  it('returns undefined for cursor / opencode when sources are empty', () => {
-    expect(resolveModelConfigWithFallback('cursor', [undefined], { now })).toBeUndefined();
-    expect(resolveModelConfigWithFallback('opencode', [undefined], { now })).toBeUndefined();
+  it('returns undefined when the integration has no default', () => {
+    expect(resolveModelConfigWithFallback([undefined], { now, policy: {} })).toBeUndefined();
   });
 
-  it('keeps only complete OpenCode provider/model pairs and forces exact mode', () => {
+  it('delegates source semantics and required-selection errors to the integration policy', () => {
+    const policy: AgenticToolModelConfigurationPolicy = {
+      missingSelectionError: 'Choose an integration model',
+      resolveSources: (sources, options) =>
+        sources[0]?.model
+          ? resolveModelConfig({ ...sources[0], mode: 'exact' }, options)
+          : undefined,
+    };
+
     expect(
-      resolveModelConfigWithFallback(
-        'opencode',
-        [
-          { mode: 'alias', provider: 'openai', model: 'gpt-5', effort: 'high' },
-          { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-5' },
-        ],
-        { now }
-      )
-    ).toEqual({
+      resolveModelConfigWithFallback([{ model: 'custom-model' }], { now, policy })
+    ).toMatchObject({
       mode: 'exact',
-      provider: 'openai',
-      model: 'gpt-5',
-      effort: 'high',
-      updated_at: '2026-04-23T00:00:00.000Z',
+      model: 'custom-model',
     });
-  });
-
-  it('rejects incomplete or blank OpenCode pairs', () => {
-    for (const source of [
-      { model: 'gpt-5' },
-      { provider: 'openai' },
-      { provider: '   ', model: 'gpt-5' },
-      { provider: 'openai', model: '   ' },
-    ]) {
-      expect(() => resolveModelConfigWithFallback('opencode', [source], { now })).toThrow(
-        /provider.*model/i
-      );
-    }
-  });
-
-  it('treats model-less OpenCode sources as absent', () => {
-    expect(
-      resolveModelConfigWithFallback('opencode', [undefined, null, {}, { effort: 'high' }], { now })
-    ).toBeUndefined();
+    expect(() => resolveModelConfigWithFallback([undefined], { now, policy })).toThrow(
+      new InvalidModelConfigError('Choose an integration model')
+    );
   });
 
   it('still uses an explicit source for tools without a static default', () => {
-    const result = resolveModelConfigWithFallback('cursor', [{ model: 'composer-experimental' }], {
+    const result = resolveModelConfigWithFallback([{ model: 'composer-experimental' }], {
       now,
+      policy: {},
     });
     expect(result?.model).toBe('composer-experimental');
   });

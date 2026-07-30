@@ -6,7 +6,8 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import { getBaseUrl, materializeAgenticToolConfiguration } from '@agor/core/config';
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { getBaseUrl } from '@agor/core/config';
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,

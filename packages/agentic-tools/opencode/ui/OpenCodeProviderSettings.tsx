@@ -1,8 +1,5 @@
-import type {
-  AgorClient,
-  OpenCodeOAuthAttempt,
-  OpenCodeProviderSettings as Settings,
-} from '@agor-live/client';
+import type { AgorClient } from '@agor/core/client';
+import type { OpenCodeOAuthAttempt, OpenCodeProviderSettings as Settings } from '@agor/core/types';
 import { Alert, List, Select, Space, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {

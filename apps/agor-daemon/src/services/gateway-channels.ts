@@ -5,11 +5,8 @@
  * Uses DrizzleService adapter with GatewayChannelRepository.
  */
 
-import {
-  AgenticConfigurationResolutionError,
-  materializeAgenticToolConfiguration,
-  PAGINATION,
-} from '@agor/core/config';
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { AgenticConfigurationResolutionError, PAGINATION } from '@agor/core/config';
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';

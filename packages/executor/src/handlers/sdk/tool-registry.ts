@@ -5,21 +5,22 @@
  * Makes it easier to add new tools and ensures consistency.
  */
 
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type {
+  AgenticToolName,
   ExecutorPulseKind,
   MessageSource,
   PermissionMode,
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
  * Tool identifier
  */
-export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
+export type Tool = AgenticToolName;
 
 /**
  * Tool runner function - executes via Feathers WebSocket
@@ -44,10 +45,6 @@ export type ToolRunner = (params: {
 export interface ToolConfig {
   /** Tool identifier */
   tool: Tool;
-  /** Display name */
-  name: string;
-  /** Environment variable for API key */
-  apiKeyEnvVar: string;
   /** Tool runner function */
   runner: ToolRunner;
 }
@@ -95,7 +92,7 @@ export class ToolRegistry {
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);
     }
-    return config.apiKeyEnvVar;
+    return getAgenticToolIntegration(tool).apiKeyName ?? 'NONE';
   }
 
   /**
@@ -138,51 +135,13 @@ export async function initializeToolRegistry(): Promise<void> {
     import('./cursor.js'),
   ]);
 
-  // Register Claude Code
-  ToolRegistry.register({
-    tool: 'claude-code',
-    name: 'Claude Code',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
-    runner: claude.executeClaudeCodeTask,
-  });
-
-  // Register Codex
-  ToolRegistry.register({
-    tool: 'codex',
-    name: 'Codex',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
-    runner: codex.executeCodexTask,
-  });
-
-  // Register Gemini
-  ToolRegistry.register({
-    tool: 'gemini',
-    name: 'Gemini',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
-    runner: gemini.executeGeminiTask,
-  });
-
-  // Register OpenCode
-  ToolRegistry.register({
-    tool: 'opencode',
-    name: 'OpenCode',
-    apiKeyEnvVar: 'NONE', // OpenCode doesn't need API key
-    runner: opencode.executeOpenCodeTask,
-  });
-
-  // Register Copilot
-  ToolRegistry.register({
-    tool: 'copilot',
-    name: 'GitHub Copilot',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
-    runner: copilot.executeCopilotTask,
-  });
-
-  // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
-  ToolRegistry.register({
-    tool: 'cursor',
-    name: 'Cursor SDK',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
-    runner: cursor.executeCursorTask,
-  });
+  const adapters: ToolConfig[] = [
+    { tool: 'claude-code', runner: claude.executeClaudeCodeTask },
+    { tool: 'codex', runner: codex.executeCodexTask },
+    { tool: 'gemini', runner: gemini.executeGeminiTask },
+    { tool: 'opencode', runner: opencode.executeOpenCodeTask },
+    { tool: 'copilot', runner: copilot.executeCopilotTask },
+    { tool: 'cursor', runner: cursor.executeCursorTask },
+  ];
+  for (const adapter of adapters) ToolRegistry.register(adapter);
 }

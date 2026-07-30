@@ -5,13 +5,13 @@
  * Only active when authentication is enabled via config.
  */
 
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { generateId } from '@agor/core';
 import {
   assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
   getEnvVarBlockReason,
   isEnvVarAllowed,
-  materializeAgenticToolConfiguration,
   normalizeStoredEnvMap,
   resolveAgenticToolPreset,
   resolveUserEnvironment,

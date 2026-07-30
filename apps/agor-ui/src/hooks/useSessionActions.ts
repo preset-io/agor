@@ -4,6 +4,11 @@
  * Provides functions to create, update, fork, spawn sessions
  */
 
+import {
+  agenticToolRequiresModelSelection,
+  getAgenticToolIntegration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -76,21 +81,22 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         };
       }
 
-      const openCodeCarriesPair =
+      const requiresModelSelection = agenticToolRequiresModelSelection(agenticTool);
+      const carriesModelSelection =
         !usesReference &&
-        agenticTool === 'opencode' &&
         Boolean(
           config.modelConfig?.provider !== undefined || config.modelConfig?.model !== undefined
         );
-      const hasCompleteOpenCodeModel = Boolean(
-        config.modelConfig?.provider?.trim() && config.modelConfig?.model?.trim()
+      const hasCompleteModelSelection = isAgenticToolModelSelectionComplete(
+        agenticTool,
+        config.modelConfig
       );
-      if (openCodeCarriesPair && !hasCompleteOpenCodeModel) {
-        throw new Error('Select an exact OpenCode provider and model');
+      if (requiresModelSelection && carriesModelSelection && !hasCompleteModelSelection) {
+        throw new Error(getAgenticToolIntegration(agenticTool).configuration.missingSelectionError);
       }
       const modelConfig = usesReference ? undefined : config.modelConfig;
       const effort =
-        usesReference || (agenticTool === 'opencode' && !hasCompleteOpenCodeModel)
+        usesReference || (requiresModelSelection && !hasCompleteModelSelection)
           ? undefined
           : config.effort;
 

@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -5,7 +6,6 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES } from '@agor-live/client';
 import {
   act,
   fireEvent,

@@ -3,7 +3,7 @@ import {
   assertOpenCodeNativeAuthSupported,
   resolveOpenCodeCredentialNamespace,
   resolveOpenCodeTaskCredentialNamespace,
-} from './opencode-credential-namespace';
+} from './credential-namespace';
 
 describe('OpenCode credential namespace routing', () => {
   it('is stable for one tenant and subject without exposing either identifier in the path', () => {

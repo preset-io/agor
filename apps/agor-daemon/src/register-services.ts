@@ -7,6 +7,10 @@
 
 import { homedir } from 'node:os';
 import {
+  admitAgenticToolExecutor,
+  getAgenticToolExecutorPayload,
+} from '@agor/agentic-tools/daemon';
+import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
@@ -142,8 +146,6 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
-import { resolveOpenCodeTaskCredentialNamespace } from './utils/opencode-credential-namespace.js';
-import { admitOpenCodeExecutor } from './utils/opencode-executor-admission.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -803,7 +805,7 @@ function createExecuteHandler(
       throw new Error('Preset-backed sessions cannot override permission mode per task');
     }
 
-    const sessionToken = await admitOpenCodeExecutor(
+    const sessionToken = await admitAgenticToolExecutor(
       {
         tool: session.agentic_tool as import('@agor/core/types').AgenticToolName,
         tenantId,
@@ -970,15 +972,14 @@ function createExecuteHandler(
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...(session.agentic_tool === 'opencode'
-        ? {
-            dataHome: resolveOpenCodeTaskCredentialNamespace({
-              tenantId: tenantId!,
-              session,
-              homeDir: executorHomeDir ?? homedir(),
-            }).dataHome,
-          }
-        : {}),
+      ...getAgenticToolExecutorPayload(
+        session.agentic_tool as import('@agor/core/types').AgenticToolName,
+        {
+          tenantId: tenantId!,
+          session,
+          homeDir: executorHomeDir ?? homedir(),
+        }
+      ),
       env: executorEnv,
       params: {
         sessionId,

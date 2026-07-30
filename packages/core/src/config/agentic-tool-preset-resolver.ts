@@ -4,6 +4,7 @@ import {
   TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '../db/repositories';
+import type { AgenticToolModelConfigurationPolicy } from '../models/resolve-config';
 import { resolveSessionDefaults } from '../sessions/resolve-session-defaults';
 import type {
   AgenticToolConfigurationReference,
@@ -35,6 +36,7 @@ export interface MaterializeAgenticToolConfigurationArgs {
   branch?: { mcp_server_ids?: string[] | null } | null;
   mcpServerIds?: string[];
   now?: Date;
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
 }
 
 export interface MaterializedAgenticToolConfiguration {
@@ -163,6 +165,7 @@ export async function materializeAgenticToolConfiguration(
     branch: args.branch,
     mcpServerIds: args.mcpServerIds,
     now: args.now,
+    modelConfiguration: args.modelConfiguration,
   });
 
   return {

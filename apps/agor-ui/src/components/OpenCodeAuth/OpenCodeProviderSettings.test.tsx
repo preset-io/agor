@@ -1,8 +1,8 @@
+import { OpenCodeProviderSettings } from '@agor/agentic-tools/ui';
 import type { AgorClient, OpenCodeProviderSettings as Settings } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
-import { OpenCodeProviderSettings } from './OpenCodeProviderSettings';
 
 const initial: Settings = {
   runtime: 'available',

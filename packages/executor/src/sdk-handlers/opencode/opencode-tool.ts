@@ -8,8 +8,19 @@
 
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/agentic-tools/opencode';
+import {
+  createOpenCodeEventTranslator,
+  createOpenCodeSanitizer,
+  type ManagedChild,
+  type ManagedOpenCodeServer,
+  type OpenCodeEventEffect,
+  type OpenCodeSanitizer,
+  reconcileOpenCodeMessages,
+  resolvePackagedOpenCodeBinary,
+  startManagedOpenCodeServer,
+} from '@agor/agentic-tools/opencode/runtime';
 import { shortId } from '@agor/core';
-import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/core/models';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
@@ -38,19 +49,6 @@ import type {
 } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { createCanUseToolCallback } from '../claude/permissions/permission-hooks.js';
-import {
-  createOpenCodeEventTranslator,
-  type OpenCodeEventEffect,
-  reconcileOpenCodeMessages,
-} from './event-translator.js';
-import {
-  createOpenCodeSanitizer,
-  type ManagedChild,
-  type ManagedOpenCodeServer,
-  type OpenCodeSanitizer,
-  resolvePackagedOpenCodeBinary,
-  startManagedOpenCodeServer,
-} from './managed-server.js';
 
 export { resolvePackagedOpenCodeBinary };
 

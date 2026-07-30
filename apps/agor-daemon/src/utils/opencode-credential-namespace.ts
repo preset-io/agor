@@ -1,12 +1,10 @@
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
-  type AgorConfig,
-  isTenantAgenticToolEnabled,
-  loadConfigSync,
-  resolveMultiTenancyConfig,
-} from '@agor/core/config';
+  assertOpenCodeNativeAuthSupported,
+  type OpenCodeCredentialNamespace,
+  resolveOpenCodeCredentialNamespace,
+} from '@agor/agentic-tools/daemon';
+import { type AgorConfig, isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -14,7 +12,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, Session, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, UserID } from '@agor/core/types';
 import {
   getHomedirFromUsername,
   resolveUnixUserForImpersonation,
@@ -22,7 +20,6 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 
-const SUBJECT_KEY_VERSION = 'agor-opencode-v1';
 const OPENCODE_EXECUTOR_ENV_KEYS = [
   'PATH',
   'HOME',
@@ -39,11 +36,6 @@ const OPENCODE_EXECUTOR_ENV_KEYS = [
   'LOG_LEVEL',
 ] as const;
 
-export type OpenCodeCredentialNamespace = {
-  namespaceKey: string;
-  dataHome: string;
-};
-
 export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & {
   tenantId: string;
   subjectUserId: UserID;
@@ -51,40 +43,6 @@ export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & 
   mode: UnixUserMode;
   executorEnv: Record<string, string>;
 };
-
-/**
- * Resolve one opaque native OpenCode data namespace.
- *
- * Tenant and user identifiers are hashed together and never become path
- * segments. The home directory is already selected from the executor identity
- * by the caller, so auth and task executors can share this single resolver.
- */
-export function resolveOpenCodeCredentialNamespace(input: {
-  tenantId: string;
-  subjectUserId: string;
-  homeDir: string;
-}): OpenCodeCredentialNamespace {
-  const tenantId = input.tenantId.trim();
-  const subjectUserId = input.subjectUserId.trim();
-  if (!tenantId || !subjectUserId) {
-    throw new Error('OpenCode credential routing requires tenant and user identity');
-  }
-  if (!isAbsolute(input.homeDir)) {
-    throw new Error('OpenCode credential routing requires an absolute executor home');
-  }
-
-  const homeDir = resolve(input.homeDir);
-  const namespaceKey = createHash('sha256')
-    .update(JSON.stringify([SUBJECT_KEY_VERSION, tenantId, subjectUserId]))
-    .digest('hex');
-  const root = join(homeDir, '.local', 'share', 'agor', 'opencode');
-  const dataHome = join(root, namespaceKey);
-  const child = relative(root, dataHome);
-  if (!child || child.startsWith('..') || isAbsolute(child)) {
-    throw new Error('OpenCode credential namespace escaped its executor home');
-  }
-  return { namespaceKey, dataHome };
-}
 
 /** Resolve the authenticated caller's one native OpenCode execution context. */
 export async function resolveAuthenticatedOpenCodeSubjectContext(
@@ -135,25 +93,4 @@ export async function resolveAuthenticatedOpenCodeSubjectContext(
       )
     ) as Record<string, string>,
   };
-}
-
-export function resolveOpenCodeTaskCredentialNamespace(input: {
-  tenantId: string;
-  session: Pick<Session, 'created_by' | 'unix_username'>;
-  homeDir: string;
-}): OpenCodeCredentialNamespace {
-  return resolveOpenCodeCredentialNamespace({
-    tenantId: input.tenantId,
-    subjectUserId: input.session.created_by,
-    homeDir: input.homeDir,
-  });
-}
-
-/** Hosted auth-resolved tenancy has no durable native per-user home boundary yet. */
-export function assertOpenCodeNativeAuthSupported(config: Pick<AgorConfig, 'multi_tenancy'>): void {
-  if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
-    throw new BadRequest(
-      'OpenCode provider connection and execution are unavailable in hosted multi-tenant mode.'
-    );
-  }
 }

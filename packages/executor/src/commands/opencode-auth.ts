@@ -1,5 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  OPENCODE_VERSION,
+  startManagedOpenCodeServer,
+  verifyOpenCodeAuthFileBoundary,
+} from '@agor/agentic-tools/opencode/runtime';
 import type {
   OpenCodeModelCatalog,
   OpenCodeOAuthAuthorization,
@@ -9,11 +14,6 @@ import type {
 } from '@agor/core/types';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import type { OpenCodeAuthPayload } from '../payload-types.js';
-import {
-  OPENCODE_VERSION,
-  startManagedOpenCodeServer,
-  verifyOpenCodeAuthFileBoundary,
-} from '../sdk-handlers/opencode/managed-server.js';
 import type { CommandOptions } from './index.js';
 
 type V2Client = ReturnType<typeof createOpencodeClient>;

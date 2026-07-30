@@ -1,3 +1,7 @@
+import {
+  agenticToolRequiresModelSelection,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -111,11 +115,12 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const hasCompleteOpenCodeModel = Boolean(
-        values.modelConfig?.provider?.trim() && values.modelConfig?.model?.trim()
+      const hasCompleteModelSelection = isAgenticToolModelSelectionComplete(
+        selectedAgent,
+        values.modelConfig
       );
       const inlineAgentConfig =
-        isInline && (selectedAgent !== 'opencode' || hasCompleteOpenCodeModel)
+        isInline && (!agenticToolRequiresModelSelection(selectedAgent) || hasCompleteModelSelection)
           ? buildConfigFromFormValues(selectedAgent, {
               modelConfig: values.modelConfig,
               effort: values.effort,

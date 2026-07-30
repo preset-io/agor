@@ -16,12 +16,7 @@
  * - Returns `undefined` when there is no usable model, so callers can chain
  *   with `??` or feed a list into `resolveModelConfigPrecedence`.
  */
-import type { AgenticToolName } from '../types/index.js';
 import type { EffortLevel, Session } from '../types/session.js';
-import { DEFAULT_CLAUDE_MODEL } from './claude.js';
-import { DEFAULT_CODEX_MODEL } from './codex.js';
-import { DEFAULT_COPILOT_MODEL } from './copilot.js';
-import { DEFAULT_GEMINI_MODEL } from './gemini-shared.js';
 
 /**
  * Loose input shape accepted by the resolver.
@@ -45,9 +40,6 @@ export type ModelConfigInput = {
  */
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
-export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =
-  'Select an exact OpenCode provider and model in Agor before running this session';
-
 export class InvalidModelConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -55,22 +47,25 @@ export class InvalidModelConfigError extends Error {
   }
 }
 
-/** OpenCode model selection is atomic: provider and model are either both usable or both absent. */
-export function hasCompleteOpenCodeModelConfig(
-  input: ModelConfigInput | null | undefined
-): boolean {
-  return Boolean(input?.provider?.trim() && input.model?.trim());
+export interface AgenticToolModelConfigurationPolicy {
+  defaultModel?: string;
+  missingSelectionError?: string;
+  isSelectionComplete?: (input: ModelConfigInput | null | undefined) => boolean;
+  resolveSources?: (
+    sources: Array<ModelConfigInput | undefined | null>,
+    options?: { now?: Date }
+  ) => ResolvedModelConfig | undefined;
+  isResolved?: (input: Partial<ResolvedModelConfig> | null | undefined) => boolean;
 }
 
 /** Whether a model config already has the complete persisted shape. */
 export function isResolvedModelConfig(
   input: Partial<ResolvedModelConfig> | null | undefined,
-  tool?: AgenticToolName
+  policy?: AgenticToolModelConfigurationPolicy
 ): input is ResolvedModelConfig {
   const hasPersistedShape = Boolean(input?.mode && input.model && input.updated_at);
   if (!hasPersistedShape) return false;
-  if (tool !== 'opencode') return true;
-  return input?.mode === 'exact' && hasCompleteOpenCodeModelConfig(input);
+  return policy?.isResolved ? policy.isResolved(input) : true;
 }
 
 /**
@@ -127,25 +122,6 @@ export function resolveModelConfigPrecedence(
   return undefined;
 }
 
-/**
- * Static default model for a tool. Undefined for cursor / opencode whose
- * defaults are sourced elsewhere (async daemon fetch / provider+model pair).
- */
-export function getDefaultModelForTool(tool: AgenticToolName): string | undefined {
-  switch (tool) {
-    case 'claude-code':
-      return DEFAULT_CLAUDE_MODEL;
-    case 'codex':
-      return DEFAULT_CODEX_MODEL;
-    case 'gemini':
-      return DEFAULT_GEMINI_MODEL;
-    case 'copilot':
-      return DEFAULT_COPILOT_MODEL;
-    default:
-      return undefined;
-  }
-}
-
 /** Extract model-less overrides that are safe to carry onto a fallback model. */
 function getModelLessFallbackOverrides(
   input: ModelConfigInput | undefined | null
@@ -177,33 +153,25 @@ function mergeModelLessFallbackOverrides(
  * sources. However, higher-priority sources that only carry model-less
  * overrides (for example `effort` or Claude Code `advisorModel`) are accumulated
  * with per-field precedence and merged onto the next source that supplies the
- * actual model, or onto the tool fallback.
+ * actual model, or onto the integration-supplied fallback.
  * We intentionally do not
  * carry model-less `mode` / `provider` because their meaning depends on the
  * missing model value. This prevents partial persisted model_config objects
  * while preserving explicit notes, effort, and advisor choices.
  *
- * OpenCode is stricter: provider + model are one atomic exact selection.
- * Model-less sources remain absent, while a source carrying only one side (or
- * a blank side) is rejected instead of being persisted or combined with a
- * lower-priority source.
+ * Tool-specific atomicity and validation belong to the integration policy.
+ * Core only invokes that policy; it does not branch on tool identity.
  */
 export function resolveModelConfigWithFallback(
-  tool: AgenticToolName,
   sources: Array<ModelConfigInput | undefined | null>,
-  opts?: { now?: Date }
+  opts?: { now?: Date; policy?: AgenticToolModelConfigurationPolicy }
 ): ResolvedModelConfig | undefined {
-  if (tool === 'opencode') {
-    for (const source of sources) {
-      if (source == null) continue;
-      const carriesPairField = source.provider !== undefined || source.model !== undefined;
-      if (!carriesPairField) continue;
-      if (!hasCompleteOpenCodeModelConfig(source)) {
-        throw new InvalidModelConfigError(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
-      }
-      return resolveModelConfig({ ...source, mode: 'exact' }, opts);
+  if (opts?.policy?.resolveSources) {
+    const resolved = opts.policy.resolveSources(sources, { now: opts.now });
+    if (!resolved && opts.policy.missingSelectionError) {
+      throw new InvalidModelConfigError(opts.policy.missingSelectionError);
     }
-    return undefined;
+    return resolved;
   }
 
   let pendingModelLessOverrides: ModelConfigInput | undefined;
@@ -223,7 +191,7 @@ export function resolveModelConfigWithFallback(
     );
   }
 
-  const toolDefault = getDefaultModelForTool(tool);
+  const toolDefault = opts?.policy?.defaultModel;
   if (!toolDefault) return undefined;
   return resolveModelConfig(
     pendingModelLessOverrides

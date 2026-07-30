@@ -20,8 +20,7 @@
  */
 
 import {
-  InvalidModelConfigError,
-  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
+  type AgenticToolModelConfigurationPolicy,
   resolveModelConfigWithFallback,
 } from '../models/resolve-config.js';
 import type { AgenticToolName, DefaultAgenticToolConfig, Session, User } from '../types/index.js';
@@ -48,6 +47,8 @@ export interface ResolveSessionDefaultsArgs {
   mcpServerIds?: string[];
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
+  /** Tool-owned model semantics supplied by the integration registry. */
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
 }
 
 export interface ResolvedSessionDefaults {
@@ -66,7 +67,7 @@ export interface ResolvedSessionDefaults {
 }
 
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
-  const { agenticTool, user, source, parent, branch, mcpServerIds, now } = args;
+  const { agenticTool, user, source, parent, branch, mcpServerIds, now, modelConfiguration } = args;
   const userToolDefaults =
     user?.default_agentic_config?.[agenticTool] ??
     user?.default_agentic_config?.[canonicalTenantAgenticTool(agenticTool)];
@@ -88,13 +89,9 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
   });
 
   const model_config = resolveModelConfigWithFallback(
-    agenticTool,
     [source?.modelConfig, sameToolParent?.model_config, userToolDefaults?.modelConfig],
-    { now }
+    { now, policy: modelConfiguration }
   );
-  if (agenticTool === 'opencode' && !model_config) {
-    throw new InvalidModelConfigError(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
-  }
 
   // mcp_server_ids: explicit override wins (incl. empty array = "no MCPs"),
   // then branch config, then user defaults, then [].

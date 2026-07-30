@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { admitOpenCodeExecutor } from './opencode-executor-admission';
+import { admitAgenticToolExecutor } from '../../src/daemon';
 
 describe('OpenCode executor admission', () => {
   it('rejects hosted native auth before token creation or executor spawn', async () => {
@@ -7,7 +7,7 @@ describe('OpenCode executor admission', () => {
     const spawnExecutor = vi.fn();
 
     await expect(
-      admitOpenCodeExecutor(
+      admitAgenticToolExecutor(
         {
           tool: 'opencode',
           tenantId: 'tenant-a',

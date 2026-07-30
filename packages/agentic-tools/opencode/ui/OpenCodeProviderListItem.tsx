@@ -2,7 +2,7 @@ import type {
   OpenCodeOAuthAttempt,
   OpenCodeProviderAuthPrompt,
   OpenCodeProviderSettings,
-} from '@agor-live/client';
+} from '@agor/core/types';
 import { Alert, Button, Input, List, Popconfirm, Select, Space, Tag, Typography } from 'antd';
 
 const ACTIVE_OAUTH_PHASES = new Set(['authorizing', 'awaiting_callback', 'completing']);

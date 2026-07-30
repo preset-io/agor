@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@agor/core/client": ["../core/src/client/index.ts"],
+      "@agor/core/models": ["../core/src/models/index.ts"],
+      "@agor/core/config": ["../core/src/config/index.ts"],
+      "@agor/core/db": ["../core/src/db/index.ts"],
+      "@agor/core/feathers": ["../core/src/feathers/index.ts"],
+      "@agor/core/types": ["../core/src/types/index.ts"]
+    }
+  }
+}

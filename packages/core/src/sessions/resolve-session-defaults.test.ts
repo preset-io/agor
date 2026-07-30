@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import {
+  type AgenticToolModelConfigurationPolicy,
+  InvalidModelConfigError,
+  resolveModelConfig,
+} from '../models/resolve-config.js';
 import type { User, UserID } from '../types/index.js';
 import { resolveSessionDefaults } from './resolve-session-defaults.js';
 
 const now = new Date('2026-05-03T00:00:00.000Z');
+const exactProviderPolicy: AgenticToolModelConfigurationPolicy = {
+  missingSelectionError: 'Select an exact provider and model',
+  resolveSources: (sources, options) => {
+    for (const source of sources) {
+      if (!source?.provider && !source?.model) continue;
+      if (!source.provider || !source.model) {
+        throw new InvalidModelConfigError('Select an exact provider and model');
+      }
+      return resolveModelConfig({ ...source, mode: 'exact' }, options);
+    }
+    return undefined;
+  },
+};
 
 function makeUser(
   partial: Partial<User['default_agentic_config']> = {},
@@ -202,7 +220,11 @@ describe('resolveSessionDefaults', () => {
 
   describe('model_config', () => {
     it('falls back to the tool default when no model is configured anywhere', () => {
-      const r = resolveSessionDefaults({ agenticTool: 'claude-code', now });
+      const r = resolveSessionDefaults({
+        agenticTool: 'claude-code',
+        now,
+        modelConfiguration: { defaultModel: 'claude-sonnet-5' },
+      });
       expect(r.model_config).toEqual({
         mode: 'alias',
         model: 'claude-sonnet-5',
@@ -216,7 +238,11 @@ describe('resolveSessionDefaults', () => {
     });
 
     it('leaves Codex effort unset when no Agor override is configured', () => {
-      const r = resolveSessionDefaults({ agenticTool: 'codex', now });
+      const r = resolveSessionDefaults({
+        agenticTool: 'codex',
+        now,
+        modelConfiguration: { defaultModel: 'gpt-5.6-sol' },
+      });
       expect(r.model_config).toMatchObject({
         mode: 'alias',
         model: 'gpt-5.6-sol',
@@ -229,6 +255,7 @@ describe('resolveSessionDefaults', () => {
         agenticTool: 'codex',
         source: { modelConfig: { effort: 'xhigh' } },
         now,
+        modelConfiguration: { defaultModel: 'gpt-5.6-sol' },
       });
       expect(r.model_config).toMatchObject({
         model: 'gpt-5.6-sol',
@@ -267,6 +294,7 @@ describe('resolveSessionDefaults', () => {
         agenticTool: 'claude-code',
         source: { modelConfig: { effort: 'max' } },
         now,
+        modelConfiguration: { defaultModel: 'claude-sonnet-5' },
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
@@ -323,11 +351,11 @@ describe('resolveSessionDefaults', () => {
       expect(r.model_config).not.toHaveProperty('effort');
     });
 
-    it('preserves a complete OpenCode provider/model pair as exact', () => {
+    it('delegates exact provider/model resolution to the integration policy', () => {
       const r = resolveSessionDefaults({
-        agenticTool: 'opencode',
+        agenticTool: 'cursor',
         user: makeUser({
-          opencode: {
+          cursor: {
             modelConfig: {
               mode: 'alias',
               provider: 'openai',
@@ -337,6 +365,7 @@ describe('resolveSessionDefaults', () => {
           },
         }),
         now,
+        modelConfiguration: exactProviderPolicy,
       });
 
       expect(r.model_config).toEqual({
@@ -348,9 +377,9 @@ describe('resolveSessionDefaults', () => {
       });
     });
 
-    it('resolves OpenCode in source → personal default order', () => {
+    it('preserves source → personal default precedence for an integration policy', () => {
       const user = makeUser({
-        opencode: {
+        cursor: {
           modelConfig: {
             mode: 'exact',
             provider: 'personal-provider',
@@ -368,10 +397,11 @@ describe('resolveSessionDefaults', () => {
 
       expect(
         resolveSessionDefaults({
-          agenticTool: 'opencode',
+          agenticTool: 'cursor',
           user,
           source,
           now,
+          modelConfiguration: exactProviderPolicy,
         }).model_config
       ).toMatchObject({
         mode: 'exact',
@@ -380,10 +410,11 @@ describe('resolveSessionDefaults', () => {
       });
       expect(
         resolveSessionDefaults({
-          agenticTool: 'opencode',
+          agenticTool: 'cursor',
           user,
           source: {},
           now,
+          modelConfiguration: exactProviderPolicy,
         }).model_config
       ).toMatchObject({
         mode: 'exact',
@@ -392,25 +423,27 @@ describe('resolveSessionDefaults', () => {
       });
     });
 
-    it('rejects OpenCode when no exact pair resolves from any Agor source', () => {
+    it('uses an integration-owned error when required model selection is absent', () => {
       expect(() =>
         resolveSessionDefaults({
-          agenticTool: 'opencode',
+          agenticTool: 'cursor',
           user: makeUser(),
           source: {},
           now,
+          modelConfiguration: exactProviderPolicy,
         })
       ).toThrow(/select.*provider.*model/i);
     });
 
-    it('rejects an incomplete OpenCode user default at the shared resolution boundary', () => {
+    it('rejects an incomplete integration-owned selection at the shared boundary', () => {
       expect(() =>
         resolveSessionDefaults({
-          agenticTool: 'opencode',
+          agenticTool: 'cursor',
           user: makeUser({
-            opencode: { modelConfig: { model: 'gpt-5' } },
+            cursor: { modelConfig: { model: 'gpt-5' } },
           }),
           now,
+          modelConfiguration: exactProviderPolicy,
         })
       ).toThrow(/provider.*model/i);
     });

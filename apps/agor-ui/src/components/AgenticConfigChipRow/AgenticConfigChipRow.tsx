@@ -1,3 +1,10 @@
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  agenticToolRequiresModelSelection,
+  getAgenticToolIntegration,
+  getDefaultModelForTool,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -7,11 +14,7 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  getDefaultModelForTool,
-  getDefaultPermissionMode,
-} from '@agor-live/client';
+import { getDefaultPermissionMode } from '@agor-live/client';
 import {
   ApiOutlined,
   ExperimentOutlined,
@@ -145,13 +148,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   };
 
   const resolved = configForSource(source);
-  const resolvedOpenCodePair =
-    tool !== 'opencode' ||
-    Boolean(resolved.modelConfig?.provider?.trim() && resolved.modelConfig.model?.trim());
+  const modelSelectionComplete =
+    !agenticToolRequiresModelSelection(tool) ||
+    isAgenticToolModelSelectionComplete(tool, resolved.modelConfig);
   const configError =
     getSourceError(source) ??
-    (!resolvedOpenCodePair
-      ? 'Select an exact OpenCode provider and model before running this session'
+    (!modelSelectionComplete
+      ? getAgenticToolIntegration(tool).configuration.missingSelectionError
       : undefined);
   const configResolvable = !configError;
 
@@ -273,11 +276,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       )}
 
       <Flex gap={token.marginXS} align="center" wrap="wrap">
-        {(resolvedModel || tool === 'opencode') && (
+        {(resolvedModel || agenticToolRequiresModelSelection(tool)) && (
           <EditableChip
             icon={<RobotOutlined />}
             label={
-              tool === 'opencode'
+              agenticToolRequiresModelSelection(tool)
                 ? resolved.modelConfig?.provider && resolvedModel
                   ? `${resolved.modelConfig.provider}/${resolvedModel}`
                   : 'Select provider/model'

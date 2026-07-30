@@ -22,6 +22,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",

@@ -14,10 +14,10 @@
  * See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
  */
 
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import {
   AgenticConfigurationResolutionError,
   InvalidScheduleAgenticToolConfigError,
-  materializeAgenticToolConfiguration,
   normalizeScheduleAgenticToolConfig,
   PAGINATION,
 } from '@agor/core/config';

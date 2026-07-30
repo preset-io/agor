@@ -1,4 +1,5 @@
-import type { AgorClient, OpenCodeModelCatalog } from '@agor-live/client';
+import type { AgorClient } from '@agor/core/client';
+import type { OpenCodeModelCatalog } from '@agor/core/types';
 import {
   InfoCircleOutlined,
   ReloadOutlined,

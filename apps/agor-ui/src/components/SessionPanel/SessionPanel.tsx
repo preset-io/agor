@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -13,7 +14,6 @@ import type {
   User,
 } from '@agor-live/client';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
   isAgenticToolName,
   mapToCodexPermissionConfig,

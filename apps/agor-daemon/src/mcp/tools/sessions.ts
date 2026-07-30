@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import {
   BranchRepository,
   type BranchWithZoneAndSessions,
@@ -17,7 +18,6 @@ import {
   GEMINI_MODELS,
 } from '@agor/core/models';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,

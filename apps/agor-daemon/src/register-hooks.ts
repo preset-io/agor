@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
@@ -69,7 +70,6 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
-  AGENTIC_TOOL_DISPLAY_NAMES,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
