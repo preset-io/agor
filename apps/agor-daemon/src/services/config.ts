@@ -176,8 +176,6 @@ export class ConfigService {
 
     // Fetch task to get creator user ID and session. This is required for
     // executor-token calls and best-effort for internal/service-account calls.
-    // Forward the resolved tenant so the tenant-scoped lookups keep context;
-    // in required_from_auth mode a bare internal call has none and is rejected.
     const internalParams: AuthenticatedParams = {
       provider: undefined,
       tenant: (params as AuthenticatedParams | undefined)?.tenant,
@@ -227,9 +225,6 @@ export class ConfigService {
       }
     }
 
-    // Resolve the key inside the request's tenant database scope. This service
-    // carries no ambient scope of its own, and in required_from_auth mode the
-    // resolver's DB read fails closed without one.
     const result = await runWithTenantDatabaseScope(
       this.db,
       internalParams.tenant?.tenant_id,
