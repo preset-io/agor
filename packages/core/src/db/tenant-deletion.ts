@@ -47,6 +47,7 @@ import { checkMigrationStatus } from './migrate';
 import { buildTenantDeletionManifest, type TenantDeletionTable } from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
+import { assertTenantWriteGateGeneration } from './tenant-write-gate';
 
 /** Thrown when the supplied tenant id is empty, blank, or wildcard-like. */
 export class InvalidTenantIdError extends Error {
@@ -112,6 +113,14 @@ export interface TenantDeletionOptions {
   dryRun?: boolean;
   /** Human-readable audit sink (secret-safe). Defaults to a no-op. */
   log?: (message: string) => void;
+  /**
+   * When set, the deletion transaction asserts — inside the same transaction,
+   * before any rows are removed — that the tenant write gate is held at exactly
+   * this generation. If the gate was lost or replaced (writes may have resumed),
+   * the transaction aborts and nothing is deleted. Bind this to a gate the caller
+   * acquired and confirmed still held. See {@link assertTenantWriteGateGeneration}.
+   */
+  assertGateGeneration?: string;
 }
 
 /** Wildcard-like characters that must never be accepted as a concrete tenant id. */
@@ -742,6 +751,14 @@ export async function deleteTenantData(
   // the set of rows the operation removes.
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     await hardenDeletionSearchPath(scoped);
+    // Bind the deletion to a continuously-held source write gate when requested.
+    // Reading the gate inside this transaction, before locking or deleting,
+    // means a lost or replaced gate (writes may have resumed) aborts the whole
+    // deletion. The gate record itself lives in a tenant table this deletion will
+    // remove, so it is read here first.
+    if (options.assertGateGeneration !== undefined) {
+      await assertTenantWriteGateGeneration(scoped, tenantId, options.assertGateGeneration);
+    }
     schemaVersion = await resolveSchemaVersion(scoped);
     const phaseOnePlan = await buildLockedDeletionPlan(scoped, manifest, planNames);
     phaseOneFingerprint = phaseOnePlan.fingerprint;
