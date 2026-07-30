@@ -92,7 +92,7 @@ export const SectionDivider: React.FC<SectionDividerProps> = ({ label }) => {
   return (
     <Divider
       titlePlacement="left"
-      orientationMargin={0}
+      styles={{ content: { margin: 0 } }}
       style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM, margin: '8px 0 20px' }}
     >
       {label}
