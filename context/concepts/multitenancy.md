@@ -64,21 +64,22 @@ speculative infrastructure.
 
 Reuse these instead of adding local tenant plumbing:
 
-| Concern                                                | Existing owner                                                                                                              |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| Configuration and tenant resolution                    | `packages/core/src/config/multitenancy.ts`                                                                                  |
-| Tenant types                                           | `packages/core/src/types/tenant.ts`                                                                                         |
-| Ambient operation identity                             | `packages/core/src/db/tenant-context.ts`                                                                                    |
-| Short tenant/system database units and guarded proxies | `packages/core/src/db/tenant-scope.ts`, `packages/core/src/db/tenant-unit-of-work.ts`                                       |
-| PostgreSQL tenant columns and RLS coverage             | `packages/core/src/db/schema.postgres.ts`, `packages/core/src/db/multitenancy-schema.test.ts`, database migrations          |
-| Service ownership and request hooks                    | `TENANT_OWNED_SERVICE_PATHS` and `TENANT_IDENTITY_ONLY_SERVICE_PATHS` in `apps/agor-daemon/src/register-hooks.ts`           |
-| Request/deferred identity helpers                      | `apps/agor-daemon/src/utils/tenant-db-scope.ts`                                                                             |
-| Queued session work                                    | `apps/agor-daemon/src/utils/session-queue-tenant-scope.ts`                                                                  |
-| MCP database work                                      | `apps/agor-daemon/src/mcp/tenant-scope.ts`                                                                                  |
-| Tenant-aware realtime delivery                         | `apps/agor-daemon/src/utils/realtime-publish.ts`                                                                            |
-| Static guard against new raw boundary bypasses         | `scripts/check-multitenancy-boundaries.mjs`                                                                                 |
-| Per-tenant erasure                                     | `packages/core/src/db/tenant-deletion.ts` (+ `apps/agor-cli/src/commands/tenant/delete.ts` for the filesystem tree)         |
-| Per-tenant inspect/export/import/verify (portability)  | `packages/core/src/db/tenant-{catalog,portability-manifest,archive,database-io,filesystem,inspect,export,import,verify}.ts` |
+| Concern                                                | Existing owner                                                                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configuration and tenant resolution                    | `packages/core/src/config/multitenancy.ts`                                                                                                                            |
+| Tenant types                                           | `packages/core/src/types/tenant.ts`                                                                                                                                   |
+| Ambient operation identity                             | `packages/core/src/db/tenant-context.ts`                                                                                                                              |
+| Short tenant/system database units and guarded proxies | `packages/core/src/db/tenant-scope.ts`, `packages/core/src/db/tenant-unit-of-work.ts`                                                                                 |
+| PostgreSQL tenant columns and RLS coverage             | `packages/core/src/db/schema.postgres.ts`, `packages/core/src/db/multitenancy-schema.test.ts`, database migrations                                                    |
+| Service ownership and request hooks                    | `TENANT_OWNED_SERVICE_PATHS` and `TENANT_IDENTITY_ONLY_SERVICE_PATHS` in `apps/agor-daemon/src/register-hooks.ts`                                                     |
+| Request/deferred identity helpers                      | `apps/agor-daemon/src/utils/tenant-db-scope.ts`                                                                                                                       |
+| Queued session work                                    | `apps/agor-daemon/src/utils/session-queue-tenant-scope.ts`                                                                                                            |
+| MCP database work                                      | `apps/agor-daemon/src/mcp/tenant-scope.ts`                                                                                                                            |
+| Tenant-aware realtime delivery                         | `apps/agor-daemon/src/utils/realtime-publish.ts`                                                                                                                      |
+| Static guard against new raw boundary bypasses         | `scripts/check-multitenancy-boundaries.mjs`                                                                                                                           |
+| Per-tenant erasure                                     | `packages/core/src/db/tenant-deletion.ts` (+ `apps/agor-cli/src/commands/tenant/delete.ts` for the filesystem tree)                                                   |
+| Per-tenant inspect/export/import/verify (portability)  | `packages/core/src/db/tenant-{catalog,portability-manifest,archive,database-io,filesystem,inspect,export,import,verify}.ts`                                           |
+| Per-tenant write gate (generation-bound freeze)        | `packages/core/src/db/tenant-write-gate.ts`; enforced in `register-hooks.ts` (`writeGateBefore`) + `utils/tenant-db-scope.ts` + `utils/session-queue-tenant-scope.ts` |
 
 RLS protects database rows, not files, object storage, caches, tokens, realtime
 rooms, processes, or external side effects. Scope those at their own owner.

@@ -122,10 +122,46 @@ agor tenant delete --tenant-id acme-corp --dry-run
 agor tenant delete --tenant-id acme-corp --database-only
 ```
 
+## Freezing a tenant: the write gate
+
+Export, verify, and delete all require the tenant's data to hold still. The write
+gate is a generic, generation-bound freeze an external orchestrator uses to stop
+every writer for one tenant and prove the freeze stayed continuous.
+
+- **`agor tenant gate acquire`** freezes the tenant and returns an opaque
+  `generation` token. While held, every tenant writer fails closed — request
+  traffic (the daemon answers writes with `503`) and deferred operators alike
+  (scheduler, gateway, executor, queue drains). Reads are never blocked.
+- **`agor tenant gate inspect --expect-generation <gen>`** proves the *same*
+  freeze is still in force. A later acquire mints a new generation (replacement)
+  and a release removes it (loss); either makes the check fail closed (exit `3`).
+- **`agor tenant gate release --generation <gen>`** lifts the freeze, but only for
+  the generation the caller holds (compare-and-delete).
+
+The gate is stored per tenant with row-level-security isolation and is removed
+automatically if the tenant is deleted. It is PostgreSQL-only; on the
+single-tenant SQLite schema there is nothing to freeze and enforcement is a no-op.
+
+Recommended orchestration, e.g. for a verified move:
+
+```bash
+GEN=$(agor tenant gate acquire --tenant-id acme-corp --reason move | jq -r .generation)
+agor tenant export --tenant-id acme-corp --archive /path/to/archive
+agor tenant gate inspect --tenant-id acme-corp --expect-generation "$GEN"   # exit 3 if the freeze broke
+# ... transport the archive and import it into the destination ...
+agor tenant delete --tenant-id acme-corp --assert-gate-generation "$GEN"     # aborts if the freeze broke
+agor tenant gate release --tenant-id acme-corp --generation "$GEN"
+```
+
+`agor tenant delete --assert-gate-generation <gen>` re-checks the gate **inside
+the deletion transaction**, so a freeze that was lost or replaced (writes may have
+resumed) aborts the deletion before anything is removed.
+
 ## Preconditions and guarantees
 
 - **Quiesce writes.** Table locks and re-validation narrow races, but you must
   stop concurrent tenant writes for the duration of an export, import, or delete.
+  The write gate (above) makes this enforceable rather than advisory.
 - **Fail closed on schema drift.** The tenant-table set is derived from the
   runtime manifest and fails closed if any schema table is unclassified; import
   additionally requires an exact ordered migration-ledger match.

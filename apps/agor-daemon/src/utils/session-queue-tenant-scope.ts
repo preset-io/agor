@@ -1,5 +1,10 @@
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
-import { runWithTenantContext, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  assertTenantWritable,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Params, SessionID, TenantContext, TenantID } from '@agor/core/types';
 import { deferWithTenantContext, resolveTenantIdForDeferredScope } from './tenant-db-scope.js';
 
@@ -102,17 +107,29 @@ export function deferWithSessionQueueTenantScope(
     console.error(`❌ [Queue] ${options.label} failed:`, error);
   };
 
+  // A queue drain is a tenant writer. Before running it, assert the tenant is
+  // not write-gated inside a short tenant transaction; a held gate fails closed
+  // and the work is deferred via handleError until the gate is released.
+  const guarded = (tenantId: string, scopedParams: QueueTenantParams): Promise<void> =>
+    runWithTenantDatabaseScope(options.db, tenantId, (scoped) =>
+      assertTenantWritable(scoped, tenantId)
+    ).then(() => work(scopedParams));
+
   const capturedTenantId = resolveTenantIdForDeferredScope(options.params);
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
-    deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
+    deferWithTenantContext(
+      scopedParams,
+      () => guarded(capturedTenantId, scopedParams),
+      handleError
+    );
     return;
   }
 
   const tenantIdHint = trustedTenantIdHint(options);
   if (tenantIdHint) {
     const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
-    deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
+    deferWithTenantContext(scopedParams, () => guarded(tenantIdHint, scopedParams), handleError);
     return;
   }
 
@@ -125,5 +142,9 @@ export function deferWithSessionQueueTenantScope(
   }
 
   const scopedParams = queueTenantParams(options.params, configuredStaticTenantId, 'static');
-  deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
+  deferWithTenantContext(
+    scopedParams,
+    () => guarded(configuredStaticTenantId, scopedParams),
+    handleError
+  );
 }

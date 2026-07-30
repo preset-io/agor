@@ -74,6 +74,10 @@ export default class TenantDelete extends Command {
       description: 'Delete only the database rows, leaving the tenant filesystem tree in place',
       default: false,
     }),
+    'assert-gate-generation': Flags.string({
+      description:
+        'Require the tenant write gate to be held at this generation inside the deletion transaction; abort if lost or replaced',
+    }),
   };
 
   /**
@@ -141,6 +145,9 @@ export default class TenantDelete extends Command {
       const result = await deleteTenantData(db, tenantId, {
         dryRun,
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
+        ...(flags['assert-gate-generation']
+          ? { assertGateGeneration: flags['assert-gate-generation'] }
+          : {}),
       });
 
       // Extend the generic deletion contract to the configured tenant filesystem
