@@ -59,6 +59,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
 - [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
+- [`agentic-tool-integration-architecture.md`](explorations/agentic-tool-integration-architecture.md) — target package, registry, runtime, daemon, and UI ownership for agentic-tool integrations.
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
 
 ### Messaging & positioning (now in the Knowledge base)
