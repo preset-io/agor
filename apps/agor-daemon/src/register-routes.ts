@@ -1132,6 +1132,55 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       params
     );
 
+    // Priority-context injection (see @agor/core/sessions/priority-context): a
+    // brand-new root session's very first spawn gets the repo's designated
+    // `.agor/priority-context.json` files (if any) prepended as established
+    // context. Root-only and first-spawn-only (messageStartIndex === 0, i.e.
+    // no messages exist yet for this session) so this never re-fires on later
+    // turns, spawned/forked children, or repos that haven't opted in (the
+    // common case — resolves to undefined).
+    //
+    // Deliberately applied here — to the bytes shipped to the executor —
+    // rather than folded into `task.full_prompt` at task-creation time: the
+    // transcript row and `task.full_prompt` (title generation, previews) must
+    // keep showing exactly what the user typed. Same reasoning as the
+    // `[Prompted by: ...]` prefix below, and centralizing here means it's
+    // resolved once per session at the single choke point both the idle path
+    // and the queue drainer route through, instead of being baked in at
+    // enqueue time and only correct for whichever task happened to be first.
+    //
+    // The daemon reads these files with its own (broader) privileges, so for
+    // non-owner sessions we gate injection on the session creator's
+    // *effective* filesystem access to the branch — the same resolved grant
+    // (owner / group / board-aligned defaults) that decides whether that
+    // user's own executor is allowed to read the worktree at all in
+    // insulated/strict Unix modes. This must go through `resolveUserAccess`
+    // rather than the raw `others_fs_access` column: group and board grants
+    // can raise or lower a specific user's effective access relative to that
+    // column's fallback.
+    let rawPromptForExecutor = task.full_prompt;
+    if (isRootSessionGenealogy(session.genealogy) && messageStartIndex === 0) {
+      try {
+        const branch = await branchRepository.findById(session.branch_id);
+        const canReadWorktreeFiles =
+          !!branch &&
+          canInjectPriorityContextForBranch(
+            await branchRepository.resolveUserAccess(branch, session.created_by as UUID)
+          );
+        const priorityContext =
+          branch && canReadWorktreeFiles
+            ? await resolvePriorityContextForWorktree(branch.path)
+            : undefined;
+        if (priorityContext) {
+          rawPromptForExecutor = `${priorityContext}\n\n${task.full_prompt}`;
+        }
+      } catch (error) {
+        console.warn(
+          `[priority-context] Skipping injection for session ${shortId(task.session_id)}: ${(error as Error).message}`
+        );
+      }
+    }
+
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
     // (NOT `params.user`): every persisted Task row requires `created_by`
@@ -1141,7 +1190,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // that don't carry `queued_by_user_id` and is therefore not authoritative.
     // See `./utils/build-prompter-prefix.ts` for the helper + tests.
     const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
-      rawPrompt: task.full_prompt,
+      rawPrompt: rawPromptForExecutor,
       sessionCreatedBy: session.created_by,
       prompterUserId: task.created_by,
       usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
@@ -1348,49 +1397,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               params
             );
 
-            // Priority-context injection (see @agor/core/sessions/priority-context):
-            // a brand-new root session's very first prompt gets the repo's
-            // designated `.agor/priority-context.json` files (if any) prepended
-            // as established context. Root-only and first-task-only so this
-            // never re-fires on later turns, spawned/forked children, or repos
-            // that haven't opted in (the common case — resolves to undefined).
-            //
-            // The daemon reads these files with its own (broader) privileges, so
-            // for non-owner sessions we gate injection on the session creator's
-            // *effective* filesystem access to the branch — the same resolved
-            // grant (owner / group / board-aligned defaults) that decides
-            // whether that user's own executor is allowed to read the worktree
-            // at all in insulated/strict Unix modes. This must go through
-            // `resolveUserAccess` rather than the raw `others_fs_access`
-            // column: group and board grants can raise or lower a specific
-            // user's effective access relative to that column's fallback.
-            let effectivePrompt = data.prompt;
-            const isRootSession = isRootSessionGenealogy(lockedSession.genealogy);
-            if (isRootSession && (await taskRepo.countBySession(id as SessionID)) === 0) {
-              try {
-                const branch = await branchRepository.findById(lockedSession.branch_id);
-                const canReadWorktreeFiles =
-                  !!branch &&
-                  canInjectPriorityContextForBranch(
-                    await branchRepository.resolveUserAccess(
-                      branch,
-                      lockedSession.created_by as UUID
-                    )
-                  );
-                const priorityContext =
-                  branch && canReadWorktreeFiles
-                    ? await resolvePriorityContextForWorktree(branch.path)
-                    : undefined;
-                if (priorityContext) {
-                  effectivePrompt = `${priorityContext}\n\n${data.prompt}`;
-                }
-              } catch (error) {
-                console.warn(
-                  `[priority-context] Skipping injection for session ${shortId(id)}: ${(error as Error).message}`
-                );
-              }
-            }
-
             const queuedTasks = await taskRepo.findQueued(id as SessionID);
             const shouldQueue =
               !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
@@ -1399,7 +1405,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (shouldQueue) {
               const queuedTask = await taskRepo.createPending({
                 session_id: id as SessionID,
-                full_prompt: effectivePrompt,
+                full_prompt: data.prompt,
                 created_by: createdBy,
                 status: TaskStatus.QUEUED,
                 metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
@@ -1444,7 +1450,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
-              full_prompt: effectivePrompt,
+              full_prompt: data.prompt,
               created_by: createdBy,
               status: TaskStatus.CREATED,
               metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,

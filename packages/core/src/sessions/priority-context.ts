@@ -56,10 +56,10 @@ export type PriorityContextGenealogy =
  * A session is eligible for priority-context injection only if it's a root
  * session — no parent (spawn) and no fork source. Spawned/forked/continued
  * sessions already inherit context from their parent and are out of scope
- * (see the spec's Decision 4). Combine with a first-task check (e.g.
- * `taskRepo.countBySession(id) === 0`) at the call site to also exclude a
+ * (see the spec's Decision 4). Combine with a first-turn check (e.g. "no
+ * messages exist yet for this session") at the call site to also exclude a
  * root session's later turns — this predicate alone doesn't know about
- * tasks.
+ * tasks or messages.
  */
 export function isRootSessionGenealogy(genealogy: PriorityContextGenealogy): boolean {
   return !genealogy?.parent_session_id && !genealogy?.forked_from_session_id;
@@ -389,7 +389,12 @@ const PRIORITY_CONTEXT_HEADER =
   "The following are this repo's designated priority-context files " +
   '(`.agor/priority-context.json`), provided automatically because this is ' +
   'a brand-new session. Treat them as established context, not as part of ' +
-  "the message below — there's no need to re-read them yourself.";
+  "the message below — there's no need to re-read them yourself, and no " +
+  'need to acknowledge, summarize, or describe them in your reply. Let ' +
+  'them inform who you are, not what you open with: reply to the message ' +
+  'below the way you would if this context had already been part of you ' +
+  'from the start, leading with the user and their goal rather than with ' +
+  'the repo, its files, or its state.';
 
 /** Build the synthetic context message to prepend to a root session's first prompt. */
 export function formatPriorityContextMessage(files: PriorityContextFile[]): string | undefined {
