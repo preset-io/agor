@@ -2,7 +2,6 @@
  * AudioSettingsTab - Configure task completion chime settings
  */
 
-import type { User } from '@agor-live/client';
 import { InfoCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -20,7 +19,6 @@ import {
 import { useEffect, useState } from 'react';
 import {
   checkAudioPermission,
-  DEFAULT_AUDIO_PREFERENCES,
   getAvailableChimes,
   getChimeDisplayName,
   MIN_DURATION_MAX,
@@ -33,25 +31,17 @@ import { FieldRow } from './panelPrimitives';
 const { Text, Paragraph } = Typography;
 
 interface AudioSettingsTabProps {
-  user: User | null;
   form: ReturnType<typeof Form.useForm>[0];
   /** Fired when the user edits an audio control (used to track a dirty panel). */
   onValuesChange?: () => void;
 }
 
-export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({
-  user,
-  form,
-  onValuesChange,
-}) => {
+export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValuesChange }) => {
   const { token } = theme.useToken();
   const { showError, showWarning, showInfo } = useThemedMessage();
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState<boolean | null>(null);
   const [showPermissionAlert, setShowPermissionAlert] = useState(false);
-
-  // Get current audio preferences or use defaults
-  const audioPrefs = user?.preferences?.audio || DEFAULT_AUDIO_PREFERENCES;
 
   // Check audio permission on mount
   useEffect(() => {
@@ -147,17 +137,8 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({
         />
       )}
 
-      <Form
-        form={form}
-        layout="vertical"
-        onValuesChange={onValuesChange}
-        initialValues={{
-          enabled: audioPrefs.enabled,
-          chime: audioPrefs.chime,
-          volume: audioPrefs.volume,
-          minDurationSeconds: audioPrefs.minDurationSeconds,
-        }}
-      >
+      {/* Values are seeded by the parent modal's shared-form hydration. */}
+      <Form form={form} layout="vertical" onValuesChange={onValuesChange}>
         <FieldRow label="Enable chimes" name="enabled" valuePropName="checked">
           <Switch onChange={handleEnableToggle} />
         </FieldRow>

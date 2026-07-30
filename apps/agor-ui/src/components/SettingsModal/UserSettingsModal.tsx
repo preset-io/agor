@@ -1368,11 +1368,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderPreferencesPanel = () => (
     <>
       <PanelHeader title="Preferences" />
-      <AudioSettingsTab
-        user={user}
-        form={audioForm}
-        onValuesChange={() => markMainPanelDirty('preferences')}
-      />
+      <AudioSettingsTab form={audioForm} onValuesChange={() => markMainPanelDirty('preferences')} />
       <SectionDivider label="Interface" />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
         <FieldRow
