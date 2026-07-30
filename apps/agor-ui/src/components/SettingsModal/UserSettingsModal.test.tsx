@@ -122,7 +122,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Claude Code(?! CLI)/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code default')).toBeChecked();
     }, ASYNC);
@@ -201,7 +201,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Claude Code(?! CLI)/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code model claude-sonnet-5')).toBeChecked();
     }, ASYNC);
@@ -510,25 +510,104 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    // 'sec' matches: Security (tab name), Password (only via keyword 'security',
-    // but it lives in the matched Security tab), and Minimum task duration /
-    // Environment variables (keyword-only hits in other tabs).
+    // 'sec' matches: Security (page name), Password (only via keyword
+    // 'security', but it lives in the matched Security tab), Only-play-for
+    // (keyword 'seconds'), and Environment variables (page alias 'secrets').
     fireEvent.change(screen.getByPlaceholderText('Search settings'), {
       target: { value: 'sec' },
     });
 
     const texts = (await screen.findAllByRole('menuitem')).map((el) => el.textContent ?? '');
-    const securityIdx = texts.findIndex((t) => /^Security/.test(t));
-    const passwordIdx = texts.findIndex((t) => /^Password/.test(t));
-    const minDurationIdx = texts.findIndex((t) => /Minimum task duration/.test(t));
+    // Exact order: matched page, its own setting, then other-tab keyword-only
+    // hits (a specific setting ahead of a broad page-alias hit).
+    expect(texts).toHaveLength(4);
+    expect(texts[0]).toMatch(/^Security/);
+    expect(texts[1]).toMatch(/^Password/);
+    expect(texts[2]).toMatch(/Only play for tasks longer than/);
+    expect(texts[3]).toMatch(/Environment variables/);
 
-    // Security (page) first, then Password (in the matched tab), then the
-    // other-tab keyword hit — tab-membership beats the label-vs-keyword tier.
-    expect(securityIdx).toBe(0);
-    expect(passwordIdx).toBe(securityIdx + 1);
-    expect(minDurationIdx).toBeGreaterThan(passwordIdx);
+    // Exactly one divider, at the page/settings boundary.
+    expect(document.querySelectorAll('.ant-menu-item-divider')).toHaveLength(1);
 
-    // Mixed results (a page + settings) render a divider between the two.
-    expect(document.querySelector('.ant-menu-item-divider')).toBeInTheDocument();
+    // Clicking a post-divider (setting) result navigates to its panel.
+    fireEvent.click(screen.getByRole('menuitem', { name: /Only play for tasks longer than/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+  });
+
+  it('classifies multi-token page matches (every token must be in the page name)', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'code claude' },
+    });
+
+    // Both tokens occur in "Claude Code", so it's still classified as a page and
+    // ranks first — and a divider separates it from its settings.
+    const items = await screen.findAllByRole('menuitem');
+    expect(items[0].textContent).toMatch(/^Claude Code/);
+    expect(document.querySelectorAll('.ant-menu-item-divider')).toHaveLength(1);
+  });
+
+  it('indexes settings by their rendered label so on-screen text is findable', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    const search = screen.getByPlaceholderText('Search settings');
+    for (const label of ['Use Slack avatar when available', 'Only play for tasks longer than']) {
+      fireEvent.change(search, { target: { value: label } });
+      expect(
+        await screen.findByRole('menuitem', { name: new RegExp(label, 'i') })
+      ).toBeInTheDocument();
+    }
+  });
+
+  it('flushes edits from a panel the user navigated away from (no data loss)', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Edit Name on Profile, then move to Security and save from there.
+    fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'new-pass' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    // Both the Profile edit and the Security edit land in the flush.
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    const patch = onUpdate.mock.calls[0][1];
+    expect(patch.name).toBe('Renamed');
+    expect(patch.password).toBe('new-pass');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

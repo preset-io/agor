@@ -15,6 +15,7 @@ import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from 
 import {
   BellOutlined,
   CheckCircleFilled,
+  CloseOutlined,
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
@@ -52,7 +53,7 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
-import { matchesSettingsSearch } from '../../utils/settingsSearch';
+import { getSettingsSearchTokens, matchesSettingsSearch } from '../../utils/settingsSearch';
 import {
   buildConfigFromFormValues,
   getClearedFormValues,
@@ -125,19 +126,10 @@ const providerKeyFor = (tool: AgenticToolName): string => `${PROVIDER_KEY_PREFIX
 const toolFromProviderKey = (key: string): AgenticToolName =>
   key.slice(PROVIDER_KEY_PREFIX.length) as AgenticToolName;
 
-// Legacy deep-link keys (pre-redesign tab ids) mapped onto their new panels so
-// existing `initialTab` callers keep landing in the right place.
-const LEGACY_KEY_MAP: Record<string, string> = {
-  general: 'profile',
-  audio: 'preferences',
-  groups: 'access',
-  'personal-api-keys': 'tokens',
-};
-
 const normalizeInitialKey = (tab?: string): string => {
   if (!tab) return 'profile';
   if (isAgenticToolTab(tab)) return providerKeyFor(tab);
-  return LEGACY_KEY_MAP[tab] ?? tab;
+  return tab;
 };
 
 // Flat index powering the modal's global search: every setting maps to the
@@ -148,6 +140,8 @@ interface SettingIndexEntry {
   label: string;
   keywords?: string;
   panelKey: string;
+  /** 'page' = a nav tab/panel itself; 'setting' = a control within a panel. */
+  kind: 'page' | 'setting';
 }
 
 const STATIC_PANEL_TITLES: Record<string, string> = {
@@ -159,16 +153,26 @@ const STATIC_PANEL_TITLES: Record<string, string> = {
   access: 'Groups & access',
 };
 
+const PAGE_KEYWORDS: Record<string, string> = {
+  profile: 'account identity name email',
+  preferences: 'audio sound interface chime',
+  security: 'account password credentials',
+  tokens: 'api token key ci pipeline',
+  'env-vars': 'env vars secrets',
+  access: 'admin groups permissions',
+};
+
 const panelTitleForKey = (key: string): string =>
   key.startsWith(PROVIDER_KEY_PREFIX)
     ? AGENTIC_TOOL_DISPLAY_NAMES[toolFromProviderKey(key)]
     : (STATIC_PANEL_TITLES[key] ?? key);
 
-// A "page" hit: the entry represents a nav tab/panel AND the query matched its
-// visible name (a keyword-only tab hit is not treated as a page match).
-const isPageMatch = (entry: SettingIndexEntry, query: string): boolean => {
+// A "page" hit: a page/tab entry whose visible name matched every query token.
+// A page found only via a keyword alias is NOT treated as a page match.
+const isPageMatch = (entry: SettingIndexEntry, tokens: string[]): boolean => {
+  if (entry.kind !== 'page') return false;
   const labelLc = entry.label.toLowerCase();
-  return labelLc === panelTitleForKey(entry.panelKey).toLowerCase() && labelLc.includes(query);
+  return tokens.every((token) => labelLc.includes(token));
 };
 
 export interface UserSettingsModalProps {
@@ -278,6 +282,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     Partial<Record<AgenticToolName, AgenticConfigFormValues>>
   >({});
 
+  // The shared `form` (+ audioForm) backs Profile/Security/Preferences/Access.
+  // Track which of those panels the user has edited so Save flushes ALL of them
+  // — otherwise editing one panel and saving from another would drop the edit.
+  const [dirtyMainPanels, setDirtyMainPanels] = useState<Set<string>>(() => new Set());
+  const markMainPanelDirty = useCallback((panel: string) => {
+    setDirtyMainPanels((prev) => (prev.has(panel) ? prev : new Set(prev).add(panel)));
+  }, []);
+
   const markAgenticConfigDirty = useCallback((tool: AgenticToolName) => {
     setDirtyAgenticConfigTools((prev) => {
       if (prev.has(tool)) return prev;
@@ -295,6 +307,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       setActiveKey(normalizeInitialKey(initialTab));
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
+      setDirtyMainPanels(new Set());
       setSearch('');
 
       form.setFieldsValue({
@@ -456,6 +469,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     setGroupsLoaded(false);
     setDirtyAgenticConfigTools(new Set());
     setAgenticConfigDraftByTool({});
+    setDirtyMainPanels(new Set());
     setActiveKey('profile');
     setSearch('');
     onClose();
@@ -531,96 +545,67 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Profile panel: identity fields + Slack-avatar preference.
-  const handleProfileSave = async (): Promise<boolean> => {
+  // Commit every edited main-form panel in a single patch. Building one
+  // `preferences` object here (rather than one patch per panel) is what keeps a
+  // Profile edit and a Preferences edit from clobbering each other's keys when
+  // both are flushed against the same not-yet-refreshed `user` prop.
+  const commitMainPanels = async (panels: Set<string>): Promise<boolean> => {
     if (!user) return false;
 
     try {
-      await form.validateFields(['email', 'name', 'emoji', 'role']);
-      const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+      const toValidate: string[] = [];
+      if (panels.has('profile')) toValidate.push('email', 'name', 'emoji', 'role');
+      if (panels.has('security')) toValidate.push('unix_username');
+      if (toValidate.length) await form.validateFields(toValidate);
+
+      const updates: UpdateUserInput = {};
       const nextPreferences: NonNullable<UpdateUserInput['preferences']> = { ...user.preferences };
-      if (values.useSlackAvatar === false) {
-        nextPreferences.use_slack_avatar = false;
-      } else {
-        delete nextPreferences.use_slack_avatar;
+      let preferencesTouched = false;
+
+      if (panels.has('profile')) {
+        const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+        updates.email = values.email;
+        updates.name = values.name;
+        updates.emoji = values.emoji;
+        updates.role = values.role;
+        if (values.useSlackAvatar === false) {
+          nextPreferences.use_slack_avatar = false;
+        } else {
+          delete nextPreferences.use_slack_avatar;
+        }
+        preferencesTouched = true;
       }
 
-      await onUpdate?.(user.user_id, {
-        email: values.email,
-        name: values.name,
-        emoji: values.emoji,
-        role: values.role,
-        preferences: nextPreferences,
-      });
-      return true;
-    } catch (err) {
-      console.error('Validation failed:', err);
-      return false;
-    }
-  };
-
-  // Security panel: password + Unix username (Unix editable by admins only).
-  const handleSecuritySave = async (): Promise<boolean> => {
-    if (!user) return false;
-
-    try {
-      await form.validateFields(['unix_username']);
-      const values = form.getFieldsValue(['unix_username', 'password']);
-      const updates: UpdateUserInput = { unix_username: values.unix_username };
-      if (values.password?.trim()) {
-        updates.password = values.password;
+      if (panels.has('security')) {
+        const values = form.getFieldsValue(['unix_username', 'password']);
+        updates.unix_username = values.unix_username;
+        if (values.password?.trim()) updates.password = values.password;
       }
-      await onUpdate?.(user.user_id, updates);
-      form.setFieldValue('password', '');
-      return true;
-    } catch (err) {
-      console.error('Validation failed:', err);
-      return false;
-    }
-  };
 
-  // Preferences panel: audio/chime settings + live event stream toggle. Each
-  // save spreads the current `preferences` so it never clobbers the other
-  // panels' keys (e.g. Profile's `use_slack_avatar`).
-  const handlePreferencesSave = async (): Promise<boolean> => {
-    if (!user || !onUpdate) return false;
-
-    try {
-      const audioValues = audioForm.getFieldsValue();
-      await onUpdate(user.user_id, {
-        preferences: {
-          ...user.preferences,
-          audio: {
-            enabled: audioValues.enabled,
-            chime: audioValues.chime,
-            volume: audioValues.volume,
-            minDurationSeconds: audioValues.minDurationSeconds,
-          },
-          eventStream: {
-            enabled: form.getFieldValue('eventStreamEnabled') ?? true,
-          },
-        },
-      });
-      return true;
-    } catch (error) {
-      console.error('Failed to save preferences:', error);
-      return false;
-    }
-  };
-
-  // Access panel (admin-only): group membership + force-password (other users).
-  const handleAccessSave = async (): Promise<boolean> => {
-    if (!user) return false;
-
-    try {
-      await syncUserGroups(form.getFieldValue('groupIds') || []);
-      if (isAdmin && isEditingOther) {
-        await onUpdate?.(user.user_id, {
-          must_change_password: form.getFieldValue('must_change_password'),
-        });
+      if (panels.has('preferences')) {
+        const audioValues = audioForm.getFieldsValue();
+        nextPreferences.audio = {
+          enabled: audioValues.enabled,
+          chime: audioValues.chime,
+          volume: audioValues.volume,
+          minDurationSeconds: audioValues.minDurationSeconds,
+        };
+        nextPreferences.eventStream = { enabled: form.getFieldValue('eventStreamEnabled') ?? true };
+        preferencesTouched = true;
       }
+
+      if (panels.has('access') && isAdmin && isEditingOther) {
+        updates.must_change_password = form.getFieldValue('must_change_password');
+      }
+
+      if (preferencesTouched) updates.preferences = nextPreferences;
+
+      if (Object.keys(updates).length > 0) await onUpdate?.(user.user_id, updates);
+      if (panels.has('security')) form.setFieldValue('password', '');
+      if (panels.has('access')) await syncUserGroups(form.getFieldValue('groupIds') || []);
       return true;
     } catch (err) {
-      console.error('Failed to save access settings:', err);
+      console.error('Failed to save settings:', err);
       return false;
     }
   };
@@ -968,79 +953,185 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     group.children.some((child) => child.key === activeKey)
   );
 
-  // Global search index across every panel's contents (not just nav names).
+  // Global search index across every panel's contents. Settings are pushed
+  // before pages so that, among equally-ranked keyword-only hits, a specific
+  // setting sorts ahead of a broad page-alias hit. Labels mirror the RENDERED
+  // labels so searching what's on screen finds it; the friendly/older phrasing
+  // lives in `keywords`.
   const settingsIndex = useMemo<SettingIndexEntry[]>(() => {
     const entries: SettingIndexEntry[] = [
-      { label: 'Profile', keywords: 'account identity', panelKey: 'profile' },
-      { label: 'Name', panelKey: 'profile' },
-      { label: 'Emoji', keywords: 'avatar icon', panelKey: 'profile' },
-      { label: 'Email', panelKey: 'profile' },
-      { label: 'Use Slack avatar', keywords: 'profile image picture', panelKey: 'profile' },
-      { label: 'Role', keywords: 'permission admin member viewer', panelKey: 'profile' },
-      { label: 'Preferences', keywords: 'audio interface sound', panelKey: 'preferences' },
-      { label: 'Enable chimes', keywords: 'sound audio notification', panelKey: 'preferences' },
-      { label: 'Volume', keywords: 'sound audio loudness', panelKey: 'preferences' },
-      { label: 'Chime sound', keywords: 'audio notification tone', panelKey: 'preferences' },
+      { label: 'Name', kind: 'setting', panelKey: 'profile' },
+      { label: 'Emoji', kind: 'setting', keywords: 'avatar icon', panelKey: 'profile' },
+      { label: 'Email', kind: 'setting', panelKey: 'profile' },
       {
-        label: 'Minimum task duration',
-        keywords: 'chime audio seconds threshold',
+        label: 'Use Slack avatar when available',
+        kind: 'setting',
+        keywords: 'profile image picture',
+        panelKey: 'profile',
+      },
+      {
+        label: 'Role',
+        kind: 'setting',
+        keywords: 'permission admin member viewer',
+        panelKey: 'profile',
+      },
+      {
+        label: 'Password',
+        kind: 'setting',
+        keywords: 'credentials security',
+        panelKey: 'security',
+      },
+      {
+        label: 'Unix username',
+        kind: 'setting',
+        keywords: 'impersonation os process user',
+        panelKey: 'security',
+      },
+      {
+        label: 'Enable chimes',
+        kind: 'setting',
+        keywords: 'sound audio notification',
+        panelKey: 'preferences',
+      },
+      {
+        label: 'Volume',
+        kind: 'setting',
+        keywords: 'sound audio loudness',
+        panelKey: 'preferences',
+      },
+      {
+        label: 'Chime sound',
+        kind: 'setting',
+        keywords: 'audio notification tone',
+        panelKey: 'preferences',
+      },
+      {
+        label: 'Only play for tasks longer than',
+        kind: 'setting',
+        keywords: 'minimum task duration chime seconds threshold',
         panelKey: 'preferences',
       },
       {
         label: 'Live event stream',
+        kind: 'setting',
         keywords: 'websocket debug beta navbar',
         panelKey: 'preferences',
       },
-      { label: 'Security', keywords: 'account', panelKey: 'security' },
-      { label: 'Password', keywords: 'credentials security', panelKey: 'security' },
-      { label: 'Unix username', keywords: 'impersonation os process user', panelKey: 'security' },
-      { label: 'Environment variables', keywords: 'env vars secrets', panelKey: 'env-vars' },
     ];
     if (isSelf && onRestartOnboarding) {
       entries.push({
         label: 'Restart onboarding',
+        kind: 'setting',
         keywords: 'wizard setup teammate',
         panelKey: 'profile',
       });
     }
     if (!isEditingOther) {
-      entries.push(
-        { label: 'API tokens', keywords: 'agor api key ci pipeline', panelKey: 'tokens' },
-        { label: 'Create API token', keywords: 'new key agor', panelKey: 'tokens' }
-      );
+      entries.push({
+        label: 'Create New Key',
+        kind: 'setting',
+        keywords: 'api token new create',
+        panelKey: 'tokens',
+      });
     }
     if (isAdmin) {
-      entries.push(
-        { label: 'Groups & access', keywords: 'admin permissions', panelKey: 'access' },
-        { label: 'Groups', keywords: 'membership branch permissions', panelKey: 'access' }
-      );
+      entries.push({
+        label: 'Groups',
+        kind: 'setting',
+        keywords: 'membership branch permissions',
+        panelKey: 'access',
+      });
     }
     if (isAdmin && isEditingOther) {
       entries.push({
-        label: 'Force password change',
-        keywords: 'security reset next login',
+        label: 'Force password change on next login',
+        kind: 'setting',
+        keywords: 'security reset',
         panelKey: 'access',
       });
     }
     for (const tool of visibleAgenticToolTabs) {
       const name = AGENTIC_TOOL_DISPLAY_NAMES[tool];
       const providerKey = providerKeyFor(tool);
+      const kw = (extra: string) => `${name} ${tool} ${extra}`;
       entries.push(
-        { label: name, keywords: `${tool} provider ai model`, panelKey: providerKey },
         {
           label: 'Authentication',
-          keywords: `${name} ${tool} api key credentials sign in oauth`,
+          kind: 'setting',
+          keywords: kw('api key credentials sign in oauth'),
           panelKey: providerKey,
         },
         {
           label: 'Session defaults',
-          keywords: `${name} ${tool} permission mode model mcp effort`,
+          kind: 'setting',
+          keywords: kw('permission mode model mcp effort preset'),
           panelKey: providerKey,
-        }
+        },
+        {
+          label: 'Permission mode',
+          kind: 'setting',
+          keywords: kw('approval'),
+          panelKey: providerKey,
+        },
+        { label: 'Model', kind: 'setting', keywords: kw('alias'), panelKey: providerKey },
+        { label: 'MCP servers', kind: 'setting', keywords: kw('tools'), panelKey: providerKey },
+        { label: 'Preset', kind: 'setting', keywords: kw('configuration'), panelKey: providerKey }
       );
+      for (const field of TOOL_FIELD_CONFIGS[tool] ?? []) {
+        entries.push({
+          label: field.label,
+          kind: 'setting',
+          keywords: kw('credentials'),
+          panelKey: providerKey,
+        });
+      }
+      if (tool === 'codex') {
+        entries.push(
+          {
+            label: 'Sandbox mode',
+            kind: 'setting',
+            keywords: kw('filesystem'),
+            panelKey: providerKey,
+          },
+          {
+            label: 'Approval policy',
+            kind: 'setting',
+            keywords: kw('commands'),
+            panelKey: providerKey,
+          },
+          {
+            label: 'Network access',
+            kind: 'setting',
+            keywords: kw('http outbound'),
+            panelKey: providerKey,
+          }
+        );
+      }
+      if (tool === 'claude-code') {
+        entries.push({
+          label: 'Reasoning effort',
+          kind: 'setting',
+          keywords: kw('thinking'),
+          panelKey: providerKey,
+        });
+      }
+    }
+    // Pages last: one per nav item, from the single source of truth (navGroups).
+    for (const group of navGroups) {
+      for (const child of group.children) {
+        const isProvider = child.key.startsWith(PROVIDER_KEY_PREFIX);
+        entries.push({
+          label: panelTitleForKey(child.key),
+          kind: 'page',
+          panelKey: child.key,
+          keywords: isProvider
+            ? `${toolFromProviderKey(child.key)} provider ai model`
+            : PAGE_KEYWORDS[child.key],
+        });
+      }
     }
     return entries;
-  }, [visibleAgenticToolTabs, isAdmin, isEditingOther, isSelf, onRestartOnboarding]);
+  }, [navGroups, visibleAgenticToolTabs, isAdmin, isEditingOther, isSelf, onRestartOnboarding]);
 
   const searchActive = search.trim().length > 0;
 
@@ -1051,42 +1142,44 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // (4) a prefix over a mid-substring; (5) index for a stable, deterministic tie.
   const searchResults = useMemo(() => {
     if (!searchActive) return [];
-    const query = search.trim().toLowerCase();
+    const fullQuery = search.trim().toLowerCase();
+    const tokens = getSettingsSearchTokens(search);
+    const labelHasEveryToken = (entry: SettingIndexEntry) => {
+      const labelLc = entry.label.toLowerCase();
+      return tokens.every((token) => labelLc.includes(token));
+    };
     const matched = settingsIndex
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry }) =>
         matchesSettingsSearch(entry, search, [(e) => e.label, (e) => e.keywords])
       );
     const matchedTabKeys = new Set(
-      matched.filter(({ entry }) => isPageMatch(entry, query)).map(({ entry }) => entry.panelKey)
+      matched.filter(({ entry }) => isPageMatch(entry, tokens)).map(({ entry }) => entry.panelKey)
     );
     return matched
-      .map(({ entry, index }) => {
-        const labelLc = entry.label.toLowerCase();
-        return {
-          entry,
-          index,
-          t1: isPageMatch(entry, query) ? 0 : 1,
-          t2: matchedTabKeys.has(entry.panelKey) ? 0 : 1,
-          t3: labelLc.includes(query) ? 0 : 1,
-          t4: labelLc.startsWith(query) ? 0 : 1,
-        };
-      })
+      .map(({ entry, index }) => ({
+        entry,
+        index,
+        t1: isPageMatch(entry, tokens) ? 0 : 1,
+        t2: matchedTabKeys.has(entry.panelKey) ? 0 : 1,
+        t3: labelHasEveryToken(entry) ? 0 : 1,
+        t4: entry.label.toLowerCase().startsWith(fullQuery) ? 0 : 1,
+      }))
       .sort((a, b) => a.t1 - b.t1 || a.t2 - b.t2 || a.t3 - b.t3 || a.t4 - b.t4 || a.index - b.index)
       .map(({ entry }) => entry);
   }, [settingsIndex, search, searchActive]);
 
   const searchMenuItems: MenuProps['items'] = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const tokens = getSettingsSearchTokens(search);
     // Page hits are ranked first; drop a divider before the first non-page hit
     // only when both kinds are present (no dangling divider).
     const showDivider =
-      searchResults.some((entry) => isPageMatch(entry, query)) &&
-      searchResults.some((entry) => !isPageMatch(entry, query));
+      searchResults.some((entry) => isPageMatch(entry, tokens)) &&
+      searchResults.some((entry) => !isPageMatch(entry, tokens));
     const items: NonNullable<MenuProps['items']> = [];
     let dividerPlaced = false;
     searchResults.forEach((entry, index) => {
-      if (showDivider && !dividerPlaced && !isPageMatch(entry, query)) {
+      if (showDivider && !dividerPlaced && !isPageMatch(entry, tokens)) {
         items.push({ type: 'divider' });
         dividerPlaced = true;
       }
@@ -1143,21 +1236,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return;
       }
 
-      switch (activeKey) {
-        case 'profile':
-          if (!(await handleProfileSave())) return;
-          break;
-        case 'security':
-          if (!(await handleSecuritySave())) return;
-          break;
-        case 'preferences':
-          if (!(await handlePreferencesSave())) return;
-          break;
-        case 'access':
-          if (!(await handleAccessSave())) return;
-          break;
-        // env-vars and tokens persist inline; nothing to commit here.
+      // Flush EVERY edited main panel (plus the active one), not just the
+      // panel in view — otherwise switching panels before Save drops edits.
+      const mainPanels = new Set(dirtyMainPanels);
+      if (MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number])) {
+        mainPanels.add(activeKey);
       }
+      if (mainPanels.size > 0 && !(await commitMainPanels(mainPanels))) return;
 
       await saveDirtyAgenticConfigs();
       handleClose();
@@ -1169,7 +1254,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderProfilePanel = () => (
     <>
       <PanelHeader title="Profile" />
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
         <FieldRow label="Name">
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="emoji" noStyle>
@@ -1253,7 +1338,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderSecurityPanel = () => (
     <>
       <PanelHeader title="Security" />
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
         <FieldRow label="Password" name="password" help="Leave blank to keep current password">
           <Input.Password placeholder="••••••••" />
         </FieldRow>
@@ -1283,9 +1368,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderPreferencesPanel = () => (
     <>
       <PanelHeader title="Preferences" />
-      <AudioSettingsTab user={user} form={audioForm} />
+      <AudioSettingsTab
+        user={user}
+        form={audioForm}
+        onValuesChange={() => markMainPanelDirty('preferences')}
+      />
       <SectionDivider label="Interface" />
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
         <FieldRow
           label="Live event stream"
           badge={
@@ -1313,7 +1402,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message={
+        title={
           <span>
             Looking for SDK credentials? API keys and per-tool config live under{' '}
             <strong>AI Providers</strong> in the sidebar, scoped so credentials never leak across
@@ -1337,7 +1426,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         Add or remove this user from admin-managed groups.
       </Typography.Paragraph>
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('access')}>
         <FieldRow
           label="Groups"
           name="groupIds"
@@ -1456,14 +1545,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <Alert
         type="info"
         showIcon
-        message="Authentication is managed by this workspace — your personal configuration is never used while this policy is active."
+        title="Authentication is managed by this workspace — your personal configuration is never used while this policy is active."
         style={{ marginBottom: 16 }}
       />
     ) : effectiveSource === 'Unavailable' ? (
       <Alert
         type="warning"
         showIcon
-        message="No credentials configured yet"
+        title="No credentials configured yet"
         style={{ marginBottom: 16 }}
       />
     ) : null;
@@ -1622,13 +1711,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
   };
 
-  const modalTitle = isEditingOther ? (
-    <Space size={8}>
+  // With the modal header bar removed, the identity lives at the top of the
+  // elevated sider — including the "Editing <user>" indicator for admins.
+  const siderTitle = isEditingOther ? (
+    <Space size={8} align="center">
       <UserIdentityAvatar user={user} size={24} fontSize="14px" />
-      <span>Editing {user?.name || user?.email}</span>
+      <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+        Editing {user?.name || user?.email}
+      </Typography.Text>
     </Space>
   ) : (
-    'Settings'
+    <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+      User Settings
+    </Typography.Text>
   );
 
   const footer = isInlineSavePanel
@@ -1655,13 +1750,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   return (
     <Modal
-      title={modalTitle}
       open={open}
       onCancel={handleClose}
       footer={footer}
       closable
+      closeIcon={<CloseOutlined />}
       width="min(1050px, calc(100vw - 32px))"
       styles={{
+        header: { display: 'none' },
         body: {
           padding: 0,
           height: 'calc(100vh - 280px)',
@@ -1694,6 +1790,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               padding: '20px 0',
             }}
           >
+            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>
+              {siderTitle}
+            </div>
             <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
               <Input
                 allowClear

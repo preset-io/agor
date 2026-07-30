@@ -35,9 +35,15 @@ const { Text, Paragraph } = Typography;
 interface AudioSettingsTabProps {
   user: User | null;
   form: ReturnType<typeof Form.useForm>[0];
+  /** Fired when the user edits an audio control (used to track a dirty panel). */
+  onValuesChange?: () => void;
 }
 
-export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }) => {
+export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({
+  user,
+  form,
+  onValuesChange,
+}) => {
   const { token } = theme.useToken();
   const { showError, showWarning, showInfo } = useThemedMessage();
   const [isPlaying, setIsPlaying] = useState(false);
@@ -144,6 +150,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ user, form }
       <Form
         form={form}
         layout="vertical"
+        onValuesChange={onValuesChange}
         initialValues={{
           enabled: audioPrefs.enabled,
           chime: audioPrefs.chime,
