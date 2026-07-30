@@ -49,6 +49,7 @@ import { DrizzleService } from '../adapters/drizzle';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -936,13 +937,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const executionMode = resolveExecutionSecurityMode();
       const initUnixGroup = executionMode.shouldInitUnixGroups;
 
-      // Sudo wrap (asUser) is gated inside the resolver — returns undefined
-      // in simple/no-RBAC mode so hosts without passwordless sudoers work
-      // (#1140, #1143). Callers no longer duplicate the gate.
-      // Git/materialization runs as the requesting user in strict mode. Any
-      // privileged group/ACL setup is a separate daemon RPC below; in simple
-      // Cloud mode the pod/mount is the filesystem security boundary.
-      const asUser = await resolveExecutorReadAsUser(this.db, userId);
+      // Managed Git lifecycle operations must run as the daemon lifecycle
+      // identity. In strict mode the requesting user can read an initialized
+      // branch through its group/ACL, but cannot create a child beneath the
+      // daemon-owned worktree root or mutate the base repo's .git/worktrees.
+      // Keep resolveExecutorReadAsUser for read/probe commands only.
+      const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
       spawnExecutorFireAndForget(
         {
@@ -962,7 +962,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         },
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
-          asUser, // Run as resolved user (fresh groups via sudo -u)
+          asUser, // Run as lifecycle identity with fresh supplemental groups
         }
       );
     } catch (error) {
