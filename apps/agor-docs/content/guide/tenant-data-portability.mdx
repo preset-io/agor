@@ -1,0 +1,146 @@
+---
+title: Tenant Data Portability
+description: Inspect, export, import, verify, and delete a single tenant's database and filesystem data in a standalone multi-tenant PostgreSQL runtime.
+---
+
+# Tenant Data Portability
+
+Operators of a standalone multi-tenant PostgreSQL runtime sometimes need to move
+one tenant's data between runtimes, prove what a tenant owns, or remove a tenant
+entirely — for migration, backup and restore, or offboarding. Agor exposes a
+small, generic capability set for exactly this, built on the runtime's own
+tenant-table manifest, migration ledger, and configured tenant filesystem root.
+
+Agor is agnostic about how you transport or mount an archive. It knows only
+tenant ids, the database connection, operation ids, the archive directory you
+point it at, and the existing tenant-directory mapping
+(`multi_tenancy.tenants_base_folder`, see
+[Multi-Tenant Filesystem](/guide/multi-tenant-filesystem)). Copying, syncing,
+snapshotting, or mounting the archive directory is your deployment's concern.
+
+## Requirements
+
+- **PostgreSQL.** Multi-tenancy is a PostgreSQL-only feature; the SQLite schema
+  is single-tenant. Every database operation fails closed against SQLite.
+- **A matching binary.** The database's applied migration ledger must match the
+  running binary. Commands refuse to run when the database has pending or
+  unknown migrations, so an archive is never produced or restored against a
+  schema this binary does not fully understand.
+- **Filesystem isolation** (optional). Tenant files are moved only when
+  `multi_tenancy.filesystem_isolation_enabled` is `true`, so a tenant has a
+  dedicated `<tenants_base_folder>/<tenant-id>` root. When isolation is disabled,
+  the commands operate on the database only and leave the shared data home
+  untouched.
+
+Every command runs non-interactively, prints a single stable JSON object to
+stdout for automation, writes human-readable audit lines to stderr, redacts
+connection-string credentials, and **never prints row or file contents**.
+
+## Commands
+
+### `agor tenant inspect`
+
+A bounded, machine-readable inventory and proof of a tenant's footprint: per-table
+row counts, a runtime-derived identity fingerprint (dialect, migration ledger,
+tenant-table set), and — when filesystem isolation is enabled — a contents-free
+filesystem summary (file, directory, symlink counts and total bytes).
+
+```bash
+agor tenant inspect --tenant-id acme-corp
+agor tenant inspect --tenant-id acme-corp --database-only
+```
+
+### `agor tenant export`
+
+Write a deterministic, versioned archive to a directory you supply. The archive
+contains every tenant-owned database row, the tenant filesystem tree (when
+isolation is enabled), and a manifest with per-payload SHA-256 hashes, the schema
+and migration identity, the manifest version, a tenant/operation binding, and
+safe relative paths only.
+
+```bash
+agor tenant export --tenant-id acme-corp --archive /path/to/archive
+```
+
+The destination must be empty or not yet exist. Two exports of identical tenant
+data produce the same content fingerprint. Quiesce tenant writes for the duration
+so the archive is internally consistent.
+
+Archive layout:
+
+```text
+<archive>/
+  manifest.json            # identity, hashes, entries, content fingerprint
+  database/<table>.jsonl   # one canonical JSON row per line, per table
+  files/<relative tree>    # the tenant filesystem tree (safe paths only)
+```
+
+### `agor tenant import`
+
+Restore a tenant from an archive. The archive is validated in full **before any
+mutation**: its hashes are re-checked, and the live database's migration ledger
+and tenant-table identity must match the archive exactly. The database is
+restored inside a single transaction (atomic commit or rollback); the filesystem
+tree is materialised in a staging directory and published to the tenant root with
+a single atomic rename.
+
+```bash
+agor tenant import --archive /path/to/archive
+agor tenant import --archive /path/to/archive --tenant-id new-tenant
+```
+
+Import requires an **empty destination or the identical prior operation**, and is
+idempotent by operation: re-running a fully-applied import is a no-op success, and
+an import interrupted between the database and filesystem steps can be re-run to
+completion. A non-empty destination that does not match the archive is refused.
+Traversal paths, escaping symlinks, and malformed archives are rejected.
+
+Passing a different `--tenant-id` re-homes the tenant into an empty destination.
+
+### `agor tenant verify`
+
+Prove that a tenant's live data matches a saved archive proof. It re-derives the
+tenant's database and filesystem hashes from the running system and compares them
+to the manifest, emitting strict, bounded evidence. Exit code is `0` on a full
+match and `3` on a mismatch.
+
+```bash
+agor tenant verify --archive /path/to/archive
+```
+
+### `agor tenant delete`
+
+Permanently and idempotently delete all data belonging to a single tenant. The
+generic deletion contract covers both tenant-owned database rows (audited,
+verified, and PostgreSQL-only) and — when filesystem isolation is enabled — the
+configured tenant filesystem tree. With isolation disabled, the shared data home
+is left untouched, preserving the historical database-only behavior.
+
+```bash
+agor tenant delete --tenant-id acme-corp
+agor tenant delete --tenant-id acme-corp --dry-run
+agor tenant delete --tenant-id acme-corp --database-only
+```
+
+## Preconditions and guarantees
+
+- **Quiesce writes.** Table locks and re-validation narrow races, but you must
+  stop concurrent tenant writes for the duration of an export, import, or delete.
+- **Fail closed on schema drift.** The tenant-table set is derived from the
+  runtime manifest and fails closed if any schema table is unclassified; import
+  additionally requires an exact ordered migration-ledger match.
+- **Cross-tenant isolation.** Every database statement is tenant-scoped by both an
+  explicit predicate and row-level security. An archive contains one tenant's data
+  only.
+- **Determinism.** Identical tenant data exports to identical database payloads
+  and produces the same content fingerprint (wall-clock metadata is excluded).
+- **Safety.** The filesystem walk never follows symlinks, records only safe
+  relative paths, preserves file modes, and rejects links or paths that escape the
+  tenant root.
+
+## Derived data
+
+The Knowledge embedding cache (`kb_unit_embeddings`) is tenant-owned but derived
+from Knowledge content that the archive already moves, and its column type is not
+portable. It is reported in `inspect` for completeness but is not exported or
+imported; the runtime regenerates it after a restore.
