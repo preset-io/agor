@@ -202,7 +202,7 @@ export function CodexAuthSettings({
           <Alert
             type="success"
             showIcon
-            message="Codex is connected"
+            title="Codex is connected"
             description="A ChatGPT login is active on this server."
           />
         );
@@ -212,7 +212,7 @@ export function CodexAuthSettings({
           <Alert
             type="error"
             showIcon
-            message="Login not found"
+            title="Login not found"
             description={
               probe.hint ??
               'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
@@ -228,7 +228,7 @@ export function CodexAuthSettings({
         <Alert
           type="success"
           showIcon
-          message="Codex is connected"
+          title="Codex is connected"
           description="Your OpenAI API key is working."
         />
       );
@@ -241,7 +241,7 @@ export function CodexAuthSettings({
         <Alert
           type="error"
           showIcon
-          message="Key not working"
+          title="Key not working"
           description={probe.hint ?? 'Key stored but not working — enter a new one.'}
         />
       );
@@ -305,7 +305,7 @@ export function CodexAuthSettings({
               <Alert
                 type="error"
                 showIcon
-                message={removeError}
+                title={removeError}
                 style={{ fontSize: token.fontSizeSM }}
               />
             )}

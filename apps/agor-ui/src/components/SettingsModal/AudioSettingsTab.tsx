@@ -131,8 +131,7 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValu
               </p>
             </div>
           }
-          closable
-          onClose={() => setShowPermissionAlert(false)}
+          closable={{ onClose: () => setShowPermissionAlert(false) }}
           style={{ marginBottom: 16 }}
         />
       )}
