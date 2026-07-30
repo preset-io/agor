@@ -294,6 +294,7 @@ function validateConfig(config: AgorConfig): void {
     'onboarding',
     'multi_tenancy',
     'uploads',
+    'mcp_catalog',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -676,6 +677,12 @@ function validateConfig(config: AgorConfig): void {
     'static_tenant_id',
     'auth_claim',
     'trusted_header',
+  ]);
+  only(config.mcp_catalog, 'mcp_catalog', [
+    'registry_sync_enabled',
+    'sync_interval_hours',
+    'probe_budget',
+    'registry_url',
   ]);
   if (unknownPaths.length > 0) {
     throw new Error(

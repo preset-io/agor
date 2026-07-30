@@ -125,7 +125,11 @@ export class MCPCatalogIngestionWorker {
         `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, failed: ${seeded.failed})`
       );
 
-      if (this.options.registrySyncEnabled === false) return null;
+      // Opt-in, so anything other than an explicit `true` means off. Testing
+      // `=== false` would turn the sync on for a caller that constructed the
+      // worker directly and left the option undefined, which is backwards for a
+      // feature whose whole point is that it makes outbound requests.
+      if (this.options.registrySyncEnabled !== true) return null;
 
       const result = await runCatalogIngestion(this.withSystemScope('mcp-catalog registry sync'), {
         ...(this.options.registryUrl

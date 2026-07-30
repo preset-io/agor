@@ -212,6 +212,61 @@ describe('loadConfig', () => {
     expect(loaded).toMatchObject(configData);
   });
 
+  it('loads the mcp_catalog block exactly as AGENTS.md documents it', async () => {
+    // Read the block out of the docs rather than restating it. An unrecognized
+    // top-level key throws, so documenting a section without registering it
+    // makes every config load and every `agor config set` fail for anyone who
+    // followed the instructions. Asserting the type exists would not catch it —
+    // only exercising the load path does.
+    const docs = await fs.readFile(path.resolve(__dirname, '../../../../AGENTS.md'), 'utf-8');
+    const block = docs.match(/^mcp_catalog:\n(?:[ #].*\n)+/m)?.[0];
+    expect(block, 'AGENTS.md no longer documents an mcp_catalog block').toBeDefined();
+
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), block as string, 'utf-8');
+
+    const loaded = await loadConfig();
+    expect(loaded.mcp_catalog).toEqual({
+      registry_sync_enabled: false,
+      sync_interval_hours: 6,
+      probe_budget: 40,
+    });
+  });
+
+  it('round-trips every documented mcp_catalog key through save and load', async () => {
+    // `setConfigValue` writes through `saveConfig`, which re-validates. A key
+    // that loads but cannot be written back is still unusable from the CLI.
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+
+    await setConfigValue('mcp_catalog.registry_sync_enabled', true);
+    await setConfigValue('mcp_catalog.sync_interval_hours', 12);
+    await setConfigValue('mcp_catalog.probe_budget', 5);
+    await setConfigValue('mcp_catalog.registry_url', 'https://registry.internal');
+
+    expect((await loadConfig()).mcp_catalog).toEqual({
+      registry_sync_enabled: true,
+      sync_interval_hours: 12,
+      probe_budget: 5,
+      registry_url: 'https://registry.internal',
+    });
+  });
+
+  it('rejects an unknown mcp_catalog subkey rather than silently accepting it', async () => {
+    // Every other section validates its subkeys; without an `only()` entry a
+    // typo would be accepted and then silently ignored at runtime.
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ mcp_catalog: { registry_sync_enabld: true } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/mcp_catalog\.registry_sync_enabld/);
+  });
+
   it('should return default config when file does not exist', async () => {
     const loaded = await loadConfig();
     const defaults = getDefaultConfig();
