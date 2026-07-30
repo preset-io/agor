@@ -9,7 +9,8 @@
 
 A Task is Agor's only durable execution lifecycle. Every executor-side wait
 must be identifiable, bounded, and abortable. Terminal Task state is committed
-only after the provider runtime is quiescent or daemon containment is verified.
+only after the agentic-tool runtime is quiescent or daemon containment is
+verified.
 
 The desired architecture deepens existing owners instead of adding an execution
 kernel:
@@ -17,8 +18,8 @@ kernel:
 ```text
 Task — only durable lifecycle and execution epoch
   |
-  +-- Provider adapter
-  |     raw SDK events -> normalized activity, operations, and outcome
+  +-- Agentic-tool runtime adapter
+  |     raw tool/SDK events -> normalized activity, operations, and outcome
   |
   +-- SDK watchdog
   |     bounded waits and active operation identities
@@ -44,8 +45,8 @@ The failure is not simply "no watchdog." Agor must distinguish:
 - an executor wrapper that can communicate from an SDK turn that is
   progressing;
 - healthy silent work from a lost completion event;
-- provider completion from transcript persistence and executor quiescence;
-- recoverable provider transport notices from terminal failure;
+- agentic-tool completion from transcript persistence and executor quiescence;
+- recoverable runtime transport notices from terminal failure;
 - a wait that has a responder from one that can never be answered;
 - terminal task settlement from its downstream queue, callback, and gateway
   consequences.
@@ -55,8 +56,15 @@ that can interpret its evidence.
 
 ## Scope and non-goals
 
-This foundation covers executor-backed SDK turns, including Claude, Codex, and
-other provider adapters that use the same Task lifecycle.
+This foundation covers executor-backed turns, including Claude Code, Codex,
+Gemini, OpenCode, and other agentic tools that use the same Task lifecycle.
+
+In this document, an **agentic tool** is an executable runtime integration such
+as Claude Code, Codex, Gemini, or OpenCode. A **model provider** is a service
+that supplies models, such as Anthropic, OpenAI, Google, or a provider exposed
+through OpenCode. The runtime contract belongs to an **agentic-tool runtime
+adapter**; model-provider selection and credentials may be inputs to that
+adapter, but they do not make the model provider the runtime owner.
 
 It preserves these Ponytail boundaries:
 
@@ -77,20 +85,20 @@ cannot be satisfied by the existing owners.
 | Owner                         | Owns                                                                                            | Does not own                                                           |
 | ----------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `Task.status`                 | Durable lifecycle and prompt admission                                                          | Wrapper or SDK health                                                  |
-| Provider adapter              | Provider event interpretation and normalized turn outcome                                       | Durable Task transitions                                               |
+| Agentic-tool runtime adapter  | Tool/SDK event interpretation, normalized turn outcome, and cooperative cleanup evidence         | Durable Task transitions, forced containment, or Session reconciliation |
 | SDK watchdog                  | Executor-local deadlines, meaningful progress, and active operation identities                  | Session state or terminal settlement                                   |
-| Executor finalizer            | Cooperative provider shutdown, operation settlement, bounded transcript flush, and report       | Forced containment                                                     |
-| Termination coordinator       | Stop, startup timeout, lost heartbeat, enforced stall, and failed cooperative cleanup           | Normal provider event interpretation                                   |
+| Executor finalizer            | Cooperative runtime shutdown, operation settlement, bounded transcript flush, and report        | Forced containment                                                     |
+| Termination coordinator       | Stop, startup timeout, lost heartbeat, enforced stall, and failed cooperative cleanup           | Normal agentic-tool event interpretation                               |
 | Session reconciler            | Session projection, queue/callback continuation, and terminal gateway notification              | SDK observation or containment                                         |
 | Executor heartbeat supervisor | Dispatch and wrapper-liveness suspicion                                                         | Proof of SDK progress or, when stronger evidence exists, process death |
 | Runtime progress projection   | UI/gateway `working`, `waiting`, `stalled`, and terminal presentation derived from shared facts | Durable lifecycle or supervision decisions                             |
 
 ## Runtime contracts
 
-### Provider adapter contract
+### Agentic-tool runtime adapter contract
 
-Provider-specific vocabulary stays inside its adapter. The adapter reports
-semantics equivalent to:
+Agentic-tool-specific vocabulary stays inside its runtime adapter. The adapter
+reports semantics equivalent to:
 
 ```text
 activity(meaningful?)
@@ -102,17 +110,27 @@ waiting_finished(reason)
 terminal_outcome(completed | failed | timed_out | cancelled)
 ```
 
-The exact TypeScript shape is an implementation decision. The contract is:
+The exact TypeScript shape is an implementation decision. Conceptually, the
+host invokes an operation equivalent to `execute(context)` and receives a
+normalized turn outcome. Cooperative cancellation invokes an operation
+equivalent to `abort(context)` and receives quiescence evidence. The host
+supplies trusted tenant, user, branch, Task, and execution context; the adapter
+must not infer or broaden those boundaries.
 
-- recoverable transport notices do not become terminal failures;
-- authoritative provider terminal events do;
+The contract is:
+
+- recoverable runtime transport notices do not become terminal failures;
+- authoritative agentic-tool terminal events do;
 - stream end without a recognized terminal outcome is an actionable failure;
 - unknown activity does not refresh meaningful progress;
 - unknown control, interaction, or terminal vocabulary produces a visible
   compatibility diagnosis rather than becoming cosmetic transcript text;
-- an incomplete provider thread is not blindly resumed.
+- an incomplete agentic-tool thread is not blindly resumed;
+- the adapter returns outcomes and cooperative cleanup evidence but does not
+  patch durable terminal Task state, perform forced containment, or reconcile
+  the Session.
 
-Captured provider traces and the SDK version manifest are the adapter
+Captured runtime traces and the tool/SDK version manifest are the adapter
 conformance boundary.
 
 ### Bounded-wait contract
@@ -136,12 +154,12 @@ bounded to the latest activity/progress and the resulting diagnosis.
 
 ### Cooperative finalization contract
 
-Provider handlers return a normalized outcome; they do not patch terminal Task
-state. The top-level executor finalizes in this order:
+Agentic-tool runtime handlers return a normalized outcome; they do not patch
+terminal Task state. The top-level executor finalizes in this order:
 
 ```text
-provider outcome
-  -> close the SDK iterator/query
+agentic-tool outcome
+  -> close the tool/SDK iterator or query
   -> settle or abort active operations
   -> flush bounded transcript writes
   -> report the terminal outcome
@@ -162,7 +180,7 @@ failed cooperative cleanup converge on the existing termination coordinator:
 active task
   -> atomically claim STOPPING
   -> deliver abort
-  -> run provider cleanup
+  -> run agentic-tool cleanup
   -> verify local process absence or remote quiescence
   -> settle STOPPED or FAILED
 ```
@@ -200,7 +218,7 @@ decision.
 An answer to the Task's active interaction is control input for that wait, not a
 new queued prompt; already queued work remains behind the active Task.
 
-An interaction timeout first aborts and closes the provider query. It cannot
+An interaction timeout first aborts and closes the agentic-tool query. It cannot
 write `timed_out` while the executor remains active.
 
 ### Runtime presentation contract
@@ -218,7 +236,7 @@ working, waiting, stalled, and terminal outcomes truthfully.
 ### Normal completion
 
 ```text
-provider terminal success
+agentic-tool terminal success
   -> adapter returns completed
   -> executor closes query and flushes transcript
   -> executor reports completed and exits
@@ -254,7 +272,7 @@ operation_started(id)
 
 ```text
 interaction wait expires
-  -> executor aborts provider query
+  -> executor aborts agentic-tool query
   -> cleanup succeeds?
        yes -> report timed_out and exit
        no  -> STOPPING -> containment
@@ -266,7 +284,7 @@ interaction wait expires
 ```text
 daemon claims STOPPING with race fences
   -> executor receives abort request
-  -> provider cleanup and quiescence report
+  -> agentic-tool cleanup and quiescence report
   -> local process absence / remote quiescence verification
   -> terminal settlement
   -> session reconciliation
@@ -288,8 +306,8 @@ Task is terminal
 4. Parallel work is tracked by operation identity, never only by a counter.
 5. Unknown activity does not refresh meaningful progress.
 6. Unknown control or terminal events produce compatibility diagnostics.
-7. Provider adapters do not write terminal Task state.
-8. A Task cannot be terminal while its provider runtime remains active.
+7. Agentic-tool runtime adapters do not write terminal Task state.
+8. A Task cannot be terminal while its agentic-tool runtime remains active.
 9. Cooperative cleanup precedes executor-reported terminality.
 10. Failed cooperative cleanup enters daemon containment.
 11. Stale heartbeat is not proof of process death when stronger evidence exists.
@@ -299,14 +317,14 @@ Task is terminal
 
 ## Failure-family coverage
 
-Issue state remains live provider truth and is not duplicated here. Each issue
+Issue state remains live GitHub truth and is not duplicated here. Each issue
 has one primary architecture family even when it has secondary effects.
 
 | Failure family                              | Evidence                                                                                                                                                                                                                                                                               | Desired owner                                |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
 | Wrapper alive while SDK is silent           | [#1541](https://github.com/preset-io/agor/issues/1541), [#1820](https://github.com/preset-io/agor/issues/1820), [#1844](https://github.com/preset-io/agor/issues/1844), [#472](https://github.com/preset-io/agor/issues/472)                                                           | SDK watchdog                                 |
 | Awaited completion is missing or mishandled | [#1900](https://github.com/preset-io/agor/issues/1900), [#2067](https://github.com/preset-io/agor/issues/2067), [#1852](https://github.com/preset-io/agor/issues/1852)                                                                                                                 | Bounded operations and executor finalizer    |
-| Provider protocol is misclassified          | [#1749](https://github.com/preset-io/agor/issues/1749), [#1821](https://github.com/preset-io/agor/issues/1821), [#1984](https://github.com/preset-io/agor/issues/1984), [#1969](https://github.com/preset-io/agor/issues/1969), [#2063](https://github.com/preset-io/agor/issues/2063) | Provider adapters                            |
+| Agentic-tool protocol is misclassified      | [#1749](https://github.com/preset-io/agor/issues/1749), [#1821](https://github.com/preset-io/agor/issues/1821), [#1984](https://github.com/preset-io/agor/issues/1984), [#1969](https://github.com/preset-io/agor/issues/1969), [#2063](https://github.com/preset-io/agor/issues/2063) | Agentic-tool runtime adapters                |
 | Task is terminal before runtime quiesces    | [#2062](https://github.com/preset-io/agor/issues/2062), [#682](https://github.com/preset-io/agor/issues/682)                                                                                                                                                                           | Executor finalizer / termination coordinator |
 | Healthy work is classified as stalled       | [#505](https://github.com/preset-io/agor/issues/505), [#1809](https://github.com/preset-io/agor/issues/1809)                                                                                                                                                                           | Phase-specific supervision and liveness      |
 | Terminal consequences remain stale          | [#1831](https://github.com/preset-io/agor/issues/1831), [#1879](https://github.com/preset-io/agor/issues/1879), [#231](https://github.com/preset-io/agor/issues/231), [#2052](https://github.com/preset-io/agor/issues/2052)                                                           | Session reconciler                           |
@@ -331,7 +349,7 @@ Each implementation PR should identify:
    updated.
 
 Timeout values, concrete TypeScript event shapes, reconciliation cadence, and
-provider-specific recovery outcomes belong to the implementation PR that first
+agentic-tool-specific recovery outcomes belong to the implementation PR that first
 needs them. They are not foundation decisions.
 
 ## Deferred upgrades and triggers
@@ -349,7 +367,7 @@ needs them. They are not foundation decisions.
 | Responsibility                         | Existing seam                                                                                                                          |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Task lifecycle and terminal guards     | `packages/core/src/types/task.ts`, `packages/core/src/db/repositories/tasks.ts`                                                        |
-| Provider event interpretation          | `packages/executor/src/sdk-handlers/`                                                                                                  |
+| Agentic-tool event interpretation      | `packages/executor/src/sdk-handlers/`                                                                                                  |
 | SDK supervision                        | `packages/executor/src/sdk-watchdog.ts`                                                                                                |
 | Top-level executor finalization        | `packages/executor/src/index.ts`, `packages/executor/src/handlers/sdk/base-executor.ts`                                                |
 | Heartbeat and pulse transport          | `packages/executor/src/executor-heartbeat.ts`                                                                                          |
