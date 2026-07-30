@@ -7,7 +7,7 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { getBaseUrl } from '@agor/core/config';
+import { getBaseUrl, resolveExecutionSecurityMode } from '@agor/core/config';
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
@@ -68,6 +68,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import {
   gatewayAgenticConfigToInlineConfiguration,
@@ -2180,6 +2181,15 @@ export class GatewayService {
         // Flag for downstream consumers: only the last message is posted to Shortcut
         gatewaySource.last_message_only = true;
       }
+
+      // In strict/delegated, refuse to create a gateway session for a user
+      // without a unix_username — it would fail at prompt time (or silently
+      // share an identity in hosted deployments).
+      assertUnixUsernameSatisfiesMode(
+        user.unix_username,
+        resolveExecutionSecurityMode().unixUserMode,
+        `gateway user ${user.user_id}`
+      );
 
       const session = await sessionsService.create(
         {

@@ -50,3 +50,6 @@ Tasks are the natural queueable unit: each prompt is exactly one task, the task
 already carries the prompt + metadata + lifecycle, and the executor only needs
 to know "give me the next task to run." Migration to task-level queueing
 landed in `never-lose-prompt` (sqlite/0040, postgres/0030).
+
+For the post-launch lifecycle, executor heartbeat, SDK pulse/watchdog, and
+termination ownership, see [task-runtime-state.md](task-runtime-state.md).

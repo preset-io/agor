@@ -20,6 +20,7 @@ import {
   resolveBranchPermission,
   resolveSessionContext,
   scopeSessionQuery,
+  setSessionUnixUsername,
 } from './branch-authorization';
 
 /** Minimal branch fixture for permission tests */
@@ -570,5 +571,49 @@ describe('scopeSessionQuery — $sort handling', () => {
     const ctx = makeCtx({ $sort: { updated_at: -1 }, $limit: 10 });
     await scopeSessionQuery(repoReturning(sessions))(ctx);
     expect(resultIds(ctx)).toEqual(['u-new', 'u-mid', 'u-old']);
+  });
+});
+
+describe('setSessionUnixUsername', () => {
+  const makeCreateContext = () =>
+    ({
+      method: 'create',
+      path: 'sessions',
+      params: { provider: 'rest', user: { user_id: USER_ID } },
+      data: {} as Record<string, unknown>,
+    }) as unknown as HookContext;
+
+  const repoWithUsername = (unix_username: string | null) => ({
+    findById: vi.fn().mockResolvedValue({ user_id: USER_ID, unix_username }),
+  });
+
+  it('stamps the creator current unix_username', async () => {
+    const ctx = makeCreateContext();
+    await setSessionUnixUsername(repoWithUsername('alice'))(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBe('alice');
+  });
+
+  it('stamps null silently when the mode does not require a unix_username', async () => {
+    const ctx = makeCreateContext();
+    await setSessionUnixUsername(repoWithUsername(null), 'simple')(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBeNull();
+  });
+
+  it('rejects a creator without unix_username when the mode requires one', async () => {
+    const ctx = makeCreateContext();
+    await expect(setSessionUnixUsername(repoWithUsername(null), 'delegated')(ctx)).rejects.toThrow(
+      /unix_user_mode 'delegated' requires a unix_username/
+    );
+  });
+
+  it('skips internal calls even when the mode requires a unix_username', async () => {
+    const ctx = {
+      method: 'create',
+      path: 'sessions',
+      params: {},
+      data: {},
+    } as unknown as HookContext;
+    await setSessionUnixUsername(repoWithUsername(null), 'delegated')(ctx);
+    expect((ctx.data as { unix_username?: string | null }).unix_username).toBeUndefined();
   });
 });

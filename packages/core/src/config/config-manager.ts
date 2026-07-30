@@ -1180,6 +1180,11 @@ export interface ResolvedExecutionSecurityMode {
   requiresDaemonUnixUser: boolean;
   /** Whether new repos/branches should initialize Unix groups. */
   shouldInitUnixGroups: boolean;
+  /**
+   * Whether every user must have a `unix_username` (strict and delegated).
+   * Session creation and executor/terminal launches fail loudly without one.
+   */
+  requiresUserUnixUsername: boolean;
 }
 
 /**
@@ -1188,13 +1193,16 @@ export interface ResolvedExecutionSecurityMode {
  * Keep this as the single semantic boundary between app-layer RBAC and
  * OS/filesystem isolation:
  * - `branch_rbac` controls Agor app permissions only.
- * - non-`simple` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ * - `insulated`/`strict` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ * - `delegated` requires per-user `unix_username` but performs no OS-level
+ *   work on the daemon host (no sudo, no groups, no sudoers) — identity
+ *   enforcement is delegated to the execution substrate.
  */
 export function resolveExecutionSecurityMode(
   config: AgorConfig = loadConfigSync()
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-  const unixIsolationEnabled = unixUserMode !== 'simple';
+  const unixIsolationEnabled = unixUserMode === 'insulated' || unixUserMode === 'strict';
 
   return {
     appRbacEnabled: config.execution?.branch_rbac === true,
@@ -1204,7 +1212,18 @@ export function resolveExecutionSecurityMode(
     unixGroupRefreshNeeded: unixIsolationEnabled,
     requiresDaemonUnixUser: unixIsolationEnabled,
     shouldInitUnixGroups: unixIsolationEnabled,
+    requiresUserUnixUsername: unixUserModeRequiresUsername(unixUserMode),
   };
+}
+
+/**
+ * Whether a Unix user mode treats per-user `unix_username` as load-bearing
+ * identity. Single predicate shared by `resolveExecutionSecurityMode()` and
+ * call sites that only have the raw mode, so the strict/delegated pairing
+ * cannot drift.
+ */
+export function unixUserModeRequiresUsername(mode: import('./types').UnixUserMode): boolean {
+  return mode === 'strict' || mode === 'delegated';
 }
 
 /**
@@ -1227,8 +1246,8 @@ export function isBranchRbacEnabled(): boolean {
 /**
  * Check if Unix user impersonation is enabled
  *
- * Returns true when unix_user_mode is set to anything other than 'simple'
- * (i.e., 'insulated' or 'strict')
+ * Returns true when unix_user_mode is 'insulated' or 'strict'. 'delegated'
+ * does not impersonate — identity enforcement lives in the execution substrate.
  */
 export function isUnixImpersonationEnabled(): boolean {
   try {

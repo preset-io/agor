@@ -41,6 +41,7 @@ import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config'
 import {
   InvalidScheduleAgenticToolConfigError,
   normalizeScheduleAgenticToolConfig,
+  unixUserModeRequiresUsername,
 } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
@@ -560,9 +561,9 @@ export class SchedulerService {
 
     const unixUsername = creator.unix_username || null;
 
-    if (!unixUsername && this.config.unixUserMode === 'strict') {
+    if (!unixUsername && unixUserModeRequiresUsername(this.config.unixUserMode)) {
       console.error(
-        `      ❌ Cannot spawn scheduled session: Creator has no unix_username (strict mode)`,
+        `      ❌ Cannot spawn scheduled session: Creator has no unix_username (${this.config.unixUserMode} mode)`,
         {
           schedule_id: schedule.schedule_id,
           schedule_name: schedule.name,
@@ -572,7 +573,7 @@ export class SchedulerService {
         }
       );
       throw new Error(
-        `Schedule creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in strict Unix user mode.`
+        `Schedule creator ${creator.email} has no unix_username set. Cannot spawn scheduled session in ${this.config.unixUserMode} Unix user mode.`
       );
     }
 

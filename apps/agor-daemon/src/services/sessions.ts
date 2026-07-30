@@ -11,6 +11,7 @@ import {
   AgenticConfigurationResolutionError,
   isTenantAgenticToolEnabled,
   PAGINATION,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -59,6 +60,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -724,9 +726,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
     // Internal call (no transport provider) → service-to-service or scheduler.
-    // Preserve parent attribution; helper-level identity checks don't apply.
+    // Preserve parent attribution. The strict/delegated unix_username
+    // requirement still applies: an internal fork/spawn of a null-stamped
+    // parent must fail here, not later at prompt time.
     if (!params?.provider) {
-      return { created_by: parent.created_by, unix_username: parent.unix_username ?? null };
+      const inheritedUnixUsername = parent.unix_username ?? null;
+      assertUnixUsernameSatisfiesMode(
+        inheritedUnixUsername,
+        resolveExecutionSecurityMode().unixUserMode,
+        `the parent session's owner (${parent.created_by})`
+      );
+      return { created_by: parent.created_by, unix_username: inheritedUnixUsername };
     }
 
     const caller = params.user;
@@ -783,6 +793,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       callerUnixUsername,
       result.usedLegacySharing
     ) as Session['unix_username'];
+
+    // In strict/delegated, a child stamped null would fail at prompt time (or
+    // silently share an identity in hosted deployments) — reject at fork/spawn
+    // time with an actionable error instead. Also covers legacy sharing
+    // inheriting a null stamp from a pre-migration parent.
+    assertUnixUsernameSatisfiesMode(
+      unixUsername,
+      resolveExecutionSecurityMode().unixUserMode,
+      `the attributed user (${createdBy})`
+    );
 
     return { created_by: createdBy, unix_username: unixUsername };
   }

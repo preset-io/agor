@@ -9,6 +9,7 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
+import type { UnixUserMode } from '@agor/core/config';
 import type {
   BoardRepository,
   BranchRepository,
@@ -27,6 +28,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -1146,10 +1148,14 @@ export async function loadUnixUsernameForUser(
  * {@link loadUnixUsernameForUser} to keep the two paths in sync.
  *
  * @param userRepo - UserRepository instance
+ * @param unixUserMode - When the mode requires per-user unix_username
+ *   (strict/delegated), a creator without one is rejected at create time
+ *   instead of failing later at prompt time.
  */
 export function setSessionUnixUsername(
   // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
-  userRepo: any
+  userRepo: any,
+  unixUserMode?: UnixUserMode
 ) {
   return async (context: HookContext) => {
     // Only for session creation
@@ -1173,6 +1179,9 @@ export function setSessionUnixUsername(
     // Stamp session with creator's current unix_username.
     // IMMUTABLE - even if user's unix_username changes later, session keeps this value.
     data.unix_username = await loadUnixUsernameForUser(userRepo, userId);
+    if (unixUserMode) {
+      assertUnixUsernameSatisfiesMode(data.unix_username, unixUserMode);
+    }
 
     return context;
   };

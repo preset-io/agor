@@ -311,10 +311,15 @@ export interface AgorDatabaseSettings {
  * OS identities.
  *
  * - `simple` — all processes run as the daemon user (no OS isolation)
+ * - `delegated` — like `simple` (no sudo impersonation, no Unix groups), but
+ *   every user MUST have a `unix_username`: it is passed to the execution
+ *   substrate (e.g. the `{unix_user}` executor-command-template variable, which
+ *   hosted deployments use to select per-user home mounts) and its absence
+ *   fails loudly instead of silently sharing an identity
  * - `insulated` — executors run as a dedicated user with per-branch groups
  * - `strict` — sessions run as the session creator's own Unix user
  */
-export type UnixUserMode = 'simple' | 'insulated' | 'strict';
+export type UnixUserMode = 'simple' | 'delegated' | 'insulated' | 'strict';
 
 export interface AgorExecutorHeartbeatSettings {
   /** Enable executor task heartbeats (default: true). */

@@ -28,6 +28,9 @@ vi.mock('@agor/core/unix', () => ({
   buildSpawnArgs: vi.fn(),
   escapeShellArg: (value: string) => `'${value.replace(/'/g, "'\\''")}'`,
   isSecretEnvKey: vi.fn(),
+  // Real implementation (mirrors user-manager.ts) — the {unix_user} format
+  // guard under test depends on its actual charset semantics.
+  isValidUnixUsername: (username: string) => /^[a-z_][a-z0-9_-]{0,31}$/.test(username),
   prepareImpersonationEnv: vi.fn(),
 }));
 
@@ -905,5 +908,31 @@ describe('substituteTemplateVariables', () => {
     ).toThrow(
       'executor_command_template requires {tenant_id}, but no active tenant context is available'
     );
+  });
+
+  it('substitutes a valid {unix_user} value', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    const result = substituteTemplateVariables('launch --user {unix_user}', {
+      unix_user: 'agor_alice',
+    });
+
+    expect(result).toBe('launch --user agor_alice');
+  });
+
+  it.each([
+    { name: 'shell metacharacters', value: 'alice; rm -rf /' },
+    { name: 'path traversal', value: '../other-tenant' },
+    { name: 'command substitution', value: '$(whoami)' },
+    { name: 'uppercase (outside the Unix username charset)', value: 'Alice' },
+  ])('refuses a malformed {unix_user} value: $name', async ({ value }) => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    // The template runs via `sh -c` and launchers use {unix_user} as a path
+    // segment for per-user home mounts, so format validation (not escaping)
+    // is the control — it must reject both shell and path-traversal shapes.
+    expect(() =>
+      substituteTemplateVariables('launch --user {unix_user}', { unix_user: value })
+    ).toThrow('{unix_user} value is not a valid Unix username');
   });
 });

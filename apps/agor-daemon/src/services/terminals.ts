@@ -624,6 +624,12 @@ export class TerminalsService {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}]`,
           asUser: finalUnixUser || undefined,
           env: executorEnv,
+          templateVariables: {
+            // Mode-resolved identity for templated execution: the sudo user in
+            // insulated/strict, the caller's unix_username in delegated (no
+            // sudo), and unset in simple.
+            unix_user: impersonationResult.reportedUnixUser || undefined,
+          },
           // Clean up map when executor exits (handles crashes too)
           onExit: () => this.handleExecutorExit(userId),
         }

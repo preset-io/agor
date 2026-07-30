@@ -372,6 +372,21 @@ template instead of passing a literal or empty tenant value. In
 `required_from_auth` mode, every executor launch requires an active tenant
 context, whether or not its template uses the placeholder.
 
+`{unix_user}` is validated against the Unix-username format and Agor refuses
+to execute the template when the value is malformed — it is rendered into a
+`sh -c` command and commonly used as a path segment for per-user home mounts.
+In `unix_user_mode: delegated` it carries the session user's `unix_username`;
+in `insulated`/`strict` it carries the resolved impersonation identity.
+
+> **Codex subscription credentials caveat:** daemon-side Codex login flows
+> (paste-import, device sign-in, logout) write `~/.codex/auth.json` on the
+> **daemon host**. When executors run through a command template, their home
+> directory is typically provided by the container/orchestration layer, so a
+> daemon-managed credential file may never reach the executor. In
+> `unix_user_mode: delegated` these flows are rejected with a clear message;
+> in `simple` with a template they still write the daemon-host file — sign in
+> to Codex from a branch terminal or inside a session instead.
+
 ### How It Works
 
 1. Daemon receives request (e.g., start agent session)

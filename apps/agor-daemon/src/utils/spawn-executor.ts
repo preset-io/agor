@@ -33,6 +33,7 @@ import {
   buildSpawnArgs,
   escapeShellArg,
   isSecretEnvKey,
+  isValidUnixUsername,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
@@ -189,6 +190,17 @@ export function substituteTemplateVariables(
   if (template.includes('{tenant_id}') && !variables.tenant_id) {
     throw new Error(
       'executor_command_template requires {tenant_id}, but no active tenant context is available'
+    );
+  }
+
+  // `{unix_user}` is rendered into a `sh -c` command AND is typically used by
+  // launchers as a path segment (per-user home mounts), so a malformed value
+  // is both a shell-injection and a path-traversal vector. The Unix username
+  // charset excludes shell metacharacters, `/` and `.`, so format validation
+  // is the control here (stronger than escaping, which would not stop `../`).
+  if (variables.unix_user !== undefined && !isValidUnixUsername(variables.unix_user)) {
+    throw new Error(
+      'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
     );
   }
 
