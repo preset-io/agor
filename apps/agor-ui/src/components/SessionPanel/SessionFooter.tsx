@@ -290,7 +290,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             agentic_tool={session.agentic_tool}
             client={client}
             branchId={session.branch_id}
-            openCodeCatalogEnabled={session.created_by === currentUserId}
+            catalogEnabled={session.created_by === currentUserId}
             compact
             getPopupContainer={getMorePopupContainer}
           />
@@ -1367,7 +1367,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         agentic_tool={session.agentic_tool}
                         client={client}
                         branchId={session.branch_id}
-                        openCodeCatalogEnabled={session.created_by === currentUserId}
+                        catalogEnabled={session.created_by === currentUserId}
                       />
                     )}
                   </div>

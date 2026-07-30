@@ -137,8 +137,11 @@ jobs:
           echo "=== Installed dist/ ==="
           ls node_modules/agor-live/dist
           echo "=== Postinstall artifacts (@agor symlinks) ==="
+          ls -la node_modules/agor-live/node_modules/@agor/agentic-tool-opencode
+          ls -la node_modules/agor-live/node_modules/@agor/agentic-tools
           ls -la node_modules/agor-live/node_modules/@agor/core
           ls -la node_modules/agor-live/node_modules/@agor/git
+          (cd node_modules/agor-live && node --input-type=module -e "await import('@agor/agentic-tools'); await import('@agor/agentic-tool-opencode/runtime'); console.log('✓ agentic-tool packages import from agor-live package context')")
           (cd node_modules/agor-live && node --input-type=module -e "await import('@agor/core/git/exec'); console.log('✓ @agor/core/git/exec imports from agor-live package context')")
           # Confirm the UI bundle index.html is present and references a JS asset.
           if [ ! -f node_modules/agor-live/dist/ui/index.html ]; then
@@ -150,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           INSTALL="$RUNNER_TEMP/smoke-install/node_modules/agor-live"
-          node packages/executor/scripts/opencode-managed-runtime-harness.mjs \
+          node packages/agentic-tool-opencode/scripts/managed-runtime-harness.mjs \
             --module "$INSTALL/dist/executor/sdk-handlers/opencode/opencode-tool.js" \
             --permission-module "$INSTALL/dist/executor/permissions/permission-service.js" \
             --streaming-module "$INSTALL/dist/executor/handlers/sdk/base-executor.js" \

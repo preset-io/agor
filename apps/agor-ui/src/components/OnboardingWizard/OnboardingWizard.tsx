@@ -5,7 +5,12 @@
  * Steps: persona → workspace → llm → integrations → done
  */
 
-import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import {
+  getAgenticToolDisplayName,
+  isAgenticToolAuthenticationRuntimeManaged,
+  TOOL_API_KEY_NAMES,
+} from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration, getAgenticToolUIIntegrations } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolName,
   AgorClient,
@@ -122,17 +127,21 @@ const LLM_OPTIONS: LlmOption[] = [
     keyLink: 'https://aistudio.google.com/',
     keyLinkLabel: 'aistudio.google.com',
   },
-  {
-    id: 'custom',
-    agent: 'opencode',
-    symbol: '⚙',
-    provider: '',
-    title: 'Custom',
-    description: 'Use any model with an OpenAI-compatible API endpoint',
-    placeholder: 'https://…',
-    keyLink: null,
-    keyLinkLabel: null,
-  },
+  ...getAgenticToolUIIntegrations().flatMap(([agent, integration]) =>
+    integration.onboardingOption
+      ? [
+          {
+            ...integration.onboardingOption,
+            id: agent,
+            agent,
+            provider: getAgenticToolDisplayName(agent),
+            placeholder: '',
+            keyLink: null,
+            keyLinkLabel: null,
+          },
+        ]
+      : []
+  ),
 ];
 
 interface McpRecommendation {
@@ -331,14 +340,6 @@ function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | nu
       if (!k.startsWith('AIzaSy')) return 'Gemini keys start with AIzaSy…';
       if (k.length < 20) return 'Key looks incomplete.';
       return null;
-    case 'opencode': {
-      try {
-        new URL(k);
-        return null;
-      } catch {
-        return 'Enter a valid URL starting with https://';
-      }
-    }
     default:
       return null;
   }
@@ -379,8 +380,6 @@ function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
       return 'OpenAI API key';
     case 'gemini':
       return 'Google API key';
-    case 'opencode':
-      return 'Endpoint URL';
     default:
       return 'API key';
   }
@@ -661,10 +660,6 @@ export function OnboardingWizard({
         );
       }
       if (agent === 'gemini') return !!(gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY);
-      if (agent === 'opencode') {
-        const opencode = user.agentic_tools?.opencode;
-        return !!opencode?.[TOOL_API_KEY_NAMES.opencode ?? 'ANTHROPIC_API_KEY'];
-      }
       return false;
     },
     [user]
@@ -687,7 +682,7 @@ export function OnboardingWizard({
   // excluded from deps because including it would re-fire on every resolution (infinite loop).
   useEffect(() => {
     if (currentStep !== 'llm' || !onCheckAuth) return;
-    const agents: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+    const agents = LLM_OPTIONS.map((option) => option.agent);
     for (const agent of agents) {
       if (!agentHasKey(agent) || authCheckInFlightRef.current.has(agent)) continue;
       authCheckInFlightRef.current.add(agent);
@@ -732,6 +727,7 @@ export function OnboardingWizard({
         return !!selectedPersona;
       case 'llm': {
         if (!selectedAgent) return false;
+        if (isAgenticToolAuthenticationRuntimeManaged(selectedAgent)) return true;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
         // Device sign-in and login-file import both complete inside their own
         // pane — no typed input to validate. They enable once the daemon
@@ -778,6 +774,7 @@ export function OnboardingWizard({
         return selectedPersona ? null : 'Pick one, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
+        if (isAgenticToolAuthenticationRuntimeManaged(selectedAgent)) return null;
         if (agentIsVerifiedConnected(selectedAgent)) return null;
         if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
           return llmAuthVerified.codex === true
@@ -820,6 +817,9 @@ export function OnboardingWizard({
       case 'persona':
         return selectedPersona ? 'This is me →' : 'Continue →';
       case 'llm': {
+        if (selectedAgent && isAgenticToolAuthenticationRuntimeManaged(selectedAgent)) {
+          return 'Continue →';
+        }
         if (
           selectedAgent &&
           agentHasKey(selectedAgent) &&
@@ -910,6 +910,10 @@ export function OnboardingWizard({
       }
       case 'llm': {
         if (!selectedAgent) return;
+        if (isAgenticToolAuthenticationRuntimeManaged(selectedAgent)) {
+          goToStep('workspace');
+          return;
+        }
         if (agentIsVerifiedConnected(selectedAgent)) {
           goToStep('workspace');
           return;
@@ -1209,6 +1213,11 @@ export function OnboardingWizard({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
           {LLM_OPTIONS.map((option) => {
             const isSelected = selectedAgent === option.agent;
+            const integration = getAgenticToolUIIntegration(option.agent);
+            const ProviderSettings = integration?.ProviderSettings;
+            const runtimeManagedAuthentication = isAgenticToolAuthenticationRuntimeManaged(
+              option.agent
+            );
             const hasKey = agentHasKey(option.agent);
             const isChecking = llmAuthChecking === option.agent;
             const isVerified = llmAuthVerified[option.agent];
@@ -1380,137 +1389,177 @@ export function OnboardingWizard({
                   </div>
                 )}
 
-                {isSelected && !isChecking && (keyBroken || !hasKey) && (
+                {isSelected && !isChecking && runtimeManagedAuthentication && (
                   <div
                     style={{
-                      padding: '0 16px 16px',
+                      padding: '12px 16px 16px',
                       borderTop: '1px solid rgba(255,255,255,0.06)',
                     }}
                   >
-                    {keyBroken && (
+                    {ProviderSettings && client ? (
+                      <ProviderSettings client={client} />
+                    ) : (
                       <Alert
                         type="warning"
-                        message={
-                          subscriptionBroken
-                            ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
-                            : 'Key stored but not working - enter a new one.'
-                        }
                         showIcon
-                        style={{ marginTop: 12, marginBottom: 8, fontSize: 12 }}
+                        message="Provider settings are unavailable until the daemon is connected."
                       />
                     )}
+                  </div>
+                )}
 
-                    {/* Auth method toggle — agents with more than one way in */}
-                    {methodOptions && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          marginTop: 12,
-                          marginBottom: 12,
-                          borderRadius: 8,
-                          border: '1px solid rgba(255,255,255,0.13)',
-                          overflow: 'hidden',
-                          background:
-                            'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.2) 100%)',
-                          backdropFilter: 'blur(12px)',
-                          WebkitBackdropFilter: 'blur(12px)',
-                          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
-                        }}
-                      >
-                        {methodOptions.map((opt, idx) => {
-                          const active = authMethod === opt.value;
-                          return (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => {
-                                setAuthMethod(opt.value);
-                                setApiKey('');
-                                setLlmError(null);
-                              }}
-                              style={{
-                                flex: 1,
-                                padding: '7px 10px',
-                                fontSize: 12,
-                                fontWeight: active ? 600 : 400,
-                                cursor: 'pointer',
-                                border: 'none',
-                                borderLeft: idx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
-                                background: active ? 'rgba(46,154,146,0.18)' : 'transparent',
-                                color: active ? PRIMARY : TEXT_MUTED,
-                                transition: 'background 0.15s ease, color 0.15s ease',
-                              }}
-                            >
-                              {opt.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {authMethod !== 'codex-device-auth' && authMethod !== 'codex-auth-json' && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          marginTop: !methodOptions && !keyBroken ? 12 : 0,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
-                          {getKeyLabel(option.agent, authMethod)}
-                        </Text>
-                        {option.keyLink && authMethod === 'api-key' && (
-                          <Typography.Link
-                            href={option.keyLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ fontSize: 12, color: PRIMARY }}
-                          >
-                            Get your key at {option.keyLinkLabel} →
-                          </Typography.Link>
-                        )}
-                      </div>
-                    )}
-
-                    {authMethod === 'codex-device-auth' ? (
-                      <CodexDeviceSignIn
-                        client={client}
-                        onVerified={handleCodexDeviceVerified}
-                        onUseFallback={handleCodexAuthMethodFallback}
-                      />
-                    ) : authMethod === 'codex-auth-json' ? (
-                      <CodexImportAuthJson client={client} onImported={handleCodexImported} />
-                    ) : authMethod === 'claude-subscription-token' ? (
-                      <>
+                {isSelected &&
+                  !isChecking &&
+                  !runtimeManagedAuthentication &&
+                  (keyBroken || !hasKey) && (
+                    <div
+                      style={{
+                        padding: '0 16px 16px',
+                        borderTop: '1px solid rgba(255,255,255,0.06)',
+                      }}
+                    >
+                      {keyBroken && (
                         <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: 10, fontSize: 12 }}
+                          type="warning"
                           message={
-                            <span>
-                              For claude.ai Pro or Max subscribers. In any terminal with Claude Code
-                              installed, run <code>claude setup-token</code>, then paste the printed
-                              token below. Need Claude Code?{' '}
-                              <Typography.Link
-                                href="https://docs.claude.com/en/docs/claude-code/setup"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                Install docs
-                              </Typography.Link>
-                              .
-                            </span>
+                            subscriptionBroken
+                              ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
+                              : 'Key stored but not working - enter a new one.'
                           }
+                          showIcon
+                          style={{ marginTop: 12, marginBottom: 8, fontSize: 12 }}
                         />
+                      )}
+
+                      {/* Auth method toggle — agents with more than one way in */}
+                      {methodOptions && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            marginTop: 12,
+                            marginBottom: 12,
+                            borderRadius: 8,
+                            border: '1px solid rgba(255,255,255,0.13)',
+                            overflow: 'hidden',
+                            background:
+                              'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.2) 100%)',
+                            backdropFilter: 'blur(12px)',
+                            WebkitBackdropFilter: 'blur(12px)',
+                            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+                          }}
+                        >
+                          {methodOptions.map((opt, idx) => {
+                            const active = authMethod === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => {
+                                  setAuthMethod(opt.value);
+                                  setApiKey('');
+                                  setLlmError(null);
+                                }}
+                                style={{
+                                  flex: 1,
+                                  padding: '7px 10px',
+                                  fontSize: 12,
+                                  fontWeight: active ? 600 : 400,
+                                  cursor: 'pointer',
+                                  border: 'none',
+                                  borderLeft: idx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                                  background: active ? 'rgba(46,154,146,0.18)' : 'transparent',
+                                  color: active ? PRIMARY : TEXT_MUTED,
+                                  transition: 'background 0.15s ease, color 0.15s ease',
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {authMethod !== 'codex-device-auth' && authMethod !== 'codex-auth-json' && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginTop: !methodOptions && !keyBroken ? 12 : 0,
+                            marginBottom: 8,
+                          }}
+                        >
+                          <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
+                            {getKeyLabel(option.agent, authMethod)}
+                          </Text>
+                          {option.keyLink && authMethod === 'api-key' && (
+                            <Typography.Link
+                              href={option.keyLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: 12, color: PRIMARY }}
+                            >
+                              Get your key at {option.keyLinkLabel} →
+                            </Typography.Link>
+                          )}
+                        </div>
+                      )}
+
+                      {authMethod === 'codex-device-auth' ? (
+                        <CodexDeviceSignIn
+                          client={client}
+                          onVerified={handleCodexDeviceVerified}
+                          onUseFallback={handleCodexAuthMethodFallback}
+                        />
+                      ) : authMethod === 'codex-auth-json' ? (
+                        <CodexImportAuthJson client={client} onImported={handleCodexImported} />
+                      ) : authMethod === 'claude-subscription-token' ? (
+                        <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 10, fontSize: 12 }}
+                            message={
+                              <span>
+                                For claude.ai Pro or Max subscribers. In any terminal with Claude
+                                Code installed, run <code>claude setup-token</code>, then paste the
+                                printed token below. Need Claude Code?{' '}
+                                <Typography.Link
+                                  href="https://docs.claude.com/en/docs/claude-code/setup"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  Install docs
+                                </Typography.Link>
+                                .
+                              </span>
+                            }
+                          />
+                          <Input.Password
+                            aria-label="Claude subscription token"
+                            placeholder="Paste token from claude setup-token…"
+                            value={apiKey}
+                            onChange={(e) => {
+                              setApiKey(e.target.value);
+                              setLlmError(null);
+                            }}
+                            style={{
+                              background: 'rgba(0,0,0,0.3)',
+                              borderColor: 'rgba(255,255,255,0.12)',
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                            }}
+                          />
+                        </>
+                      ) : (
                         <Input.Password
-                          aria-label="Claude subscription token"
-                          placeholder="Paste token from claude setup-token…"
+                          aria-label={getKeyLabel(option.agent, authMethod)}
+                          placeholder={option.placeholder}
                           value={apiKey}
                           onChange={(e) => {
                             setApiKey(e.target.value);
-                            setLlmError(null);
+                            if (selectedAgent)
+                              setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
                           }}
                           style={{
                             background: 'rgba(0,0,0,0.3)',
@@ -1519,41 +1568,23 @@ export function OnboardingWizard({
                             fontSize: 13,
                           }}
                         />
-                      </>
-                    ) : (
-                      <Input.Password
-                        aria-label={getKeyLabel(option.agent, authMethod)}
-                        placeholder={option.placeholder}
-                        value={apiKey}
-                        onChange={(e) => {
-                          setApiKey(e.target.value);
-                          if (selectedAgent)
-                            setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
-                        }}
-                        style={{
-                          background: 'rgba(0,0,0,0.3)',
-                          borderColor: 'rgba(255,255,255,0.12)',
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                        }}
-                      />
-                    )}
+                      )}
 
-                    <Text
-                      style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
-                    >
-                      Stored securely - never shared or logged.
-                    </Text>
-                    {llmError && (
-                      <Alert
-                        type="error"
-                        message={llmError}
-                        showIcon
-                        style={{ marginTop: 10, fontSize: 12 }}
-                      />
-                    )}
-                  </div>
-                )}
+                      <Text
+                        style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
+                      >
+                        Stored securely - never shared or logged.
+                      </Text>
+                      {llmError && (
+                        <Alert
+                          type="error"
+                          message={llmError}
+                          showIcon
+                          style={{ marginTop: 10, fontSize: 12 }}
+                        />
+                      )}
+                    </div>
+                  )}
               </div>
             );
           })}
@@ -1776,7 +1807,10 @@ export function OnboardingWizard({
   };
 
   const renderDone = () => {
-    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
+    const aiConnected =
+      hasAnyLlmKey(user) ||
+      (selectedAgent !== null &&
+        (isAgenticToolAuthenticationRuntimeManaged(selectedAgent) || apiKey.trim().length > 0));
     const workspaceReady = hasExistingBoard;
 
     return (

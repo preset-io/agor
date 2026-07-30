@@ -12,6 +12,11 @@ describe('getPermissionModeLabel', () => {
   it('maps codex modes to human labels', () => {
     expect(getPermissionModeLabel('codex', 'allow-all')).toBe('Never ask');
   });
+
+  it('reads OpenCode modes from its registered UI contribution', () => {
+    expect(getPermissionModeLabel('opencode', 'autoEdit')).toBe('Accept edits');
+    expect(getPermissionModeLabel('opencode', 'yolo')).toBe('Bypass permissions');
+  });
 });
 
 describe('PermissionModeSelector', () => {

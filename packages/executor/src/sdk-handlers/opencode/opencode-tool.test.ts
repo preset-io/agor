@@ -333,11 +333,13 @@ describe('OpenCodeTool managed turn', () => {
     );
 
     expect(executorPackage.dependencies['@agor/agentic-tool-opencode']).toBe('workspace:*');
+    expect(executorPackage.dependencies).not.toHaveProperty('@opencode-ai/sdk');
+    expect(executorPackage.dependencies).not.toHaveProperty('opencode-ai');
     expect(openCodePackage.dependencies).toMatchObject({
       '@opencode-ai/sdk': '1.14.33',
       'opencode-ai': '1.14.33',
     });
-    expect(corePackage.dependencies['@opencode-ai/sdk']).toBe('1.14.33');
+    expect(corePackage.dependencies).not.toHaveProperty('@opencode-ai/sdk');
     expect(publishedPackage.dependencies).toMatchObject({
       '@opencode-ai/sdk': '1.14.33',
       'opencode-ai': '1.14.33',

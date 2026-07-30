@@ -22,6 +22,12 @@ import type { AgorClient } from '../../services/feathers-client.js';
  */
 export type Tool = AgenticToolName;
 
+export interface ToolExecutionResult {
+  completion?: {
+    model?: string;
+  };
+}
+
 /**
  * Tool runner function - executes via Feathers WebSocket
  */
@@ -33,11 +39,11 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
-  dataHome?: string;
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
-}) => Promise<void>;
+}) => Promise<ToolExecutionResult>;
 
 /**
  * Tool configuration
@@ -108,11 +114,11 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
-      dataHome?: string;
+      agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
     }
-  ): Promise<void> {
+  ): Promise<ToolExecutionResult> {
     const config = ToolRegistry.get(tool);
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);
@@ -135,13 +141,19 @@ export async function initializeToolRegistry(): Promise<void> {
     import('./cursor.js'),
   ]);
 
+  const legacyRunner =
+    (runner: (params: Parameters<ToolRunner>[0]) => Promise<void>): ToolRunner =>
+    async (params) => {
+      await runner(params);
+      return {};
+    };
   const adapters: ToolConfig[] = [
-    { tool: 'claude-code', runner: claude.executeClaudeCodeTask },
-    { tool: 'codex', runner: codex.executeCodexTask },
-    { tool: 'gemini', runner: gemini.executeGeminiTask },
+    { tool: 'claude-code', runner: legacyRunner(claude.executeClaudeCodeTask) },
+    { tool: 'codex', runner: legacyRunner(codex.executeCodexTask) },
+    { tool: 'gemini', runner: legacyRunner(gemini.executeGeminiTask) },
     { tool: 'opencode', runner: opencode.executeOpenCodeTask },
-    { tool: 'copilot', runner: copilot.executeCopilotTask },
-    { tool: 'cursor', runner: cursor.executeCursorTask },
+    { tool: 'copilot', runner: legacyRunner(copilot.executeCopilotTask) },
+    { tool: 'cursor', runner: legacyRunner(cursor.executeCursorTask) },
   ];
   for (const adapter of adapters) ToolRegistry.register(adapter);
 }

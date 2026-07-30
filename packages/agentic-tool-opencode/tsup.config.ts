@@ -5,6 +5,7 @@ export default defineConfig({
     'shared/index': 'src/shared/index.ts',
     'daemon/index': 'src/daemon/index.ts',
     'runtime/index': 'src/runtime/index.ts',
+    'runtime/auth-payload': 'src/runtime/auth-payload.ts',
     'ui/index': 'src/ui/index.ts',
   },
   format: ['cjs', 'esm'],
@@ -26,5 +27,6 @@ export default defineConfig({
     'opencode-ai',
     'react',
     'react/jsx-runtime',
+    'zod',
   ],
 });

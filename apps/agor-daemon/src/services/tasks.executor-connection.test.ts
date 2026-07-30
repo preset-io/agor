@@ -89,6 +89,35 @@ describe('TasksService executor patches', () => {
       undefined
     );
   });
+
+  it('persists adapter completion facts through the daemon-owned finalizer', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const sessionPatch = vi.fn().mockResolvedValue({});
+    service.patch = vi.fn().mockResolvedValue({
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: TaskStatus.COMPLETED,
+      model: 'provider/model',
+    });
+    Reflect.set(service, 'app', {
+      service: (path: string) => {
+        expect(path).toBe('sessions');
+        return { patch: sessionPatch };
+      },
+    });
+
+    await service.complete('task-1', { model: 'provider/model' });
+
+    expect(service.patch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({
+        status: TaskStatus.COMPLETED,
+        model: 'provider/model',
+      }),
+      undefined
+    );
+    expect(sessionPatch).toHaveBeenCalledWith('session-1', { ready_for_prompt: true }, undefined);
+  });
 });
 
 describe('TasksService runtime telemetry', () => {

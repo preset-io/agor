@@ -50,7 +50,7 @@ export interface AgenticConfigChipRowProps {
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
   branchId?: string;
-  openCodeCatalogEnabled?: boolean;
+  catalogEnabled?: boolean;
   /** Form field holding the configuration source. */
   fieldName?: string;
   /** Offer "Save as my default" under the chips while Custom is active. */
@@ -100,7 +100,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   mcpServerById,
   currentUser,
   branchId,
-  openCodeCatalogEnabled = true,
+  catalogEnabled = true,
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
   showEffort = true,
@@ -298,7 +298,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
                 agentic_tool={tool}
                 client={client}
                 branchId={branchId}
-                openCodeCatalogEnabled={openCodeCatalogEnabled}
+                catalogEnabled={catalogEnabled}
                 showAdvisor={false}
               />
             )}

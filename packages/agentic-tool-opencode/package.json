@@ -24,6 +24,12 @@
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.cjs"
     },
+    "./runtime/auth-payload": {
+      "source": "./src/runtime/auth-payload.ts",
+      "types": "./dist/runtime/auth-payload.d.ts",
+      "import": "./dist/runtime/auth-payload.js",
+      "require": "./dist/runtime/auth-payload.cjs"
+    },
     "./ui": {
       "source": "./src/ui/index.ts",
       "types": "./dist/ui/index.d.ts",
@@ -37,7 +43,8 @@
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
     "typecheck": "tsc -p tsconfig.typecheck.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:auth": "tsx scripts/provider-auth-harness.mjs"
   },
   "dependencies": {
     "@agor/core": "workspace:*",
@@ -45,11 +52,13 @@
     "@opencode-ai/sdk": "1.14.33",
     "antd": "^6.5.0",
     "opencode-ai": "1.14.33",
-    "react": "^19.2.7"
+    "react": "^19.2.7",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.17",
+    "tsx": "^4.23.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

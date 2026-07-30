@@ -9,14 +9,14 @@ import type {
   OpenCodeProviderSettings,
 } from '@agor/core/types';
 import {
-  type AuthenticatedOpenCodeSubjectContext,
-  resolveAuthenticatedOpenCodeSubjectContext,
-} from '../utils/opencode-credential-namespace.js';
-import {
   type OpenCodeOAuthExecutorHandle,
   runExecutorCommand,
   startOpenCodeOAuthExecutor,
-} from '../utils/spawn-executor.js';
+} from '../../utils/spawn-executor.js';
+import {
+  type AuthenticatedOpenCodeSubjectContext,
+  resolveAuthenticatedOpenCodeSubjectContext,
+} from './credential-namespace.js';
 
 const mutationSlots = new Map<string, Promise<void>>();
 // An unverified OAuth process keeps the same namespace coordinator closed.

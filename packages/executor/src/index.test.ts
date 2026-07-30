@@ -68,7 +68,7 @@ describe('AgorExecutor watchdog handoff', () => {
       taskId: 'task-1',
       prompt: 'prompt',
       tool: 'opencode',
-      dataHome: '/opaque/opencode-home',
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
       daemonUrl: 'http://daemon',
       resolvedConfig: {
         execution: {
@@ -91,10 +91,39 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(runtime.recordPulse).toHaveBeenCalledWith('sdk_started', 'opencode');
     expect(runtime.execute).toHaveBeenCalledWith(
       'opencode',
-      expect.objectContaining({ dataHome: '/opaque/opencode-home' })
+      expect.objectContaining({
+        agenticToolContext: { dataHome: '/opaque/opencode-home' },
+      })
     );
     expect(runtime.recordPulse.mock.invocationCallOrder[0]).toBeLessThan(
       runtime.execute.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('settles adapter completion only after the runner returns from runtime cleanup', async () => {
+    const complete = vi.fn().mockResolvedValue({});
+    runtime.execute.mockResolvedValueOnce({
+      completion: { model: 'provider/model' },
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: { service: () => { complete: typeof complete } };
+      executeTask(): Promise<void>;
+    };
+    executor.client = { service: () => ({ complete }) };
+
+    await executor.executeTask();
+
+    expect(complete).toHaveBeenCalledWith('task-1', { model: 'provider/model' });
+    expect(runtime.execute.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      complete.mock.invocationCallOrder[0]!
     );
   });
 

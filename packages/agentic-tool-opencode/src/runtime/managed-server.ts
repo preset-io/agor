@@ -388,7 +388,17 @@ export async function startManagedOpenCodeServer(
   },
   dependencies: ManagedOpenCodeServerDependencies = {}
 ): Promise<ManagedOpenCodeServer> {
-  if (input.dataHome) await ensureOpenCodeDataHome(input.dataHome);
+  const nativeEnvironment = input.dataHome
+    ? {
+        XDG_DATA_HOME: input.dataHome,
+        XDG_CONFIG_HOME: join(input.dataHome, 'xdg-config'),
+        XDG_CACHE_HOME: join(input.dataHome, 'xdg-cache'),
+        XDG_STATE_HOME: join(input.dataHome, 'xdg-state'),
+      }
+    : {};
+  if (input.dataHome) {
+    await Promise.all(Object.values(nativeEnvironment).map(ensureOpenCodeDataHome));
+  }
 
   const randomBytes = dependencies.randomBytes ?? nodeRandomBytes;
   const password = randomBytes(32).toString('base64url');
@@ -397,7 +407,7 @@ export async function startManagedOpenCodeServer(
   const environment = {
     ...process.env,
     ...input.environment,
-    ...(input.dataHome ? { XDG_DATA_HOME: input.dataHome } : {}),
+    ...nativeEnvironment,
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,
   };

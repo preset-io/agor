@@ -527,6 +527,9 @@ importers:
       react:
         specifier: ^19.2.7
         version: 19.2.7
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -537,6 +540,9 @@ importers:
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(supports-color@8.1.1)(tsx@4.23.0)(typescript@6.0.3)(yaml@2.9.0)
+      tsx:
+        specifier: ^4.23.0
+        version: 4.23.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -577,9 +583,6 @@ importers:
       '@agor-live/client':
         specifier: workspace:*
         version: link:../client
-      '@agor/agentic-tools':
-        specifier: workspace:*
-        version: link:../agentic-tools
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.197
         version: 0.3.197(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
@@ -890,9 +893,6 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.144.0
         version: 0.144.0
-      '@opencode-ai/sdk':
-        specifier: 1.14.33
-        version: 1.14.33
       '@slack/socket-mode':
         specifier: ^2.0.7
         version: 2.0.7
@@ -1002,18 +1002,12 @@ importers:
       '@github/copilot-sdk':
         specifier: ^0.2.2
         version: 0.2.2
-      '@opencode-ai/sdk':
-        specifier: 1.14.33
-        version: 1.14.33
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
       node-pty:
         specifier: ^1.2.0-beta.12
         version: 1.2.0-beta.12
-      opencode-ai:
-        specifier: 1.14.33
-        version: 1.14.33
       zod:
         specifier: ^4.3.6
         version: 4.4.3

@@ -4,7 +4,10 @@
  * Agor orchestration stays here; the OpenCode module owns the complete managed turn.
  */
 
-import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '@agor/agentic-tool-opencode';
+import {
+  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
+  parseOpenCodeExecutorContext,
+} from '@agor/agentic-tool-opencode';
 import { generateId, shortId } from '@agor/core';
 import type {
   ExecutorPulseKind,
@@ -23,6 +26,7 @@ import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js'
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
+import type { ToolExecutionResult } from './tool-registry.js';
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -32,10 +36,10 @@ export async function executeOpenCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
-  dataHome?: string;
+  agenticToolContext?: Record<string, unknown>;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
-}): Promise<void> {
+}): Promise<ToolExecutionResult> {
   const { client, sessionId, taskId, prompt } = params;
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
@@ -57,6 +61,7 @@ export async function executeOpenCodeTask(params: {
     if (!session.model_config?.provider?.trim() || !session.model_config.model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
+    const { dataHome } = parseOpenCodeExecutorContext(params.agenticToolContext);
 
     const repos = createFeathersBackedRepositories(client);
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;
@@ -95,7 +100,7 @@ export async function executeOpenCodeTask(params: {
         mcpToken: session.mcp_token,
         permissionMode: params.permissionMode,
         signal: params.abortController.signal,
-        dataHome: params.dataHome,
+        dataHome,
         persistOpenCodeSessionId: async (openCodeSessionId) => {
           await client.service('sessions').patch(sessionId, {
             sdk_session_id: openCodeSessionId,
@@ -126,21 +131,12 @@ export async function executeOpenCodeTask(params: {
           result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
         metadata: result.finalMessage.metadata,
       });
-      await client.service('tasks').patch(taskId, {
-        status: 'completed',
-        completed_at: new Date().toISOString(),
-        model: modelIdentifier,
-      });
+      return { completion: { model: modelIdentifier } };
     }
+    return {};
   } catch (error) {
     const err = error as Error;
     console.error('[opencode] Execution failed:', err);
-    if (!params.abortController.signal.aborted) {
-      await client.service('tasks').patch(taskId, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-      });
-    }
     throw err;
   } finally {
     globalPermissionManager.unregister(sessionId);

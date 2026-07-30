@@ -1,8 +1,8 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { BranchRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
-import { createOpenCodeModelsService } from './opencode-models';
+import { runExecutorCommand } from '../../utils/spawn-executor.js';
+import { createOpenCodeModelsService } from './models-service';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -31,7 +31,7 @@ vi.mock('@agor/core/unix', async () => {
   };
 });
 
-vi.mock('../utils/spawn-executor.js', () => ({
+vi.mock('../../utils/spawn-executor.js', () => ({
   runExecutorCommand: vi.fn(),
 }));
 

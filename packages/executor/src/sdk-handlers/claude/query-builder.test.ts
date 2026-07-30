@@ -36,7 +36,7 @@ vi.mock('./model-utils.js', () => ({
     betas: model.includes('[1m]') ? ['context-1m-2025-08-07'] : [],
   })),
 }));
-vi.mock('./permissions/permission-hooks.js', () => ({
+vi.mock('../base/permission-hooks.js', () => ({
   createCanUseToolCallback: vi.fn(
     () => () => Promise.resolve({ behavior: 'allow', updatedInput: {} })
   ),

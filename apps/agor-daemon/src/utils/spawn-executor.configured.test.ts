@@ -476,6 +476,7 @@ describe('configured executor spawning', () => {
 
     try {
       const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const unix = await import('@agor/core/unix');
       const handle = startOpenCodeOAuthExecutor(
         {
           command: 'opencode.auth',
@@ -496,10 +497,15 @@ describe('configured executor spawning', () => {
         ['executor', '--stdin'],
         expect.objectContaining({ detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
       );
+      expect(unix.buildSpawnArgs).toHaveBeenCalledWith(
+        'node',
+        [expect.any(String), '--interactive-command'],
+        expect.any(Object)
+      );
       proc.stdout.emit(
         'data',
         Buffer.from(
-          'AGOR_OPENCODE_OAUTH_EVENT {"type":"authorized","authorization":{"url":"http://127.0.0.1/authorize","method":"auto","instructions":"Synthetic code 1234"}}\n'
+          'AGOR_EXECUTOR_INTERACTIVE_EVENT {"type":"authorized","authorization":{"url":"http://127.0.0.1/authorize","method":"auto","instructions":"Synthetic code 1234"}}\n'
         )
       );
       proc.stderr.emit(

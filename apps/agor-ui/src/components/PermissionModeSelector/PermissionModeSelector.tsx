@@ -1,3 +1,4 @@
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -189,31 +190,6 @@ const CURSOR_MODES: ModeOption[] = [
   },
 ];
 
-// OpenCode permission modes. Non-automatic requests use Agor's permission UI.
-const OPENCODE_MODES: ModeOption[] = [
-  {
-    mode: 'default',
-    label: 'Manual',
-    description: 'Asks before each operation · for high-stakes changes',
-    icon: <LockOutlined />,
-    tone: 'danger',
-  },
-  {
-    mode: 'autoEdit',
-    label: 'Accept edits',
-    description: 'Auto-approves edits, asks for other operations · recommended for OpenCode',
-    icon: <EditOutlined />,
-    tone: 'success',
-  },
-  {
-    mode: 'yolo',
-    label: 'Bypass permissions',
-    description: 'Fully bypasses permission checks · isolated environments only',
-    icon: <UnlockOutlined />,
-    tone: 'warning',
-  },
-];
-
 // Codex sandbox mode options
 export const CODEX_SANDBOX_MODES = [
   {
@@ -259,13 +235,23 @@ export const CODEX_APPROVAL_POLICIES = [
 
 /** Get the mode options for a given agentic tool */
 const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): ModeOption[] => {
+  const contributed = tool ? getAgenticToolUIIntegration(tool)?.permissionModes : undefined;
+  if (contributed) {
+    const icons = {
+      lock: <LockOutlined />,
+      edit: <EditOutlined />,
+      unlock: <UnlockOutlined />,
+    };
+    return contributed.map((option) => ({
+      ...option,
+      icon: icons[option.icon],
+    }));
+  }
   switch (tool) {
     case 'codex':
       return CODEX_MODES;
     case 'gemini':
       return GEMINI_MODES;
-    case 'opencode':
-      return OPENCODE_MODES;
     case 'copilot':
       return COPILOT_MODES;
     case 'cursor':

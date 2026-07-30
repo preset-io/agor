@@ -41,12 +41,12 @@ const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
 }
-const modulePath = resolve(args.get('--module') ?? 'src/sdk-handlers/opencode/opencode-tool.ts');
+const modulePath = resolve(args.get('--module') ?? 'src/runtime/opencode-tool.ts');
 const permissionModulePath = resolve(
-  args.get('--permission-module') ?? 'src/permissions/permission-service.ts'
+  args.get('--permission-module') ?? '../executor/src/permissions/permission-service.ts'
 );
 const streamingModulePath = resolve(
-  args.get('--streaming-module') ?? 'src/handlers/sdk/base-executor.ts'
+  args.get('--streaming-module') ?? '../executor/src/handlers/sdk/base-executor.ts'
 );
 const containmentModulePath = resolve(
   args.get('--containment-module') ?? '../../apps/agor-daemon/src/executor-tracking.ts'

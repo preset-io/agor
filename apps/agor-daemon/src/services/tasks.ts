@@ -1404,7 +1404,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async complete(
     id: string,
-    data: { report?: Task['report'] },
+    data: { report?: Task['report']; model?: string },
     params?: TaskParams
   ): Promise<Task> {
     // Terminal timing is computed atomically by TaskRepository.update().
@@ -1414,6 +1414,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         status: TaskStatus.COMPLETED,
         completed_at: new Date().toISOString(),
         report: data.report,
+        ...(data.model ? { model: data.model } : {}),
       },
       params
     )) as Task;

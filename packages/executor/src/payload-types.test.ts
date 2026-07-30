@@ -49,7 +49,7 @@ describe('PromptPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       daemonUrl: 'http://localhost:4000',
       env: { ANTHROPIC_API_KEY: 'key' },
-      dataHome: '/data/agor',
+      agenticToolContext: { nativeHome: '/data/agor' },
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
@@ -63,7 +63,7 @@ describe('PromptPayloadSchema', () => {
     const result = PromptPayloadSchema.parse(payload);
     expect(result.daemonUrl).toBe('http://localhost:4000');
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
-    expect(result.dataHome).toBe('/data/agor');
+    expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
   });
 

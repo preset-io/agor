@@ -6,6 +6,7 @@ const runtime = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   readAuthFile: vi.fn(),
   start: vi.fn(),
+  verifyAuthFileBoundary: vi.fn(async () => undefined),
   sanitizeError: vi.fn((value: unknown) =>
     value instanceof Error ? value : new Error(String(value))
   ),
@@ -20,18 +21,31 @@ vi.mock('@opencode-ai/sdk/v2', () => ({
   createOpencodeClient: vi.fn(() => runtime.clients.shift()),
 }));
 
-vi.mock('@agor/agentic-tool-opencode/runtime', async () => {
-  const actual = await vi.importActual<typeof import('@agor/agentic-tool-opencode/runtime')>(
-    '@agor/agentic-tool-opencode/runtime'
-  );
-  return {
-    ...actual,
-    startManagedOpenCodeServer: runtime.start,
-    verifyOpenCodeAuthFileBoundary: vi.fn(async () => undefined),
-  };
-});
+import {
+  handleOpenCodeAuth,
+  handleOpenCodeOAuth as handleOpenCodeOAuthWithRuntime,
+  type OpenCodeAuthPayload,
+  type OpenCodeCommandOptions,
+  type OpenCodeOAuthPayload,
+} from './auth-handler.js';
 
-import { executeCommand } from './index';
+const runtimeDependencies = {
+  startManagedOpenCodeServer: runtime.start,
+  verifyOpenCodeAuthFileBoundary: runtime.verifyAuthFileBoundary,
+};
+
+function executeCommand(payload: OpenCodeAuthPayload, options: OpenCodeCommandOptions = {}) {
+  return handleOpenCodeAuth(payload, options, runtimeDependencies);
+}
+
+function handleOpenCodeOAuth(
+  payload: OpenCodeOAuthPayload,
+  options: OpenCodeCommandOptions,
+  emit: Parameters<typeof handleOpenCodeOAuthWithRuntime>[2],
+  readCode?: Parameters<typeof handleOpenCodeOAuthWithRuntime>[3]
+) {
+  return handleOpenCodeOAuthWithRuntime(payload, options, emit, readCode, runtimeDependencies);
+}
 
 const providerList = (connected: string[]) => ({
   data: {
@@ -439,7 +453,6 @@ describe('opencode.auth executor command', () => {
     runtime.clients.push(authClient, verificationClient);
     const events: unknown[] = [];
 
-    const { handleOpenCodeOAuth } = await import('./opencode-auth');
     const result = await handleOpenCodeOAuth(
       {
         command: 'opencode.auth',
@@ -504,7 +517,6 @@ describe('opencode.auth executor command', () => {
     authClient.provider.oauth.callback.mockResolvedValue({ error: { name: 'denied' } });
     runtime.clients.push(authClient);
 
-    const { handleOpenCodeOAuth } = await import('./opencode-auth');
     const result = await handleOpenCodeOAuth(
       {
         command: 'opencode.auth',
@@ -590,7 +602,6 @@ describe('opencode.auth executor command', () => {
     runtime.clients.push(authClient, verificationClient);
     const events: unknown[] = [];
 
-    const { handleOpenCodeOAuth } = await import('./opencode-auth');
     const result = await handleOpenCodeOAuth(
       {
         command: 'opencode.auth',

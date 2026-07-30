@@ -419,7 +419,8 @@ opaque tenant-and-user namespace. OAuth authorization runs in one bounded auth
 executor and task-scoped OpenCode server; Agor stops that runtime before a fresh
 server verifies the saved state. A task always routes to the namespace of the
 immutable session owner (`session.created_by`), not the user who submitted the
-prompt.
+prompt. OpenCode's data, configuration, cache, and state XDG roots are all
+placed beneath that namespace.
 
 - In `strict` mode, the session owner's Unix identity, ownership checks, and
   `0700`/`0600` permissions enforce the filesystem boundary.
@@ -440,6 +441,9 @@ prompt.
 - Native OpenCode credential storage is unavailable when multi-tenancy uses
   `required_from_auth`; configuration and task execution reject before starting
   OpenCode.
+- Task and catalog servers for one user may run concurrently. Credential
+  mutations and OAuth attempts are serialized; a mutation is guaranteed for
+  later server starts, not an already-running turn.
 
 ---
 

@@ -7,8 +7,22 @@ type ExecutionAdmission = (input: {
   config: Pick<AgorConfig, 'multi_tenancy'>;
 }) => void;
 
-const EXECUTION_ADMISSION: Partial<Record<AgenticToolName, ExecutionAdmission>> = {
-  [OPENCODE_DAEMON_CONTRIBUTION.name]: OPENCODE_DAEMON_CONTRIBUTION.admitExecutor,
+type ExecutorPayloadContribution = (input: {
+  tenantId: string;
+  session: Pick<Session, 'created_by' | 'unix_username'>;
+  homeDir: string;
+}) => Record<string, unknown>;
+
+interface DaemonAgenticToolIntegration {
+  admitExecutor?: ExecutionAdmission;
+  getExecutorPayload?: ExecutorPayloadContribution;
+}
+
+const DAEMON_INTEGRATIONS: Partial<Record<AgenticToolName, DaemonAgenticToolIntegration>> = {
+  [OPENCODE_DAEMON_CONTRIBUTION.name]: {
+    admitExecutor: OPENCODE_DAEMON_CONTRIBUTION.admitExecutor,
+    getExecutorPayload: OPENCODE_DAEMON_CONTRIBUTION.getExecutorPayload,
+  },
 };
 
 export async function admitAgenticToolExecutor<T>(
@@ -19,26 +33,18 @@ export async function admitAgenticToolExecutor<T>(
   },
   admitted: () => Promise<T>
 ): Promise<T> {
-  const admission = EXECUTION_ADMISSION[input.tool];
-  admission?.({ tenantId: input.tenantId, config: input.config });
+  DAEMON_INTEGRATIONS[input.tool]?.admitExecutor?.({
+    tenantId: input.tenantId,
+    config: input.config,
+  });
   return admitted();
 }
-
-type ExecutorPayloadContribution = (input: {
-  tenantId: string;
-  session: Pick<Session, 'created_by' | 'unix_username'>;
-  homeDir: string;
-}) => Record<string, unknown>;
-
-const EXECUTOR_PAYLOAD: Partial<Record<AgenticToolName, ExecutorPayloadContribution>> = {
-  [OPENCODE_DAEMON_CONTRIBUTION.name]: OPENCODE_DAEMON_CONTRIBUTION.getExecutorPayload,
-};
 
 export function getAgenticToolExecutorPayload(
   tool: AgenticToolName,
   input: Parameters<ExecutorPayloadContribution>[0]
 ): Record<string, unknown> {
-  return EXECUTOR_PAYLOAD[tool]?.(input) ?? {};
+  return DAEMON_INTEGRATIONS[tool]?.getExecutorPayload?.(input) ?? {};
 }
 
 export * from '@agor/agentic-tool-opencode/daemon';

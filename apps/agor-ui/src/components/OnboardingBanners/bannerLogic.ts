@@ -31,8 +31,8 @@ const CLAUDE_CREDENTIAL_FIELDS = [
  *
  * `credentialFields` are the auth-indicating env-var names for each tool (matching
  * both `agentic_tools[tool]` and `env_vars`); base-URL fields are excluded. OpenCode
- * is server-based — no credential field — so it never contributes a stored key, but
- * a user who SELECTED it still resolves to probing `opencode` (always authenticated).
+ * owns native provider credentials, so it never contributes a stored key. Its
+ * generic check-auth result remains unknown unless a tool-owned probe is used.
  */
 const SUPPORTED_AGENTIC_TOOLS: readonly {
   tool: AgenticToolName;

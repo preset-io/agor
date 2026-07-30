@@ -1136,7 +1136,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             <Alert
               type="info"
               showIcon
-              title="OpenCode connections can only be managed by that user."
+              title={`${displayNames[toolName]} connections can only be managed by that user.`}
             />
           );
           if (managesOwnSettings && client) {

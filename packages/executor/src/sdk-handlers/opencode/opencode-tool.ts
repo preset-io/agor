@@ -15,7 +15,7 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import { createCanUseToolCallback } from '../claude/permissions/permission-hooks.js';
+import { createCanUseToolCallback } from '../base/permission-hooks.js';
 
 export {
   type OpenCodeCanUseToolCallback,

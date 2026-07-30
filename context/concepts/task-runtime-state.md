@@ -3,6 +3,8 @@
 > Read this before changing task lifecycle, executor startup, runtime telemetry,
 > SDK activity mapping, watchdog policy, Stop behavior, or session
 > promptability. The code remains ground truth; this is the current-state map.
+> Agentic-tool package ownership and adapter boundaries are defined separately
+> in [agentic-tool-integration-architecture.md](../explorations/agentic-tool-integration-architecture.md).
 
 ## Mental model
 

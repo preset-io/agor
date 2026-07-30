@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { admitAgenticToolExecutor } from './daemon';
+import { admitAgenticToolExecutor, getAgenticToolExecutorPayload } from './daemon';
 
 describe('OpenCode executor admission', () => {
   it('rejects hosted native auth before token creation or executor spawn', async () => {
@@ -24,5 +24,20 @@ describe('OpenCode executor admission', () => {
 
     expect(generateToken).not.toHaveBeenCalled();
     expect(spawnExecutor).not.toHaveBeenCalled();
+  });
+
+  it('contributes an opaque adapter context instead of adding host payload fields', () => {
+    const payload = getAgenticToolExecutorPayload('opencode', {
+      tenantId: 'tenant-a',
+      session: {
+        created_by: 'user-1',
+        unix_username: 'alice',
+      } as never,
+      homeDir: '/home/alice',
+    });
+
+    const context = payload.agenticToolContext as { dataHome: string };
+    expect(context.dataHome.startsWith('/home/alice/.local/share/agor/opencode/')).toBe(true);
+    expect(payload).not.toHaveProperty('dataHome');
   });
 });

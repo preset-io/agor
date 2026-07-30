@@ -34,10 +34,10 @@ import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
-import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
 function summarizeMcpConfigCounts(config: unknown): string {
   if (!config || typeof config !== 'object') return 'none';

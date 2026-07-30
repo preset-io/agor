@@ -326,7 +326,7 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       if (isAgenticToolAuthenticationRuntimeManaged(tool as AgenticToolName)) {
-        return authed('native');
+        return unknown('Authentication is managed and verified by the selected agentic tool.');
       }
 
       const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];

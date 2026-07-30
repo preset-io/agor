@@ -8,6 +8,7 @@
  * (filesystem + DB + events). Unix operations are internal to git commands.
  */
 
+import { OpenCodeAuthParamsSchema } from '@agor/agentic-tool-opencode/runtime/auth-payload';
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
@@ -123,8 +124,8 @@ export const BasePayloadSchema = z.object({
   /** Environment variables to inject */
   env: z.record(z.string(), z.string()).optional(),
 
-  /** Data home directory override */
-  dataHome: z.string().optional(),
+  /** Opaque, daemon-authorized context interpreted by the selected adapter. */
+  agenticToolContext: z.record(z.string(), z.unknown()).optional(),
 
   /**
    * Daemon-resolved config slice. See {@link ResolvedConfigSliceSchema}.
@@ -166,30 +167,9 @@ export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
 
 export const OpenCodeAuthPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('opencode.auth'),
+  /** OpenCode auth/catalog commands are themselves adapter-owned payloads. */
   dataHome: z.string().min(1),
-  params: z.discriminatedUnion('operation', [
-    z.object({ operation: z.literal('discover') }),
-    z.object({
-      operation: z.literal('discover-models'),
-      directory: z.string().min(1).optional(),
-    }),
-    z.object({
-      operation: z.literal('connect-api-key'),
-      providerId: z.string().trim().min(1).max(200),
-      apiKey: z.string().trim().min(1),
-      metadata: z.record(z.string(), z.string()).optional(),
-    }),
-    z.object({
-      operation: z.literal('disconnect'),
-      providerId: z.string().trim().min(1).max(200),
-    }),
-    z.object({
-      operation: z.literal('connect-oauth'),
-      providerId: z.string().trim().min(1).max(200),
-      method: z.number().int().nonnegative(),
-      inputs: z.record(z.string(), z.string()).optional(),
-    }),
-  ]),
+  params: OpenCodeAuthParamsSchema,
 });
 
 export type OpenCodeAuthPayload = z.infer<typeof OpenCodeAuthPayloadSchema>;

@@ -29,7 +29,7 @@ export interface ModelConfig {
   model: string;
   // Claude Code-specific: server-side advisor tool model.
   advisorModel?: string;
-  // OpenCode-specific: provider + model
+  // Integration-owned exact provider/model selection.
   provider?: string;
 }
 
@@ -45,10 +45,10 @@ export interface ModelSelectorProps {
    * client, the picker only shows static models.
    */
   client?: AgorClient | null;
-  /** Optional authorized branch scope for OpenCode model discovery. */
+  /** Optional authorized branch scope for integration-owned model discovery. */
   branchId?: string;
-  /** False when an existing OpenCode session belongs to another user. */
-  openCodeCatalogEnabled?: boolean;
+  /** Whether integration-owned dynamic catalog discovery is authorized. */
+  catalogEnabled?: boolean;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
   /** Optional container for nested selector/popover overlays. */
@@ -164,7 +164,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agentic_tool,
   client,
   branchId,
-  openCodeCatalogEnabled = true,
+  catalogEnabled = true,
   compact = false,
   getPopupContainer,
   showAdvisor = true,
@@ -306,7 +306,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       <IntegrationModelSelector
         client={client}
         branchId={branchId}
-        catalogEnabled={openCodeCatalogEnabled}
+        catalogEnabled={catalogEnabled}
         compact={compact}
         getPopupContainer={getPopupContainer}
         value={

@@ -535,7 +535,7 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
   }
 }
 
-const OPENCODE_OAUTH_EVENT_PREFIX = 'AGOR_OPENCODE_OAUTH_EVENT ';
+const INTERACTIVE_EXECUTOR_EVENT_PREFIX = 'AGOR_EXECUTOR_INTERACTIVE_EVENT ';
 
 function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'>) {
   const executorPath = findExecutorPath();
@@ -595,7 +595,7 @@ function prepareLocalExecutorImpersonation(
 
 function prepareLocalExecutorSpawn(
   options: SpawnExecutorOptions,
-  mode: '--stdin' | '--opencode-oauth',
+  mode: '--stdin' | '--interactive-command',
   location = resolveLocalExecutorLocation(options)
 ) {
   const { executorPath, cwd } = location;
@@ -623,9 +623,9 @@ function prepareLocalExecutorSpawn(
 }
 
 function parseOpenCodeOAuthEvent(line: string): OpenCodeOAuthProcessEvent | undefined {
-  if (!line.startsWith(OPENCODE_OAUTH_EVENT_PREFIX)) return undefined;
+  if (!line.startsWith(INTERACTIVE_EXECUTOR_EVENT_PREFIX)) return undefined;
   try {
-    const event = JSON.parse(line.slice(OPENCODE_OAUTH_EVENT_PREFIX.length)) as unknown;
+    const event = JSON.parse(line.slice(INTERACTIVE_EXECUTOR_EVENT_PREFIX.length)) as unknown;
     if (!event || typeof event !== 'object' || !('type' in event)) return undefined;
     if (event.type === 'callback-started') return { type: 'callback-started' };
     if (
@@ -768,10 +768,9 @@ function createJsonLineInput(
 /**
  * Starts the one bounded, local executor process used by native OpenCode OAuth.
  *
- * This deliberately is not a general interactive executor transport: the only
- * intermediate frames it understands are the two OpenCode OAuth lifecycle
- * events above. Cancellation contains the executor's whole process group,
- * including its task-scoped managed OpenCode server.
+ * The process transport is generic JSON-lines framing. This integration-owned
+ * adapter interprets only OpenCode OAuth events. Cancellation contains the
+ * executor's whole process group, including its managed OpenCode server.
  */
 export function startOpenCodeOAuthExecutor(
   payload: Record<string, unknown>,
@@ -792,7 +791,7 @@ export function startOpenCodeOAuthExecutor(
       : configuredExecutorDefaults.asUser || undefined;
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
-  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--opencode-oauth');
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--interactive-command');
   const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
   const child = spawn(cmd, args, {
     cwd,

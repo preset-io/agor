@@ -213,7 +213,12 @@ describe('check-auth tri-state', () => {
 
   it('treats OpenCode provider authentication as a managed-runtime concern', async () => {
     const result = await service().create({ tool: 'opencode' }, params);
-    expect(result.status).toBe('authenticated');
+    expect(result).toMatchObject({
+      status: 'unknown',
+      authenticated: false,
+      method: 'none',
+    });
+    expect(resolveApiKeyMock).not.toHaveBeenCalled();
   });
 
   it('a raw key that 401s → unauthenticated (settings "Test Connection")', async () => {

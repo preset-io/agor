@@ -6,9 +6,9 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, OpenCodeModelCatalog, UUID } from '@agor/core/types';
-import { hasBranchPermission } from '../utils/branch-authorization.js';
-import { resolveAuthenticatedOpenCodeSubjectContext } from '../utils/opencode-credential-namespace.js';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
+import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { runExecutorCommand } from '../../utils/spawn-executor.js';
+import { resolveAuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
 
 type ModelCatalogQuery = { branch_id?: string };
 

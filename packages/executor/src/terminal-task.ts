@@ -4,12 +4,11 @@
  * The executor has four fail-safe paths that try to mark a task terminal —
  * the top-level catch in `AgorExecutor.start()`, the SIGTERM/SIGINT
  * shutdown handler, the `uncaughtException` handler, and the
- * `unhandledRejection` handler. The SDK handler (`base-executor`) is
- * the authoritative writer for terminal state and stamps a richer payload
- * (timing, `git_state.sha_at_end`, normalized SDK responses). If that
- * inner path already ran, the fail-safe paths must NOT redundantly emit a
- * second `'patched'` event — that's the bug the UI saw as
- * "chime plays twice".
+ * `unhandledRejection` handler. Legacy SDK handlers still write their normal
+ * terminal payloads. Runtime adapters that return completion facts are
+ * finalized here only after their cleanup has settled. In either case,
+ * fail-safe paths must NOT redundantly emit a second `'patched'` event —
+ * that's the bug the UI saw as "chime plays twice".
  *
  * Lives outside `index.ts` so the helper and its constant don't pollute
  * the package's public surface, and so the unit tests don't have to
@@ -19,6 +18,14 @@ import { shortId } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
+
+export async function completeTaskAfterRuntimeCleanup(
+  client: AgorClient,
+  taskId: string,
+  data: { model?: string }
+): Promise<void> {
+  await client.service('tasks').complete(taskId, data);
+}
 
 /**
  * Statuses past which any subsequent terminal-write is a no-op.

@@ -16,6 +16,7 @@ export type OpenCodeEventEffect =
         metadata: RecordValue;
       };
     }
+  | { type: 'unknown-activity' }
   | { type: 'idle' }
   | { type: 'error'; message: string };
 
@@ -187,7 +188,14 @@ export function createOpenCodeEventTranslator(input: {
       const root = record(event);
       const type = string(root?.type);
       const properties = record(root?.properties);
-      return type && properties ? (handlers.get(type)?.(properties) ?? []) : [];
+      if (!type || !properties) return [];
+      const handler = handlers.get(type);
+      if (handler) return handler(properties);
+      const sessionId =
+        string(properties.sessionID) ??
+        string(record(properties.info)?.sessionID) ??
+        string(record(properties.part)?.sessionID);
+      return sessionId === input.sessionId ? [{ type: 'unknown-activity' }] : [];
     },
   };
 }

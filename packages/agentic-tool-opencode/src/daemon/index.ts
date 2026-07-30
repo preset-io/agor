@@ -1,5 +1,6 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { Session } from '@agor/core/types';
+import { createOpenCodeExecutorContext } from '../shared/executor-context.js';
 import { resolveOpenCodeTaskCredentialNamespace } from './credential-namespace.js';
 import { assertOpenCodeExecutionAllowed } from './execution-admission.js';
 
@@ -25,7 +26,9 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     homeDir: string;
   }) {
     return {
-      dataHome: resolveOpenCodeTaskCredentialNamespace(input).dataHome,
+      agenticToolContext: createOpenCodeExecutorContext(
+        resolveOpenCodeTaskCredentialNamespace(input).dataHome
+      ),
     };
   },
 } as const;

@@ -156,7 +156,11 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
-    data: { git_state?: { sha_at_end?: string; commit_message?: string } },
+    data: {
+      report?: Task['report'];
+      model?: string;
+      git_state?: { sha_at_end?: string; commit_message?: string };
+    },
     params?: FeathersParams
   ): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;

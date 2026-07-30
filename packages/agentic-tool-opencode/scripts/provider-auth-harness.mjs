@@ -169,11 +169,9 @@ export async function SyntheticOAuthPlugin() {
   );
 
   const { handleOpenCodeAuth, handleOpenCodeOAuth } = await import(
-    '../src/commands/opencode-auth.ts'
+    '../src/runtime/auth-handler.ts'
   );
-  const { startManagedOpenCodeServer } = await import(
-    '../src/sdk-handlers/opencode/managed-server.ts'
-  );
+  const { startManagedOpenCodeServer } = await import('../src/runtime/managed-server.ts');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2');
   const modelCatalog = await expectSuccess(
     await handleOpenCodeAuth(

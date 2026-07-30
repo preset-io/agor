@@ -14,8 +14,6 @@
     "test:runtime": "node scripts/runtime-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && pnpm test:runtime",
-    "test:opencode-runtime": "tsx scripts/opencode-managed-runtime-harness.mjs --module src/sdk-handlers/opencode/opencode-tool.ts --permission-module src/permissions/permission-service.ts --streaming-module src/handlers/sdk/base-executor.ts --containment-module ../../apps/agor-daemon/src/executor-tracking.ts",
-    "test:opencode-auth": "tsx scripts/opencode-provider-auth-harness.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -25,10 +23,8 @@
     "@agor/git": "workspace:*",
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",
-    "@opencode-ai/sdk": "1.14.33",
     "diff": "^7.0.0",
     "node-pty": "^1.2.0-beta.12",
-    "opencode-ai": "1.14.33",
     "zod": "^4.4.3"
   },
   "devDependencies": {

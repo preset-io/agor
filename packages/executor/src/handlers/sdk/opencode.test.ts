@@ -112,6 +112,7 @@ describe('executeOpenCodeTask', () => {
         taskId: '00000000-0000-7000-8000-000000000002' as never,
         prompt: 'Do not run',
         abortController: new AbortController(),
+        agenticToolContext: { dataHome: '/opaque/opencode-home' },
       })
     ).rejects.toThrow(/select.*provider.*model/i);
 
@@ -146,7 +147,7 @@ describe('executeOpenCodeTask', () => {
     });
 
     const abortController = new AbortController();
-    await executeOpenCodeTask({
+    const execution = await executeOpenCodeTask({
       client: client as never,
       sessionId: '00000000-0000-7000-8000-000000000001' as never,
       taskId: '00000000-0000-7000-8000-000000000002' as never,
@@ -154,7 +155,7 @@ describe('executeOpenCodeTask', () => {
       permissionMode: 'default',
       abortController,
       messageSource: 'gateway',
-      dataHome: '/opaque/opencode-home',
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
       resolvedConfig: { execution: { permission_timeout_ms: 1234 } },
     });
 
@@ -215,10 +216,8 @@ describe('executeOpenCodeTask', () => {
         tool_uses: [{ id: 'call-1', name: 'bash', input: { command: 'pwd' } }],
       })
     );
-    expect(services.tasks.patch).toHaveBeenCalledWith(
-      '00000000-0000-7000-8000-000000000002',
-      expect.objectContaining({ status: 'completed', model: 'openai/gpt-test' })
-    );
+    expect(execution).toEqual({ completion: { model: 'openai/gpt-test' } });
+    expect(services.tasks.patch).not.toHaveBeenCalled();
   });
 
   it('reuses a daemon-written user message beyond the default Feathers page', async () => {
@@ -266,6 +265,7 @@ describe('executeOpenCodeTask', () => {
       prompt: 'Daemon wrote this prompt',
       abortController: new AbortController(),
       messageSource: 'agor',
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
     });
 
     expect(mocks.messagesCreate).toHaveBeenCalledTimes(1);
@@ -304,6 +304,7 @@ describe('executeOpenCodeTask', () => {
       taskId: '00000000-0000-7000-8000-000000000002' as never,
       prompt: 'Continue',
       abortController: new AbortController(),
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
     });
 
     expect(mocks.runTurn.mock.calls[0][0].existingOpenCodeSessionId).toBe('oc-existing');
@@ -320,11 +321,6 @@ describe('executeOpenCodeTask', () => {
       order.push('managed cleanup settled');
       throw new OpenCodePermissionRejectedError('OpenCode permission was rejected');
     });
-    services.tasks.patch.mockImplementationOnce(async (_taskId, task) => {
-      order.push(`task ${task.status}`);
-      return {};
-    });
-
     await expect(
       executeOpenCodeTask({
         client: client as never,
@@ -332,13 +328,11 @@ describe('executeOpenCodeTask', () => {
         taskId: '00000000-0000-7000-8000-000000000002' as never,
         prompt: 'Needs permission',
         abortController: new AbortController(),
+        agenticToolContext: { dataHome: '/opaque/opencode-home' },
       })
     ).rejects.toThrow('OpenCode permission was rejected');
 
-    expect(services.tasks.patch).toHaveBeenCalledWith(
-      '00000000-0000-7000-8000-000000000002',
-      expect.objectContaining({ status: 'failed' })
-    );
-    expect(order).toEqual(['managed cleanup settled', 'task failed']);
+    expect(services.tasks.patch).not.toHaveBeenCalled();
+    expect(order).toEqual(['managed cleanup settled']);
   });
 });

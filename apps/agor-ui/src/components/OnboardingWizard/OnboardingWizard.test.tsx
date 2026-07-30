@@ -80,7 +80,20 @@ function renderWizard(
   };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
-    service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    service: vi.fn((name: string) =>
+      name === 'boards'
+        ? boardsService
+        : name === 'opencode-auth'
+          ? {
+              find: vi.fn(async () => ({
+                runtime: 'available',
+                runtimeVersion: 'test',
+                providers: [],
+                isolation: { mode: 'strict', boundary: 'os' },
+              })),
+            }
+          : {}
+    ),
   };
   const onCreateRepo = vi.fn(async () => undefined);
   const onCreateBranch = vi.fn(async () => null);
@@ -194,7 +207,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Claude')).toBeInTheDocument();
     expect(screen.getByText('GPT')).toBeInTheDocument();
     expect(screen.getByText('Gemini')).toBeInTheDocument();
-    expect(screen.getByText('Custom')).toBeInTheDocument();
+    expect(screen.getByText('Multiple providers')).toBeInTheDocument();
     expect(screen.getByText('Recommended')).toBeInTheDocument();
 
     // No key input until a provider is selected.
@@ -203,6 +216,18 @@ describe('OnboardingWizard', () => {
     clickButton('GPT');
     expect(screen.getByLabelText('OpenAI API key')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('sk-proj-…')).toBeInTheDocument();
+  });
+
+  it('renders OpenCode-owned provider settings instead of a fake endpoint credential', async () => {
+    renderWizard({ initialStep: 'llm' });
+
+    clickButton('Multiple providers');
+
+    expect(
+      await screen.findByText(/Connect providers through native API-key or subscription/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Endpoint URL')).not.toBeInTheDocument();
+    expect(screen.getByText(/^Continue/).closest('button')).toBeEnabled();
   });
 
   it('validates the API key format for the selected provider before enabling Connect', async () => {

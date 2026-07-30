@@ -52,6 +52,54 @@ describe('OpenCode native data boundary', () => {
 });
 
 describe('managed OpenCode readiness', () => {
+  it('namespaces every OpenCode XDG root under the private native-data home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-xdg-'));
+    roots.push(root);
+    const dataHome = join(root, 'namespace');
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      kill: () => true,
+    }) as ManagedChild;
+    const spawn = vi.fn(() => child);
+
+    const started = startManagedOpenCodeServer(
+      { directory: tmpdir(), dataHome },
+      {
+        resolveBinary: async () => '/packaged/opencode',
+        spawn,
+        fetch: vi.fn(async () => new Response('{}', { status: 200 })),
+      }
+    );
+    child.stdout.write('opencode server listening on http://127.0.0.1:43210\n');
+    const server = await started;
+
+    expect(spawn).toHaveBeenCalledWith(
+      '/packaged/opencode',
+      ['serve', '--hostname=127.0.0.1', '--port=0'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          XDG_DATA_HOME: dataHome,
+          XDG_CONFIG_HOME: join(dataHome, 'xdg-config'),
+          XDG_CACHE_HOME: join(dataHome, 'xdg-cache'),
+          XDG_STATE_HOME: join(dataHome, 'xdg-state'),
+        }),
+      })
+    );
+    for (const directory of [
+      dataHome,
+      join(dataHome, 'xdg-config'),
+      join(dataHome, 'xdg-cache'),
+      join(dataHome, 'xdg-state'),
+    ]) {
+      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+    }
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    await server.close();
+  });
+
   it('waits for authenticated HTTP health after the listener announcement', async () => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),

@@ -54,6 +54,7 @@ import type {
   UserRole,
 } from '@agor/core/types';
 import {
+  AGENTIC_TOOL_NAMES,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
   normalizeRole,
@@ -508,15 +509,22 @@ export class UsersService {
         data.default_agentic_config ?? current.default_agentic_config;
       const nextDefaultAgenticSelection =
         data.default_agentic_selection ?? current.default_agentic_selection;
-      const openCodeSelection = nextDefaultAgenticSelection?.opencode;
-      const usesInlineOpenCodeDefault =
-        openCodeSelection?.source === 'inline' ||
-        (openCodeSelection === undefined && nextDefaultAgenticConfig?.opencode !== undefined);
-      if (usesInlineOpenCodeDefault) {
+      const changedDefaultTools = AGENTIC_TOOL_NAMES.filter(
+        (tool) =>
+          Object.hasOwn(data.default_agentic_config ?? {}, tool) ||
+          Object.hasOwn(data.default_agentic_selection ?? {}, tool)
+      );
+      for (const tool of changedDefaultTools) {
+        const selection = nextDefaultAgenticSelection?.[tool];
+        const configuration = nextDefaultAgenticConfig?.[tool];
+        const usesInlineDefault =
+          selection?.source === 'inline' ||
+          (selection === undefined && configuration !== undefined);
+        if (!usesInlineDefault) continue;
         try {
           await materializeAgenticToolConfiguration(this.db, {
-            tool: 'opencode',
-            source: { configuration: nextDefaultAgenticConfig?.opencode ?? {} },
+            tool,
+            source: { configuration: configuration ?? {} },
           });
         } catch (error) {
           if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);

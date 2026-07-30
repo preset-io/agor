@@ -8,36 +8,18 @@ import type {
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import type { OpenCodeAuthPayload } from './auth-payload.js';
 import {
   startManagedOpenCodeServer as defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary as defaultVerifyOpenCodeAuthFileBoundary,
   OPENCODE_VERSION,
 } from './managed-server.js';
 
+export type { OpenCodeAuthPayload } from './auth-payload.js';
+
 export interface OpenCodeCommandOptions {
   dryRun?: boolean;
 }
-
-export type OpenCodeAuthPayload = {
-  command: 'opencode.auth';
-  dataHome: string;
-  params:
-    | { operation: 'discover' }
-    | { operation: 'discover-models'; directory?: string }
-    | {
-        operation: 'connect-api-key';
-        providerId: string;
-        apiKey: string;
-        metadata?: Record<string, string>;
-      }
-    | { operation: 'disconnect'; providerId: string }
-    | {
-        operation: 'connect-oauth';
-        providerId: string;
-        method: number;
-        inputs?: Record<string, string>;
-      };
-};
 
 export interface OpenCodeAuthRuntimeDependencies {
   startManagedOpenCodeServer: typeof defaultStartManagedOpenCodeServer;
@@ -343,6 +325,27 @@ export type OpenCodeOAuthPayload = Omit<OpenCodeAuthPayload, 'params'> & {
   params: Extract<OpenCodeAuthPayload['params'], { operation: 'connect-oauth' }>;
 };
 
+const LOOPBACK_OAUTH_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);
+
+export function validateOpenCodeOAuthAuthorizationUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('OpenCode returned an invalid OAuth authorization URL');
+  }
+  if (url.username || url.password) {
+    throw new Error('OpenCode returned an OAuth authorization URL with embedded credentials');
+  }
+  if (
+    url.protocol !== 'https:' &&
+    !(url.protocol === 'http:' && LOOPBACK_OAUTH_HOSTS.has(url.hostname))
+  ) {
+    throw new Error('OpenCode returned an unsafe OAuth authorization URL');
+  }
+  return url.href;
+}
+
 export async function handleOpenCodeOAuth(
   payload: OpenCodeOAuthPayload,
   options: OpenCodeCommandOptions,
@@ -373,7 +376,7 @@ export async function handleOpenCodeOAuth(
           throw new Error('OpenCode rejected OAuth authorization');
         }
         const authorization: OpenCodeOAuthAuthorization = {
-          url: response.data.url,
+          url: validateOpenCodeOAuthAuthorizationUrl(response.data.url),
           method: response.data.method,
           instructions: response.data.instructions,
         };

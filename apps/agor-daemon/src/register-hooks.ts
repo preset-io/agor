@@ -92,6 +92,7 @@ import type {
 } from './declarations.js';
 import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
+import { AGENTIC_TOOL_TENANT_IDENTITY_ONLY_SERVICE_PATHS } from './integrations/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
@@ -467,8 +468,7 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
-  'opencode-auth',
-  'opencode-models',
+  ...AGENTIC_TOOL_TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   'claude-models',
   'copilot-models',
   'cursor-models',

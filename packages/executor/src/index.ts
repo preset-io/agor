@@ -31,7 +31,7 @@ import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
-import { tryMarkTaskTerminal } from './terminal-task.js';
+import { completeTaskAfterRuntimeCleanup, tryMarkTaskTerminal } from './terminal-task.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
@@ -54,8 +54,8 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
-  /** Daemon-derived OpenCode credential namespace. Never derived by the executor. */
-  dataHome?: string;
+  /** Opaque, daemon-authorized context interpreted by the selected adapter. */
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
 }
@@ -289,7 +289,7 @@ export class AgorExecutor {
       await initializeToolRegistry();
 
       // Execute using registry
-      await ToolRegistry.execute(this.config.tool, {
+      const result = await ToolRegistry.execute(this.config.tool, {
         client: this.client,
         sessionId: this.config.sessionId as SessionID,
         taskId: this.config.taskId as TaskID,
@@ -297,10 +297,13 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
-        dataHome: this.config.dataHome,
+        agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });
+      if (result?.completion && !this.terminationRequest && !this.abortController.signal.aborted) {
+        await completeTaskAfterRuntimeCleanup(this.client, this.config.taskId, result.completion);
+      }
     } finally {
       this.watchdog?.stop();
       this.watchdog = null;

@@ -402,7 +402,7 @@ export interface TasksService extends AgorService<Task> {
   /**
    * Mark a task as completed
    */
-  complete(id: string, data: { report?: unknown }, params?: Params): Promise<Task>;
+  complete(id: string, data: { report?: unknown; model?: string }, params?: Params): Promise<Task>;
 
   /**
    * Mark a task as failed

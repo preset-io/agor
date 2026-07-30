@@ -855,6 +855,11 @@ Agor's per-task Basic credential authenticates only the private SDK-to-server co
 - In `simple` mode, it reads state as the daemon user.
 - Prefer Agor-scoped environment variables when credentials must remain user- or session-specific.
 
+Agor places OpenCode's XDG data, configuration, cache, and state roots beneath
+the authenticated tenant-and-user namespace. This provides OS-enforced
+separation only when users execute under distinct Unix identities; same-UID
+modes remain logical isolation.
+
 OpenCode provider settings discover native API-key and OAuth methods using a
 disposable managed server. A native OAuth attempt keeps authorize and callback
 on the same auth server, stops the complete auth process path on completion or
@@ -873,6 +878,11 @@ namespace, optionally scopes it to a server-authorized branch directory, reads
 only provider/model display metadata and availability, then stops the server.
 Agor keeps no provider registry, model cache, server pool, or persistent
 OpenCode server.
+
+Task and catalog servers for the same subject may run concurrently against
+OpenCode's native state. Credential changes and OAuth attempts are serialized,
+but are not coordinated with an already-running turn; the change is guaranteed
+for servers started after the mutation.
 
 Every runnable OpenCode session stores one exact Agor provider/model pair.
 Resolution is session override, then preset or workspace default, then the

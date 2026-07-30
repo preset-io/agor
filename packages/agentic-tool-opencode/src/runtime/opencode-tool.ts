@@ -276,6 +276,7 @@ function createOpenCodeEffectConsumer(input: {
       for (const effect of effects) {
         switch (effect.type) {
           case 'text-delta':
+            input.streamingCallbacks?.onPulse?.('progress', 'message.text_delta');
             if (!input.streamingCallbacks) break;
             if (!textStarted) {
               textStarted = true;
@@ -293,6 +294,7 @@ function createOpenCodeEffectConsumer(input: {
             );
             break;
           case 'reasoning-delta':
+            input.streamingCallbacks?.onPulse?.('progress', 'message.reasoning_delta');
             if (!input.streamingCallbacks?.onThinkingChunk) break;
             if (!thinkingStarted) {
               thinkingStarted = true;
@@ -307,7 +309,14 @@ function createOpenCodeEffectConsumer(input: {
             );
             break;
           case 'tool-activity':
-            input.streamingCallbacks?.onPulse?.('progress', `opencode_tool_${effect.status}`);
+            input.streamingCallbacks?.onPulse?.(
+              'progress',
+              effect.status === 'completed' || effect.status === 'error'
+                ? 'tool.complete'
+                : effect.status === 'pending' || effect.status === 'running'
+                  ? 'tool.start'
+                  : 'tool.update'
+            );
             break;
           case 'permission':
             input.streamingCallbacks?.onPulse?.('waiting', 'permission.request');
@@ -318,6 +327,9 @@ function createOpenCodeEffectConsumer(input: {
               effect,
               canUseTool: input.canUseTool,
             });
+            break;
+          case 'unknown-activity':
+            input.streamingCallbacks?.onPulse?.('unknown_activity', 'unknown.event');
             break;
           case 'idle':
             input.settle();

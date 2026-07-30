@@ -465,7 +465,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           currentUser={currentUser}
           client={client ?? null}
           branchId={session.branch_id}
-          openCodeCatalogEnabled={session.created_by === currentUser?.user_id}
+          catalogEnabled={session.created_by === currentUser?.user_id}
           enableSaveAsDefault
           showEffort
         />

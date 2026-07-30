@@ -12,6 +12,8 @@ const targetManifest = 'packages/agor-live/package.json';
 const sourceManifests = [
   'packages/core/package.json',
   'packages/git/package.json',
+  'packages/agentic-tools/package.json',
+  'packages/agentic-tool-opencode/package.json',
   'apps/agor-cli/package.json',
   'apps/agor-daemon/package.json',
   'packages/executor/package.json',
@@ -19,7 +21,19 @@ const sourceManifests = [
 
 // Internal workspace packages are bundled/copied into agor-live dist.
 // They are not publishable npm dependencies and should not be synced into dependencies.
-const skipDeps = new Set(['@agor/core', '@agor/daemon', '@agor/git']);
+const skipDeps = new Set([
+  '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
+  // These are used only by the packages' browser entrypoints. agor-live ships
+  // the already-bundled UI and must not install a second browser dependency
+  // graph for daemon/executor imports.
+  '@ant-design/icons',
+  '@agor/core',
+  '@agor/daemon',
+  '@agor/git',
+  'antd',
+  'react',
+]);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
 
 const readJson = (relPath) => JSON.parse(readFileSync(resolve(repoRoot, relPath), 'utf8'));

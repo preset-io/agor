@@ -225,11 +225,28 @@ describe('OpenCode event translator', () => {
     ).toEqual([{ type: 'error', message: 'provider failed' }]);
   });
 
-  it('ignores unrecognized event names, including object-prototype keys', () => {
+  it('retains unknown active-session activity without accepting foreign or unscoped events', () => {
     const events = translator();
 
     expect(events.translate({ type: 'unsupported', properties: {} })).toEqual([]);
-    expect(events.translate({ type: 'toString', properties: {} })).toEqual([]);
+    expect(
+      events.translate({
+        type: 'unsupported',
+        properties: { sessionID: ACTIVE_SESSION },
+      })
+    ).toEqual([{ type: 'unknown-activity' }]);
+    expect(
+      events.translate({
+        type: 'unsupported',
+        properties: { sessionID: 'session-foreign' },
+      })
+    ).toEqual([]);
+    expect(
+      events.translate({
+        type: 'toString',
+        properties: { sessionID: ACTIVE_SESSION },
+      })
+    ).toEqual([{ type: 'unknown-activity' }]);
   });
 });
 

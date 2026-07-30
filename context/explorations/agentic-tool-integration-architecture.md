@@ -1,8 +1,8 @@
 # Agentic-tool integration architecture
 
-> **Status:** Target ownership for the OpenCode integration refactor. This
-> document records the intended seams; code remains ground truth while the
-> branch is migrated.
+> **Status:** Ownership contract implemented for the OpenCode integration
+> surfaces added by #2078. Named legacy seams remain below. Code remains ground
+> truth.
 
 ## Goal
 
@@ -50,10 +50,13 @@ AgenticToolIntegration
   UI contributions
         |
         v
-packages/agentic-tools/<tool>/
+packages/agentic-tool-<tool>/
 ```
 
-The registry is the only place that knows the complete installed tool set.
+`@agor/agentic-tools` is the only package that knows the complete installed
+tool set. Because the daemon, executor, and browser are separate build roots,
+each surface has one explicit typed projection of the canonical descriptor.
+Those registrations contain no duplicated tool behavior or metadata.
 Consumers ask the selected integration for behavior or capabilities; they do
 not switch on the tool name.
 
@@ -135,8 +138,19 @@ branch migrates. The architectural rules are fixed:
   coordinator rather than inventing containment;
 - Session reconciliation remains host-owned.
 
+The daemon places adapter-private execution inputs under one opaque
+`agenticToolContext` payload field. The selected adapter validates and
+interprets that value. Shared prompt payloads and executor runner signatures do
+not grow `dataHome`, provider, or other OpenCode-named fields.
+
 The existing executor `ToolRegistry` is the runtime composition point. Extend
 it; do not add a second runtime registry.
+
+For OpenCode, the runtime handler returns completion facts only after managed
+cleanup. The executor's top-level finalizer then asks the daemon-owned Task
+service to settle the durable Task. Runtime failures likewise unwind through
+the executor fail-safe or the daemon termination coordinator rather than being
+patched terminal inside the OpenCode adapter.
 
 ### Authentication and model catalogs
 
@@ -146,6 +160,11 @@ discovery, OAuth/API-key protocol, catalog parsing, and tool-specific errors.
 
 Secrets never enter browser registry metadata. UI contributions receive only
 authorized host clients and non-secret state.
+
+Provider authorization URLs are validated at the native-runtime boundary
+before they become browser-visible. Only HTTPS and narrowly scoped loopback
+HTTP URLs are accepted; malformed URLs, embedded credentials, and active-content
+schemes fail closed.
 
 ### UI contributions
 
@@ -186,8 +205,12 @@ Surface-specific exports keep dependency direction explicit:
 The package may depend on shared host contracts. Shared host packages must not
 import OpenCode. Composition roots import both and register the integration.
 
-Canonical persisted types that are genuinely shared remain in `@agor/core`;
-OpenCode-only protocol and presentation types live with OpenCode.
+Canonical persisted types and public client/service DTOs remain in
+`@agor/core`: the generated Agor client must type stable HTTP service routes
+without importing a runtime package. Raw OpenCode SDK types, native protocol
+interpretation, runtime payloads, and presentation types live with OpenCode.
+Core API DTOs are normalized Agor wire contracts and must not re-export the
+OpenCode SDK.
 
 ## Migration on PR #2078
 
@@ -204,6 +227,54 @@ The branch migrates by replacement, not layering:
 Physical relocation of legacy Claude Code, Codex, Gemini, Copilot, and Cursor
 implementations is not required in this PR. Their thin descriptors prove that
 the host contract is general without expanding the refactor.
+
+Daemon-owned Feathers authorization, tenant lookup, and branch access remain
+under `apps/agor-daemon/src/integrations/<tool>/`; they must not be pulled into
+the executor package. The daemon has one local integration composition root
+that registers those services and contributes their tenant-hook paths. Shared
+service registration and hook files do not name OpenCode.
+
+Interactive executor commands use one generic bounded JSON-lines transport.
+The transport only frames payloads, events, and control messages; the
+OpenCode command adapter owns OAuth payload validation and event semantics.
+
+## Native-state and concurrency contract
+
+The daemon derives one opaque tenant-and-user namespace and the executor maps
+all four OpenCode XDG roots (`data`, `config`, `cache`, and `state`) beneath it.
+The host-provided subject and Unix identity remain authoritative. This is an
+OS-enforced boundary only in strict mode; shared-UID modes provide logical
+separation, not protection from another same-UID process.
+
+OpenCode's native database supports simultaneous task and catalog servers for
+the same subject. Credential mutations and OAuth attempts are serialized by
+namespace in the daemon. Those mutations are not coordinated with an
+already-running turn; a connect or disconnect is guaranteed only for later
+server starts. If OpenCode adds a native cross-process locking requirement, the
+package must implement that at its native-state boundary rather than adding
+tool-name locks to host services.
+
+The packaged distribution copies and links both the installed registry and the
+OpenCode package as internal `@agor/*` packages. They are not public npm
+dependencies and no `workspace:*` reference is allowed to escape the release
+artifact.
+
+## Deferred legacy seams
+
+The repository still has older exhaustive tool switches that predate this
+containment work:
+
+- core default-permission selection and permission-mode mapping;
+- executor normalizer selection and the watchdog's native heartbeat filter; and
+- the daemon's OpenCode-typed wrapper around generic interactive subprocess
+  framing and process containment; and
+- exhaustive settings-tab and form-instance maps in the UI.
+
+They are not extension points for new OpenCode behavior. Migrate each only when
+its host contract can express the behavior for every affected tool without
+moving UI, runtime, or SDK dependencies into core. This PR replaces the
+OpenCode-specific branches it introduced; it does not turn a focused
+containment refactor into a repository-wide rewrite of legacy integrations.
 
 ## Guardrails
 

@@ -6,6 +6,11 @@ import {
 } from './model-configuration.js';
 
 export {
+  createOpenCodeExecutorContext,
+  type OpenCodeExecutorContext,
+  parseOpenCodeExecutorContext,
+} from './executor-context.js';
+export {
   hasCompleteOpenCodeModelConfig,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
   OPENCODE_MODEL_CONFIGURATION,

@@ -246,6 +246,40 @@ jq '
   }
 ' "$REPO_ROOT/packages/core/package.json" > "$DIST_STAGE/core/package.json"
 
+echo "  → Copying agentic-tool integration registry..."
+mkdir -p "$DIST_STAGE/agentic-tools"
+cp -r "$REPO_ROOT/packages/agentic-tools/dist/"* "$DIST_STAGE/agentic-tools/"
+
+echo "  → Creating package.json for bundled @agor/agentic-tools..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/agentic-tools",
+    version: "0.1.0",
+    type: "module",
+    main: "./index.js",
+    types: "./index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/agentic-tools/package.json" > "$DIST_STAGE/agentic-tools/package.json"
+
+echo "  → Copying OpenCode agentic-tool package..."
+mkdir -p "$DIST_STAGE/agentic-tool-opencode"
+cp -r "$REPO_ROOT/packages/agentic-tool-opencode/dist/"* "$DIST_STAGE/agentic-tool-opencode/"
+
+echo "  → Creating package.json for bundled @agor/agentic-tool-opencode..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/agentic-tool-opencode",
+    version: "0.1.0",
+    type: "module",
+    main: "./shared/index.js",
+    types: "./shared/index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/agentic-tool-opencode/package.json" > "$DIST_STAGE/agentic-tool-opencode/package.json"
+
 echo "  → Copying CLI..."
 mkdir -p "$DIST_STAGE/cli"
 cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"
@@ -302,7 +336,7 @@ rm -rf "$SCRIPT_DIR/dist.old"
 echo ""
 echo "📦 Setting up @agor package symlinks for local development..."
 mkdir -p "$SCRIPT_DIR/node_modules/@agor"
-for package_name in core git; do
+for package_name in agentic-tool-opencode agentic-tools core git; do
   rm -rf "$SCRIPT_DIR/node_modules/@agor/$package_name"
   ln -s "../../dist/$package_name" "$SCRIPT_DIR/node_modules/@agor/$package_name"
 done

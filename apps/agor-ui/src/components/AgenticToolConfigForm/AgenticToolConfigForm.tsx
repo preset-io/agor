@@ -20,6 +20,7 @@ import {
   getAgenticToolIntegration,
   isAgenticToolModelSelectionComplete,
 } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
@@ -51,7 +52,7 @@ export interface AgenticToolConfigFormProps {
    * dynamic discovery (e.g., default-settings preview, schedule editor).
    */
   client?: AgorClient | null;
-  /** Optional authorized branch scope for OpenCode model discovery. */
+  /** Optional authorized branch scope for integration-owned model discovery. */
   branchId?: string;
   /**
    * Render the Claude advisor model inline with the model selector. Surfaces
@@ -63,7 +64,6 @@ export interface AgenticToolConfigFormProps {
 const MODEL_LABELS: Record<string, string> = {
   codex: 'Codex Model',
   gemini: 'Gemini Model',
-  opencode: 'OpenCode LLM Provider',
   copilot: 'Copilot Model',
   cursor: 'Cursor Model',
 };
@@ -76,7 +76,10 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   branchId,
   showAdvisor = true,
 }) => {
-  const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
+  const modelLabel =
+    getAgenticToolUIIntegration(agenticTool)?.modelLabel ??
+    MODEL_LABELS[agenticTool] ??
+    'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
   const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[agenticTool];
   const effortLevels = toolCapabilities.reasoningEffortLevels;

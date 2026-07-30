@@ -11,7 +11,12 @@ import type {
   PromptPayload,
   ZellijAttachPayload,
 } from '../payload-types.js';
-import { executeCommand, getRegisteredCommands, hasCommand } from './index.js';
+import {
+  executeCommand,
+  executeInteractiveCommand,
+  getRegisteredCommands,
+  hasCommand,
+} from './index.js';
 
 describe('Command Registry', () => {
   it('should have all expected commands registered', () => {
@@ -405,6 +410,38 @@ describe('executeCommand - unknown command', () => {
     expect(result.error?.code).toBe('UNKNOWN_COMMAND');
     expect(result.error?.message).toContain('unknown.command');
     expect(result.error?.details).toHaveProperty('supportedCommands');
+  });
+});
+
+describe('interactive command registry', () => {
+  it('routes bounded OpenCode OAuth through the generic transport contract', async () => {
+    const result = await executeInteractiveCommand(
+      {
+        command: 'opencode.auth',
+        dataHome: '/opaque/data-home',
+        params: {
+          operation: 'connect-oauth',
+          providerId: 'openai',
+          method: 0,
+        },
+      },
+      { dryRun: true },
+      {
+        emit() {},
+        async read() {
+          throw new Error('dry-run must not read a control frame');
+        },
+      }
+    );
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        dryRun: true,
+        command: 'opencode.auth',
+        operation: 'connect-oauth',
+      },
+    });
   });
 });
 
