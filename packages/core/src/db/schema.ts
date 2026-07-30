@@ -57,6 +57,7 @@ export const kbNamespaceAcl = schema.kbNamespaceAcl;
 export const kbDocuments = schema.kbDocuments;
 export const kbDocumentVersions = schema.kbDocumentVersions;
 export const kbDocumentUnits = schema.kbDocumentUnits;
+export const kbDocumentComments = schema.kbDocumentComments;
 export const kbEmbeddingSpaces = schema.kbEmbeddingSpaces;
 export const kbGraphNodes = schema.kbGraphNodes;
 export const kbGraphEdges = schema.kbGraphEdges;

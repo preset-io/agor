@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(__dirname, '../../../..');
 
+// Migrations that introduce a tenant-owned table after the 0054/0055 rollout.
+// Each must both create the `tenant_id` column and install the RLS policy.
+const TENANT_TABLE_CREATING_MIGRATIONS = [
+  'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql',
+  'packages/core/drizzle/postgres/0068_uploads.sql',
+  'packages/core/drizzle/postgres/0070_kb_document_comments.sql',
+];
+
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
@@ -30,17 +38,14 @@ function retiredTenantTables(): Set<string> {
 
 function migrationTenantTables(): string[] {
   const migration = readRepoFile('packages/core/drizzle/postgres/0054_app_level_multitenancy.sql');
-  const presetsMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
-  );
-  const uploadsMigration = readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql');
+  const tenantTableCreatingMigrations =
+    TENANT_TABLE_CREATING_MIGRATIONS.map(readRepoFile).join('\n');
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
       [
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
-        ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
-        ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...tenantTableCreatingMigrations.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -51,8 +56,7 @@ function migrationTenantTables(): string[] {
 function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
+    ...TENANT_TABLE_CREATING_MIGRATIONS.map(readRepoFile),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

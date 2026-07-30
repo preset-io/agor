@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardComment } from './board-comment';
-import {
-  CommentAttachmentType,
-  getCommentAttachmentType,
-  groupReactions,
-  isReply,
-  isResolvable,
-  isThreadRoot,
-} from './board-comment';
+import { CommentAttachmentType, getCommentAttachmentType } from './board-comment';
+import { groupReactions, isReply, isResolvable, isThreadRoot } from './comment';
 
 // ============================================================================
 // Test Helpers
