@@ -166,13 +166,15 @@ live tenant data against the archive and detects any straggler write — treat
 (rejecting writes while the gate row exists) is a possible future hardening, not
 current behavior.
 
-Likewise, the filesystem export is **not** hardened against an adversary who
-restructures the tenant tree's directories mid-export — swapping an intermediate
-directory to a symlink between the walk and the copy can still route a read
-outside the tenant root (the `O_NOFOLLOW` protection covers only the terminal
-path component). The quiescence precondition (the write gate) plus the mandatory
-`verify` step are the mitigations: verify re-hashes live data against the archive
-and surfaces any diverted read as a content-hash mismatch.
+The filesystem export **fails closed** if a read would resolve outside the
+tenant root. The walk never descends symlinks (it records them as their own
+entries), and every regular-file read opens with `O_NOFOLLOW` **and** then proves
+the opened inode's canonical path is inside the tenant root. This covers both a
+terminal component swapped to a symlink and an intermediate directory swapped to
+a symlink mid-export: either way the read is refused and the export aborts rather
+than archiving foreign bytes. (This is prevention at the read, not detection
+after the fact; the mandatory `verify` step remains a defence-in-depth check for
+straggler *writes*, which the gate does not fence — see above.)
 
 `agor tenant delete --assert-gate-generation <gen>` binds the **database
 deletion phase only**: it re-checks the gate **inside the deletion transaction**,
@@ -218,7 +220,10 @@ on retry deletes zero rows and still reports success.)
   and produces the same content fingerprint (wall-clock metadata is excluded).
 - **Safety.** The filesystem walk never follows symlinks, records only safe
   relative paths, preserves file modes, and rejects links or paths that escape the
-  tenant root.
+  tenant root. Regular-file reads open with `O_NOFOLLOW` and additionally prove
+  the opened inode's canonical path is inside the tenant root, so a read that
+  would resolve outside the root (via a terminal or intermediate-directory symlink
+  swap) fails closed instead of archiving foreign bytes.
 
 ## Derived data
 

@@ -11,6 +11,11 @@
  *   - The tree walk never follows symlinks. Symbolic links are recorded as their
  *     own entries with the raw target string; directory symlinks are not
  *     descended, which also prevents cycles.
+ *   - Regular-file reads (hash and copy) open with `O_NOFOLLOW` and then prove
+ *     the opened inode's canonical path is inside the tenant root. A file whose
+ *     terminal component OR an intermediate directory was swapped to a symlink so
+ *     the read would resolve outside the root fails closed — the export aborts
+ *     rather than archiving foreign bytes.
  *   - Every archived path is a POSIX relative path validated to stay within the
  *     root (no absolute paths, no `..` traversal, no NUL bytes).
  *   - On restore, files are written into a staging directory and the finished
@@ -24,7 +29,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createWriteStream, constants as fsConstants } from 'node:fs';
+import { createWriteStream, constants as fsConstants, type Stats } from 'node:fs';
 import {
   chmod,
   copyFile,
@@ -39,7 +44,7 @@ import {
   rm,
   symlink,
 } from 'node:fs/promises';
-import { dirname, join, posix, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 /** Kind of filesystem entry captured in an archive. */
@@ -133,26 +138,75 @@ export function resolveWithinRoot(root: string, relativePath: string): string {
 }
 
 /**
- * Open a path as a regular file WITHOUT following a terminal symlink
- * (`O_NOFOLLOW`), then `fstat` the descriptor to confirm it really is a regular
- * file. This closes the TOCTOU window between the walk's `lstat` (which saw a
- * regular file) and the later hash/copy: if the path was swapped to a symlink in
- * between, `open` fails with `ELOOP` and we refuse it instead of reading whatever
- * the link points at. The returned handle must be closed by the caller.
+ * Prove that the inode behind an already-open descriptor lives inside
+ * `allowedRoot` (the tenant filesystem root's canonical path), and refuse
+ * otherwise. This is what closes the intermediate-directory symlink swap that
+ * `O_NOFOLLOW` alone cannot: `O_NOFOLLOW` guards only the TERMINAL component, so
+ * an adversary who swaps an ancestor DIRECTORY to a symlink between the walk and
+ * the read can make `open(root/ancestor/file)` resolve to an inode OUTSIDE the
+ * tenant root. We resolve the canonical path of the descriptor we actually hold
+ * open and require it to be within `allowedRoot` — the check runs against the
+ * SAME fd we read from, so there is no re-open TOCTOU.
  *
- * LIMITATION: `O_NOFOLLOW` guards only the TERMINAL path component. An adversary
- * who swaps an intermediate DIRECTORY of the tenant tree to a symlink between
- * the walk and the copy can still route a read outside the tenant root, because
- * the leading components are resolved normally. Preventing that requires
- * openat-style, descriptor-relative descent (open each component with
- * `O_NOFOLLOW` relative to its parent fd), which Node does not portably expose,
- * so it is left as future hardening. Today this residual window is a
- * detection-via-verify concern, not prevention: the mandatory verify step
- * re-hashes live tenant data against the archive and surfaces a content-hash
- * mismatch if such a swap diverted a read. Callers must run export under
- * tenant quiescence and always verify.
+ * Linux (primary target): read `/proc/self/fd/<fd>`, which names the inode the
+ * descriptor points at regardless of how the path was resolved. Portable
+ * fallback when `/proc` is absent (`ENOENT`): resolve the path with `realpath`
+ * and require its dev+ino to equal the open descriptor's `fstat` dev+ino, so the
+ * canonical path names the very inode we hold rather than a swapped one. Either
+ * way, a canonical location outside `allowedRoot` fails closed.
  */
-async function openRegularFileNoFollow(absolutePath: string): Promise<FileHandle> {
+async function assertOpenedInodeWithinRoot(
+  handle: FileHandle,
+  fstatInfo: Stats,
+  entryAbsolutePath: string,
+  allowedRoot: string
+): Promise<void> {
+  let canonical: string;
+  try {
+    canonical = await readlink(`/proc/self/fd/${handle.fd}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+    // `/proc` unavailable (non-Linux or restricted): resolve the path and prove
+    // it names the very inode we hold open, not one swapped in behind us.
+    canonical = await realpath(entryAbsolutePath);
+    const viaPath = await lstat(canonical);
+    if (viaPath.dev !== fstatInfo.dev || viaPath.ino !== fstatInfo.ino) {
+      throw new UnsafeArchivePathError(
+        `Refusing to read a file whose canonical path is not the opened inode: ${entryAbsolutePath}`
+      );
+    }
+  }
+  const rel = relative(allowedRoot, canonical);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new UnsafeArchivePathError(
+      `Refusing to read a file that resolves outside the tenant root: ${entryAbsolutePath}`
+    );
+  }
+}
+
+/**
+ * Open a path as a regular file WITHOUT following a terminal symlink
+ * (`O_NOFOLLOW`), `fstat` the descriptor to confirm it really is a regular file,
+ * and prove the opened inode's canonical path is inside `allowedRoot` (the
+ * canonical tenant filesystem root). This closes two attacks at once:
+ *
+ *   - Terminal swap: if the path was replaced by a symlink after the walk saw a
+ *     regular file, `open` fails with `ELOOP` and we refuse it.
+ *   - Intermediate-directory swap: if an ancestor directory was replaced by a
+ *     symlink so the path resolves to an inode OUTSIDE the tenant root, the
+ *     `allowedRoot` containment check (see `assertOpenedInodeWithinRoot`) fails
+ *     closed and we refuse rather than reading the foreign bytes.
+ *
+ * The export therefore ABORTS on such a swap instead of archiving out-of-root
+ * bytes; it is prevention, not detection-after-the-fact. The returned handle
+ * must be closed by the caller.
+ */
+async function openRegularFileNoFollow(
+  absolutePath: string,
+  allowedRoot: string
+): Promise<FileHandle> {
   let handle: FileHandle;
   try {
     handle = await open(absolutePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -164,16 +218,21 @@ async function openRegularFileNoFollow(absolutePath: string): Promise<FileHandle
     }
     throw error;
   }
-  const info = await handle.stat();
-  if (!info.isFile()) {
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new UnsafeArchivePathError(`Refusing to read a non-regular file: ${absolutePath}`);
+    }
+    await assertOpenedInodeWithinRoot(handle, info, absolutePath, allowedRoot);
+  } catch (error) {
     await handle.close().catch(() => {});
-    throw new UnsafeArchivePathError(`Refusing to read a non-regular file: ${absolutePath}`);
+    throw error;
   }
   return handle;
 }
 
-async function sha256File(absolutePath: string): Promise<string> {
-  const handle = await openRegularFileNoFollow(absolutePath);
+async function sha256File(absolutePath: string, allowedRoot: string): Promise<string> {
+  const handle = await openRegularFileNoFollow(absolutePath, allowedRoot);
   try {
     const hash = createHash('sha256');
     await pipeline(handle.createReadStream(), hash);
@@ -185,15 +244,18 @@ async function sha256File(absolutePath: string): Promise<string> {
 
 /**
  * Copy a regular file into `destinationPath` reading through an `O_NOFOLLOW`
- * descriptor, so a source path swapped to a symlink after the walk is refused
- * rather than followed out of the tenant root. Exported for unit coverage of the
- * copy path's symlink refusal.
+ * descriptor whose opened inode is proven to sit inside `allowedRoot` (the
+ * canonical tenant filesystem root). A source swapped to a symlink after the
+ * walk, or one whose ancestor directory was swapped so it resolves outside the
+ * tenant root, is refused rather than copied. Exported for unit coverage of the
+ * copy path's symlink and containment refusals.
  */
 export async function copyRegularFileNoFollow(
   sourcePath: string,
-  destinationPath: string
+  destinationPath: string,
+  allowedRoot: string
 ): Promise<void> {
-  const handle = await openRegularFileNoFollow(sourcePath);
+  const handle = await openRegularFileNoFollow(sourcePath, allowedRoot);
   try {
     await pipeline(handle.createReadStream(), createWriteStream(destinationPath));
   } finally {
@@ -225,6 +287,7 @@ function isInternalSymlink(root: string, linkAbsoluteDir: string, linkTarget: st
 
 async function walkDirectory(
   root: string,
+  allowedRoot: string,
   absoluteDir: string,
   relativeDir: string,
   depth: number,
@@ -270,7 +333,7 @@ async function walkDirectory(
         size: 0,
         mode: permissionBits(info.mode),
       });
-      await walkDirectory(root, absolutePath, relPath, depth + 1, acc);
+      await walkDirectory(root, allowedRoot, absolutePath, relPath, depth + 1, acc);
       continue;
     }
 
@@ -279,7 +342,7 @@ async function walkDirectory(
         path: relPath,
         type: 'file',
         size: info.size,
-        sha256: await sha256File(absolutePath),
+        sha256: await sha256File(absolutePath, allowedRoot),
         mode: permissionBits(info.mode),
       });
       continue;
@@ -320,8 +383,12 @@ export async function walkTenantFilesystemTree(root: string): Promise<{
   if (!(await rootExists(root))) {
     return { entries: [], skippedSpecialCount: 0, unsafeSymlinkCount: 0 };
   }
+  // Canonicalise the root once. Every file we open must resolve to an inode
+  // inside this path, or the read is refused (fail closed on an ancestor-symlink
+  // swap that would route a read outside the tenant root).
+  const allowedRoot = await realpath(root);
   const acc: WalkAccumulator = { entries: [], skippedSpecialCount: 0, unsafeSymlinkCount: 0 };
-  await walkDirectory(root, root, '', 0, acc);
+  await walkDirectory(root, allowedRoot, root, '', 0, acc);
   acc.entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return {
     entries: acc.entries,
@@ -388,6 +455,12 @@ export async function copyTenantFilesystemInto(
 }> {
   const walk = await walkTenantFilesystemTree(root);
   await mkdir(destinationFilesDir, { recursive: true });
+  // Canonical root once, so each opened file is proven to resolve inside it.
+  // Skip resolution when there is nothing to read (absent/empty root would make
+  // `realpath` throw).
+  const allowedRoot = walk.entries.some((entry) => entry.type === 'file')
+    ? await realpath(root)
+    : root;
   for (const entry of walk.entries) {
     const destination = resolveWithinRoot(destinationFilesDir, entry.path);
     if (entry.type === 'directory') {
@@ -398,9 +471,15 @@ export async function copyTenantFilesystemInto(
       await symlink(entry.linkTarget as string, destination);
     } else {
       await mkdir(dirname(destination), { recursive: true });
-      // Read through O_NOFOLLOW: a file the walk saw as regular but that has
-      // since been swapped to a symlink is refused rather than followed.
-      await copyRegularFileNoFollow(join(root, entry.path.split('/').join(sep)), destination);
+      // Read through O_NOFOLLOW and prove the opened inode resolves inside the
+      // canonical tenant root: a file swapped to a symlink, or one whose ancestor
+      // directory was swapped so it resolves outside the root, is refused rather
+      // than copied (the export fails closed instead of archiving foreign bytes).
+      await copyRegularFileNoFollow(
+        join(root, entry.path.split('/').join(sep)),
+        destination,
+        allowedRoot
+      );
       await chmod(destination, entry.mode);
     }
   }

@@ -175,14 +175,36 @@ describe('copy → stage → publish round trip', () => {
   it('refuses to copy through a symlink swapped in at a file path (O_NOFOLLOW)', async () => {
     // Simulates the TOCTOU where a path the walk saw as a regular file is
     // replaced by a symlink before the copy reads it.
+    const root = join(scratch, 'root');
+    await mkdir(root, { recursive: true });
     const secret = join(scratch, 'secret.txt');
     await writeFile(secret, 'secret');
-    const source = join(scratch, 'source-now-a-symlink');
+    const source = join(root, 'source-now-a-symlink');
     await symlink(secret, source);
     const destination = join(scratch, 'copied.txt');
-    await expect(copyRegularFileNoFollow(source, destination)).rejects.toThrow(
+    await expect(copyRegularFileNoFollow(source, destination, root)).rejects.toThrow(
       UnsafeArchivePathError
     );
+  });
+
+  it('refuses to copy a file whose parent is a symlink pointing outside the root', async () => {
+    // The escape is via an INTERMEDIATE directory, not the terminal component:
+    // the tenant root contains `sub` as a symlink to a directory outside the
+    // root, so `open(root/sub/file)` resolves to an out-of-root inode even
+    // though the terminal `open` (with O_NOFOLLOW) succeeds. The containment
+    // check on the opened descriptor must refuse it.
+    const root = join(scratch, 'root');
+    await mkdir(root, { recursive: true });
+    const outside = join(scratch, 'outside');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'file.txt'), 'foreign-bytes');
+    // `sub` is a symlink to the outside directory; its target `file.txt` is a
+    // real regular file, so O_NOFOLLOW alone would happily read it.
+    await symlink(outside, join(root, 'sub'));
+    const destination = join(scratch, 'copied.txt');
+    await expect(
+      copyRegularFileNoFollow(join(root, 'sub', 'file.txt'), destination, root)
+    ).rejects.toThrow(UnsafeArchivePathError);
   });
 });
 
