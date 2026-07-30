@@ -50,11 +50,21 @@ export * from './repositories';
 export * from './schema';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
+// Tenant data portability (inspect / export / import / verify)
+export * from './tenant-archive';
+export * from './tenant-catalog';
+export * from './tenant-database-io';
 // Tenant deletion (permanent, audited, idempotent per-tenant erasure)
 export * from './tenant-deletion';
 export * from './tenant-deletion-manifest';
+export * from './tenant-export';
+export * from './tenant-filesystem';
 export * from './tenant-imperative-tables';
+export * from './tenant-import';
+export * from './tenant-inspect';
+export * from './tenant-portability-manifest';
 export * from './tenant-scope';
 export * from './tenant-unit-of-work';
+export * from './tenant-verify';
 // User utilities
 export * from './user-utils';
