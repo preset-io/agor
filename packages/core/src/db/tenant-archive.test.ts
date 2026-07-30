@@ -4,7 +4,7 @@
  * payload integrity checking. No database required.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   canonicalJson,
   computeContentFingerprint,
   databaseDir,
+  filesDir,
   MalformedArchiveError,
   readManifest,
   serializeManifest,
@@ -105,6 +106,26 @@ describe('manifest validation', () => {
     expect(() => assertManifestShape(tampered)).toThrow(/contentFingerprint/);
   });
 
+  it('rejects an operationId with a path separator or ".." (staging-path escape)', () => {
+    // The content fingerprint excludes operationId, so a hostile id keeps the
+    // manifest otherwise valid — the dedicated check is the only defense.
+    const good = makeManifest([{ name: 'sessions', rowCount: 1, sha256: 'h', bytes: 10 }]);
+    expect(() => assertManifestShape({ ...good, operationId: 'x/../../../victim' })).toThrow(
+      MalformedArchiveError
+    );
+    expect(() => assertManifestShape({ ...good, operationId: 'a/b' })).toThrow(
+      MalformedArchiveError
+    );
+    expect(() => assertManifestShape({ ...good, operationId: 'a\\b' })).toThrow(
+      MalformedArchiveError
+    );
+    expect(() => assertManifestShape({ ...good, operationId: 'a..b' })).toThrow(
+      MalformedArchiveError
+    );
+    // A plain UUID-like id is accepted.
+    expect(() => assertManifestShape({ ...good, operationId: 'op-123' })).not.toThrow();
+  });
+
   it('rejects non-object input and missing fields', () => {
     expect(() => assertManifestShape(null)).toThrow(MalformedArchiveError);
     expect(() => assertManifestShape('x')).toThrow(MalformedArchiveError);
@@ -149,5 +170,67 @@ describe('verifyArchiveIntegrity', () => {
     const result = await verifyArchiveIntegrity(scratch, manifest);
     expect(result.ok).toBe(false);
     expect(result.problems.join(' ')).toMatch(/missing database file/);
+  });
+
+  it('confirms directory and symlink entries exist with the expected type', async () => {
+    const base: Pick<
+      TenantArchiveManifest,
+      'manifestVersion' | 'tenantId' | 'database' | 'filesystem'
+    > = {
+      manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+      tenantId: 'acme',
+      database: { identity, tables: [] },
+      filesystem: {
+        included: true,
+        entries: [
+          { path: 'sub', type: 'directory', size: 0, mode: 0o755 },
+          { path: 'sub/link', type: 'symlink', size: 0, linkTarget: 'x', mode: 0o777 },
+        ],
+        skippedSpecialCount: 0,
+        unsafeSymlinkCount: 0,
+      },
+    };
+    const manifest: TenantArchiveManifest = {
+      ...base,
+      operationId: 'op-fs',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: computeContentFingerprint(base),
+    };
+
+    // Nothing materialised yet: the directory and symlink entries are missing.
+    const missing = await verifyArchiveIntegrity(scratch, manifest);
+    expect(missing.ok).toBe(false);
+    expect(missing.problems.join(' ')).toMatch(/missing archived (directory|symlink)/);
+
+    // Materialise the directory and symlink and verify passes.
+    const files = filesDir(scratch);
+    await mkdir(join(files, 'sub'), { recursive: true });
+    await symlink('x', join(files, 'sub', 'link'));
+    const ok = await verifyArchiveIntegrity(scratch, manifest);
+    expect(ok.ok).toBe(true);
+
+    // A wrong type at an archived path is reported (symlink present where a
+    // directory is expected).
+    const wrongBase: Pick<
+      TenantArchiveManifest,
+      'manifestVersion' | 'tenantId' | 'database' | 'filesystem'
+    > = {
+      ...base,
+      filesystem: {
+        included: true,
+        entries: [{ path: 'sub/link', type: 'directory', size: 0, mode: 0o755 }],
+        skippedSpecialCount: 0,
+        unsafeSymlinkCount: 0,
+      },
+    };
+    const wrong: TenantArchiveManifest = {
+      ...wrongBase,
+      operationId: 'op-fs2',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: computeContentFingerprint(wrongBase),
+    };
+    const mismatch = await verifyArchiveIntegrity(scratch, wrong);
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.problems.join(' ')).toMatch(/expected a directory/);
   });
 });

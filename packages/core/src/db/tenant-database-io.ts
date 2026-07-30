@@ -19,6 +19,7 @@ import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
 import { canonicalJson } from './tenant-archive';
+import { TENANT_WRITE_GATE_KEY, TENANT_WRITE_GATE_NAMESPACE } from './tenant-write-gate';
 
 const TENANT_SCHEMA = 'public';
 const TENANT_SCOPE_COLUMN = 'tenant_id';
@@ -62,12 +63,23 @@ export async function exportTenantTableRows(
   tenantColumn: string = TENANT_SCOPE_COLUMN
 ): Promise<{ jsonl: string; rowCount: number }> {
   const column = sql.identifier(tenantColumn);
+  // The reserved per-tenant write-gate record (a single row in `app_variables`)
+  // is live orchestration state, not tenant data: it carries a wall-clock
+  // `acquiredAt` and a per-run `generation`, so archiving it would break
+  // export determinism, and restoring it would leave the destination frozen at
+  // the source's generation. Exclude it here so export, verify (live re-export
+  // compare), and import classification — all of which call this function —
+  // agree that the gate row is never part of the archive.
+  const excludeGateRow =
+    tableName === 'app_variables'
+      ? sql` AND NOT (namespace = ${TENANT_WRITE_GATE_NAMESPACE} AND key = ${TENANT_WRITE_GATE_KEY})`
+      : sql``;
   const result = await executeRaw(
     db,
     sql`
       SELECT pg_catalog.to_jsonb(t) AS row
       FROM ${qualifiedTable(tableName)} t
-      WHERE ${column} = ${tenantId}
+      WHERE ${column} = ${tenantId}${excludeGateRow}
       ORDER BY pg_catalog.to_jsonb(t)::pg_catalog.text
     `
   );

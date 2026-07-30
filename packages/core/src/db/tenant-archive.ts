@@ -24,7 +24,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
 import { resolveWithinRoot, type TenantFilesystemEntry } from './tenant-filesystem';
@@ -74,6 +74,30 @@ export interface TenantArchiveManifest {
   };
   /** SHA-256 over the canonical, wall-clock-free content of this archive. */
   contentFingerprint: string;
+}
+
+/**
+ * Reject an operation id that is unsafe to embed in a filesystem path. The
+ * importer derives a staging directory name from `manifest.operationId`
+ * (`.agor-import-<operationId>`) and then `rm(...,{recursive,force})`s it, so a
+ * value containing a path separator, a NUL byte, or a `..` segment could escape
+ * that directory and delete an arbitrary tree. The content fingerprint
+ * deliberately excludes the operation id, so a hostile id would otherwise pass
+ * integrity — this validation, applied at both export entry and manifest
+ * validation, is the only line of defense. Mirrors the rejection style of
+ * {@link assertSafeRelativePath}.
+ */
+export function assertSafeOperationId(operationId: string): void {
+  if (
+    operationId.includes('/') ||
+    operationId.includes('\\') ||
+    operationId.includes('\0') ||
+    operationId.includes('..')
+  ) {
+    throw new MalformedArchiveError(
+      `Unsafe operationId (must not contain path separators, "..", or NUL): ${operationId}`
+    );
+  }
 }
 
 /** Deterministic JSON: object keys sorted recursively, arrays preserved. */
@@ -202,6 +226,7 @@ export function assertManifestShape(parsed: unknown): TenantArchiveManifest {
   if (typeof parsed.operationId !== 'string' || parsed.operationId.length === 0) {
     throw new MalformedArchiveError('Archive manifest is missing an operationId');
   }
+  assertSafeOperationId(parsed.operationId);
   if (typeof parsed.contentFingerprint !== 'string' || parsed.contentFingerprint.length === 0) {
     throw new MalformedArchiveError('Archive manifest is missing a contentFingerprint');
   }
@@ -298,7 +323,6 @@ export async function verifyArchiveIntegrity(
   let checkedFiles = 0;
   const filesRoot = filesDir(archiveRoot);
   for (const entry of manifest.filesystem.entries) {
-    if (entry.type !== 'file') continue;
     let absolute: string;
     try {
       absolute = resolveWithinRoot(filesRoot, entry.path);
@@ -306,11 +330,31 @@ export async function verifyArchiveIntegrity(
       record(`unsafe archive path: ${entry.path}`);
       continue;
     }
-    let info: Awaited<ReturnType<typeof stat>>;
+    // lstat so an entry's own type is checked (a symlink is classified as such,
+    // not followed). Directory and symlink entries are confirmed to exist with
+    // the expected type — no hashing needed — so verify is a fuller preflight
+    // that the entire archived tree is materialisable, not just its file bytes.
+    let info: Awaited<ReturnType<typeof lstat>>;
     try {
-      info = await stat(absolute);
+      info = await lstat(absolute);
     } catch {
-      record(`missing archived file: ${entry.path}`);
+      record(`missing archived ${entry.type}: ${entry.path}`);
+      continue;
+    }
+    if (entry.type === 'directory') {
+      if (!info.isDirectory()) {
+        record(`expected a directory at archived path: ${entry.path}`);
+      }
+      continue;
+    }
+    if (entry.type === 'symlink') {
+      if (!info.isSymbolicLink()) {
+        record(`expected a symlink at archived path: ${entry.path}`);
+      }
+      continue;
+    }
+    if (!info.isFile()) {
+      record(`expected a regular file at archived path: ${entry.path}`);
       continue;
     }
     checkedFiles += 1;

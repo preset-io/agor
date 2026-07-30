@@ -163,6 +163,36 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
     await deleteTenantData(db, tenant);
   });
 
+  it('release is generation-predicated: stale refused, forced re-acquire rotates', async () => {
+    const tenant = `wg-${generateId()}`;
+    await seedTenant(db, tenant);
+
+    const first = await acquireTenantWriteGate(db, tenant);
+    // Forced re-acquire mints a new generation atomically (locking read + upsert).
+    const second = await acquireTenantWriteGate(db, tenant, { force: true });
+    expect(second.generation).not.toBe(first.generation);
+
+    // A release holding the superseded generation is refused (compare-and-delete):
+    // the generation-predicated DELETE never drops the replacement generation.
+    await expect(
+      releaseTenantWriteGate(db, tenant, { generation: first.generation })
+    ).rejects.toBeInstanceOf(TenantWriteGateGenerationError);
+
+    // The gate is still held at the current generation.
+    const held = await inspectTenantWriteGate(db, tenant, { expectGeneration: second.generation });
+    expect(held.active).toBe(true);
+    expect(held.heldContinuously).toBe(true);
+
+    // Releasing the current generation clears it.
+    const released = await releaseTenantWriteGate(db, tenant, { generation: second.generation });
+    expect(released.released).toBe(true);
+    expect(released.reason).toBe('released');
+    const after = await inspectTenantWriteGate(db, tenant);
+    expect(after.active).toBe(false);
+
+    await deleteTenantData(db, tenant);
+  });
+
   it('binds destructive deletion to the held gate generation', async () => {
     const tenant = `wg-${generateId()}`;
     await seedTenant(db, tenant);

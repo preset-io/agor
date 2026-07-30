@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertSafeRelativePath,
+  copyRegularFileNoFollow,
   copyTenantFilesystemInto,
   deleteTenantFilesystemTree,
   publishTenantFilesystemAtomically,
@@ -83,6 +84,14 @@ describe('walkTenantFilesystemTree', () => {
   it('returns empty for an absent root', async () => {
     const walk = await walkTenantFilesystemTree(join(scratch, 'nope'));
     expect(walk.entries).toEqual([]);
+  });
+
+  it('refuses a symlinked tenant root instead of following it', async () => {
+    const realDir = join(scratch, 'real');
+    await seedTree(realDir);
+    const linkRoot = join(scratch, 'linkroot');
+    await symlink(realDir, linkRoot);
+    await expect(walkTenantFilesystemTree(linkRoot)).rejects.toThrow(UnsafeArchivePathError);
   });
 
   it('records internal symlinks and skips ones that escape the root', async () => {
@@ -162,6 +171,19 @@ describe('copy → stage → publish round trip', () => {
       )
     ).rejects.toThrow(UnsafeArchivePathError);
   });
+
+  it('refuses to copy through a symlink swapped in at a file path (O_NOFOLLOW)', async () => {
+    // Simulates the TOCTOU where a path the walk saw as a regular file is
+    // replaced by a symlink before the copy reads it.
+    const secret = join(scratch, 'secret.txt');
+    await writeFile(secret, 'secret');
+    const source = join(scratch, 'source-now-a-symlink');
+    await symlink(secret, source);
+    const destination = join(scratch, 'copied.txt');
+    await expect(copyRegularFileNoFollow(source, destination)).rejects.toThrow(
+      UnsafeArchivePathError
+    );
+  });
 });
 
 describe('deleteTenantFilesystemTree', () => {
@@ -180,5 +202,21 @@ describe('deleteTenantFilesystemTree', () => {
     const base = join(scratch, 'tenants');
     await mkdir(base, { recursive: true });
     await expect(deleteTenantFilesystemTree(base, base)).rejects.toThrow(UnsafeArchivePathError);
+  });
+
+  it('refuses to delete a symlinked tenant root and leaves the target intact', async () => {
+    const realTree = join(scratch, 'real-tree');
+    await seedTree(realTree);
+    const base = join(scratch, 'tenants');
+    await mkdir(base, { recursive: true });
+    // A symlink inside the base pointing at an unrelated tree must not be
+    // followed (realpath would otherwise escape to the target).
+    const linkTenant = join(base, 'tenant-link');
+    await symlink(realTree, linkTenant);
+    await expect(deleteTenantFilesystemTree(linkTenant, base)).rejects.toThrow(
+      UnsafeArchivePathError
+    );
+    // The link's target tree is untouched.
+    expect((await stat(join(realTree, 'top.txt'))).isFile()).toBe(true);
   });
 });

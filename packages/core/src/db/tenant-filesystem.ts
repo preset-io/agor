@@ -24,18 +24,19 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createWriteStream, constants as fsConstants } from 'node:fs';
 import {
   chmod,
   copyFile,
+  type FileHandle,
   lstat,
   mkdir,
+  open,
   readdir,
   readlink,
   realpath,
   rename,
   rm,
-  stat,
   symlink,
 } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
@@ -131,10 +132,61 @@ export function resolveWithinRoot(root: string, relativePath: string): string {
   return absolute;
 }
 
+/**
+ * Open a path as a regular file WITHOUT following a terminal symlink
+ * (`O_NOFOLLOW`), then `fstat` the descriptor to confirm it really is a regular
+ * file. This closes the TOCTOU window between the walk's `lstat` (which saw a
+ * regular file) and the later hash/copy: if the path was swapped to a symlink in
+ * between, `open` fails with `ELOOP` and we refuse it instead of reading whatever
+ * the link points at. The returned handle must be closed by the caller.
+ */
+async function openRegularFileNoFollow(absolutePath: string): Promise<FileHandle> {
+  let handle: FileHandle;
+  try {
+    handle = await open(absolutePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new UnsafeArchivePathError(
+        `Refusing to follow a symlink at a regular-file path: ${absolutePath}`
+      );
+    }
+    throw error;
+  }
+  const info = await handle.stat();
+  if (!info.isFile()) {
+    await handle.close().catch(() => {});
+    throw new UnsafeArchivePathError(`Refusing to read a non-regular file: ${absolutePath}`);
+  }
+  return handle;
+}
+
 async function sha256File(absolutePath: string): Promise<string> {
-  const hash = createHash('sha256');
-  await pipeline(createReadStream(absolutePath), hash);
-  return hash.digest('hex');
+  const handle = await openRegularFileNoFollow(absolutePath);
+  try {
+    const hash = createHash('sha256');
+    await pipeline(handle.createReadStream(), hash);
+    return hash.digest('hex');
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * Copy a regular file into `destinationPath` reading through an `O_NOFOLLOW`
+ * descriptor, so a source path swapped to a symlink after the walk is refused
+ * rather than followed out of the tenant root. Exported for unit coverage of the
+ * copy path's symlink refusal.
+ */
+export async function copyRegularFileNoFollow(
+  sourcePath: string,
+  destinationPath: string
+): Promise<void> {
+  const handle = await openRegularFileNoFollow(sourcePath);
+  try {
+    await pipeline(handle.createReadStream(), createWriteStream(destinationPath));
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 function permissionBits(mode: number): number {
@@ -227,12 +279,20 @@ async function walkDirectory(
 }
 
 async function rootExists(root: string): Promise<boolean> {
+  let info: Awaited<ReturnType<typeof lstat>>;
   try {
-    const info = await stat(root);
-    return info.isDirectory();
+    info = await lstat(root);
   } catch {
     return false;
   }
+  // lstat, not stat: a symlinked root must never be followed. Following it would
+  // let a link resolve the "tenant root" to an unrelated tree and export or
+  // publish over it. The walk claims "never follows symlinks" — enforce that at
+  // the root too.
+  if (info.isSymbolicLink()) {
+    throw new UnsafeArchivePathError(`Refusing to operate on a symlinked tenant root: ${root}`);
+  }
+  return info.isDirectory();
 }
 
 /**
@@ -326,7 +386,9 @@ export async function copyTenantFilesystemInto(
       await symlink(entry.linkTarget as string, destination);
     } else {
       await mkdir(dirname(destination), { recursive: true });
-      await copyFile(join(root, entry.path.split('/').join(sep)), destination);
+      // Read through O_NOFOLLOW: a file the walk saw as regular but that has
+      // since been swapped to a symlink is refused rather than followed.
+      await copyRegularFileNoFollow(join(root, entry.path.split('/').join(sep)), destination);
       await chmod(destination, entry.mode);
     }
   }
@@ -409,7 +471,23 @@ export async function deleteTenantFilesystemTree(
   tenantRoot: string,
   allowedBaseRoot: string
 ): Promise<{ deleted: boolean }> {
-  if (!(await rootExists(tenantRoot))) {
+  // lstat BEFORE realpath: realpath would resolve a symlinked root to whatever
+  // it points at, and the containment check below would then be evaluated
+  // against that resolved tree — potentially deleting data outside the tenants
+  // base. Refuse a symlinked root and delete nothing. A missing root is an
+  // idempotent no-op success.
+  let info: Awaited<ReturnType<typeof lstat>>;
+  try {
+    info = await lstat(tenantRoot);
+  } catch {
+    return { deleted: false };
+  }
+  if (info.isSymbolicLink()) {
+    throw new UnsafeArchivePathError(
+      `Refusing to delete tenant filesystem: ${tenantRoot} is a symlink`
+    );
+  }
+  if (!info.isDirectory()) {
     return { deleted: false };
   }
   const resolvedBase = await realpath(allowedBaseRoot);

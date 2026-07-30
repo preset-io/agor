@@ -121,6 +121,16 @@ async function classifyDatabase(
   });
 }
 
+/**
+ * Detect a PostgreSQL unique/primary-key violation (SQLSTATE 23505) whether it
+ * surfaces directly or wrapped as a `cause`.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  const causeCode = (error as { cause?: { code?: string } } | null)?.cause?.code;
+  return code === '23505' || causeCode === '23505';
+}
+
 /** Insert every archived table's rows in parent-first order inside one tx. */
 async function restoreDatabase(
   db: Database,
@@ -143,7 +153,27 @@ async function restoreDatabase(
           `Archive table ${table.name} declares ${archived.rowCount} row(s) but contains ${rows.length}`
         );
       }
-      const count = await insertTenantTableRows(scoped, table.name, rows);
+      let count: number;
+      try {
+        count = await insertTenantTableRows(scoped, table.name, rows);
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          // Row identifiers (UUID primary keys) are globally unique across a
+          // runtime, not just within a tenant. A collision here means the
+          // destination runtime already holds these ids — the usual cause is
+          // re-homing (a `--tenant-id` different from the archive) into the SAME
+          // runtime the archive came from. Re-homing must target a DIFFERENT
+          // runtime whose global key space is empty for these ids; it does not
+          // clone a tenant within one runtime.
+          throw new MalformedArchiveError(
+            `Refusing to import: unique/primary-key collision while restoring ${table.name}. ` +
+              'Re-homing to a different --tenant-id must target a separate destination runtime ' +
+              'with a globally-empty key space, not the runtime the archive was exported from. ' +
+              'Import into a fresh runtime instead.'
+          );
+        }
+        throw error;
+      }
       inserted += count;
       if (count > 0) log(`restored ${count} row(s) into ${table.name}`);
     }

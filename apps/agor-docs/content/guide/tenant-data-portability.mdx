@@ -96,6 +96,11 @@ completion. A non-empty destination that does not match the archive is refused.
 Traversal paths, escaping symlinks, and malformed archives are rejected.
 
 Passing a different `--tenant-id` re-homes the tenant into an empty destination.
+Re-homing requires a **fresh destination runtime**: row identifiers (UUID primary
+keys) are globally unique across a runtime, not merely within a tenant, so
+importing under a new tenant id into the *same* runtime the archive came from
+collides on those ids and is refused. Point a re-home at a separate runtime whose
+global key space is empty for the archived ids.
 
 ### `agor tenant verify`
 
@@ -124,38 +129,71 @@ agor tenant delete --tenant-id acme-corp --database-only
 
 ## Freezing a tenant: the write gate
 
-Export, verify, and delete all require the tenant's data to hold still. The write
-gate is a generic, generation-bound freeze an external orchestrator uses to stop
-every writer for one tenant and prove the freeze stayed continuous.
+Export, verify, and delete all want the tenant's data to hold still. The write
+gate is a generic, generation-bound signal an external orchestrator uses to stop
+tenant writers **at the application's wired entry points** and to prove that
+signal stayed continuous.
 
-- **`agor tenant gate acquire`** freezes the tenant and returns an opaque
-  `generation` token. While held, every tenant writer fails closed — request
-  traffic (the daemon answers writes with `503`) and deferred operators alike
-  (scheduler, gateway, executor, queue drains). Reads are never blocked.
+- **`agor tenant gate acquire`** records the gate and returns an opaque
+  `generation` token. While held, tenant writers that pass through the wired
+  enforcement points fail closed — request traffic (the daemon answers writes
+  with `503`) and deferred operators alike (scheduler, gateway, executor, queue
+  drains). Reads are never blocked.
 - **`agor tenant gate inspect --expect-generation <gen>`** proves the *same*
-  freeze is still in force. A later acquire mints a new generation (replacement)
+  gate is still in force. A later acquire mints a new generation (replacement)
   and a release removes it (loss); either makes the check fail closed (exit `3`).
-- **`agor tenant gate release --generation <gen>`** lifts the freeze, but only for
+- **`agor tenant gate release --generation <gen>`** lifts the gate, but only for
   the generation the caller holds (compare-and-delete).
 
 The gate is stored per tenant with row-level-security isolation and is removed
 automatically if the tenant is deleted. It is PostgreSQL-only; on the
-single-tenant SQLite schema there is nothing to freeze and enforcement is a no-op.
+single-tenant SQLite schema there is nothing to gate and enforcement is a no-op.
+
+### What the gate does and does not guarantee
+
+The gate is **app-layer, fail-closed enforcement** at request hooks and deferred
+operator helpers. It is **not** a database lock or fence:
+
+- A write that already passed its pre-acquire check before the gate row appeared
+  can still commit.
+- A raw writer that bypasses those entry points (a direct SQL session, an
+  unwired code path) can still commit while the gate is "held".
+
+So the gate does **not** affirmatively freeze every possible writer. Export
+consistency therefore **relies on the mandatory `verify` step**, which re-hashes
+live tenant data against the archive and detects any straggler write — treat
+`verify` as part of the move, not an optional check. DB-level trigger fencing
+(rejecting writes while the gate row exists) is a possible future hardening, not
+current behavior.
+
+`agor tenant delete --assert-gate-generation <gen>` binds the **database
+deletion phase only**: it re-checks the gate **inside the deletion transaction**,
+so a gate that was lost or replaced (writes may have resumed) aborts the database
+deletion before anything is removed. It does **not** cover the subsequent
+filesystem deletion, which is a separate step.
 
 Recommended orchestration, e.g. for a verified move:
 
 ```bash
 GEN=$(agor tenant gate acquire --tenant-id acme-corp --reason move | jq -r .generation)
 agor tenant export --tenant-id acme-corp --archive /path/to/archive
-agor tenant gate inspect --tenant-id acme-corp --expect-generation "$GEN"   # exit 3 if the freeze broke
+agor tenant gate inspect --tenant-id acme-corp --expect-generation "$GEN"   # exit 3 if the gate broke
 # ... transport the archive and import it into the destination ...
-agor tenant delete --tenant-id acme-corp --assert-gate-generation "$GEN"     # aborts if the freeze broke
+agor tenant verify --archive /path/to/archive                                # mandatory: catches straggler writes
+agor tenant delete --tenant-id acme-corp --assert-gate-generation "$GEN"     # aborts the DB phase if the gate broke
 agor tenant gate release --tenant-id acme-corp --generation "$GEN"
 ```
 
-`agor tenant delete --assert-gate-generation <gen>` re-checks the gate **inside
-the deletion transaction**, so a freeze that was lost or replaced (writes may have
-resumed) aborts the deletion before anything is removed.
+### Retrying a partially-completed delete
+
+`agor tenant delete --assert-gate-generation <gen>` is **not idempotent after the
+database phase succeeds**: the gate row lives in a tenant table, so it is deleted
+along with the tenant. Because deletion is database-then-filesystem, a crash in
+the window after the database commit but before the filesystem tree is removed
+leaves the tenant in a DB-done / FS-pending state. A retry to finish the
+filesystem removal must be run **without** `--assert-gate-generation` — the gate
+generation no longer exists, so re-asserting it would abort. (The database phase
+on retry deletes zero rows and still reports success.)
 
 ## Preconditions and guarantees
 

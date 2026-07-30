@@ -18,6 +18,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { generateId } from '../lib/ids';
 import type { Database } from './client';
 import {
+  assertSafeOperationId,
   computeContentFingerprint,
   databaseDir,
   filesDir,
@@ -89,6 +90,9 @@ export async function exportTenant(
   assertValidTenantId(tenantId);
   const log = options.log ?? (() => {});
   const operationId = options.operationId ?? generateId();
+  // Reject a caller-supplied operation id that could escape the importer's
+  // staging-directory path (covers the CLI `--operation-id` flag and the API).
+  assertSafeOperationId(operationId);
 
   const identity = await resolveTenantDatabaseIdentity(db);
   await assertEmptyArchiveDestination(options.archivePath);

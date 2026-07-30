@@ -29,6 +29,12 @@ import { importTenant } from './tenant-import';
 import { inspectTenant } from './tenant-inspect';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 import { verifyTenant } from './tenant-verify';
+import {
+  acquireTenantWriteGate,
+  assertTenantWritable,
+  releaseTenantWriteGate,
+  TENANT_WRITE_GATE_NAMESPACE,
+} from './tenant-write-gate';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -178,6 +184,34 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     await deleteTenantData(db, tenantA);
     await deleteTenantData(db, tenantB);
     await rm(fsRoot, { recursive: true, force: true });
+  });
+
+  it('excludes the reserved write-gate row from the archive and leaves an import writable', async () => {
+    const tenant = `tpw-${generateId()}`;
+    await seedTenant(db, tenant);
+
+    // Freeze the tenant, then export while the gate is held.
+    const { generation } = await acquireTenantWriteGate(db, tenant, { reason: 'export' });
+    const archive = join(scratch, `${tenant}-archive`);
+    await exportTenant(db, tenant, { archivePath: archive });
+
+    // The archived app_variables payload must not contain the reserved gate row
+    // (its wall-clock/generation state is orchestration, not tenant data).
+    const appVars = await readFile(join(archive, 'database', 'app_variables.jsonl'), 'utf8').catch(
+      () => ''
+    );
+    expect(appVars).not.toContain(TENANT_WRITE_GATE_NAMESPACE);
+
+    // Release, erase, and restore into the now-empty destination.
+    await releaseTenantWriteGate(db, tenant, { generation });
+    await deleteTenantData(db, tenant);
+    const imported = await importTenant(db, { archivePath: archive });
+    expect(imported.database.restored).toBe(true);
+
+    // Because no gate row was carried over, the restored tenant is writable.
+    await expect(assertTenantWritable(db, tenant)).resolves.toBeUndefined();
+
+    await deleteTenantData(db, tenant);
   });
 
   it('refuses to import into a non-empty, non-matching destination', async () => {

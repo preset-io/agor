@@ -2,31 +2,50 @@
  * Generic, runtime-owned per-tenant write gate.
  *
  * An external orchestrator that needs a tenant's data to hold still — to export,
- * verify, migrate, or delete it — must be able to stop every writer for that
- * tenant and prove the stop was continuous. This module provides that primitive
+ * verify, migrate, or delete it — records an intent to stop writers and can
+ * prove that intent stayed continuous. This module provides that primitive
  * without any deployment-specific knowledge: it knows only a tenant id, a
  * database connection, and an opaque, monotonic *generation* token.
  *
+ * What this is (and is NOT):
+ *
+ *   This is APP-LAYER, fail-closed enforcement. The gate record is consulted at
+ *   the request hooks and the deferred operator helpers wired to
+ *   {@link assertTenantWritable} (see `register-hooks.ts` `writeGateBefore`,
+ *   `utils/tenant-db-scope.ts`, `utils/session-queue-tenant-scope.ts`). It is
+ *   NOT a database lock or fence. It does not stop a write that already passed
+ *   its pre-acquire check before the gate row appeared, and it does not stop a
+ *   raw writer that bypasses those entry points entirely — such a write can
+ *   still commit while the gate is "held". The gate therefore makes quiescence
+ *   *enforceable at the wired boundaries*, not an affirmative freeze of every
+ *   possible writer. Export/verify/delete consistency ultimately RELIES on the
+ *   mandatory `verify` step, which re-hashes live tenant data against the
+ *   archive and detects any straggler write. True writer fencing (e.g. DB-level
+ *   triggers that reject writes while the gate row exists) is deliberately left
+ *   as future hardening.
+ *
  * Semantics:
  *
- *   - **Acquire** freezes a tenant by writing a gate record stamped with a fresh
- *     generation (a time-ordered UUIDv7). While the record exists, tenant writes
- *     fail closed at the enforcement points (see {@link assertTenantWritable}).
- *   - **Generation binding** lets a holder prove the *same* freeze remained in
+ *   - **Acquire** writes a gate record stamped with a fresh generation (a
+ *     time-ordered UUIDv7). While the record exists, tenant writes fail closed
+ *     at the wired enforcement points (see {@link assertTenantWritable}).
+ *   - **Generation binding** lets a holder prove the *same* gate remained in
  *     force. A later acquire mints a new generation (replacement); a release
  *     removes it (loss). Either makes a continuity check for the old generation
  *     fail — the fail-closed contract the orchestrator relies on.
  *   - **Release** removes the gate, but only for the generation the caller holds
- *     (compare-and-delete), so one operator cannot lift another's freeze.
+ *     (compare-and-delete), so one operator cannot lift another's gate.
  *   - **In-transaction assertion** ({@link assertTenantWriteGateGeneration}) lets
  *     a destructive operation confirm, inside its own transaction, that the gate
- *     is still held at the expected generation before it commits.
+ *     is still held at the expected generation before it commits. This binds the
+ *     DATABASE deletion phase only; a subsequent filesystem deletion is a
+ *     separate step and is not covered by this assertion.
  *
  * The gate record is stored as a single reserved key in the tenant-owned
  * `app_variables` table, so it is row-level-security isolated per tenant and is
  * removed automatically when the tenant is deleted — no dedicated schema. Gate
  * state is PostgreSQL-only, mirroring the rest of Agor's multi-tenancy: on the
- * single-tenant SQLite schema there is nothing to freeze, and enforcement is a
+ * single-tenant SQLite schema there is nothing to gate, and enforcement is a
  * no-op so it never blocks a self-hosted developer.
  */
 
@@ -156,6 +175,35 @@ async function readGateRowScoped(
   return parseGatePayload(rowsOf(result)[0]?.value_text);
 }
 
+/**
+ * Read the gate record for update, taking a row lock (`FOR UPDATE`) so a
+ * check-then-act (read the current gate, then acquire or release) is serialized
+ * against a concurrent acquire/release on the same tenant. Used ONLY by
+ * {@link acquireTenantWriteGate} and {@link releaseTenantWriteGate}; the
+ * read-only paths ({@link readTenantWriteGate}/{@link assertTenantWritable} and
+ * {@link assertTenantWriteGateGeneration}) stay unlocked so enforcement reads
+ * never block. The caller owns the transaction (the surrounding tenant scope),
+ * so the lock is held until that transaction commits.
+ */
+async function readGateRowScopedForUpdate(
+  scopedDb: Database,
+  tenantId: string
+): Promise<GatePayload | null> {
+  const result = await executeRaw(
+    scopedDb,
+    sql`
+      SELECT value_text
+      FROM ${appVariablesTable()}
+      WHERE tenant_id = ${tenantId}
+        AND namespace = ${TENANT_WRITE_GATE_NAMESPACE}
+        AND key = ${TENANT_WRITE_GATE_KEY}
+      LIMIT 1
+      FOR UPDATE
+    `
+  );
+  return parseGatePayload(rowsOf(result)[0]?.value_text);
+}
+
 function toState(payload: GatePayload | null): TenantWriteGateState {
   if (!payload) return { active: false };
   return {
@@ -229,7 +277,9 @@ export async function acquireTenantWriteGate(
 ): Promise<AcquireTenantWriteGateResult> {
   assertPostgres(db, 'acquire');
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    const existing = await readGateRowScoped(scoped, tenantId);
+    // Locking read: serialize this acquire against a concurrent acquire/release
+    // so two non-force acquires cannot both observe "no gate" and both succeed.
+    const existing = await readGateRowScopedForUpdate(scoped, tenantId);
     if (existing && !options.force) {
       throw new TenantWriteGateHeldError(tenantId, existing.generation);
     }
@@ -318,11 +368,16 @@ export async function releaseTenantWriteGate(
 ): Promise<ReleaseTenantWriteGateResult> {
   assertPostgres(db, 'release');
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    const existing = await readGateRowScoped(scoped, tenantId);
+    // Locking read: take the row lock before deciding, so no concurrent
+    // acquire/release can change the generation between this read and the delete.
+    const existing = await readGateRowScopedForUpdate(scoped, tenantId);
     if (!existing) return { released: false, reason: 'not-active' };
     if (existing.generation !== options.generation && !options.force) {
       throw new TenantWriteGateGenerationError(tenantId, options.generation, existing.generation);
     }
+    // Predicate the delete on the exact generation observed under the lock, so
+    // we remove only that record — a defense-in-depth compare-and-delete that
+    // cannot drop a replacement generation even if the lock were absent.
     await executeRaw(
       scoped,
       sql`
@@ -330,6 +385,7 @@ export async function releaseTenantWriteGate(
         WHERE tenant_id = ${tenantId}
           AND namespace = ${TENANT_WRITE_GATE_NAMESPACE}
           AND key = ${TENANT_WRITE_GATE_KEY}
+          AND (value_text::pg_catalog.jsonb->>'generation') = ${existing.generation}
       `
     );
     const forced = existing.generation !== options.generation;
