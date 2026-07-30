@@ -130,6 +130,21 @@ async function findAndClickButton(text: string | RegExp) {
 }
 
 describe('OnboardingWizard', () => {
+  it('uses the shared animated glass highlights behind its content', () => {
+    const { baseElement } = renderWizard();
+
+    expect(baseElement.querySelector('[data-glass-highlights="strong"]')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(baseElement.querySelectorAll('[data-glass-highlight]')).toHaveLength(2);
+    expect(
+      Array.from(baseElement.querySelectorAll('style'))
+        .map((style) => style.textContent)
+        .join('\n')
+    ).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it('starts on the persona step; selecting a persona advances to LLM and saves onboarding progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
@@ -618,6 +633,22 @@ describe('Codex ChatGPT login import', () => {
       await screen.findByText(/Codex login no longer found on this server/i)
     ).toBeInTheDocument();
     expect(screen.queryByText(/Key stored but not working/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a successfully registered subscription usable when later verification is unknown', async () => {
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+    }));
+    renderWizard({
+      initialStep: 'llm',
+      user: makeUser({ agentic_auth_methods: { codex: 'subscription' } } as never),
+      onCheckAuth,
+    });
+
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Continue →')).toBeInTheDocument();
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
   });
 });
 

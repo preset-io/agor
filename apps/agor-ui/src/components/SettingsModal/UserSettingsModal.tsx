@@ -76,7 +76,6 @@ const { Sider, Content } = Layout;
 
 const AGENTIC_TOOL_TABS = [
   'claude-code',
-  'claude-code-cli',
   'codex',
   'gemini',
   'opencode',
@@ -201,10 +200,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const tenantToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
   const visibleAgenticToolTabs = useMemo(
     () =>
-      AGENTIC_TOOL_TABS.filter((tool) => {
-        const canonical = tool === 'claude-code-cli' ? 'claude-code' : tool;
-        return tenantToolSettings.get(canonical as TenantAgenticToolName)?.enabled !== false;
-      }),
+      AGENTIC_TOOL_TABS.filter(
+        (tool) => tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled !== false
+      ),
     [tenantToolSettings]
   );
 
@@ -220,7 +218,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
-  const [claudeCliForm] = Form.useForm();
   const [codexForm] = Form.useForm();
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
@@ -231,14 +228,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
     () => ({
       'claude-code': claudeForm,
-      'claude-code-cli': claudeCliForm,
       codex: codexForm,
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
       cursor: cursorForm,
     }),
-    [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
+    [claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
   );
 
   // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
@@ -251,7 +247,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // each time the modal opens.
   const [agenticToolStatus, setAgenticToolStatus] = useState<Record<AgenticToolName, FieldStatus>>({
     'claude-code': {},
-    'claude-code-cli': {},
     codex: {},
     gemini: {},
     opencode: {},
@@ -429,7 +424,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     const next: Record<AgenticToolName, FieldStatus> = {
       'claude-code': {},
-      'claude-code-cli': {},
       codex: {},
       gemini: {},
       opencode: {},
@@ -790,10 +784,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // read from one place instead of drifting.
   const resolveProvider = useCallback(
     (tool: AgenticToolName) => {
-      const canonicalTool = (
-        tool === 'claude-code-cli' ? 'claude-code' : tool
-      ) as TenantAgenticToolName;
-      const credentialToolName: AgenticToolName = tool === 'claude-code-cli' ? 'claude-code' : tool;
+      const canonicalTool = tool as TenantAgenticToolName;
+      const credentialToolName: AgenticToolName = tool;
       // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Claude and Codex
       // expose an explicit method so dormant credentials are never selected by accident.
       const allToolFields = TOOL_FIELD_CONFIGS[tool] ?? [];

@@ -8,7 +8,7 @@ const SECTION_GAP_HEIGHT = 8;
 
 export function estimateBranchSessionSectionsHeight(
   sessions: Session[],
-  { defaultExpanded = true }: { defaultExpanded?: boolean } = {}
+  { sessionsExpanded = true }: { sessionsExpanded?: boolean } = {}
 ): number {
   const activeSessions = sessions.filter((session) => !session.archived);
   if (activeSessions.length === 0) return EMPTY_SESSIONS_SHELL_HEIGHT;
@@ -23,7 +23,7 @@ export function estimateBranchSessionSectionsHeight(
 
   if (manualCount > 0) {
     height += SECTION_HEADER_HEIGHT;
-    if (defaultExpanded) height += manualCount * SESSION_ROW_HEIGHT;
+    if (sessionsExpanded) height += manualCount * SESSION_ROW_HEIGHT;
   } else {
     // The card still shows a Sessions header with the New Session action when
     // only scheduled/gateway sessions exist.

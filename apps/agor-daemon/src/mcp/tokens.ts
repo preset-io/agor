@@ -25,10 +25,15 @@
  * for deleted sessions are rejected even if they haven't yet hit their `exp`.
  */
 
-import { MCP_TOKEN } from '@agor/core/config';
+import {
+  MCP_TOKEN,
+  type ResolvedMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
 import {
   generateId,
-  requireCurrentTenantId,
+  getCurrentTenantId,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
@@ -81,6 +86,11 @@ export interface McpTokenContext {
 
 export interface McpTokenInitOptions {
   db: TenantScopeAwareDatabase;
+  /**
+   * Resolved daemon tenant policy. Issuance may use the configured tenant only
+   * in static mode; required_from_auth still needs an ambient tenant identity.
+   */
+  multiTenancy: ResolvedMultiTenancyConfig;
   /** Token lifetime in ms. Falls back to `MCP_TOKEN.DEFAULT_EXPIRATION_MS` (24h). */
   expirationMs?: number;
   /** Override `Date.now()` for tests. */
@@ -94,6 +104,7 @@ export interface McpTokenInitOptions {
 interface ModuleState {
   db: TenantScopeAwareDatabase;
   sessionRepo: SessionRepository;
+  multiTenancy: ResolvedMultiTenancyConfig;
   expirationMs: number;
   now: () => number;
   tokenCache: Map<string, CachedMcpToken>;
@@ -131,6 +142,7 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
   _state = {
     db: options.db,
     sessionRepo: new SessionRepository(options.db),
+    multiTenancy: options.multiTenancy,
     expirationMs,
     now,
     tokenCache: new Map(),
@@ -152,6 +164,44 @@ export function shutdownMcpTokens(): void {
 // ============================================================================
 
 /**
+ * Resolve the tenant binding for a new token through the canonical config
+ * resolver. Ambient identity is passed as an explicit trusted daemon signal:
+ *
+ * - static mode falls back to its configured tenant when ambient identity is
+ *   absent;
+ * - an ambient identity must agree with the configured static tenant;
+ * - required_from_auth accepts an ambient identity but fails closed without
+ *   one.
+ */
+function resolveIssuanceTenantId(state: ModuleState): TenantID {
+  const ambientTenantId = getCurrentTenantId();
+  try {
+    if (
+      ambientTenantId !== undefined &&
+      (!ambientTenantId.trim() || ambientTenantId.trim() !== ambientTenantId)
+    ) {
+      throw new TenantResolutionError('Invalid ambient tenant identity');
+    }
+    return resolveTenantContext(
+      state.multiTenancy,
+      ambientTenantId
+        ? {
+            params: { tenant_id: ambientTenantId },
+          }
+        : undefined
+    ).tenant_id;
+  } catch (error) {
+    if (error instanceof TenantResolutionError) {
+      const message = error.message.startsWith('Missing tenant context')
+        ? 'missing active tenant context'
+        : error.message;
+      throw new Error(`MCP token generation failed: ${message}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/**
  * Mint or reuse an MCP token for a session.
  *
  * @throws if the module isn't initialized, the session doesn't exist, or the
@@ -169,9 +219,7 @@ export async function generateSessionToken(
   }
 
   const nowMs = s.now();
-  const tenantId = requireCurrentTenantId(
-    'MCP token generation failed: missing active tenant context'
-  ) as TenantID;
+  const tenantId = resolveIssuanceTenantId(s);
   if (nowMs - s.lastCachePruneAtMs > 5 * 60 * 1000) {
     for (const [key, entry] of s.tokenCache) {
       if (entry.expiresAtMs <= nowMs) {

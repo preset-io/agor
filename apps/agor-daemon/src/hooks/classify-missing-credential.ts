@@ -10,6 +10,7 @@ import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from
 import type { AgenticToolName, HookContext, Message, TaskID, UserID } from '@agor/core/types';
 import {
   canonicalTenantAgenticTool,
+  isAgenticToolName,
   MessageRole,
   PROVIDER_CREDENTIAL_FIELDS,
   TOOL_API_KEY_NAMES,
@@ -60,6 +61,7 @@ export function classifyMissingCredentialFailure(
       }
 
       const tool = session.agentic_tool;
+      if (!isAgenticToolName(tool)) return context;
       const keyName = TOOL_API_KEY_NAMES[tool];
       // Tools with no mapped key (e.g. opencode) aren't credential-gated.
       if (!keyName) return context;

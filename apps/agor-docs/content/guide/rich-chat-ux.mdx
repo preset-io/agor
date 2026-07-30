@@ -42,13 +42,14 @@ Combined with **per-user analytics** (Settings → Analytics), this gives you a 
 
 ## 🧠 Model Selector & Effort
 
-**Switch models and reasoning depth mid-session.** A model selector and effort dropdown sit in the session panel footer.
+**Switch models and reasoning depth mid-session.** Claude and Codex sessions expose a model selector and effort dropdown in the session panel footer. Codex shows **Inherited** until Agor stores an explicit override.
 
 | Effort   | When                                         |
 | -------- | -------------------------------------------- |
 | `low`    | Quick lookups, simple edits                  |
 | `medium` | Balanced speed/quality                       |
-| `high`   | Default (complex coding, reviews)            |
+| `high`   | Deep reasoning for complex coding and reviews |
+| `xhigh`  | Extra reasoning depth for supported runtimes |
 | `max`    | Critical decisions, architecture (Opus only) |
 
 Models with the `[1m]` suffix (e.g., `claude-sonnet-4-6[1m]`) enable Anthropic's 1M-token extended context window. They appear as separate dropdown entries.

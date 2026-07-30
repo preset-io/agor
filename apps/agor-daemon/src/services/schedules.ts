@@ -28,12 +28,18 @@ import { BadRequest } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   BranchID,
+  PersistedScheduleAgenticToolConfig,
   QueryParams,
   Schedule,
+  ScheduleAgenticToolConfig,
+  ScheduleCreateData,
+  SchedulePatchData,
   UserID,
   UUID,
 } from '@agor/core/types';
+import { SCHEDULE_CREATE_WRITE_FIELDS, SCHEDULE_PATCH_WRITE_FIELDS } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export type ScheduleParams = QueryParams<{
   branch_id?: BranchID;
@@ -42,7 +48,7 @@ export type ScheduleParams = QueryParams<{
 }> &
   AuthenticatedParams & { schedule?: Schedule };
 
-export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>, ScheduleParams> {
+export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData, ScheduleParams> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -59,9 +65,9 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
   }
 
   private async validateConfig(
-    config: Schedule['agentic_tool_config'],
+    config: ScheduleAgenticToolConfig,
     userId?: UserID
-  ): Promise<Schedule['agentic_tool_config']> {
+  ): Promise<ScheduleAgenticToolConfig> {
     try {
       if (config.configuration_reference !== undefined) {
         await resolveAgenticConfigurationReference(
@@ -90,9 +96,7 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     }
   }
 
-  private normalizeConfig(
-    config: Schedule['agentic_tool_config']
-  ): Schedule['agentic_tool_config'] {
+  private normalizeConfig(config: PersistedScheduleAgenticToolConfig): ScheduleAgenticToolConfig {
     try {
       return normalizeScheduleAgenticToolConfig(config);
     } catch (error) {
@@ -103,20 +107,49 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
     }
   }
 
-  async create(data: Partial<Schedule>, params?: ScheduleParams) {
+  async create(data: ScheduleCreateData, params?: ScheduleParams) {
+    const rawData = data as unknown as Record<string, unknown>;
+    const prepared = assertServiceWriteFields(
+      'Schedule',
+      rawData,
+      SCHEDULE_CREATE_WRITE_FIELDS,
+      params,
+      ['created_by', 'next_run_at']
+    );
+    data = pickWriteFields<ScheduleCreateData>(rawData, SCHEDULE_CREATE_WRITE_FIELDS);
+
+    const creatorId = params?.user?.user_id as UserID | undefined;
     if (data.agentic_tool_config) {
       let agenticToolConfig = this.normalizeConfig(data.agentic_tool_config);
-      const creatorId = (data.created_by ?? params?.user?.user_id) as UserID | undefined;
       agenticToolConfig = await this.validateConfig(agenticToolConfig, creatorId);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,
       };
     }
-    return super.create(data, params);
+    const trustedCreatedBy =
+      creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
+    const trustedData = {
+      ...data,
+      ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+      ...(prepared && typeof rawData.next_run_at === 'number'
+        ? { next_run_at: rawData.next_run_at }
+        : {}),
+    };
+    return super.create(trustedData, params);
   }
 
-  async patch(id: string | null, data: Partial<Schedule>, params?: ScheduleParams) {
+  async patch(id: string | null, data: SchedulePatchData, params?: ScheduleParams) {
+    const rawData = data as Record<string, unknown>;
+    const prepared = assertServiceWriteFields(
+      'Schedule',
+      rawData,
+      SCHEDULE_PATCH_WRITE_FIELDS,
+      params,
+      ['next_run_at']
+    );
+    data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_PATCH_WRITE_FIELDS);
+
     if (data.agentic_tool_config) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
       const current = params?.schedule ?? (await this.get(id, params));
@@ -130,11 +163,13 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
         agentic_tool_config: agenticToolConfig,
       };
     }
-    return super.patch(id, data, params);
-  }
-
-  async update(id: string, data: Partial<Schedule>, params?: ScheduleParams) {
-    return this.patch(id, data, params) as Promise<Schedule>;
+    const trustedData = {
+      ...data,
+      ...(prepared && typeof rawData.next_run_at === 'number'
+        ? { next_run_at: rawData.next_run_at }
+        : {}),
+    };
+    return super.patch(id, trustedData, params);
   }
 }
 

@@ -39,7 +39,6 @@ import {
   FolderOutlined,
   HistoryOutlined,
   LoadingOutlined,
-  QuestionCircleOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
@@ -99,7 +98,6 @@ import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { HighlightMatch } from '../components/HighlightMatch';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
-import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { useAgorStore } from '../store/agorStore';
@@ -3033,21 +3031,11 @@ export function KnowledgePage({
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             />
           </Tooltip>
-          <Tooltip title="Documentation" placement="bottom">
-            <Button
-              type="text"
-              icon={<QuestionCircleOutlined style={{ fontSize: token.fontSizeLG }} />}
-              href="https://agor.live/guide/getting-started"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            />
-          </Tooltip>
-          <ThemeSwitcher />
           {hasMinimumRole(currentUser?.role, ROLES.ADMIN) && (
-            <Tooltip title="Knowledge settings" placement="bottom">
+            <Tooltip title="Knowledge Base Settings" placement="bottom">
               <Button
                 type="text"
+                aria-label="Knowledge Base Settings"
                 icon={<SettingOutlined style={{ fontSize: token.fontSizeLG }} />}
                 onClick={openKnowledgeSettings}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}

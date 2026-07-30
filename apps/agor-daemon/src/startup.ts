@@ -34,6 +34,11 @@ import { SchedulerService } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from './utils/spawn-executor.js';
 
 const DEBUG_STARTUP =
   process.env.AGOR_DEBUG_STARTUP === '1' || process.env.DEBUG?.includes('startup');
@@ -600,7 +605,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `🚀 Agor daemon running at http://${displayHost}:${DAEMON_PORT} (bound to ${DAEMON_HOST})`
   );
   console.log(
-    `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/context,/users`
+    `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
   runPostStartJob('health-monitor-initialize', () => healthMonitor.initialize());
@@ -613,7 +618,28 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // deliberately skips registered local repos to avoid surprising writes
   // outside Agor-managed storage.
   runPostStartJob('git-remote-credential-scrub', () =>
-    runStartupTenantDatabaseScope(ctx, () => scrubManagedGitRemoteCredentials(db))
+    runStartupTenantDatabaseScope(ctx, async () => {
+      await scrubManagedGitRemoteCredentials(db);
+      if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
+        // A later Cell/storage-admin reconciler must scrub physical configs:
+        // one global executor cannot assume every tenant checkout is mounted.
+        return;
+      }
+      const result = await runExecutorCommand(
+        {
+          command: 'git.managed-credentials.reconcile',
+          sessionToken: generateScopedServiceToken(
+            app as unknown as { settings: { authentication?: { secret?: string } } }
+          ),
+          daemonUrl: getDaemonUrl(),
+          params: {},
+        },
+        { logPrefix: '[startup.git-credential-reconcile]' }
+      );
+      if (!result.success) {
+        throw new Error(result.error?.message ?? 'Managed Git credential reconciliation failed');
+      }
+    })
   );
 
   // Log the host IP that will be frozen into env command templates as

@@ -44,11 +44,11 @@ vi.mock('../GlobalSearch', () => ({
 vi.mock('../GlobalUserMenu', () => ({
   GlobalUserMenu: () => <div data-testid="global-user-menu" />,
 }));
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({ themeMode: 'dark', setThemeMode: vi.fn() }),
+}));
 vi.mock('../MarkdownRenderer', () => ({
   MarkdownRenderer: () => <div data-testid="markdown-renderer" />,
-}));
-vi.mock('../ThemeSwitcher', () => ({
-  ThemeSwitcher: () => <div data-testid="theme-switcher" />,
 }));
 vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
@@ -180,17 +180,12 @@ const STABLE_HEADER_PROPS = {
   connected: true,
   connecting: false,
   onMenuClick: noop,
-  onCommentsClick: noop,
   onEventStreamClick: noop,
   onUserSettingsClick: noop,
   onThemeEditorClick: noop,
   onLogout: noop,
   onRetryConnection: noop,
-  currentBoardName: 'Board',
-  currentBoardIcon: '📋',
-  unreadCommentsCount: 0,
   eventStreamEnabled: true,
-  hasUserMentions: false,
   currentBoardId: 'board-1',
   onBoardChange: noop,
   onHomeClick: noop,

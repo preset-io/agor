@@ -55,8 +55,9 @@ export interface NavigationOpts {
 }
 
 export interface AppNavigation {
-  /** Navigate to a session's conversation view. Pushes `/s/<short>/`.
-   *  Same-URL clicks (already on this session) just recenter the camera. */
+  /** Navigate to a session's conversation view. Pushes `/s/<short>/` —
+   *  useUrlState recenters onto the session's row inside its branch card.
+   *  Same-URL clicks (already on this session) recenter the row directly. */
   goToSession: (sessionId: string, opts?: NavigationOpts) => void;
   /** Navigate to a branch. Pushes `/w/<short>/` — useUrlState
    *  resolves the branch, switches boards if needed, and recenters. */
@@ -144,13 +145,21 @@ export function useAppNavigation({
       if (!pushPath(sessionPath(sessionId as SessionID), opts)) {
         // Same-URL click on the already-open session — no history
         // transition, so the URL→state recenter effect won't run. Fall
-        // back to a direct recenter via the branch when we have it.
+        // back to a direct recenter aimed at the session's row inside
+        // its branch card (not the card head).
         const session = (sessionByIdRef.current ?? agorStore.getState().sessionById).get(sessionId);
         const branch = session?.branch_id
           ? (branchByIdRef.current ?? agorStore.getState().branchById).get(session.branch_id)
           : undefined;
         if (branch?.board_id) {
-          recenterMap(branch.branch_id, { boardId: branch.board_id });
+          // ensureVisible: selecting an already-open session shouldn't
+          // yank the camera when its row is already on screen — only
+          // nudge it into view when it isn't. See CanvasNavigationContext.
+          recenterMap(branch.branch_id, {
+            boardId: branch.board_id,
+            sessionId,
+            ensureVisible: true,
+          });
         }
       }
     },

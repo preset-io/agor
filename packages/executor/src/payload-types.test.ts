@@ -285,109 +285,34 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
       },
     };
 
     const result = GitBranchAddPayloadSchema.parse(payload);
     expect(result.command).toBe('git.branch.add');
-    expect(result.params.branchName).toBe('feature-x');
+    expect(result.params.repoId).toBe('550e8400-e29b-41d4-a716-446655440003');
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
-  it('should parse with branch creation options', () => {
-    const payload = {
+  it('strips duplicated materialization facts and retains operational intent', () => {
+    const result = GitBranchAddPayloadSchema.parse({
       command: 'git.branch.add',
       sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
-        branch: 'feature-x',
-        sourceBranch: 'main',
-        createBranch: true,
+        branch: 'untrusted',
+        storageMode: 'worktree',
+        cloneDepth: 100,
+        restoreMode: true,
+        useReference: true,
       },
-    };
-
-    const result = GitBranchAddPayloadSchema.parse(payload);
-    expect(result.params.branch).toBe('feature-x');
-    expect(result.params.sourceBranch).toBe('main');
-    expect(result.params.createBranch).toBe(true);
-  });
-
-  // Clone-mode invariants live on the schema (not just in the executor
-  // handler) so malformed payloads fail at parse time with a clear message.
-  // See enforceClonePayloadInvariants in payload-types.ts.
-  describe('clone-mode invariants (superRefine)', () => {
-    const basePayload = {
-      command: 'git.branch.add' as const,
-      sessionToken: 'jwt-token-here',
-      params: {
-        branchId: '550e8400-e29b-41d4-a716-446655440002',
-        repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/agor/repos/github.com/user/repo.git',
-        branchName: 'feature-x',
-        branchPath: '/data/agor/worktrees/user/repo/feature-x',
-      },
-    };
-
-    it('accepts a clone-mode payload with a remoteUrl (and optional cloneDepth)', () => {
-      const result = GitBranchAddPayloadSchema.parse({
-        ...basePayload,
-        params: {
-          ...basePayload.params,
-          storageMode: 'clone',
-          remoteUrl: 'https://github.com/user/repo.git',
-          cloneDepth: 100,
-        },
-      });
-      expect(result.params.storageMode).toBe('clone');
-      expect(result.params.remoteUrl).toBe('https://github.com/user/repo.git');
-      expect(result.params.cloneDepth).toBe(100);
     });
-
-    it('rejects a clone-mode payload missing remoteUrl', () => {
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            storageMode: 'clone',
-            // no remoteUrl
-          },
-        })
-      ).toThrow(/remoteUrl is required/);
-    });
-
-    it('rejects cloneDepth paired with branch (or undefined) mode', () => {
-      // Explicit worktree mode.
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            storageMode: 'worktree',
-            cloneDepth: 100,
-          },
-        })
-      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
-
-      // Mode unset (legacy callers) — same rule: cloneDepth without
-      // explicit clone mode is a config bug, not silently dropped.
-      expect(() =>
-        GitBranchAddPayloadSchema.parse({
-          ...basePayload,
-          params: {
-            ...basePayload.params,
-            cloneDepth: 100,
-          },
-        })
-      ).toThrow(/cloneDepth is only meaningful when storageMode === 'clone'/);
-    });
+    expect(result.params).not.toHaveProperty('branch');
+    expect(result.params).not.toHaveProperty('storageMode');
+    expect(result.params).not.toHaveProperty('cloneDepth');
+    expect(result.params.restoreMode).toBe(true);
+    expect(result.params.useReference).toBe(true);
   });
 });
 
@@ -399,6 +324,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
       },
     };
 
@@ -415,6 +341,7 @@ describe('GitBranchRemovePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
+        branchesRoot: '/data/agor/worktrees',
         force: true,
       },
     };
@@ -577,9 +504,6 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
-        repoPath: '/data/repos/repo.git',
-        branchName: 'feature',
-        branchPath: '/data/branches/feature',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);
@@ -593,6 +517,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/branches/feature',
+        branchesRoot: '/data/branches',
       },
     };
     expect(isGitBranchRemovePayload(payload)).toBe(true);
@@ -622,7 +547,18 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('git.branch.add');
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('git.branch.clean');
+    expect(commands).toContain('git.repo.inspect');
+    expect(commands).toContain('git.managed-credentials.reconcile');
     expect(commands).toContain('branch.files.list');
+    expect(commands).toContain('branch.files.browse');
+    expect(commands).toContain('branch.files.read');
+    expect(commands).toContain('branch.filesystem.status');
+    expect(commands).toContain('branch.artifact.publish');
+    expect(commands).toContain('branch.artifact.land');
+    expect(commands).toContain('branch.artifact.validate');
+    expect(commands).toContain('branch.knowledge.write');
+    expect(commands).toContain('branch.knowledge.read');
+    expect(commands).toContain('branch.gateway.slack-file-upload');
     expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
@@ -636,6 +572,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(19);
+    expect(commands.length).toBe(31);
   });
 });

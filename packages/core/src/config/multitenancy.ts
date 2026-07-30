@@ -147,6 +147,11 @@ export function assertValidMultiTenancyConfig(
         'Config error: multi_tenancy.required_from_auth requires multi_tenancy.auth_claim or multi_tenancy.trusted_header'
       );
     }
+    if (config.multi_tenancy?.filesystem_isolation_enabled !== true) {
+      throw new Error(
+        'Config error: multi_tenancy.required_from_auth requires multi_tenancy.filesystem_isolation_enabled: true'
+      );
+    }
   }
 }
 

@@ -13,10 +13,10 @@ import {
   requiredBotEvents,
   requiredBotScopes,
 } from '@agor/core/gateway';
-import { getRequiredSecretFields } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
+import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
@@ -27,14 +27,6 @@ vi.mock('@agor/core/gateway', async (importOriginal) => {
   };
 });
 
-vi.mock('../../utils/branch-workspace-path.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/branch-workspace-path.js')>();
-  return {
-    ...actual,
-    resolveBranchWorkspacePath: vi.fn(),
-  };
-});
-
 vi.mock('../../utils/upload.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/upload.js')>();
   return {
@@ -42,6 +34,14 @@ vi.mock('../../utils/upload.js', async (importOriginal) => {
     getUploadDirectory: vi.fn(actual.getUploadDirectory),
   };
 });
+vi.mock('../../utils/executor-read-impersonation.js', () => ({
+  resolveExecutorReadAsUser: vi.fn(async () => undefined),
+}));
+vi.mock('../../utils/spawn-executor.js', () => ({
+  generateScopedServiceToken: vi.fn(() => 'service-token'),
+  getDaemonUrl: vi.fn(() => 'http://daemon.test'),
+  runExecutorCommand: vi.fn(),
+}));
 
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
@@ -58,6 +58,48 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
+
+describe('gateway channel MCP agentic-tool schemas', () => {
+  it('accepts every active tool and rejects historical tools', async () => {
+    const tools = await captureTools();
+    const createSchema = tools.agor_gateway_channels_create.cfg.inputSchema;
+    const updateSchema = tools.agor_gateway_channels_update.cfg.inputSchema;
+
+    for (const agent of AGENTIC_TOOL_NAMES) {
+      expect(
+        createSchema.safeParse({
+          name: 'Draft',
+          targetBranchId: 'branch-1',
+          enabled: false,
+          config: { align_slack_users: true },
+          agenticConfig: { agent },
+        }).success
+      ).toBe(true);
+      expect(
+        updateSchema.safeParse({
+          gatewayChannelId: 'gateway-1',
+          agenticConfig: { agent },
+        }).success
+      ).toBe(true);
+    }
+
+    expect(
+      createSchema.safeParse({
+        name: 'Draft',
+        targetBranchId: 'branch-1',
+        enabled: false,
+        config: { align_slack_users: true },
+        agenticConfig: { agent: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+    expect(
+      updateSchema.safeParse({
+        gatewayChannelId: 'gateway-1',
+        agenticConfig: { agent: 'claude-code-cli' },
+      }).success
+    ).toBe(false);
+  });
+});
 
 async function captureTools(
   role: 'admin' | 'member' = 'admin',
@@ -135,7 +177,6 @@ const threadMapping = {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(getConnector).mockReset();
-  vi.mocked(resolveBranchWorkspacePath).mockReset();
   vi.mocked(getUploadDirectory).mockReset();
 });
 
@@ -1681,48 +1722,39 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
 
     it('uploads a file from a path relative to the branch workspace', async () => {
-      const dir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-workspace-'));
-      const filePath = path.join(dir, 'chart.png');
-      fs.writeFileSync(filePath, Buffer.from('fake-chart-bytes'));
-      try {
-        vi.mocked(resolveBranchWorkspacePath).mockResolvedValue({
-          branch: branch as any,
-          branchId: 'branch-1' as any,
-          branchRoot: dir,
-          relative: 'chart.png',
-          absolute: filePath,
-          canonical: filePath,
-        });
+      vi.mocked(runExecutorCommand).mockResolvedValue({
+        success: true,
+        data: { uploaded: { id: 'F456', name: 'chart.png' } },
+      });
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
-        const uploadFile = vi.fn(async () => ({
-          id: 'F456',
-          permalink: null,
-          name: 'chart.png',
-        }));
-        vi.mocked(getConnector).mockReturnValue({ uploadFile } as any);
-        spyCallerGatewaySession('branch-1', gatewaySource);
-        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
-          fileUploadEnabled as any
-        );
-        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_file_upload.handler({
+        path: 'chart.png',
+        threadTs: '171234.000100',
+      });
+      const payload = JSON.parse(result.content[0].text);
 
-        const tools = await captureTools('member');
-        const result = await tools.agor_gateway_slack_file_upload.handler({
-          path: 'chart.png',
-          threadTs: '171234.000100',
-        });
-        const payload = JSON.parse(result.content[0].text);
-
-        expect(uploadFile).toHaveBeenCalledWith({
-          channel: 'C123',
-          threadTs: '171234.000100',
-          file: Buffer.from('fake-chart-bytes'),
-          filename: 'chart.png',
-        });
-        expect(payload).toMatchObject({ uploaded: true, thread_ts: '171234.000100' });
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      expect(runExecutorCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'branch.gateway.slack-file-upload',
+          params: expect.objectContaining({
+            branchId: 'branch-1',
+            filePath: 'chart.png',
+            gatewayChannelId: fileUploadEnabled.id,
+            threadTs: '171234.000100',
+          }),
+        }),
+        expect.any(Object)
+      );
+      const executorPayload = vi.mocked(runExecutorCommand).mock.calls[0]?.[0];
+      expect(JSON.stringify(executorPayload)).not.toContain('xoxb');
+      expect(executorPayload?.params).not.toHaveProperty('connectorConfig');
+      expect(payload).toMatchObject({ uploaded: true });
     });
 
     it('rejects an absolute path outside the daemon upload directory', async () => {
@@ -1747,39 +1779,22 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       }
     });
 
-    // The three tests below deliberately do NOT mock resolveBranchWorkspacePath
-    // (or leave canonicalizeExistingPrefix/isPathInsideRoot real, which they
-    // already are) so the escape rejections are proven end-to-end through the
-    // tool, not just asserted against a mock's return value.
-
-    it('rejects relative path traversal via the real branch workspace resolver', async () => {
-      const actualWorkspacePath = await vi.importActual<
-        typeof import('../../utils/branch-workspace-path.js')
-      >('../../utils/branch-workspace-path.js');
-      vi.mocked(resolveBranchWorkspacePath).mockImplementation(
-        actualWorkspacePath.resolveBranchWorkspacePath
+    it('surfaces executor rejection for relative path traversal', async () => {
+      vi.mocked(runExecutorCommand).mockResolvedValue({
+        success: false,
+        error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path escapes branch root' },
+      });
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
       );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
-      const workspaceDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-real-workspace-'));
-      try {
-        spyCallerGatewaySession('branch-1', gatewaySource);
-        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
-          fileUploadEnabled as any
-        );
-        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue({
-          ...branch,
-          path: workspaceDir,
-        } as any);
-        vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(true);
-
-        const tools = await captureTools('member');
-        await expect(
-          tools.agor_gateway_slack_file_upload.handler({ path: '../secret.txt' })
-        ).rejects.toThrow('".." segments');
-        expect(getConnector).not.toHaveBeenCalled();
-      } finally {
-        fs.rmSync(workspaceDir, { recursive: true, force: true });
-      }
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({ path: '../secret.txt' })
+      ).rejects.toThrow('Path escapes branch root');
+      expect(getConnector).not.toHaveBeenCalled();
     });
 
     it('rejects an absolute path that is a symlink escaping the upload directory', async () => {

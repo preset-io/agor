@@ -22,10 +22,11 @@ vi.mock('../AgenticToolConfigurationPicker', () => ({
 }));
 // Chip-row stub that drives the shared `agenticToolPresetId` field.
 vi.mock('../AgenticConfigChipRow', () => ({
-  AgenticConfigChipRow: () => {
+  AgenticConfigChipRow: ({ showEffort = true }: { showEffort?: boolean }) => {
     const form = Form.useFormInstance();
     return (
       <div>
+        {showEffort && <div data-testid="effort-chip" />}
         <Form.Item name="agenticToolPresetId" hidden>
           <input />
         </Form.Item>
@@ -91,6 +92,22 @@ const codexSession = {
 } as unknown as Session;
 
 describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
+  it('shows historical removed-runtime sessions as read-only', () => {
+    render(
+      <SessionSettingsModal
+        open
+        onClose={vi.fn()}
+        session={{ ...claudeSession, agentic_tool: 'claude-code-cli' } as Session}
+        client={null}
+        currentUser={null}
+      />
+    );
+
+    expect(screen.getByText('Historical Session')).toBeInTheDocument();
+    expect(screen.getByText(/runtime settings cannot be changed/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
+  });
+
   it('persists MCP changes while a preset is selected', async () => {
     const onUpdateSessionMcpServers = vi.fn();
     render(

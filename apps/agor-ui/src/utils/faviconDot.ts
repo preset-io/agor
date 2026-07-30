@@ -13,6 +13,12 @@ export function createFaviconWithDot(
   readyDot: boolean,
   dotColors: { running: string; ready: string; border: string }
 ): Promise<string> {
+  // Keep the canonical SVG as the favicon whenever no status overlay is
+  // needed. Rasterization is reserved for the canvas-composited dot variants.
+  if (!runningDot && !readyDot) {
+    return Promise.resolve(baseFaviconUrl);
+  }
+
   return new Promise((resolve, reject) => {
     const canvas = document.createElement('canvas');
     canvas.width = 32;

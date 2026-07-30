@@ -20,11 +20,11 @@
 
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { IPty } from 'node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { resolveEffectiveUserInfo } from '../user-runtime-paths.js';
 import type { CommandOptions } from './index.js';
 
 /**
@@ -212,7 +212,9 @@ export async function handleZellijAttach(
   payload: ZellijAttachPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { userId, sessionName, cwd, tabName, cols, rows, envFile } = payload.params;
+  const { userId, sessionName, tabName, cols, rows } = payload.params;
+  const effectiveUser = resolveEffectiveUserInfo();
+  const cwd = payload.params.cwd || effectiveUser.homedir;
 
   // Dry run mode
   if (options.dryRun) {
@@ -316,26 +318,10 @@ export async function handleZellijAttach(
     delete cleanEnv.ZELLIJ_SESSION_NAME;
     delete cleanEnv.ZELLIJ_PANE_ID;
 
-    // Get actual home directory and shell for current user from passwd
-    // os.homedir() doesn't work correctly with sudo impersonation - it returns the original user's home
-    // We must use getent passwd to get the correct values for the impersonated user
-    const { execSync } = await import('node:child_process');
-
-    let actualHome = '/tmp'; // Fallback
-    let userShell = '/bin/bash'; // Fallback
-    try {
-      const passwdEntry = execSync(`getent passwd $(whoami)`, { encoding: 'utf-8' }).trim();
-      const fields = passwdEntry.split(':');
-      // passwd format: name:password:uid:gid:gecos:home:shell
-      if (fields.length >= 6 && fields[5]) {
-        actualHome = fields[5];
-      }
-      if (fields.length >= 7 && fields[6]) {
-        userShell = fields[6];
-      }
-    } catch (err) {
-      console.error(`[zellij.attach] Failed to get user info from passwd:`, err);
-    }
+    // The executor already runs as the resolved identity. Resolve runtime
+    // paths here rather than asking the daemon to inspect another user's home.
+    const actualHome = effectiveUser.homedir;
+    const userShell = effectiveUser.shell;
     console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
 
     // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
@@ -425,46 +411,19 @@ export async function handleZellijAttach(
       }
     });
 
-    // Listen for tab commands (from daemon when user switches branches
-    // OR when a `claude-code-cli` session is created — the daemon passes
-    // `command` + `commandArgs` so the new tab spawns the `claude` binary
-    // directly into its foreground process).
-    socket.on(
-      'terminal:tab',
-      async (data: {
-        action: string;
-        tabName: string;
-        cwd?: string;
-        command?: string;
-        commandArgs?: string[];
-        /** Force-recreate semantics for `create`: closes every existing
-         *  tab named `tabName` before spawning a fresh one. Used by
-         *  /sessions/:id/restart-cli and by the daemon's ensure-create
-         *  path when it detected the in-tab claude was dead. */
-        forceRecreate?: boolean;
-      }) => {
-        try {
-          await handleTabAction(
-            data.action,
-            data.tabName,
-            data.cwd,
-            data.command,
-            data.commandArgs,
-            data.forceRecreate
-          );
-        } catch (err) {
-          // handleTabAction throws on focus/create-without-command
-          // failure; the socket handler must catch it or Node will
-          // treat it as an unhandled rejection and tear down the
-          // executor. We log + drop — the next ensure-create / Restart
-          // re-attempts naturally.
-          console.warn(
-            `[zellij.tab] handleTabAction(${data.action} ${data.tabName}) failed:`,
-            err instanceof Error ? err.message : String(err)
-          );
-        }
+    // Listen for tab commands from the daemon when the user switches branches.
+    socket.on('terminal:tab', async (data: { action: string; tabName: string; cwd?: string }) => {
+      try {
+        await handleTabAction(data.action, data.tabName, data.cwd);
+      } catch (err) {
+        // The socket handler must catch failures or Node will treat them as
+        // unhandled rejections and tear down the executor.
+        console.warn(
+          `[zellij.tab] handleTabAction(${data.action} ${data.tabName}) failed:`,
+          err instanceof Error ? err.message : String(err)
+        );
       }
-    );
+    });
 
     // Listen for redraw requests (when client reconnects)
     // Trigger resize to force Zellij to redraw via SIGWINCH
@@ -524,19 +483,6 @@ export async function handleZellijAttach(
         }
       }
     })();
-
-    // Source env file after Zellij initializes (user env vars like API keys)
-    if (envFile && ptyProcess) {
-      // Wait for shell to be ready, then source env file
-      setTimeout(() => {
-        if (ptyProcess) {
-          // Source the env file silently (suppress output, ignore errors if file doesn't exist)
-          const sourceCmd = `[ -f '${envFile}' ] && source '${envFile}' 2>/dev/null; clear\r`;
-          ptyProcess.write(sourceCmd);
-          console.log(`[zellij.attach] Sourced env file: ${envFile}`);
-        }
-      }, 800); // Wait longer than tab creation to ensure shell is ready
-    }
 
     // Return success - executor stays running until PTY exits
     return {
@@ -598,7 +544,7 @@ export async function handleZellijTab(
   payload: ZellijTabPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { action, tabName, cwd, command, commandArgs, forceRecreate } = payload.params;
+  const { action, tabName, cwd } = payload.params;
 
   // Dry run mode
   if (options.dryRun) {
@@ -610,8 +556,6 @@ export async function handleZellijTab(
         action,
         tabName,
         cwd,
-        tabCommand: command,
-        tabCommandArgs: commandArgs,
       },
     };
   }
@@ -628,14 +572,13 @@ export async function handleZellijTab(
   }
 
   try {
-    await handleTabAction(action, tabName, cwd, command, commandArgs, forceRecreate);
+    await handleTabAction(action, tabName, cwd);
 
     return {
       success: true,
       data: {
         action,
         tabName,
-        spawnedCommand: command,
       },
     };
   } catch (error) {
@@ -761,18 +704,6 @@ async function queryTabNames(): Promise<string[]> {
 }
 
 /**
- * Execute a zellij action command
- *
- * Uses `zellij action` CLI to control the running session.
- * For 'create' action, checks if tab exists first and focuses instead.
- *
- * When `command` is supplied on a `create` action, the new tab spawns
- * the named binary instead of the user's default shell. This is how the
- * Claude Code CLI adapter drops the user into an interactive `claude`
- * REPL inside a Zellij pane — see
- * docs/internal/claude-code-cli-integration-analysis-2026-05-14.md §
- * "Spawn shape".
- */
 /**
  * Run one `zellij --session <X> action <args...>` invocation.
  * Returns exit code + stderr so callers can branch on success/failure
@@ -813,103 +744,12 @@ function runZellij(
   });
 }
 
-/**
- * Close EVERY tab matching `tabName`. Zellij's `close-tab` only closes
- * the currently-focused tab, so for duplicates (which happen when
- * multiple executors race on `new-tab` — see CLAUDE.md's "Cold-start
- * race" notes) we navigate-then-close in a loop.
- *
- * **Critical guard**: count matches upfront and bound the loop by
- * that count. Earlier "loop until go-to-tab-name errors" semantics
- * blew up because `zellij action go-to-tab-name <missing>` does NOT
- * always return non-zero — it can silently no-op, leaving focus on
- * whatever tab was current. The subsequent `close-tab` then kills
- * the WRONG tab, and the loop keeps killing tabs until the session
- * is empty (zellij with no tabs auto-exits — the whole executor
- * dies). We saw this in the wild on the Restart path against a
- * session that had several `cli-XXX` duplicates plus unrelated tabs.
- *
- * Re-query between iterations so concurrent activity (e.g. a
- * sibling executor closing tabs simultaneously) doesn't confuse our
- * count.
- */
-async function closeAllTabsNamed(sessionName: string, tabName: string): Promise<void> {
-  // Cap by initial count so we never close more tabs than existed at
-  // start. Re-checked each iteration in case parallel activity pruned
-  // the list under us.
-  const initialTabs = await queryTabNames();
-  const initialMatches = initialTabs.filter((t) => t === tabName).length;
-  if (initialMatches === 0) {
-    console.log(`[zellij.tab] No tabs to close for "${tabName}" — already gone`);
-    return;
-  }
-  let closed = 0;
-  for (let i = 0; i < initialMatches; i++) {
-    // Verify a matching tab still exists before navigating + closing.
-    // Guards against the "go-to-tab-name silently no-ops on missing
-    // name → close-tab kills the wrong tab" failure mode.
-    const currentTabs = await queryTabNames();
-    if (!currentTabs.includes(tabName)) {
-      break;
-    }
-    const focusResult = await runZellij(sessionName, ['go-to-tab-name', tabName]);
-    if (focusResult.code !== 0) {
-      break;
-    }
-    const closeResult = await runZellij(sessionName, ['close-tab']);
-    if (closeResult.code !== 0) {
-      console.warn(`[zellij.tab] close-tab failed for "${tabName}": ${closeResult.stderr}`);
-      break;
-    }
-    closed += 1;
-  }
-  console.log(`[zellij.tab] Closed ${closed} of ${initialMatches} tab(s) named "${tabName}"`);
-}
-
-/**
- * Run `new-tab` with the per-tab KDL layout file that spawns `command`
- * as the tab's foreground pane. Caller is responsible for ensuring no
- * stale duplicate tab exists when forceRecreate semantics are required.
- */
-async function createTabWithLayout(
-  sessionName: string,
-  tabName: string,
-  cwd: string | undefined,
-  command: string,
-  commandArgs: string[]
-): Promise<{ code: number | null; stderr: string }> {
-  const layoutPath = writeClaudeLayoutFile(tabName, cwd, command, commandArgs);
-  const actionArgs = ['new-tab', '--name', tabName, '--layout', layoutPath];
-  if (cwd) {
-    actionArgs.splice(3, 0, '--cwd', cwd);
-  }
-  return runZellij(sessionName, actionArgs);
-}
-
-async function handleTabAction(
-  action: string,
-  tabName: string,
-  cwd?: string,
-  command?: string,
-  commandArgs?: string[],
-  forceRecreate?: boolean
-): Promise<void> {
+async function handleTabAction(action: string, tabName: string, cwd?: string): Promise<void> {
   if (!currentSessionName) {
     console.error('[zellij.tab] No session name set, cannot perform tab action');
     return;
   }
   const sessionName = currentSessionName;
-
-  // ── close ───────────────────────────────────────────────────────────
-  // Close ALL matching tabs. Idempotent: silent no-op if tab is absent.
-  // Multi-iteration covers the "duplicate tabs from racing executors"
-  // case — the previous single-shot close left siblings behind, and
-  // subsequent `create` would auto-converse to focus the stale sibling
-  // instead of spawning fresh.
-  if (action === 'close') {
-    await closeAllTabsNamed(sessionName, tabName);
-    return;
-  }
 
   // ── focus ───────────────────────────────────────────────────────────
   if (action === 'focus') {
@@ -922,43 +762,20 @@ async function handleTabAction(
     return;
   }
 
-  // ── create (with or without forceRecreate) ──────────────────────────
+  // ── create ──────────────────────────────────────────────────────────
   if (action !== 'create') {
     throw new Error(`Unknown tab action: ${action}`);
   }
 
-  if (forceRecreate) {
-    // Caller (e.g. /sessions/:id/restart-cli, or the ensure-create
-    // path when claude is dead) explicitly wants a fresh tab even if
-    // a stale-named one already exists. Close every matching tab
-    // first, then proceed to new-tab.
-    console.log(`[zellij.tab] forceRecreate=true for "${tabName}" — closing existing first`);
-    await closeAllTabsNamed(sessionName, tabName);
-  } else {
-    // Default: if the tab already exists, treat the create as a
-    // "land on this tab" hint and just focus it. Preserves scrollback
-    // for the common reload case where the tab + its foreground
-    // process are both still healthy.
-    const existingTabs = await queryTabNames();
-    if (existingTabs.includes(tabName)) {
-      console.log(`[zellij.tab] Tab "${tabName}" already exists, focusing instead of creating`);
-      const result = await runZellij(sessionName, ['go-to-tab-name', tabName]);
-      if (result.code !== 0) {
-        console.warn(`[zellij.tab] focus-on-existing failed for "${tabName}": ${result.stderr}`);
-      }
-      return;
-    }
-  }
-
-  // Fresh new-tab. With `command`, Zellij's `action new-tab` doesn't
-  // accept `--command` directly — we materialize a per-tab KDL layout
-  // file declaring one pane that runs it (see writeClaudeLayoutFile).
-  if (command) {
-    const result = await createTabWithLayout(sessionName, tabName, cwd, command, commandArgs ?? []);
+  // If the tab already exists, treat create as a "land on this tab" hint
+  // and focus it so terminal scrollback is preserved across reloads.
+  const existingTabs = await queryTabNames();
+  if (existingTabs.includes(tabName)) {
+    console.log(`[zellij.tab] Tab "${tabName}" already exists, focusing instead of creating`);
+    const result = await runZellij(sessionName, ['go-to-tab-name', tabName]);
     if (result.code !== 0) {
-      throw new Error(`zellij new-tab failed with code ${result.code}: ${result.stderr}`);
+      console.warn(`[zellij.tab] focus-on-existing failed for "${tabName}": ${result.stderr}`);
     }
-    console.log(`[zellij.tab] Tab action succeeded: create ${tabName} (with command)`);
     return;
   }
 
@@ -969,53 +786,6 @@ async function handleTabAction(
     throw new Error(`zellij new-tab failed with code ${result.code}: ${result.stderr}`);
   }
   console.log(`[zellij.tab] Tab action succeeded: create ${tabName}`);
-}
-
-/**
- * Materialize a Zellij KDL layout file describing one pane that runs a
- * specific binary with the given argv. Used by the Claude Code CLI
- * adapter to spawn `claude` into a freshly-created tab.
- *
- * Layout shape (KDL):
- *
- *   layout {
- *     pane command="claude" cwd="..." {
- *       args "--session-id" "..." "-n" "cli-..." "--permission-mode" "acceptEdits" ...
- *     }
- *   }
- *
- * Returns the absolute path of the written file. The file is left on disk
- * after Zellij parses it — Zellij reads it synchronously during the
- * `action new-tab --layout <file>` call, so cleanup is optional. We keep
- * it under `/tmp/agor-zellij-layouts/` for easy diagnosis if a spawn
- * misbehaves.
- */
-function writeClaudeLayoutFile(
-  tabName: string,
-  cwd: string | undefined,
-  command: string,
-  commandArgs: string[]
-): string {
-  const dir = '/tmp/agor-zellij-layouts';
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  const filePath = path.join(dir, `${tabName}-${Date.now()}.kdl`);
-  // KDL string-escaping: backslashes and double-quotes only. Each argv
-  // element becomes a separate quoted token inside `args`. Named
-  // `quoteKdl` (not `escape`) to avoid shadowing the global
-  // `escape()` URL-encoder.
-  const quoteKdl = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  const argsLine =
-    commandArgs.length > 0 ? `        args ${commandArgs.map(quoteKdl).join(' ')}\n` : '';
-  const cwdAttr = cwd ? ` cwd=${quoteKdl(cwd)}` : '';
-  const layout = `layout {
-    pane command=${quoteKdl(command)}${cwdAttr} {
-${argsLine}    }
-}
-`;
-  fs.writeFileSync(filePath, layout, { mode: 0o600 });
-  return filePath;
 }
 
 /**

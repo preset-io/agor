@@ -77,49 +77,6 @@ const codexSession = {
 } as unknown as Session;
 
 describe('ForkSpawnModal configuration defaults', { timeout: 10_000 }, () => {
-  it('reads a claude-code default under the canonical key for a claude-code-cli spawn', async () => {
-    const cliSession = {
-      session_id: 'parent-cli',
-      title: 'Parent CLI',
-      agentic_tool: 'claude-code-cli',
-      permission_config: { mode: 'acceptEdits' },
-    } as unknown as Session;
-    const currentUser = {
-      user_id: 'u1',
-      // Saved under the canonical key only.
-      default_agentic_config: {
-        'claude-code': {
-          modelConfig: { mode: 'exact', model: 'canon-model' },
-          permissionMode: 'plan',
-        },
-      },
-    } as unknown as User;
-    const onConfirm = vi.fn().mockResolvedValue(undefined);
-
-    render(
-      <ForkSpawnModal
-        open
-        action="spawn"
-        session={cliSession}
-        currentUser={currentUser}
-        onConfirm={onConfirm}
-        onCancel={vi.fn()}
-        client={null}
-        userById={new Map()}
-      />
-    );
-
-    fireEvent.change(screen.getByTestId('prompt-textarea'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByText('Custom config'));
-    fireEvent.click(screen.getByRole('button', { name: /Spawn Session/i }));
-
-    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
-    const spawnConfig = onConfirm.mock.calls[0][0];
-    // Canonical read → the claude-code default flows into the spawn config.
-    expect(spawnConfig.modelConfig?.model).toBe('canon-model');
-    expect(spawnConfig.permissionMode).toBe('plan');
-  });
-
   it('restores Codex-specific controls for inline custom spawns only', async () => {
     render(
       <ForkSpawnModal

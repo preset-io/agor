@@ -1,5 +1,5 @@
-import { CloseOutlined } from '@ant-design/icons';
-import { Button, Input, type InputRef, theme } from 'antd';
+import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Input, type InputRef, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -14,8 +14,6 @@ import {
 import { useGlobalSearch } from './useGlobalSearch';
 import { useRecents } from './useRecents';
 import { flattenResults, hasAnyEntries } from './utils';
-
-const INPUT_WIDTH = 260;
 
 interface GlobalSearchProps extends GlobalSearchEntityMaps {
   currentUserId?: string;
@@ -115,13 +113,20 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        inputRef.current?.focus();
         setOpen(true);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+
+  // Focus the input whenever the popover opens — covers both icon click
+  // and Cmd+K. Uses rAF because the Input mounts in the same render tick.
+  useEffect(() => {
+    if (open) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [open]);
 
   // Click outside closes the dropdown.
   useEffect(() => {
@@ -197,7 +202,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   // built-in search-icon button. If the user submits before the 220ms
   // debounce settled, flush instead of navigating — next press will land
   // on fresh rows. Acceptable 2-press UX in the rare stale case.
+  //
+  // A blank submit is a no-op, not "navigate to whatever recent item
+  // happens to be selectedIndex 0" — that row wasn't deliberately chosen,
+  // it's just the default, so treating it as a submit target sends users
+  // to a "random" board any time they hit Enter/click search on an empty
+  // field. Clicking a recent row directly still navigates via its own
+  // onClick in GlobalSearchDropdown, unaffected by this guard.
   const handleSubmit = (value: string) => {
+    if (!value.trim()) return;
     if (value.trim() !== debouncedQuery.trim()) {
       flush();
       return;
@@ -207,46 +220,24 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   };
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: INPUT_WIDTH }}>
-      <Input.Search
-        ref={inputRef}
-        placeholder="Search…  ⌘K"
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-          // Reset the keyboard cursor on every keystroke so it doesn't track
-          // a stale row across debounce boundaries.
-          setSelectedIndex(0);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={handleKeyDown}
-        onSearch={handleSubmit}
-        allowClear
-        aria-label="Global search"
-        aria-autocomplete="list"
-        aria-expanded={open}
-        aria-controls={GLOBAL_SEARCH_LISTBOX_ID}
-        aria-activedescendant={
-          open && visibleRows[selectedIndex] ? rowDomId(visibleRows[selectedIndex]) : undefined
-        }
-        role="combobox"
-        style={{ width: '100%' }}
-      />
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <Tooltip title="Search  ⌘K" open={open ? false : undefined}>
+        <Button
+          type="text"
+          icon={<SearchOutlined style={{ fontSize: token.fontSizeLG }} />}
+          aria-label="Open search"
+          onClick={() => {
+            if (open) {
+              handleClose();
+            } else {
+              setOpen(true);
+            }
+          }}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        />
+      </Tooltip>
       {open && (
         <div
-          // Plain popover wrapper. `role="listbox"` lives on the inner result-rows
-          // container in `GlobalSearchDropdown` — this outer div also holds the
-          // chip row, close button, and BETA tag, which aren't list options.
-          //
-          // Anchored to the right edge of the input (input lives in the
-          // right cluster of the navbar) so the popover grows leftward
-          // and doesn't overflow the viewport.
-          //
-          // Flex column so the chip row stays sticky at the top and the
-          // result body takes whatever vertical space is left up to 85vh.
-          // Without `min-height: 0` on the scrollable child, flex children
-          // refuse to shrink below their content height and scroll breaks.
           style={{
             position: 'absolute',
             top: '100%',
@@ -263,30 +254,43 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
             zIndex: 1000,
           }}
         >
-          {/*
-           * Close affordance. Esc still works (combobox keyboard contract);
-           * this is for users reaching for the mouse. Absolute-positioned so
-           * it doesn't reflow the chip row, sized to match the BETA tag's
-           * visual weight on the second chip row.
-           */}
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            onClick={handleClose}
-            aria-label="Close search"
-            style={{
-              position: 'absolute',
-              top: 4,
-              right: 4,
-              width: 24,
-              height: 24,
-              minWidth: 24,
-              padding: 0,
-              color: token.colorTextTertiary,
-              zIndex: 1,
-            }}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', padding: '8px 8px 0', gap: 4 }}>
+            <Input.Search
+              ref={inputRef}
+              placeholder="Search…"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSelectedIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+              onSearch={handleSubmit}
+              allowClear
+              aria-label="Global search"
+              aria-autocomplete="list"
+              aria-expanded={open}
+              aria-controls={GLOBAL_SEARCH_LISTBOX_ID}
+              aria-activedescendant={
+                visibleRows[selectedIndex] ? rowDomId(visibleRows[selectedIndex]) : undefined
+              }
+              role="combobox"
+              style={{ flex: 1 }}
+            />
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined />}
+              onClick={handleClose}
+              aria-label="Close search"
+              style={{
+                width: 28,
+                height: 28,
+                minWidth: 28,
+                padding: 0,
+                color: token.colorTextTertiary,
+              }}
+            />
+          </div>
           <SearchChipRow
             activeChip={activeChip}
             onChipChange={(chip) => {

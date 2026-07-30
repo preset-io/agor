@@ -3,7 +3,8 @@
  *
  * Bidirectional sync between URL and React state for board/session
  * selection, plus URL→state recenter side effects for entity deep
- * links (branches, artifacts).
+ * links (sessions aim at their row inside the branch card; branches
+ * and artifacts center on the node).
  *
  * URL shape — flat entity URLs. Boards are addressable in their own
  * right; sub-entities (session/branch/artifact) are keyed by their
@@ -332,6 +333,10 @@ export function useUrlState(options: UseUrlStateOptions) {
     let resolvedSessionId: string | null = null;
     let recenterTargetId: string | null = null;
     let activeUrlTarget: ActiveUrlTarget | null = null;
+    // Set for session URLs: aims the recenter at the session's row inside
+    // the branch card instead of the card center, so selecting a session
+    // pans to the item itself rather than jerking to the card head.
+    let recenterSessionId: string | null = null;
 
     if (urlBoardParam) {
       resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
@@ -350,6 +355,7 @@ export function useUrlState(options: UseUrlStateOptions) {
         if (wt?.board_id) {
           resolvedBoardId = wt.board_id;
           recenterTargetId = wt.branch_id;
+          recenterSessionId = resolvedSessionId;
         }
       }
     } else {
@@ -426,14 +432,22 @@ export function useUrlState(options: UseUrlStateOptions) {
     // commit + ResizeObserver firing; invisible against the 400ms
     // recenter animation. Stored in a ref so a follow-up URL change
     // can cancel a stale pending recenter before it fires.
+    // Session URLs carry `sessionId` so the canvas aims at the session's
+    // row inside the card (not the card head — that jerk was the reported
+    // bug). `ensureVisible` keeps the pan conditional: if the row is
+    // already on screen (e.g. selecting another session on the same
+    // visible card) the camera holds still; deep links and cross-board
+    // hops still bring the off-screen row into view. Branch/artifact deep
+    // links center on the node itself.
     if (urlParamsChanged && recenterTargetId && resolvedBoardId) {
       // Any pending timer was cleared at the top of this effect when
       // `urlParamsChanged` flipped — safe to schedule fresh.
       const target = recenterTargetId;
       const boardId = resolvedBoardId;
+      const sessionId = recenterSessionId ?? undefined;
       deferredRecenterTimerRef.current = setTimeout(() => {
         deferredRecenterTimerRef.current = null;
-        recenterMap(target, { boardId });
+        recenterMap(target, { boardId, sessionId, ensureVisible: sessionId != null });
       }, 50);
     }
   }, [

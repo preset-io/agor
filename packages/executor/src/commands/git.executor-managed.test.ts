@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -7,10 +10,22 @@ const mocks = vi.hoisted(() => ({
   deleteBranchDirectory: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
+  createBranchAsClone: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
   gitRaw: vi.fn(),
+  isValidGitRepo: vi.fn(),
+  getDefaultBranch: vi.fn(),
+  getRemoteUrl: vi.fn(),
+  scanGitConfigRemoteCredentials: vi.fn(),
+  scrubGitConfigRemoteCredentials: vi.fn(),
+  userHome: '/passwd/home',
 }));
+
+vi.mock('node:os', async () => {
+  const actual = await vi.importActual<typeof import('node:os')>('node:os');
+  return { ...actual, userInfo: vi.fn(() => ({ homedir: mocks.userHome })) };
+});
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
@@ -27,9 +42,15 @@ vi.mock('../git/index.js', async () => {
     ...actual,
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
+    createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     getReposDir: mocks.getReposDir,
+    isValidGitRepo: mocks.isValidGitRepo,
+    getDefaultBranch: mocks.getDefaultBranch,
+    getRemoteUrl: mocks.getRemoteUrl,
+    scanGitConfigRemoteCredentials: mocks.scanGitConfigRemoteCredentials,
+    scrubGitConfigRemoteCredentials: mocks.scrubGitConfigRemoteCredentials,
   };
 });
 
@@ -41,15 +62,21 @@ import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
   handleBranchInspect,
+  handleGitBranchAdd,
+  handleGitBranchRemove,
   handleGitClone,
+  handleGitManagedCredentialsReconcile,
   handleGitRepoDelete,
+  handleGitRepoInspect,
 } from './git.js';
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
+const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
 
 function createClient(records: {
   repo?: Record<string, unknown>;
+  repoPages?: Array<Array<Record<string, unknown>>>;
   branches?: Array<Record<string, unknown>>;
   branchPages?: Array<Array<Record<string, unknown>>>;
   branch?: Record<string, unknown>;
@@ -59,6 +86,19 @@ function createClient(records: {
     io: { disconnect: vi.fn() },
     service: vi.fn((name: string) => {
       if (name === 'repos') {
+        const find = vi.fn(
+          async ({ query }: { query?: { $skip?: number; $limit?: number } } = {}) => {
+            const allRepos = records.repoPages?.flat() ?? (records.repo ? [records.repo] : []);
+            const skip = query?.$skip ?? 0;
+            const limit = query?.$limit ?? 1000;
+            return {
+              data: allRepos.slice(skip, skip + limit),
+              total: allRepos.length,
+              limit,
+              skip,
+            };
+          }
+        );
         return {
           get: vi.fn(async () => records.repo),
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
@@ -67,6 +107,7 @@ function createClient(records: {
           }),
           create: vi.fn(async (data: Record<string, unknown>) => data),
           initializeUnixGroup: vi.fn(async () => ({ unix_group: 'agor_repo_test' })),
+          find,
         };
       }
       if (name === 'users') {
@@ -98,6 +139,10 @@ function createClient(records: {
         return {
           get: vi.fn(async () => records.branch),
           find,
+          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
+            ...(records.branch ?? {}),
+            ...data,
+          })),
         };
       }
       throw new Error(`unexpected service ${name}`);
@@ -121,9 +166,201 @@ beforeEach(() => {
     repoName: 'agor-assistant',
     defaultBranch: 'main',
   });
+  mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
+  mocks.isValidGitRepo.mockResolvedValue(true);
+  mocks.getDefaultBranch.mockResolvedValue('main');
+  mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
+  mocks.scanGitConfigRemoteCredentials.mockResolvedValue({
+    findings: [{ configPath: '/repo/.git/config' }],
+  });
+  mocks.scrubGitConfigRemoteCredentials.mockResolvedValue({ findings: [] });
 });
 
 describe('managed executor git/fs commands', () => {
+  it('resolves trusted repo metadata just-in-time inside git.branch.add', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://user:secret@example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'trusted-ref',
+        base_ref: 'trusted-base',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+        clone_depth: 42,
+      },
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: {
+          branchId,
+          repoId,
+          useReference: true,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteUrl: 'https://example.com/trusted/repo.git',
+        ref: 'trusted-base',
+        newBranchName: 'trusted-ref',
+        depth: 42,
+        referencePath: '/trusted/repo',
+      })
+    );
+  });
+
+  it('denies missing tenant-scoped repo before filesystem materialization', async () => {
+    mocks.createExecutorClient.mockResolvedValueOnce({
+      io: { disconnect: vi.fn() },
+      service: vi.fn(() => ({
+        get: vi.fn(async () => {
+          throw new Error('Not found');
+        }),
+      })),
+    });
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'other-tenant-token',
+        params: {
+          branchId,
+          repoId,
+        },
+      },
+      {}
+    );
+    expect(result).toMatchObject({ success: false, error: { message: 'Not found' } });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  });
+
+  it('inspects local repository contents only inside the executor and returns sanitized metadata', async () => {
+    const result = await handleGitRepoInspect(
+      {
+        command: 'git.repo.inspect',
+        params: { path: '/repo' },
+      },
+      {}
+    );
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        path: '/repo',
+        defaultBranch: 'main',
+        remoteUrl: 'https://example.com/org/repo.git',
+        credentialFindingCount: 1,
+      },
+    });
+  });
+
+  it('expands tilde from passwd user info rather than a misleading HOME', async () => {
+    const oldHome = process.env.HOME;
+    process.env.HOME = '/daemon/home';
+    try {
+      await handleGitRepoInspect({ command: 'git.repo.inspect', params: { path: '~/repo' } }, {});
+      expect(mocks.isValidGitRepo).toHaveBeenCalledWith('/passwd/home/repo');
+    } finally {
+      process.env.HOME = oldHome;
+    }
+  });
+
+  it('continues inspection with a safe diagnostic when .agor.yml is malformed', async () => {
+    mocks.parseAgorYml.mockImplementationOnce(() => {
+      throw new Error('secret malformed contents');
+    });
+    const result = await handleGitRepoInspect(
+      { command: 'git.repo.inspect', params: { path: '/repo' } },
+      {}
+    );
+    expect(result).toMatchObject({
+      success: true,
+      data: { environmentWarning: expect.stringContaining('Failed to parse .agor.yml') },
+    });
+    expect(JSON.stringify(result)).not.toContain('secret malformed contents');
+  });
+
+  it('rejects an invalid local repository', async () => {
+    mocks.isValidGitRepo.mockResolvedValueOnce(false);
+    const result = await handleGitRepoInspect(
+      { command: 'git.repo.inspect', params: { path: '/not-repo' } },
+      {}
+    );
+    expect(result).toMatchObject({ success: false, error: { code: 'GIT_REPO_INSPECT_FAILED' } });
+  });
+
+  it('paginates self-hosted reconciliation and dry-run does not mutate configs', async () => {
+    createClient({
+      repoPages: [
+        Array.from({ length: 1000 }, (_, index) => ({
+          repo_id: `local-${index}`,
+          repo_type: 'local',
+        })),
+        [{ repo_id: repoId, repo_type: 'remote', local_path: '/managed/repo' }],
+      ],
+      branches: [
+        {
+          branch_id: branchId,
+          repo_id: repoId,
+          path: '/managed/archived',
+          archived: true,
+        },
+      ],
+    });
+
+    const result = await handleGitManagedCredentialsReconcile(
+      {
+        command: 'git.managed-credentials.reconcile',
+        sessionToken: 'tenant-token',
+        params: {},
+      },
+      { dryRun: true }
+    );
+
+    expect(result).toMatchObject({ success: true, data: { dryRun: true } });
+    expect(mocks.scrubGitConfigRemoteCredentials).not.toHaveBeenCalled();
+  });
+  it('uses the daemon-provided tenant root when removing a branch directory', async () => {
+    const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
+    const branchPath = join(branchesRoot, 'repo', 'feature');
+    await mkdir(branchPath, { recursive: true });
+    createClient({});
+
+    try {
+      const result = await handleGitBranchRemove(
+        {
+          command: 'git.branch.remove',
+          sessionToken: 'jwt',
+          params: {
+            branchId,
+            branchPath,
+            branchesRoot,
+            storageMode: 'clone',
+            deleteDbRecord: false,
+          },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(true);
+      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot);
+    } finally {
+      await rm(branchesRoot, { recursive: true, force: true });
+    }
+  });
+
   it('derives git.repo.delete paths from daemon records instead of payload paths', async () => {
     createClient({
       repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
@@ -131,13 +368,16 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith('/safe/worktrees/repo/feature');
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(
+      '/safe/worktrees/repo/feature',
+      '/safe/worktrees'
+    );
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
@@ -225,7 +465,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 
@@ -233,9 +473,10 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.deleteBranchDirectory).toHaveBeenCalledTimes(1002);
     expect(mocks.deleteBranchDirectory).toHaveBeenNthCalledWith(
       1001,
-      '/safe/worktrees/repo/branch-1000'
+      '/safe/worktrees/repo/branch-1000',
+      '/safe/worktrees'
     );
-    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo');
+    expect(mocks.deleteRepoDirectory).toHaveBeenCalledWith('/safe/repos/repo', '/safe/repos');
   });
 
   it('rejects git.repo.delete if branch query returns a foreign branch', async () => {
@@ -247,7 +488,7 @@ describe('managed executor git/fs commands', () => {
     });
 
     const result = await handleGitRepoDelete(
-      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId } },
+      { command: 'git.repo.delete', sessionToken: 'jwt', params: { repoId, ...deleteRoots } },
       {}
     );
 

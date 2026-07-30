@@ -31,7 +31,6 @@ Before this review, the Features block included:
 - Scheduler
 - Cards (Beta)
 - Artifacts
-- API Proxies (CORS bypass)
 - Message Gateway
 - One-Time Launch Auth
 
@@ -87,7 +86,6 @@ Positioning: useful differentiators, but not the first concept stack a new prosp
 
 Move implementation or integration plumbing out of Features:
 
-- **API Proxies (CORS bypass)**
 - **One-Time Launch Auth**
 
 Keep URLs stable, but treat these as reference pages rather than prospect-facing feature pillars.
@@ -99,7 +97,6 @@ This review intentionally preserves existing URLs. If we later want a deeper IA 
 1. **Add category landing pages without moving old URLs.** For example `/guide/core-workflow`, `/guide/agents-and-context`, `/guide/team-workflow`, and `/guide/extensions`.
 2. **Bundle thin or highly technical pages into broader pages.** Candidate bundles:
    - `rich-chat-ux` + `in-conversation-widgets` → “Conversation Experience”.
-   - `artifacts` + `api-proxies` → “Artifacts” with API proxy details as a subsection.
    - `scheduler` + teammate heartbeat material → cross-link or merge into an “Automation” story.
    - `message-gateway` + launch auth → “External Channels & Launch” if launch handoff becomes user-facing.
 3. **Only move/rename routes with redirects.** Existing URLs likely appear in screenshots, changelogs, and external links; avoid breaking them unless Next redirects are added.
@@ -128,7 +125,6 @@ Near term, keep the stock Nextra sidebar layout and avoid adding custom spacing 
   - Architecture
   - TypeScript Client
   - SDK Comparison
-  - API Proxies
   - One-Time Launch Auth
 
 Longer term, consider category landing pages so the first visible list is the category list, not every leaf page. That would reduce visible feature items without relying on extra separator spacing in the doctree.

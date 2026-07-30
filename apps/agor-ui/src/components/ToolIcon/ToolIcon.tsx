@@ -6,7 +6,6 @@
 
 import { theme } from 'antd';
 import ccLogo from '../../assets/tools/cc.png';
-import claudeCodeCliLogo from '../../assets/tools/claude-code-cli.png';
 import codexLogo from '../../assets/tools/codex.png';
 import copilotLogo from '../../assets/tools/copilot.png';
 import cursorLogo from '../../assets/tools/cursor.png';
@@ -26,7 +25,6 @@ export interface ToolIconProps {
 
 const toolLogos: Record<string, string> = {
   'claude-code': ccLogo,
-  'claude-code-cli': claudeCodeCliLogo,
   codex: codexLogo,
   gemini: geminiLogo,
   opencode: opencodeLogo,
@@ -36,7 +34,6 @@ const toolLogos: Record<string, string> = {
 
 // This is an image plate, not a UI surface: the transparent logo artwork was
 // authored against exact black and must not invert with the app theme. The
-// Claude Code CLI mascot's white outline is also clearest on this plate.
 // biome-ignore lint/plugin/noHardcodedColorLiteral: exact brand-asset image plate
 const DARK_LOGO_PLATE = '#000000';
 

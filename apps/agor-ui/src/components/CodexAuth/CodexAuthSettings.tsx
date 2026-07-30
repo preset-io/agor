@@ -111,7 +111,10 @@ export function CodexAuthSettings({
     setProbing(true);
     try {
       const result = await run(
-        () => client.service('check-auth').create({ tool: 'codex' }) as Promise<AuthCheckResult>
+        () =>
+          client
+            .service('check-auth')
+            .create({ tool: 'codex', validateNative: true }) as Promise<AuthCheckResult>
       );
       setProbe(result);
     } catch {
@@ -123,19 +126,26 @@ export function CodexAuthSettings({
     }
   }, [client, run, allowChatgptLogin]);
 
-  // Re-probe when the persisted method changes: the daemon checks whichever
-  // credential the server's active method points at, so a verdict captured for
-  // the previous method would otherwise be mislabelled by the banner.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: authMethod is a deliberate re-probe trigger, not a value read by runProbe.
+  // API-key validation is cheap and stays local to the daemon/provider. Native
+  // subscription validation may require scheduling a Cloud executor, so it is
+  // only run by the explicit Recheck action or immediately after login/import.
   useEffect(() => {
-    void runProbe();
-  }, [runProbe, authMethod]);
+    if (authMethod === 'api_key') void runProbe();
+  }, [authMethod, runProbe]);
 
-  // Device sign-in and login-file import both persist `subscription` daemon-side
-  // as part of the flow, so here we only re-probe to refresh the banner.
+  // Device sign-in and login-file import already return success only after the
+  // daemon has written and executor-verified auth.json. Adopt that result
+  // directly instead of scheduling a second executor merely to rediscover the
+  // file we just wrote. Later validation remains available through Recheck.
   const handleAuthenticated = useCallback(() => {
-    void runProbe();
-  }, [runProbe]);
+    setProbing(false);
+    setProbe({
+      status: 'authenticated',
+      authenticated: true,
+      method: 'oauth',
+      hint: 'ChatGPT login connected.',
+    });
+  }, []);
 
   // Remove the Codex ChatGPT login from this server (delete-only, no token
   // revocation). The daemon deletes the auth.json and clears the stored method —

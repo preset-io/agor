@@ -1,0 +1,70 @@
+import type { SDKResultMessage } from '@agor/core/sdk';
+import { describe, expect, it } from 'vitest';
+import { aggregateClaudeResults } from './result-aggregation.js';
+
+function result(uuid: string, inputTokens: number, cost: number): SDKResultMessage {
+  return {
+    type: 'result',
+    subtype: 'success',
+    duration_ms: 10,
+    duration_api_ms: 8,
+    is_error: false,
+    num_turns: 1,
+    result: '',
+    stop_reason: null,
+    total_cost_usd: cost,
+    usage: {
+      input_tokens: inputTokens,
+      output_tokens: 2,
+      cache_creation_input_tokens: 3,
+      cache_read_input_tokens: 4,
+      server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
+      service_tier: 'standard',
+    },
+    modelUsage: {
+      sonnet: {
+        inputTokens,
+        outputTokens: 2,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 3,
+        webSearchRequests: 0,
+        costUSD: cost,
+        contextWindow: 200_000,
+        maxOutputTokens: 32_000,
+      },
+    },
+    permission_denials: [],
+    uuid,
+    session_id: 'sdk-session',
+  };
+}
+
+describe('aggregateClaudeResults', () => {
+  it('makes the terminal result an aggregate of every query turn', () => {
+    const aggregate = aggregateClaudeResults([
+      result('parent', 10, 0.01),
+      result('continuation', 20, 0.02),
+    ]);
+
+    expect(aggregate.uuid).toBe('continuation');
+    expect(aggregate.usage).toMatchObject({
+      input_tokens: 30,
+      output_tokens: 4,
+      cache_creation_input_tokens: 6,
+      cache_read_input_tokens: 8,
+    });
+    expect(aggregate.modelUsage.sonnet).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 4,
+      contextWindow: 200_000,
+      maxOutputTokens: 32_000,
+      costUSD: 0.03,
+    });
+    expect(aggregate).toMatchObject({
+      duration_ms: 20,
+      duration_api_ms: 16,
+      num_turns: 2,
+      total_cost_usd: 0.03,
+    });
+  });
+});

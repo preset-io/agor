@@ -8,8 +8,7 @@
 
 import {
   assertInlineAgenticConfigurationAllowed,
-  PublicBaseUrlNotConfiguredError,
-  requirePublicBaseUrl,
+  getBaseUrl,
   resolveAgenticToolPreset,
 } from '@agor/core/config';
 import {
@@ -73,6 +72,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
@@ -1684,12 +1684,12 @@ export class GatewayService {
     user: User
   ): Promise<string | null> {
     try {
-      const baseUrl = await requirePublicBaseUrl();
-      return getSessionUrl(sessionId, baseUrl);
+      const baseUrl = await getBaseUrl();
+      const sessionUrl = getSessionUrl(sessionId, baseUrl);
+      if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
+      return sessionUrl;
     } catch (error) {
-      if (!(error instanceof PublicBaseUrlNotConfiguredError)) {
-        console.warn('[gateway] Failed to build public session URL:', error);
-      }
+      console.warn('[gateway] Failed to build public session URL:', error);
     }
 
     try {
@@ -2008,7 +2008,9 @@ export class GatewayService {
     // settings (which Codex reads from `permission_config.codex`, not `mode`)
     // get silently dropped.
     const agenticConfig = channel.agentic_config;
-    const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const agenticTool: AgenticToolName = requireActiveAgenticTool(
+      agenticConfig?.agent ?? 'claude-code'
+    );
     // HTTP-originated requests carry an ambient tenant DB scope; socket-mode
     // listener messages only carry tenant identity (runWithTenantContext).
     // Open a short tenant unit of work from that identity — same pattern as
@@ -2433,6 +2435,7 @@ export class GatewayService {
           const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
+            tenantId: getCurrentTenantId(),
           });
           failedAttachments = failed;
           if (paths.length > 0) {

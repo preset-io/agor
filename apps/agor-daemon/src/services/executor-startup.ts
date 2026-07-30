@@ -4,13 +4,16 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { AuthenticatedParams, Session } from '@agor/core/types';
+import type { AgenticToolName, AuthenticatedParams, Session } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
+import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 
 type ExecutorStartupSessionsService = Pick<
   SessionsServiceImpl,
   'get' | 'materializeAgenticToolPreset'
 >;
+
+export type ActiveExecutorSession = Session & { agentic_tool: AgenticToolName };
 
 /** Load and validate the session state needed before any executor/process work begins. */
 export async function prepareSessionForExecutorStart(
@@ -18,16 +21,19 @@ export async function prepareSessionForExecutorStart(
   sessionsService: ExecutorStartupSessionsService,
   sessionId: string,
   params: AuthenticatedParams
-): Promise<Session> {
+): Promise<ActiveExecutorSession> {
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new Error('Missing active tenant context for executor startup');
 
   return runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
     const session = await sessionsService.get(sessionId, params);
     if (!session) throw new Error(`Session ${sessionId} not found`);
-    if (!(await isTenantAgenticToolEnabled(session.agentic_tool, tenantDb))) {
-      throw new Error(`${session.agentic_tool} is disabled for this workspace`);
+    const agenticTool = requireActiveAgenticTool(session.agentic_tool);
+    if (!(await isTenantAgenticToolEnabled(agenticTool, tenantDb))) {
+      throw new Error(`${agenticTool} is disabled for this workspace`);
     }
-    return sessionsService.materializeAgenticToolPreset(session, params);
+    const materializedSession = await sessionsService.materializeAgenticToolPreset(session, params);
+    requireActiveAgenticTool(materializedSession.agentic_tool);
+    return materializedSession as ActiveExecutorSession;
   });
 }

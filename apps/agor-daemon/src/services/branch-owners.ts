@@ -21,12 +21,12 @@
 import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, BranchID, HookContext, User, UUID } from '@agor/core/types';
+import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   createServiceToken,
   getDaemonUrl,
-  serviceTokenScopeForParams,
+  serviceTokenScopeForCurrentTenant,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -260,9 +260,9 @@ export function setupBranchOwnersService(
           // Syncing the branch will pick up the new owner from the DB
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
-            ...serviceTokenScopeForParams(context.params as Partial<AuthenticatedParams>),
             branch_id: branchId,
             command: 'unix.sync-branch',
+            ...serviceTokenScopeForCurrentTenant(),
           });
           spawnExecutorFireAndForget(
             {
@@ -295,9 +295,9 @@ export function setupBranchOwnersService(
           // Syncing the branch will handle the removed owner
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
-            ...serviceTokenScopeForParams(context.params as Partial<AuthenticatedParams>),
             branch_id: branchId,
             command: 'unix.sync-branch',
+            ...serviceTokenScopeForCurrentTenant(),
           });
           spawnExecutorFireAndForget(
             {

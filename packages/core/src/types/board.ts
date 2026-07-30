@@ -1,4 +1,4 @@
-import type { AgenticToolName } from './agentic-tool';
+import type { PersistedAgenticToolName } from './agentic-tool';
 import type { BranchPermissionLevel } from './branch';
 import type { CardID } from './card';
 import type { ArtifactID, BoardID, BranchID } from './id';
@@ -84,8 +84,13 @@ export interface ZoneTrigger {
   template: string;
   /** Trigger behavior mode (default: 'show_picker') */
   behavior: ZoneTriggerBehavior;
-  /** Preferred agent for auto-created sessions (default: 'claude-code') */
-  agent?: AgenticToolName;
+  /**
+   * Preferred agent for auto-created sessions (default: 'claude-code').
+   *
+   * This is persisted board metadata, so removed identifiers remain readable.
+   * Runtime trigger paths must narrow it to an active tool before execution.
+   */
+  agent?: PersistedAgenticToolName;
 }
 
 /**

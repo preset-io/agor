@@ -2,50 +2,39 @@ import { BgColorsOutlined, CheckOutlined, EditOutlined } from '@ant-design/icons
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, theme } from 'antd';
 import type React from 'react';
-import { useTheme } from '../../contexts/ThemeContext';
+import { type ThemeMode, useTheme } from '../../contexts/ThemeContext';
 
 export interface ThemeSwitcherProps {
   onOpenThemeEditor?: () => void;
 }
 
-export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ onOpenThemeEditor }) => {
-  const { token } = theme.useToken();
-  const { themeMode, setThemeMode } = useTheme();
+const themeCheckIcon = <CheckOutlined />;
+const themeBlankIcon = <span style={{ width: 14, display: 'inline-block' }} />;
 
-  const menuItems: MenuProps['items'] = [
+export function buildThemeMenuItems(
+  themeMode: ThemeMode,
+  setThemeMode: (mode: ThemeMode) => void,
+  onOpenThemeEditor?: () => void
+): NonNullable<MenuProps['items']> {
+  return [
     {
       key: 'dark',
       label: 'Dark',
-      icon:
-        themeMode === 'dark' ? (
-          <CheckOutlined />
-        ) : (
-          <span style={{ width: 14, display: 'inline-block' }} />
-        ),
+      icon: themeMode === 'dark' ? themeCheckIcon : themeBlankIcon,
       onClick: () => setThemeMode('dark'),
     },
     {
       key: 'light',
       label: 'Light',
-      icon:
-        themeMode === 'light' ? (
-          <CheckOutlined />
-        ) : (
-          <span style={{ width: 14, display: 'inline-block' }} />
-        ),
+      icon: themeMode === 'light' ? themeCheckIcon : themeBlankIcon,
       onClick: () => setThemeMode('light'),
     },
     {
       key: 'custom',
       label: 'Custom',
-      icon:
-        themeMode === 'custom' ? (
-          <CheckOutlined />
-        ) : (
-          <span style={{ width: 14, display: 'inline-block' }} />
-        ),
+      icon: themeMode === 'custom' ? themeCheckIcon : themeBlankIcon,
       onClick: () => setThemeMode('custom'),
-      disabled: !onOpenThemeEditor, // Disable if no editor provided
+      disabled: !onOpenThemeEditor,
     },
     {
       type: 'divider',
@@ -58,6 +47,13 @@ export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ onOpenThemeEditor 
       disabled: !onOpenThemeEditor,
     },
   ];
+}
+
+export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ onOpenThemeEditor }) => {
+  const { token } = theme.useToken();
+  const { themeMode, setThemeMode } = useTheme();
+
+  const menuItems = buildThemeMenuItems(themeMode, setThemeMode, onOpenThemeEditor);
 
   return (
     <Dropdown menu={{ items: menuItems }} placement="bottomRight" trigger={['click']}>

@@ -33,10 +33,19 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useSessionActions } from '../../hooks/useSessionActions';
+import {
+  type BranchSectionKey,
+  COLLAPSED_BRANCH_NODES_STORAGE_KEY,
+  type CollapsedBranchNode,
+  type CollapsedBranchNodes,
+  EMPTY_COLLAPSED_BRANCH_NODE,
+  EMPTY_COLLAPSED_BRANCH_NODES,
+  setCollapsedBranchNode,
+} from '../../utils/collapsedBranchNodes';
 import { useThemedMessage } from '../../utils/message';
 import {
   getMatchSnippet,
@@ -64,6 +73,8 @@ import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 // Stable theme object so the ConfigProvider context value doesn't churn.
 const NO_MOTION_THEME = { token: { motion: false } };
 
+const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
+
 export type BranchSessionSectionsMode = 'card' | 'panel';
 type CollapseKey = string | number;
 type RemoteRelationshipRef = {
@@ -84,7 +95,6 @@ export interface BranchSessionSectionsProps {
   onOpenSessionSettings?: (sessionId: string) => void;
   peekedSessionIds?: Set<string>;
   onTogglePeekSession?: (sessionId: string) => void;
-  defaultExpanded?: boolean;
   mode?: BranchSessionSectionsMode;
   client: AgorClient | null;
 }
@@ -241,7 +251,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   onOpenSessionSettings,
   peekedSessionIds,
   onTogglePeekSession,
-  defaultExpanded = true,
   mode = 'card',
   client,
 }) => {
@@ -260,30 +269,61 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     action: 'fork',
     session: null,
   });
-  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
-  const previousExpandableKeysRef = useRef<Set<React.Key> | null>(null);
-  const manuallyCollapsedKeysRef = useRef<Set<React.Key>>(new Set());
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   const isPanel = mode === 'panel';
-  const [openSectionKeys, setOpenSectionKeys] = useState<CollapseKey[]>(() =>
-    defaultExpanded ? ['sessions'] : []
+  // Every collapsible node (sections + parent sessions in the tree) defaults
+  // to expanded; only user-collapsed exceptions are kept. Board cards persist
+  // them per branch in the shared collapsedBranchNodes store; the teammate
+  // panel is a transient surface and must not rewrite the board card's stored
+  // state, so it keeps ephemeral state instead.
+  const [storedCollapsedNodes, setStoredCollapsedNodes] = useLocalStorage<CollapsedBranchNodes>(
+    COLLAPSED_BRANCH_NODES_STORAGE_KEY,
+    EMPTY_COLLAPSED_BRANCH_NODES
   );
-  const isManualSessionsOpen = openSectionKeys.includes('sessions');
-  const isScheduledRunsOpen = openSectionKeys.includes('scheduled-runs');
-  const isGatewaySessionsOpen = openSectionKeys.includes('gateway-sessions');
+  const [panelCollapsedNode, setPanelCollapsedNode] = useState<CollapsedBranchNode>(
+    EMPTY_COLLAPSED_BRANCH_NODE
+  );
+  const collapsedNode = isPanel
+    ? panelCollapsedNode
+    : (storedCollapsedNodes[branch.branch_id] ?? EMPTY_COLLAPSED_BRANCH_NODE);
+  const updateCollapsedNode = useCallback(
+    (updater: (node: CollapsedBranchNode) => CollapsedBranchNode) => {
+      if (isPanel) {
+        setPanelCollapsedNode(updater);
+        return;
+      }
+      setStoredCollapsedNodes((nodes) =>
+        setCollapsedBranchNode(
+          nodes,
+          branch.branch_id,
+          updater(nodes[branch.branch_id] ?? EMPTY_COLLAPSED_BRANCH_NODE)
+        )
+      );
+    },
+    [branch.branch_id, isPanel, setStoredCollapsedNodes]
+  );
+  const collapsedSections = collapsedNode.sections;
+  const openSectionKeys = useMemo<CollapseKey[]>(
+    () => SECTION_KEYS.filter((key) => !collapsedSections?.includes(key)),
+    [collapsedSections]
+  );
+  const isManualSessionsOpen = !collapsedSections?.includes('sessions');
+  const isScheduledRunsOpen = !collapsedSections?.includes('scheduled-runs');
+  const isGatewaySessionsOpen = !collapsedSections?.includes('gateway-sessions');
   const updateSectionOpenState = useCallback(
-    (sectionKey: CollapseKey, keys: CollapseKey | CollapseKey[]) => {
+    (sectionKey: BranchSectionKey, keys: CollapseKey | CollapseKey[]) => {
       const sectionIsOpen = Array.isArray(keys) ? keys.includes(sectionKey) : keys === sectionKey;
-      setOpenSectionKeys((currentKeys) => {
-        const alreadyOpen = currentKeys.includes(sectionKey);
-        if (sectionIsOpen) return alreadyOpen ? currentKeys : [...currentKeys, sectionKey];
-        return alreadyOpen ? currentKeys.filter((key) => key !== sectionKey) : currentKeys;
+      updateCollapsedNode((node) => {
+        const sections = new Set(node.sections ?? []);
+        if (sectionIsOpen) sections.delete(sectionKey);
+        else sections.add(sectionKey);
+        return { ...node, sections: [...sections] };
       });
     },
-    []
+    [updateCollapsedNode]
   );
   const handleManualSessionsChange = useCallback(
     (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('sessions', keys),
@@ -297,10 +337,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('gateway-sessions', keys),
     [updateSectionOpenState]
   );
-  useEffect(() => {
-    if (!defaultExpanded) return;
-    setOpenSectionKeys((keys) => (keys.includes('sessions') ? keys : [...keys, 'sessions']));
-  }, [defaultExpanded]);
   const peekedIds = peekedSessionIds ?? new Set<string>();
   const trimmedSearchQuery = searchQuery.trim();
   const searchActive = isSessionSearchActive(trimmedSearchQuery);
@@ -542,58 +578,45 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
 
-  useEffect(() => {
-    if (!isManualSessionsOpen) return;
+  // Parent sessions default to expanded; only collapsed exceptions are kept in
+  // the collapsedBranchNodes store. Deriving the expanded set means sessions
+  // that newly gain children start expanded, while stored exceptions survive
+  // sessions temporarily leaving the tree (archive, lost children).
+  const collapsedSessionIds = collapsedNode.sessionIds;
+  const expandedKeys = useMemo(
+    () => expandableKeys.filter((key) => !collapsedSessionIds?.includes(String(key))),
+    [collapsedSessionIds, expandableKeys]
+  );
 
-    const expandableKeySet = new Set(expandableKeys);
-    const previousExpandableKeys = previousExpandableKeysRef.current;
-    const manuallyCollapsedKeys = manuallyCollapsedKeysRef.current;
+  const toggleSessionCollapsed = useCallback(
+    (sessionId: string) => {
+      updateCollapsedNode((node) => {
+        const sessionIds = new Set(node.sessionIds ?? []);
+        if (sessionIds.has(sessionId)) sessionIds.delete(sessionId);
+        else sessionIds.add(sessionId);
+        return { ...node, sessionIds: [...sessionIds] };
+      });
+    },
+    [updateCollapsedNode]
+  );
 
-    setExpandedKeys((previousExpandedKeys) => {
-      if (!previousExpandableKeys) {
-        return expandableKeys.filter((key) => !manuallyCollapsedKeys.has(key));
-      }
-
-      const nextExpandedKeys = previousExpandedKeys.filter((key) => expandableKeySet.has(key));
-      const nextExpandedKeySet = new Set(nextExpandedKeys);
-
-      for (const key of expandableKeys) {
-        if (
-          !previousExpandableKeys.has(key) &&
-          !nextExpandedKeySet.has(key) &&
-          !manuallyCollapsedKeys.has(key)
-        ) {
-          nextExpandedKeys.push(key);
-          nextExpandedKeySet.add(key);
+  const handleSessionTreeExpand = useCallback(
+    (keys: React.Key[]) => {
+      // Only reconcile keys currently in the tree so exceptions stored for
+      // sessions outside this render set (archived, filtered) are preserved.
+      const expandedKeySet = new Set(keys.map(String));
+      updateCollapsedNode((node) => {
+        const sessionIds = new Set(node.sessionIds ?? []);
+        for (const key of expandableKeys) {
+          const sessionId = String(key);
+          if (expandedKeySet.has(sessionId)) sessionIds.delete(sessionId);
+          else sessionIds.add(sessionId);
         }
-      }
-
-      return nextExpandedKeys;
-    });
-
-    previousExpandableKeysRef.current = expandableKeySet;
-  }, [expandableKeys, isManualSessionsOpen]);
-
-  const handleSessionTreeExpand = useCallback((keys: React.Key[]) => {
-    setExpandedKeys((previousKeys) => {
-      const nextKeys = [...keys];
-      const previousKeySet = new Set(previousKeys);
-      const nextKeySet = new Set(nextKeys);
-
-      for (const key of previousKeySet) {
-        if (!nextKeySet.has(key)) {
-          manuallyCollapsedKeysRef.current.add(key);
-        }
-      }
-      for (const key of nextKeySet) {
-        if (!previousKeySet.has(key)) {
-          manuallyCollapsedKeysRef.current.delete(key);
-        }
-      }
-
-      return nextKeys;
-    });
-  }, []);
+        return { ...node, sessionIds: [...sessionIds] };
+      });
+    },
+    [expandableKeys, updateCollapsedNode]
+  );
 
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
@@ -710,7 +733,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             : undefined
         }
       >
-        <div style={sessionRowStyle(session)} onClick={() => onSessionClick?.(session.session_id)}>
+        <div
+          style={sessionRowStyle(session)}
+          data-session-id={session.session_id}
+          onClick={() => onSessionClick?.(session.session_id)}
+        >
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             <SessionRelationshipIcon session={session} size={10} />
@@ -776,15 +803,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           aria-expanded={expanded}
           onClick={(event) => {
             event.stopPropagation();
-            setExpandedKeys((previousKeys) => {
-              if (previousKeys.includes(key)) {
-                manuallyCollapsedKeysRef.current.add(key);
-                return previousKeys.filter((expandedKey) => expandedKey !== key);
-              }
-
-              manuallyCollapsedKeysRef.current.delete(key);
-              return [...previousKeys, key];
-            });
+            toggleSessionCollapsed(String(key));
           }}
           style={{
             border: 0,
@@ -799,7 +818,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </button>
       );
     },
-    []
+    [toggleSessionCollapsed]
   );
 
   const renderSessionNode = (node: SessionTreeNode) => {
@@ -835,6 +854,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       >
         <div
           style={sessionRowStyle(session)}
+          data-session-id={session.session_id}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
             if (onForkSession || onSpawnSession) {

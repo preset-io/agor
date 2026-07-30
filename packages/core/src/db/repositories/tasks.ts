@@ -6,6 +6,7 @@
 
 import type {
   ExecutorPulse,
+  ExecutorTerminationCompleteInput,
   SdkFailure,
   SessionID,
   Task,
@@ -182,7 +183,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? new Date(row.last_executor_heartbeat_at).toISOString()
         : undefined,
       created_by: row.created_by,
-      session_md5: row.session_md5 ?? undefined,
       ...row.data,
     };
   }
@@ -222,7 +222,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
-      session_md5: task.session_md5 ?? null,
       data: {
         full_prompt: task.full_prompt ?? '',
         message_range: task.message_range ?? {
@@ -576,6 +575,40 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /**
+   * Persist the scoped executor's cooperative-stop completion.
+   *
+   * The request timestamp fences delayed reports, while the row lock makes the
+   * report idempotent against duplicate socket delivery/reconnect recovery.
+   */
+  async recordExecutorQuiescence(
+    input: ExecutorTerminationCompleteInput,
+    observedAt = new Date()
+  ): Promise<Task | null> {
+    return this.mutateLockedTask(input.task_id, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      if (
+        current.status !== TaskStatus.STOPPING ||
+        !request ||
+        request.requested_at !== input.requested_at
+      ) {
+        return null;
+      }
+      if (request.executor_quiesced_at) return current;
+
+      const data = {
+        ...row.data,
+        termination_request: {
+          ...request,
+          executor_quiesced_at: observedAt.toISOString(),
+        },
+      };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
+  }
+
   /** Record observe-only SDK health evidence only while the executor still owns the task. */
   async recordSdkHealthObservation(id: string, failure: SdkFailure): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
@@ -622,6 +655,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           cause === input.cause
             ? input.errorMessage
             : (existing?.error_message ?? input.errorMessage),
+        ...(existing?.executor_quiesced_at
+          ? { executor_quiesced_at: existing.executor_quiesced_at }
+          : {}),
       };
       const sdkFailure = incomingWins
         ? (input.sdkFailure ?? current.sdk_failure)
@@ -820,7 +856,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             executor_connected_at: insertData.executor_connected_at,
             completed_at: insertData.completed_at,
             last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-            session_md5: insertData.session_md5,
             data: insertData.data,
           })
           .where(eq(tasks.task_id, fullId))

@@ -373,7 +373,7 @@ export const ArtifactNode = ({
           />
         </Tooltip>
         {hasUsablePayload && (
-          <Tooltip title="Open in CodeSandbox (eject — daemon-injected env vars/AGOR_TOKEN won't carry over)">
+          <Tooltip title="Open in CodeSandbox (eject — daemon-injected capabilities won't carry over)">
             <Button
               type="text"
               size="small"

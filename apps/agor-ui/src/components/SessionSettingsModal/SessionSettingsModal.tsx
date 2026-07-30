@@ -24,7 +24,11 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import {
+  getDefaultPermissionMode,
+  isAgenticToolName,
+  mapToCodexPermissionConfig,
+} from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
@@ -35,6 +39,7 @@ import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
+import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
@@ -91,7 +96,10 @@ const EMPTY_MCP_SERVER_IDS: string[] = [];
 
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
   const permissionMode: PermissionMode =
-    session.permission_config?.mode ?? getDefaultPermissionMode(session.agentic_tool);
+    session.permission_config?.mode ??
+    (isAgenticToolName(session.agentic_tool)
+      ? getDefaultPermissionMode(session.agentic_tool)
+      : 'default');
   const codexDefaults = mapToCodexPermissionConfig(permissionMode);
 
   return {
@@ -132,11 +140,14 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
   }
 
   if (!presetId && values.modelConfig) {
+    const modelConfig = buildModelConfigFromFormValues({
+      modelConfig: values.modelConfig,
+      effort: values.effort,
+    });
     updates.model_config = {
-      ...values.modelConfig,
-      ...(values.effort ? { effort: values.effort } : {}),
+      ...modelConfig,
       updated_at: new Date().toISOString(),
-    };
+    } as NonNullable<Session['model_config']>;
   }
 
   if (!presetId && values.permissionMode) {
@@ -196,6 +207,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   client,
   currentUser,
 }) => {
+  const activeAgenticTool = isAgenticToolName(session.agentic_tool) ? session.agentic_tool : null;
   // Entity maps come from the store rather than being drilled through the App
   // shell. The whole session→MCP map is sliced to this session's ids here so
   // the rest of the component keeps working with a plain `string[]`.
@@ -269,6 +281,10 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   }, [open, client, canEditEnvSelections, session.session_id]);
 
   const handleOk = () => {
+    if (!activeAgenticTool) {
+      onClose();
+      return;
+    }
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
       const values = form.getFieldsValue(true) as FormValues;
@@ -293,12 +309,9 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           codexApprovalPolicy: values.codexApprovalPolicy,
           codexNetworkAccess: values.codexNetworkAccess,
         };
-        void persistUserDefaultFromForm(
-          client,
-          currentUser,
-          session.agentic_tool,
-          formValues
-        ).catch(() => showError('Failed to save your default configuration'));
+        void persistUserDefaultFromForm(client, currentUser, activeAgenticTool, formValues).catch(
+          () => showError('Failed to save your default configuration')
+        );
       }
 
       if (onUpdateSessionMcpServers) {
@@ -396,6 +409,19 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     ),
   });
 
+  if (!activeAgenticTool) {
+    return (
+      <Modal title="Historical Session" open={open} onCancel={onClose} footer={null} width={600}>
+        <Typography.Paragraph>
+          This session used the removed experimental Claude Code CLI integration. Its stored
+          metadata and conversation remain readable, but its runtime settings cannot be changed and
+          the session cannot be resumed.
+        </Typography.Paragraph>
+        <SessionIdsList session={session} />
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       title="Session Settings"
@@ -427,11 +453,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         </Form.Item>
         {/* Configuration source Select + resolved chips — parity with NewSessionModal */}
         <AgenticConfigChipRow
-          tool={session.agentic_tool}
+          tool={activeAgenticTool}
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client ?? null}
           enableSaveAsDefault
+          showEffort
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}

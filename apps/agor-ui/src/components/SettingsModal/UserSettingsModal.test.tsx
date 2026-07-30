@@ -9,7 +9,6 @@ vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
   TOOL_FIELD_CONFIGS: {
     'claude-code': [],
-    'claude-code-cli': [],
     codex: [{ field: 'OPENAI_API_KEY', label: 'OpenAI API Key' }],
     gemini: [],
     opencode: [],

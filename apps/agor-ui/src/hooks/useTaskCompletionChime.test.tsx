@@ -243,32 +243,6 @@ describe('useTaskCompletionChime', () => {
       expect(playChimeMock).toHaveBeenCalledTimes(1);
     });
 
-    it('dedupes a post-completion `session_md5` patch (stateless_fs_mode)', () => {
-      const client = makeMockClient();
-      render(client);
-
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.RUNNING })
-      );
-      client.__tasks.emit(
-        'patched',
-        makeTask({ task_id: 't1' as TaskID, status: TaskStatus.COMPLETED })
-      );
-      // Daemon writes session_md5 after the executor exits — the resulting
-      // `'patched'` broadcast still carries status=COMPLETED.
-      client.__tasks.emit(
-        'patched',
-        makeTask({
-          task_id: 't1' as TaskID,
-          status: TaskStatus.COMPLETED,
-          session_md5: 'abc123',
-        })
-      );
-
-      expect(playChimeMock).toHaveBeenCalledTimes(1);
-    });
-
     it('dedupes double-FAILED patches if a future regression brings them back', () => {
       // The executor's `tryMarkTaskTerminal` guard (added in this PR)
       // prevents the inner+outer catch pair from both emitting. This

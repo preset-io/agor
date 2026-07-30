@@ -122,10 +122,19 @@ function renderPanel({
   return { onOpenTerminal };
 }
 
-describe('SessionPanel terminal actions', () => {
+describe('SessionPanel historical runtime handling and terminal actions', () => {
   afterEach(() => {
     reactive.tasks = [];
     vi.restoreAllMocks();
+  });
+
+  it('keeps removed-runtime history visible without a prompt composer', () => {
+    renderPanel();
+
+    expect(screen.getByText('Historical session — runtime removed')).toBeVisible();
+    expect(screen.getByText(/stored conversation remains readable/i)).toBeVisible();
+    expect(screen.queryByLabelText('Prompt')).not.toBeInTheDocument();
+    expect(screen.getByText('Session content')).toBeVisible();
   });
 
   it('opens branch terminals with structured branch id routing instead of raw cd input', async () => {

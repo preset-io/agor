@@ -21,6 +21,15 @@ describe('Command Registry', () => {
     expect(commands).toContain('git.branch.add');
     expect(commands).toContain('git.branch.remove');
     expect(commands).toContain('branch.files.list');
+    expect(commands).toContain('branch.files.browse');
+    expect(commands).toContain('branch.files.read');
+    expect(commands).toContain('branch.filesystem.status');
+    expect(commands).toContain('branch.artifact.publish');
+    expect(commands).toContain('branch.artifact.land');
+    expect(commands).toContain('branch.artifact.validate');
+    expect(commands).toContain('branch.knowledge.write');
+    expect(commands).toContain('branch.knowledge.read');
+    expect(commands).toContain('branch.gateway.slack-file-upload');
     expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
@@ -37,6 +46,15 @@ describe('Command Registry', () => {
     expect(hasCommand('git.branch.add')).toBe(true);
     expect(hasCommand('git.branch.remove')).toBe(true);
     expect(hasCommand('branch.files.list')).toBe(true);
+    expect(hasCommand('branch.files.browse')).toBe(true);
+    expect(hasCommand('branch.files.read')).toBe(true);
+    expect(hasCommand('branch.filesystem.status')).toBe(true);
+    expect(hasCommand('branch.artifact.publish')).toBe(true);
+    expect(hasCommand('branch.artifact.land')).toBe(true);
+    expect(hasCommand('branch.artifact.validate')).toBe(true);
+    expect(hasCommand('branch.knowledge.write')).toBe(true);
+    expect(hasCommand('branch.knowledge.read')).toBe(true);
+    expect(hasCommand('branch.gateway.slack-file-upload')).toBe(true);
     expect(hasCommand('branch.inspect')).toBe(true);
     expect(hasCommand('branch.agor-yml.import')).toBe(true);
     expect(hasCommand('branch.agor-yml.export')).toBe(true);
@@ -163,7 +181,7 @@ describe('executeCommand - git.clone', () => {
     });
   });
 
-  it('should include optional fields in dry-run response', async () => {
+  it('should include restore intent in dry-run response', async () => {
     const payloadWithOptions: GitClonePayload = {
       ...gitClonePayload,
       params: {
@@ -212,9 +230,8 @@ describe('executeCommand - git.branch.add', () => {
     command: 'git.branch.add',
     sessionToken: 'jwt-token',
     params: {
-      repoPath: '/data/agor/repos/repo.git',
-      branchName: 'feature-x',
-      branchPath: '/data/agor/worktrees/repo/feature-x',
+      branchId: '550e8400-e29b-41d4-a716-446655440002',
+      repoId: '550e8400-e29b-41d4-a716-446655440003',
     },
   };
 
@@ -225,9 +242,6 @@ describe('executeCommand - git.branch.add', () => {
     expect(result.data).toMatchObject({
       dryRun: true,
       command: 'git.branch.add',
-      repoPath: branchAddPayload.params.repoPath,
-      branchName: branchAddPayload.params.branchName,
-      branchPath: branchAddPayload.params.branchPath,
     });
   });
 
@@ -236,9 +250,7 @@ describe('executeCommand - git.branch.add', () => {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        sourceBranch: 'main',
-        createBranch: true,
+        restoreMode: true,
       },
     };
 
@@ -246,25 +258,16 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      branch: 'feature-x',
-      sourceBranch: 'main',
-      createBranch: true,
+      restoreMode: true,
     });
   });
 
-  it('should round-trip storageMode / cloneDepth / remoteUrl in dry-run response', async () => {
-    // PR 1 of the branch→clone storage migration. The daemon forwards
-    // these three knobs; the executor branches on storageMode at run time.
-    // Pin them through the dry-run echo so the daemon-side test fixture
-    // can assert payload-shape correctness without spinning up a real git.
+  it('should round-trip the clone reference policy in dry-run response', async () => {
     const clonePayload: GitBranchAddPayload = {
       ...branchAddPayload,
       params: {
         ...branchAddPayload.params,
-        branch: 'feature-x',
-        storageMode: 'clone',
-        cloneDepth: 100,
-        remoteUrl: 'https://github.com/org/repo.git',
+        useReference: true,
       },
     };
 
@@ -272,9 +275,7 @@ describe('executeCommand - git.branch.add', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
-      storageMode: 'clone',
-      cloneDepth: 100,
-      remoteUrl: 'https://github.com/org/repo.git',
+      useReference: true,
     });
   });
 });
@@ -284,7 +285,9 @@ describe('executeCommand - git.branch.remove', () => {
     command: 'git.branch.remove',
     sessionToken: 'jwt-token',
     params: {
+      branchId: '550e8400-e29b-41d4-a716-446655440002',
       branchPath: '/data/agor/worktrees/repo/feature-x',
+      branchesRoot: '/data/agor/worktrees',
     },
   };
 

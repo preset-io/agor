@@ -19,7 +19,12 @@
  */
 
 import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
-import type { AgenticToolName, Session, User } from '../types/index.js';
+import {
+  type AgenticToolName,
+  isAgenticToolName,
+  type Session,
+  type User,
+} from '../types/index.js';
 import {
   type ParentPermissionLayer,
   resolvePermissionConfig,
@@ -62,7 +67,13 @@ export function resolveChildSessionConfig(
   args: ResolveChildSessionConfigArgs
 ): ResolvedChildSessionConfig {
   const { parent, user, overrides, now } = args;
-  const effectiveTool: AgenticToolName = args.effectiveTool ?? parent.agentic_tool;
+  const requestedTool = args.effectiveTool ?? parent.agentic_tool;
+  if (!isAgenticToolName(requestedTool)) {
+    throw new Error(
+      `Cannot resolve child configuration for removed agentic tool: ${requestedTool}`
+    );
+  }
+  const effectiveTool: AgenticToolName = requestedTool;
   const sameTool = effectiveTool === parent.agentic_tool;
   const userToolDefaults = user?.default_agentic_config?.[effectiveTool];
 

@@ -31,6 +31,7 @@ import type {
   RuntimeTelemetryInput,
   SdkHealthFailureInput,
   Session,
+  SessionUpdate,
   Task,
 } from '@agor/core/types';
 import type {
@@ -55,7 +56,16 @@ export type Application = ExpressApplication;
  * This matches the SessionRepository methods exposed via the service adapter
  */
 export interface SessionsServiceImpl
-  extends Service<Session, CreateSessionInput, FeathersParams, Partial<Session>> {
+  extends Omit<
+    Service<Session, CreateSessionInput, FeathersParams, SessionUpdate>,
+    'patch' | 'update'
+  > {
+  patch(
+    id: import('@agor/core/types').NullableId,
+    data: SessionUpdate,
+    params?: FeathersParams
+  ): Promise<Session | Session[]>;
+  update(id: string, data: SessionUpdate, params?: FeathersParams): Promise<Session>;
   fork(
     id: string,
     data: { prompt: string; task_id?: string },
@@ -131,6 +141,10 @@ export interface SessionsServiceImpl
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  reportTerminationComplete(
+    data: import('@agor/core/types').ExecutorTerminationCompleteInput,
+    params?: FeathersParams
+  ): Promise<Task>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,
@@ -138,6 +152,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
+  autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,

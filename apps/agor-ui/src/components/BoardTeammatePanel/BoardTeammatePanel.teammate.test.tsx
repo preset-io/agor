@@ -7,8 +7,8 @@ import { agorStore } from '../../store/agorStore';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
 vi.mock('../BranchCard', () => ({
-  BranchSessionSections: ({ defaultExpanded }: { defaultExpanded?: boolean }) => (
-    <div data-testid="teammate-session-sections">defaultExpanded:{String(defaultExpanded)}</div>
+  BranchSessionSections: ({ mode }: { mode?: string }) => (
+    <div data-testid="teammate-session-sections">mode:{String(mode)}</div>
   ),
 }));
 
@@ -32,7 +32,7 @@ describe('BoardTeammatePanel teammate tab', () => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
-  it('expands the teammate Sessions section by default', () => {
+  it('renders the teammate Sessions section as a transient panel surface', () => {
     render(
       <AntApp>
         <BoardTeammatePanel
@@ -48,9 +48,7 @@ describe('BoardTeammatePanel teammate tab', () => {
       </AntApp>
     );
 
-    expect(screen.getByTestId('teammate-session-sections')).toHaveTextContent(
-      'defaultExpanded:true'
-    );
+    expect(screen.getByTestId('teammate-session-sections')).toHaveTextContent('mode:panel');
     expect(screen.getByTestId('branch-header-pill')).toHaveAttribute(
       'data-truncate-to-fit',
       'true'

@@ -8,8 +8,9 @@
  * resolves. The socket-driven `sessionById` update may arrive a tick later,
  * so a strict `if (!session) return` guard inside `goToSession` would
  * silently strand the user on the prior URL — the very regression this
- * fix addresses. The lookup is now scoped to the same-URL recenter
- * fallback (where it actually matters) instead of gating the navigation.
+ * fix addresses. The session lookup is scoped to the same-URL recenter
+ * fallback (where it aims the camera at the session's row inside its
+ * branch card) instead of gating the navigation.
  *
  * The same contract applies to `goToBranch` and `goToBoard` — used by the
  * post-create handlers in `App/App.tsx` (handleCreateBranch,
@@ -21,8 +22,8 @@ import type { Branch, Session } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
-import { CanvasNavigationProvider } from '../contexts/CanvasNavigationContext';
+import { describe, expect, it, vi } from 'vitest';
+import { CanvasNavigationProvider, useRegisterRecenter } from '../contexts/CanvasNavigationContext';
 import { useAppNavigation } from './useAppNavigation';
 
 // A real UUIDv7. `shortId` strips hyphens and keeps the first
@@ -115,9 +116,9 @@ describe('useAppNavigation.goToSession', () => {
 
   it('does not blow up on same-URL re-click when session is unknown', () => {
     // Already on the target session URL but sessionById is empty (deep-link
-    // load where data hasn't streamed in yet). The same-URL fallback used
-    // to dereference `session.branch_id` — assert it's safe with a missing
-    // session.
+    // load where data hasn't streamed in yet). The same-URL fallback
+    // dereferences `session.branch_id` — assert it's safe with a missing
+    // session (no navigation, no crash).
     const { result } = renderHook(
       () =>
         useTestNav({
@@ -136,6 +137,47 @@ describe('useAppNavigation.goToSession', () => {
     }).not.toThrow();
 
     // No navigation should have happened — already on this URL.
+    expect(result.current.pathname).toBe(`/s/${NEW_SESSION_SHORT}/`);
+  });
+
+  it('recenters onto the session row (not the card head) on same-URL re-click of a known session', () => {
+    // The reported bug was the camera jerking to the branch card's head
+    // when a session was selected. The fix keeps the pan but aims it at
+    // the session's own row inside the card: the recenter must carry the
+    // session id as a sub-target, and `ensureVisible` so the camera only
+    // moves when that row isn't already on screen (no jump on a re-click
+    // of a session that's already in view).
+    const session = {
+      session_id: NEW_SESSION_ID,
+      branch_id: EXISTING_BRANCH_ID,
+    } as Session;
+    const branch = {
+      branch_id: EXISTING_BRANCH_ID,
+      board_id: EXISTING_BOARD_ID,
+    } as Branch;
+
+    const recenter = vi.fn(() => true);
+    const { result } = renderHook(
+      () => {
+        useRegisterRecenter(recenter);
+        return useTestNav({
+          boardById: new Map(),
+          sessionById: new Map([[session.session_id, session]]),
+          branchById: new Map([[branch.branch_id, branch]]),
+          artifactById: new Map(),
+        });
+      },
+      { wrapper: wrap(`/s/${NEW_SESSION_SHORT}/`) }
+    );
+
+    act(() => {
+      result.current.nav.goToSession(NEW_SESSION_ID);
+    });
+
+    expect(recenter).toHaveBeenCalledWith(EXISTING_BRANCH_ID, {
+      sessionId: NEW_SESSION_ID,
+      ensureVisible: true,
+    });
     expect(result.current.pathname).toBe(`/s/${NEW_SESSION_SHORT}/`);
   });
 });

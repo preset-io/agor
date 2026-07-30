@@ -75,9 +75,11 @@ raw connection or a superuser/BYPASSRLS daemon role.
    trusted header; unlike internal JWTs, existing opaque keys contain no signed
    tenant claim.
 3. **Tenant-bound internal tokens:** every newly issued internal MCP JWT signs a
-   non-empty tenant id. Issuance requires an active tenant; cache keys include
-   it; validation rejects legacy/unbound tokens and checks session existence
-   inside the signed tenant.
+   non-empty tenant id. Static mode may use its configured tenant when no
+   ambient identity exists; `required_from_auth` requires an active tenant.
+   Any configured/ambient conflict fails closed. Cache keys include the tenant;
+   validation rejects legacy/unbound tokens and checks session existence inside
+   the signed tenant.
 4. **Immutable stateful binding:** an MCP Streamable HTTP session is bound at
    initialize time to `(tenant, user, optional Agor session)`. Every subsequent
    request re-authenticates; tenant and user must match. The optional Agor

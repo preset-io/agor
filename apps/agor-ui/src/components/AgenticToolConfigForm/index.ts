@@ -3,6 +3,7 @@ export { AgenticToolConfigForm } from './AgenticToolConfigForm';
 export type { AgenticFormValues } from './agenticConfigHelpers';
 export {
   buildConfigFromFormValues,
+  buildModelConfigFromFormValues,
   buildScheduleConfigFromFormValues,
   getClearedFormValues,
   getFormValuesFromConfig,

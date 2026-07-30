@@ -76,6 +76,28 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  it('shows a pointer only when the environment label links to a running app', () => {
+    const { rerender } = render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://example.test',
+            environment_instance: { status: 'running' },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link')).toHaveStyle({ cursor: 'pointer' });
+
+    rerender(<EnvironmentPill {...defaultProps} />);
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
+  });
+
   it('can hide only the destructive nuke action while preserving other controls', () => {
     render(<EnvironmentPill {...defaultProps} showNukeEnvironment={false} />);
 
@@ -89,5 +111,52 @@ describe('EnvironmentPill', () => {
     render(<EnvironmentPill {...defaultProps} />);
 
     expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeInTheDocument();
+  });
+
+  it('surfaces the active variant name when the repo defines multiple variants', () => {
+    const multiVariantRepo = {
+      repo_id: 'repo-2',
+      slug: 'tzercin/agor',
+      environment: {
+        version: 2,
+        default: 'sqlite',
+        variants: {
+          sqlite: { start: 'pnpm dev', stop: 'pnpm stop' },
+          postgres: { start: 'pnpm dev:pg', stop: 'pnpm stop' },
+        },
+      },
+    } as unknown as Repo;
+    const pgBranch = {
+      ...branch,
+      environment_variant: 'postgres',
+    } as Branch;
+
+    render(<EnvironmentPill {...defaultProps} repo={multiVariantRepo} branch={pgBranch} />);
+
+    expect(screen.getByText('postgres')).toBeInTheDocument();
+    expect(screen.queryByText('env')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the generic "env" label when only one variant exists', () => {
+    const singleVariantRepo = {
+      repo_id: 'repo-3',
+      slug: 'tzercin/agor',
+      environment: {
+        version: 2,
+        default: 'default',
+        variants: {
+          default: { start: 'pnpm dev', stop: 'pnpm stop' },
+        },
+      },
+    } as unknown as Repo;
+    const singleBranch = {
+      ...branch,
+      environment_variant: 'default',
+    } as Branch;
+
+    render(<EnvironmentPill {...defaultProps} repo={singleVariantRepo} branch={singleBranch} />);
+
+    expect(screen.getByText('env')).toBeInTheDocument();
+    expect(screen.queryByText('default')).not.toBeInTheDocument();
   });
 });

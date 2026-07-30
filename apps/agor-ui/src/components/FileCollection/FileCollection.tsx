@@ -23,7 +23,6 @@ import {
 import { Button, Empty, Input, Spin, Tooltip, Tree } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ConceptListItem } from '../../types';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 
@@ -32,17 +31,14 @@ const { Search } = Input;
 // Debounce delay for live search (milliseconds)
 const SEARCH_DEBOUNCE_MS = 300;
 
-// Support both old ContextFileListItem and new FileListItem types
-export type FileItem =
-  | ConceptListItem
-  | {
-      path: string;
-      title: string;
-      size: number;
-      lastModified: string;
-      isText?: boolean;
-      mimeType?: string;
-    };
+export type FileItem = {
+  path: string;
+  title: string;
+  size: number;
+  lastModified: string;
+  isText?: boolean;
+  mimeType?: string;
+};
 
 export interface FileCollectionProps {
   /** List of files from server */

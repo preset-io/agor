@@ -153,14 +153,6 @@ describe('resolveProbeAgent', () => {
     );
   });
 
-  it('maps a claude-code-cli stored key to the claude-code probe target', () => {
-    expect(
-      resolveProbeAgent(
-        asUser({ agentic_tools: { 'claude-code-cli': { CLAUDE_CODE_OAUTH_TOKEN: 't' } } })
-      )
-    ).toBe('claude-code');
-  });
-
   it('falls back to claude-code when nothing is known', () => {
     expect(resolveProbeAgent(null)).toBe('claude-code');
     expect(resolveProbeAgent(asUser({}))).toBe('claude-code');

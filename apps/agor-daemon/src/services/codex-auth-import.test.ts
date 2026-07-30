@@ -1,7 +1,7 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readCodexAuthFile, writeCodexAuthFile } from '../utils/codex-auth-file.js';
+import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
 
 vi.mock('@agor/core/config', async () => {
@@ -31,21 +31,19 @@ vi.mock('@agor/core/unix', async () => {
   };
 });
 
-vi.mock('../utils/codex-auth-file.js', async () => {
-  const actual = await vi.importActual<typeof import('../utils/codex-auth-file.js')>(
-    '../utils/codex-auth-file.js'
+vi.mock('../utils/executor-codex-auth.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(
+    '../utils/executor-codex-auth.js'
   );
   return {
     ...actual,
-    writeCodexAuthFile: vi.fn(),
-    readCodexAuthFile: vi.fn(),
+    writeCodexAuthViaExecutor: vi.fn(),
   };
 });
 
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
-const writeCodexAuthFileMock = vi.mocked(writeCodexAuthFile);
-const readCodexAuthFileMock = vi.mocked(readCodexAuthFile);
+const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
 const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const TEST_DB = { run: vi.fn() } as never;
@@ -85,22 +83,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  // Readback verification is byte-exact against what was written, so the
-  // read mock returns whatever the write mock captured.
-  let written = '';
-  writeCodexAuthFileMock.mockImplementation((content: string) => {
-    written = content;
-  });
-  readCodexAuthFileMock.mockImplementation(() =>
-    written ? { ok: true, content: written } : { ok: false, reason: 'not-found' }
-  );
+  writeCodexAuthViaExecutorMock.mockResolvedValue({ authMode: 'chatgpt' });
 });
 
 describe('codex-auth-import', () => {
   it('rejects unauthenticated callers before touching anything', async () => {
     const { app } = makeApp();
     await expect(service(app).create({ authJson: VALID_AUTH_JSON })).rejects.toThrow(/Sign in/);
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('rejects hosted multi-tenant mode', async () => {
@@ -111,7 +101,7 @@ describe('codex-auth-import', () => {
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
       /hosted multi-tenant/
     );
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('rejects when codex is disabled for the workspace', async () => {
@@ -127,7 +117,7 @@ describe('codex-auth-import', () => {
     await expect(service(app).create({ authJson: 'not json' }, AUTH_PARAMS)).rejects.toThrow(
       /valid JSON/
     );
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('rejects a credential-free file', async () => {
@@ -135,15 +125,15 @@ describe('codex-auth-import', () => {
     await expect(
       service(app).create({ authJson: JSON.stringify({ tokens: {} }) }, AUTH_PARAMS)
     ).rejects.toThrow(/codex login/);
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('writes, verifies, flips the auth method, and returns non-secret metadata only', async () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
 
-    expect(writeCodexAuthFileMock).toHaveBeenCalledTimes(1);
-    const [writtenContent, asUser] = writeCodexAuthFileMock.mock.calls[0];
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
+    const [writtenContent, asUser] = writeCodexAuthViaExecutorMock.mock.calls[0];
     expect(JSON.parse(writtenContent)).toEqual(JSON.parse(VALID_AUTH_JSON));
     expect(asUser).toBeNull();
 
@@ -158,41 +148,8 @@ describe('codex-auth-import', () => {
     expect(JSON.stringify(result)).not.toContain('access-abc');
   });
 
-  it('surfaces a friendly error when the readback verification fails persistently', async () => {
-    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
-    const { app, usersService } = makeApp();
-    await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
-      /verified/
-    );
-    // One retry on a transient-looking read failure, then give up.
-    expect(readCodexAuthFileMock).toHaveBeenCalledTimes(2);
-    expect(usersService.patch).not.toHaveBeenCalled();
-  });
-
-  it('retries the readback once and succeeds on a transient read failure', async () => {
-    // First read fails transiently; the retry falls through to the capture
-    // implementation and returns the written bytes.
-    readCodexAuthFileMock.mockReturnValueOnce({ ok: false, reason: 'unreadable' });
-    const { app, usersService } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
-    expect(result.status).toBe('authenticated');
-    expect(usersService.patch).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects when the readback bytes differ from what was written', async () => {
-    readCodexAuthFileMock.mockReturnValue({
-      ok: true,
-      content: '{"OPENAI_API_KEY":"sk-someone-elses-import"}\n',
-    });
-    const { app, usersService } = makeApp();
-    await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
-      /verified/
-    );
-    expect(usersService.patch).not.toHaveBeenCalled();
-  });
-
   it('maps write failures to a friendly error and logs only the error class', async () => {
-    writeCodexAuthFileMock.mockImplementationOnce(() => {
+    writeCodexAuthViaExecutorMock.mockImplementationOnce(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -219,7 +176,7 @@ describe('codex-auth-import', () => {
     const { app } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
     expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthFileMock).toHaveBeenCalledWith(expect.any(String), 'alice');
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'alice');
   });
 
   it('strict mode without a unix_username rejects before writing', async () => {
@@ -231,7 +188,7 @@ describe('codex-auth-import', () => {
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
       /Unix account/
     );
-    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
   });
 
   it('insulated mode targets the configured executor user', async () => {
@@ -241,6 +198,6 @@ describe('codex-auth-import', () => {
     const { app } = makeApp();
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
     expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthFileMock).toHaveBeenCalledWith(expect.any(String), 'agor_executor');
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'agor_executor');
   });
 });

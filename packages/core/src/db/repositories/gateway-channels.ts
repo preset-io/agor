@@ -7,10 +7,10 @@
 
 import type {
   ChannelType,
-  GatewayAgenticConfig,
   GatewayChannel,
   GatewayChannelID,
   GatewayEnvVar,
+  PersistedGatewayAgenticConfig,
   TenantID,
   UUID,
 } from '@agor/core/types';
@@ -206,10 +206,11 @@ export class GatewayChannelRepository
         config: decryptConfig(config),
         agentic_config: agenticConfig
           ? ({
-              ...(agenticConfig as unknown as GatewayAgenticConfig),
+              ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
               presetId:
-                (row.agentic_tool_preset_id as GatewayAgenticConfig['presetId']) ?? undefined,
-            } as GatewayAgenticConfig)
+                (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
+                undefined,
+            } as PersistedGatewayAgenticConfig)
           : null,
         mcp_server_ids: row.mcp_server_ids ?? undefined,
         enabled: Boolean(row.enabled),

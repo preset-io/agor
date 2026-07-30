@@ -16,13 +16,14 @@ export interface ModelOptionLike {
   id: string;
 }
 
-const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']);
+const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code']);
 
 /** Common option shape the picker renders: a friendly name plus optional blurb. */
 export interface NormalizedModelOption {
   id: string;
   displayName: string;
   description?: string;
+  availability?: 'supported' | 'provider-dependent' | 'unsupported';
 }
 
 /** The picker's upstream lists disagree on the name field (`displayName` vs `label`). */
@@ -31,6 +32,7 @@ type LooseModelOption = {
   displayName?: string;
   label?: string;
   description?: string;
+  availability?: 'supported' | 'provider-dependent' | 'unsupported';
 };
 
 export function normalizeModelOption(model: LooseModelOption): NormalizedModelOption {
@@ -38,62 +40,30 @@ export function normalizeModelOption(model: LooseModelOption): NormalizedModelOp
     id: model.id,
     displayName: model.displayName ?? model.label ?? model.id,
     description: model.description,
+    availability: model.availability,
   };
 }
 
-const CLAUDE_ALIAS_PATTERN = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/;
-
-/** Parse a Claude alias id into its model line and a comparable version number. */
-function parseClaudeAlias(id: string): { line: string; version: number } | null {
-  const match = CLAUDE_ALIAS_PATTERN.exec(id);
-  if (!match) return null;
-  const [, line, major, minor] = match;
-  return { line, version: Number(major) + (minor ? Number(minor) / 100 : 0) };
-}
-
 /**
- * Curate the top-level model list: for Claude keep only the latest alias per
- * model line (Opus/Sonnet/Haiku/Fable), dropping dated snapshots, `[1m]`
- * variants, and superseded versions. The default/recommended model is surfaced
- * first. Non-Claude tools ship short curated lists already, so they pass
- * through unchanged (order preserved, default first).
+ * Preserve the complete selectable alias list supplied by the tool's static or
+ * dynamic discovery source, surfacing the default/recommended model first.
+ *
+ * Provider discovery is responsible for excluding unsuitable entries such as
+ * Claude's dated snapshots. Users can still pin an unlisted provider model ID
+ * through exact mode.
  */
 export function curateModelOptions(
-  tool: AgenticToolName,
+  _tool: AgenticToolName,
   models: NormalizedModelOption[],
   defaultModel: string
 ): NormalizedModelOption[] {
-  let curated = models;
-
-  if (CLAUDE_TOOLS.has(tool)) {
-    const latestByLine = new Map<string, { option: NormalizedModelOption; version: number }>();
-    for (const option of models) {
-      if (option.id.includes('[1m]')) continue;
-      const parsed = parseClaudeAlias(option.id);
-      if (!parsed) continue;
-      const existing = latestByLine.get(parsed.line);
-      if (!existing || parsed.version > existing.version) {
-        latestByLine.set(parsed.line, { option, version: parsed.version });
-      }
-    }
-    const keep = new Set([...latestByLine.values()].map((entry) => entry.option.id));
-    curated = models.filter((model) => keep.has(model.id));
-    // Never drop the current runtime default, even if it fails to parse.
-    if (defaultModel && !curated.some((model) => model.id === defaultModel)) {
-      const fallback = models.find((model) => model.id === defaultModel);
-      if (fallback) curated = [fallback, ...curated];
-    }
-  }
-
-  const defaultIndex = curated.findIndex((model) => model.id === defaultModel);
-  if (defaultIndex > 0) {
-    curated = [
-      curated[defaultIndex],
-      ...curated.slice(0, defaultIndex),
-      ...curated.slice(defaultIndex + 1),
-    ];
-  }
-  return curated;
+  const defaultIndex = models.findIndex((model) => model.id === defaultModel);
+  if (defaultIndex <= 0) return models;
+  return [
+    models[defaultIndex],
+    ...models.slice(0, defaultIndex),
+    ...models.slice(defaultIndex + 1),
+  ];
 }
 
 /** Resolve a stored model id to its friendly display name for inline summaries. */

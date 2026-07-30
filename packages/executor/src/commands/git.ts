@@ -18,7 +18,8 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { userInfo } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
@@ -32,10 +33,15 @@ import {
   deleteBranchDirectory,
   deleteRepoDirectory,
   ensureGitRemoteUrl,
+  getDefaultBranch,
+  getRemoteUrl,
   getReposDir,
+  isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
+  scanGitConfigRemoteCredentials,
+  scrubGitConfigRemoteCredentials,
   stripGitUrlCredentials,
 } from '../git/index.js';
 import type {
@@ -48,13 +54,120 @@ import type {
   GitBranchCleanPayload,
   GitBranchRemovePayload,
   GitClonePayload,
+  GitManagedCredentialsReconcilePayload,
   GitRepoDeletePayload,
+  GitRepoInspectPayload,
   GitRepoRealignOriginPayload,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 import { fixBranchGitDirPermissionsBasic } from './unix.js';
+
+/**
+ * Self-hosted compatibility operation. The daemon authorizes the request and
+ * launches this narrow inspection under the caller's resolved executor Unix
+ * identity; the command deliberately has no daemon capability token.
+ */
+export async function handleGitRepoInspect(
+  payload: GitRepoInspectPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  try {
+    let inputPath = payload.params.path.trim();
+    if (inputPath.startsWith('~')) {
+      inputPath = join(userInfo().homedir, inputPath.slice(1).replace(/^[/\\]?/, ''));
+    }
+    if (!isAbsolute(inputPath)) throw new Error(`Path must be absolute: ${inputPath}`);
+    const repoPath = resolve(inputPath);
+    if (!(await isValidGitRepo(repoPath))) {
+      throw new Error(`Not a valid git repository: ${repoPath}`);
+    }
+    const remoteUrl = stripGitUrlCredentials((await getRemoteUrl(repoPath)) ?? '') || undefined;
+    let environment: unknown;
+    let environmentWarning: string | undefined;
+    try {
+      environment = parseAgorYml(join(repoPath, '.agor.yml')) ?? undefined;
+    } catch {
+      environmentWarning = 'Failed to parse .agor.yml; repository registration will continue.';
+    }
+    const scan = await scanGitConfigRemoteCredentials(repoPath);
+    return {
+      success: true,
+      data: {
+        path: repoPath,
+        defaultBranch: await getDefaultBranch(repoPath),
+        remoteUrl,
+        environment,
+        credentialFindingCount: scan.findings.length,
+        ...(environmentWarning ? { environmentWarning } : {}),
+        ...(options.dryRun ? { dryRun: true } : {}),
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: 'GIT_REPO_INSPECT_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+export async function handleGitManagedCredentialsReconcile(
+  payload: GitManagedCredentialsReconcilePayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  let client: AgorClient | null = null;
+  try {
+    client = await createExecutorClient(
+      payload.daemonUrl || 'http://localhost:3030',
+      payload.sessionToken
+    );
+    const fetchAll = async (service: 'repos' | 'branches', query: Record<string, unknown>) => {
+      const rows: Array<{
+        repo_id?: string;
+        repo_type?: string;
+        local_path?: string;
+        path?: string;
+      }> = [];
+      while (true) {
+        const result = await client!.service(service).find({
+          query: { ...query, $limit: 1000, $skip: rows.length },
+        });
+        const page = Array.isArray(result) ? result : result.data;
+        rows.push(...page);
+        if (Array.isArray(result) || page.length === 0 || rows.length >= result.total) return rows;
+      }
+    };
+    const repos = await fetchAll('repos', {});
+    let findings = 0;
+    for (const repo of repos.filter((item) => item.repo_type === 'remote')) {
+      if (!options.dryRun && repo.local_path)
+        findings += (await scrubGitConfigRemoteCredentials(repo.local_path)).findings.length;
+      const branches = await fetchAll('branches', {
+        repo_id: repo.repo_id,
+        archived: { $in: [true, false] },
+      });
+      for (const branch of branches) {
+        if (!options.dryRun && branch.path)
+          findings += (await scrubGitConfigRemoteCredentials(branch.path)).findings.length;
+      }
+    }
+    return { success: true, data: { findings, dryRun: options.dryRun === true } };
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: 'GIT_MANAGED_CREDENTIALS_RECONCILE_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  } finally {
+    client?.io.disconnect();
+  }
+}
 
 /**
  * Fetch the requesting user's git environment via Feathers RPC.
@@ -623,12 +736,12 @@ export async function handleGitRepoDelete(
 
     for (const branch of branches) {
       if (!branch.path) continue;
-      await deleteBranchDirectory(branch.path);
+      await deleteBranchDirectory(branch.path, payload.params.branchesRoot);
       deletedPaths.push(branch.path);
       console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
     }
 
-    await deleteRepoDirectory(repoPath);
+    await deleteRepoDirectory(repoPath, payload.params.reposRoot);
     deletedPaths.push(repoPath);
     console.log(`🗑️  [git.repo.delete] Deleted repository directory: ${repoPath}`);
 
@@ -1015,6 +1128,10 @@ export async function handleGitBranchAdd(
   options: CommandOptions
 ): Promise<ExecutorResult> {
   const branchId = payload.params.branchId;
+  let resolvedRepoPath: string | undefined;
+  let resolvedBranchPath: string | undefined;
+  let resolvedBranchName: string | undefined;
+  let resolvedOthersAccess: 'none' | 'read' | 'write' = 'read';
 
   // Dry run mode
   if (options.dryRun) {
@@ -1025,18 +1142,8 @@ export async function handleGitBranchAdd(
         command: 'git.branch.add',
         branchId,
         repoId: payload.params.repoId,
-        repoPath: payload.params.repoPath,
-        branchName: payload.params.branchName,
-        branchPath: payload.params.branchPath,
-        branch: payload.params.branch,
-        sourceBranch: payload.params.sourceBranch,
-        createBranch: payload.params.createBranch,
-        storageMode: payload.params.storageMode,
-        cloneDepth: payload.params.cloneDepth,
-        remoteUrl: payload.params.remoteUrl
-          ? stripGitUrlCredentials(payload.params.remoteUrl)
-          : payload.params.remoteUrl,
-        referencePath: payload.params.referencePath,
+        restoreMode: payload.params.restoreMode,
+        useReference: payload.params.useReference,
       },
     };
   }
@@ -1049,23 +1156,40 @@ export async function handleGitBranchAdd(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.branch.add] Connected to daemon');
 
+    // Resolve filesystem-bearing repository metadata through the scoped
+    // service token in this same executor. This makes authorization, trusted
+    // path resolution, credential scrub, and materialization one operation.
+    const repo = await client.service('repos').get(payload.params.repoId);
+    const branchRecord = await client.service('branches').get(branchId);
+    if (branchRecord.repo_id !== payload.params.repoId) {
+      throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
+    }
+
     // Fetch per-user git credentials via Feathers RPC
     const env = await fetchUserGitEnvironment(client, payload.params.userId);
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const branchPath = payload.params.branchPath;
-    const repoPath = payload.params.repoPath;
-    const branchName = payload.params.branchName;
-    const branch = payload.params.branch || branchName;
-    const shouldCreateBranch = payload.params.createBranch ?? false;
-    const sourceBranch = payload.params.sourceBranch;
-    const refType = payload.params.refType;
+    const branchPath = branchRecord.path;
+    const repoPath = repo.local_path;
+    const branchName = branchRecord.name;
+    resolvedRepoPath = repoPath;
+    resolvedBranchPath = branchPath;
+    resolvedBranchName = branchName;
+    resolvedOthersAccess = branchRecord.others_fs_access || 'read';
+    const branch = branchRecord.ref || branchName;
+    const shouldCreateBranch = branchRecord.new_branch ?? false;
+    const sourceBranch = branchRecord.base_ref || repo.default_branch || 'main';
+    const refType = branchRecord.ref_type;
     const restoreMode = payload.params.restoreMode ?? false;
-    const storageMode = payload.params.storageMode ?? 'worktree';
-    const cloneDepth = payload.params.cloneDepth;
-    const remoteUrl = payload.params.remoteUrl;
-    const referencePath = payload.params.referencePath;
+    const storageMode = branchRecord.storage_mode ?? 'worktree';
+    const cloneDepth = branchRecord.clone_depth;
+    const remoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
+    const referencePath = payload.params.useReference ? repo.local_path : undefined;
+
+    if (!repoPath && storageMode === 'worktree') {
+      throw new Error(`Repository ${repoId} has no local_path for worktree materialization`);
+    }
 
     console.log(`[git.branch.add] Creating branch at ${branchPath}...`);
     console.log(
@@ -1081,8 +1205,7 @@ export async function handleGitBranchAdd(
       // payload schema also enforces this via superRefine.)
       if (!remoteUrl) {
         throw new Error(
-          `storageMode='clone' requires remoteUrl in payload (got none). ` +
-            `The daemon should forward repo.remote_url alongside storageMode.`
+          `Cannot materialize clone-mode branch: tenant-scoped repository ${repoId} has no remote_url.`
         );
       }
 
@@ -1141,7 +1264,7 @@ export async function handleGitBranchAdd(
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && branchId) {
       try {
-        const othersAccess = payload.params.othersAccess || 'read';
+        const othersAccess = resolvedOthersAccess;
         console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
         const result = await client
           .service('branches')
@@ -1155,7 +1278,7 @@ export async function handleGitBranchAdd(
           error instanceof Error ? error.message : String(error)
         );
       }
-    } else if (!payload.params.initUnixGroup && storageMode === 'worktree') {
+    } else if (payload.params.fixBasicPermissions && storageMode === 'worktree') {
       // RBAC is explicitly disabled — set basic permissions for the base
       // repo's .git/worktrees/<name>/ entry so git operations work even
       // without Unix group isolation.
@@ -1247,7 +1370,7 @@ export async function handleGitBranchAdd(
     // unblocks sync-unix, sessions, and manual recovery — the directory just
     // won't be a proper git branch. Also repairs perms if a prior attempt
     // created the dir but failed on group initialization.
-    const fallbackPath = payload.params.branchPath;
+    const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
     let fallbackPermissionsApplied = false;
     if (fallbackPath) {
@@ -1268,8 +1391,9 @@ export async function handleGitBranchAdd(
       // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          const othersAccess = payload.params.othersAccess || 'read';
-          await client.service('branches').initializeUnixGroup({ branchId, othersAccess });
+          await client
+            .service('branches')
+            .initializeUnixGroup({ branchId, othersAccess: resolvedOthersAccess });
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {
@@ -1285,9 +1409,9 @@ export async function handleGitBranchAdd(
     let userMessage = errorMessage;
     if (errorMessage.includes('already exists')) {
       if (errorMessage.includes('branch')) {
-        userMessage = `A branch named '${payload.params.branch || payload.params.branchName}' already exists and is in use by another branch. Please choose a different name.`;
+        userMessage = `A branch named '${resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
       } else {
-        userMessage = `Directory '${payload.params.branchPath || payload.params.branchName}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
+        userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
       }
     }
 
@@ -1315,9 +1439,9 @@ export async function handleGitBranchAdd(
         details: {
           branchId,
           repoId: payload.params.repoId,
-          repoPath: payload.params.repoPath,
-          branchName: payload.params.branchName,
-          branchPath: payload.params.branchPath,
+          repoPath: resolvedRepoPath,
+          branchName: resolvedBranchName,
+          branchPath: resolvedBranchPath,
           fallbackDirectoryCreated: fallbackCreated,
           fallbackPermissionsApplied,
         },
@@ -1372,6 +1496,7 @@ export async function handleGitBranchRemove(
 
     const branchId = payload.params.branchId;
     const branchPath = payload.params.branchPath;
+    const branchesRoot = payload.params.branchesRoot;
     const storageMode = payload.params.storageMode ?? 'worktree';
 
     console.log(
@@ -1394,7 +1519,7 @@ export async function handleGitBranchRemove(
         console.log(
           `[git.branch.remove] Clone mode — removing self-standing directory ${branchPath}`
         );
-        await deleteBranchDirectory(branchPath);
+        await deleteBranchDirectory(branchPath, branchesRoot);
         filesystemRemoved = true;
       } else {
         console.log(
@@ -1415,7 +1540,7 @@ export async function handleGitBranchRemove(
         console.warn(
           `[git.branch.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
         );
-        await deleteBranchDirectory(branchPath);
+        await deleteBranchDirectory(branchPath, branchesRoot);
         filesystemRemoved = true;
       } else {
         // Read .git file to find the main repo
@@ -1448,7 +1573,7 @@ export async function handleGitBranchRemove(
         // Fully delete the directory to reclaim all disk space.
         if (existsSync(branchPath)) {
           console.log(`[git.branch.remove] Directory still exists, removing residual files...`);
-          await deleteBranchDirectory(branchPath);
+          await deleteBranchDirectory(branchPath, branchesRoot);
           console.log(`[git.branch.remove] Directory fully removed`);
         }
 
@@ -1483,7 +1608,7 @@ export async function handleGitBranchRemove(
       console.log(
         '[git.branch.remove] No .git file but directory exists (orphaned), removing directory...'
       );
-      await deleteBranchDirectory(branchPath);
+      await deleteBranchDirectory(branchPath, branchesRoot);
       filesystemRemoved = true;
       console.log('[git.branch.remove] Orphaned directory removed');
     } else {

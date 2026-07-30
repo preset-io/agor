@@ -47,11 +47,4 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     description: 'GitHub Copilot agentic runtime',
     beta: true,
   },
-  {
-    id: 'claude-code-cli',
-    name: 'Claude Code CLI',
-    icon: '🤖',
-    description: 'Anthropic Claude CLI, billed to your Pro/Max subscription',
-    beta: true,
-  },
 ];

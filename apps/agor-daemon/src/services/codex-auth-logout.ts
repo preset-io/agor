@@ -40,7 +40,7 @@ import type {
   CodexAuthLogoutResult,
   UserID,
 } from '@agor/core/types';
-import { deleteCodexAuthFile } from '../utils/codex-auth-file.js';
+import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
@@ -85,7 +85,7 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       // do NOT clear the method in that case so a login we couldn't remove keeps
       // working. Log the error class only — never token bytes.
       try {
-        deleteCodexAuthFile(identity.unixUser);
+        await deleteCodexAuthViaExecutor(identity.unixUser);
       } catch (err) {
         console.error(
           `[CodexAuth] Failed to delete auth.json${

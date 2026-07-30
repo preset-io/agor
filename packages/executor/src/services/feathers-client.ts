@@ -6,6 +6,8 @@
  */
 
 import { type AgorClient, createClient } from '@agor/core/api';
+import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
+import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -17,11 +19,46 @@ const SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS = 1000;
 const SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS = 30_000;
 const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
 const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
+const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
+
+export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
 
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
     console.debug(...args);
   }
+}
+
+export function registerExecutorClientHooks(client: AgorClient): void {
+  client.hooks({
+    before: {
+      all: [
+        async (context) => {
+          const path = String(context.path);
+          const isTranscriptWrite =
+            (path === 'messages' && (context.method === 'create' || context.method === 'patch')) ||
+            (path === 'messages/bulk' && context.method === 'create');
+          if (!isTranscriptWrite) return context;
+
+          let byteSize: number;
+          try {
+            byteSize = Buffer.byteLength(JSON.stringify(context.data), 'utf8');
+          } catch {
+            throw new Error(
+              `Executor transcript data could not be serialized (${path}.${context.method})`
+            );
+          }
+          if (byteSize > EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
+            throw new Error(
+              `Executor transcript data is ${byteSize} bytes, exceeding the ${EXECUTOR_REQUEST_DATA_BUDGET_BYTES}-byte transport budget (${path}.${context.method}). ` +
+                `Reduce the tool result size at the source (e.g. pagination, filtering, or result limits).`
+            );
+          }
+          return context;
+        },
+      ],
+    },
+  });
 }
 
 /**
@@ -92,8 +129,10 @@ export async function createExecutorClient(
     // lifetime; the existing reconnect handler below re-authenticates the
     // socket after each successful reconnect.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
+    ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
     authStorage: storage,
   });
+  registerExecutorClientHooks(client);
 
   // Keep the executor JWT available for daemon endpoints that need an explicit
   // task-scoped proof. Socket.io auth can preserve the session creator user
@@ -112,10 +151,13 @@ export async function createExecutorClient(
     }
   };
 
-  let reauthenticating = false;
-  const reauthenticateSocket = async (label: string): Promise<boolean> => {
-    if (reauthenticating) return true;
-    reauthenticating = true;
+  // Single-flight re-authentication. Both the socket-reconnect handlers and the
+  // 401-retry hook below funnel through this, so overlapping reauth attempts
+  // (e.g. a reconnect reauth racing a burst of in-flight-request 401s) coalesce
+  // into exactly ONE reAuthenticate/authenticate round-trip. Every caller
+  // awaits its REAL result — not an optimistic early `true` — so a caller that
+  // sees `true` knows the socket is genuinely re-authenticated.
+  const reauthenticateSocket = createSingleFlight(async (label: string): Promise<boolean> => {
     try {
       // Try reAuthenticate first — uses stored credentials from MemoryStorage
       await client.reAuthenticate(true);
@@ -135,13 +177,23 @@ export async function createExecutorClient(
         await hooks?.onReauthenticated?.();
         return true;
       } catch (error) {
+        // The underlying session JWT is itself invalid/expired — nothing left
+        // to re-authenticate with. Report failure so the 401-retry hook fails
+        // the original call cleanly after one attempt instead of looping.
         console.error(`[executor] Re-authentication failed after ${label}:`, error);
         return false;
       }
-    } finally {
-      reauthenticating = false;
     }
-  };
+  });
+
+  // Method-agnostic, one-shot 401 retry. Any service call that fails with a
+  // definite auth failure (401 / NotAuthenticated) runs single-flight reauth
+  // and retries the ORIGINAL call exactly once, replaying via the raw hook
+  // arguments so custom (non-CRUD) methods retry too. There is deliberately NO
+  // proactive refresh timer: re-presenting the JWT cannot extend its expiry, so
+  // recovery is purely reactive. See feathers-auth-retry.ts.
+  const authRetryHook = createAuthRetryAroundHook({ client, reauthenticate: reauthenticateSocket });
+  client.hooks({ around: { all: [authRetryHook] } } as Parameters<AgorClient['hooks']>[0]);
 
   const scheduleServerDisconnectReconnect = () => {
     if (serverDisconnectReconnectTimer) return;

@@ -26,10 +26,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
-import type { AuthenticatedParams } from '@agor/core/types';
+import { getCurrentTenantId } from '@agor/core/db';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
+  escapeShellArg,
   isSecretEnvKey,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
@@ -62,13 +63,18 @@ export function configureDaemonUrl(url: string): void {
 }
 
 let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
+let requireExecutorTenantContext = false;
 
 /** Set default executor template + impersonation user from config. Call once at daemon startup. */
-export function configureExecutor(config?: ExecutorConfig | null): void {
+export function configureExecutor(
+  config?: ExecutorConfig | null,
+  options: { requireTenantContext?: boolean } = {}
+): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
     asUser: config?.executor_unix_user || undefined,
   };
+  requireExecutorTenantContext = options.requireTenantContext === true;
 
   if (configuredExecutorDefaults.executorCommandTemplate) {
     const preview =
@@ -91,6 +97,12 @@ export interface ExecutorTemplateVariables {
   session_id?: string;
   branch_id?: string;
   log_level?: string;
+  /**
+   * Trusted runtime tenant identity. This is populated from the ambient tenant
+   * context, shell-escaped during substitution, and is not caller-overridable
+   * through `SpawnExecutorOptions.templateVariables`.
+   */
+  tenant_id?: string;
 }
 
 export type ExecutorSpawnMode = 'local' | 'templated';
@@ -107,7 +119,11 @@ export interface SpawnExecutorOptions {
   asUser?: string | null;
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
-  templateVariables?: ExecutorTemplateVariables;
+  /**
+   * Caller-provided domain/runtime overrides. Tenant identity is deliberately
+   * excluded: it must come from the ambient tenant context.
+   */
+  templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
   onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
@@ -131,6 +147,8 @@ export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
   /** Optional timeout for short-lived command execution. */
   timeoutMs?: number;
+  /** Suppress child stdout/stderr logging because the JSON result may contain credentials. */
+  sensitiveOutput?: boolean;
 }
 
 /**
@@ -147,6 +165,12 @@ export function substituteTemplateVariables(
   template: string,
   variables: ExecutorTemplateVariables
 ): string {
+  if (template.includes('{tenant_id}') && !variables.tenant_id) {
+    throw new Error(
+      'executor_command_template requires {tenant_id}, but no active tenant context is available'
+    );
+  }
+
   let result = template;
 
   const substitutions: Record<string, string | number | undefined> = {
@@ -158,12 +182,18 @@ export function substituteTemplateVariables(
     session_id: variables.session_id,
     branch_id: variables.branch_id,
     log_level: variables.log_level,
+    tenant_id: variables.tenant_id,
   };
 
   for (const [key, value] of Object.entries(substitutions)) {
     if (value !== undefined) {
       const placeholder = new RegExp(`\\{${key}\\}`, 'g');
-      result = result.replace(placeholder, String(value));
+      // executor_command_template is executed via `sh -c`. Tenant IDs may
+      // originate in external auth claims, so render this security-sensitive
+      // value as one opaque shell argument. Templates should use
+      // `{tenant_id}` unquoted, e.g. `launcher --tenant-id {tenant_id}`.
+      const renderedValue = key === 'tenant_id' ? escapeShellArg(String(value)) : String(value);
+      result = result.replace(placeholder, renderedValue);
     }
   }
 
@@ -176,6 +206,22 @@ export function generateTaskId(): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/**
+ * Resolve executor tenant identity from the operation-wide AsyncLocalStorage
+ * context established by Feathers/MCP orchestration boundaries.
+ *
+ * Hosted required-from-auth mode refuses every unscoped executor launch, not
+ * only templates that happen to reference `{tenant_id}`. An unscoped local
+ * executor would also receive an unusable tenant-less runtime credential.
+ */
+function resolveExecutorTenantId(): string | undefined {
+  const tenantId = getCurrentTenantId();
+  if (!tenantId && requireExecutorTenantContext) {
+    throw new Error('Missing active tenant context for executor launch');
+  }
+  return tenantId ? String(tenantId) : undefined;
 }
 
 export function findExecutorPath(): string {
@@ -231,6 +277,7 @@ export function spawnExecutor(
   options: SpawnExecutorOptions = {}
 ): void {
   const { templateVariables, logPrefix = '[Executor]' } = options;
+  const tenantId = resolveExecutorTenantId();
 
   const executorCommandTemplate =
     options.executorCommandTemplate !== undefined
@@ -252,6 +299,7 @@ export function spawnExecutor(
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         ...templateVariables,
+        tenant_id: tenantId,
       },
       logPrefix,
     });
@@ -526,6 +574,7 @@ export async function runExecutorCommand(
   options: RunExecutorCommandOptions = {}
 ): Promise<ExecutorCommandResult> {
   const { templateVariables, logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+  const tenantId = resolveExecutorTenantId();
 
   const executorCommandTemplate =
     options.executorCommandTemplate !== undefined
@@ -548,6 +597,7 @@ export async function runExecutorCommand(
         unix_user: asUser,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         ...templateVariables,
+        tenant_id: tenantId,
       },
       logPrefix,
     });
@@ -658,12 +708,12 @@ function runExecutorCommandLocal(
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      logChunkedOutput(logPrefix, 'stdout', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
-      logChunkedOutput(logPrefix, 'stderr', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
     });
 
     child.on('error', (error) => {
@@ -754,12 +804,12 @@ function runExecutorCommandWithTemplate(
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      logChunkedOutput(logPrefix, 'stdout', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
-      logChunkedOutput(logPrefix, 'stderr', chunk);
+      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
     });
 
     child.on('error', (error) => {
@@ -850,15 +900,11 @@ export function createServiceToken(
 }
 
 /**
- * Build extra JWT claims for executor/service tokens from authenticated service
- * params. In Cloud required-from-auth mode, executor RPCs must carry the same
- * tenant claim as the request that spawned them; otherwise the daemon handles
- * them as the static/default tenant.
+ * Build executor/service-token tenant claims from the same ambient identity
+ * used by command-template substitution.
  */
-export function serviceTokenScopeForParams(
-  params?: Partial<AuthenticatedParams>
-): Record<string, unknown> {
-  const tenantId = params?.tenant?.tenant_id ?? params?.tenant_id ?? params?.user?.tenant_id;
+export function serviceTokenScopeForCurrentTenant(): Record<string, unknown> {
+  const tenantId = resolveExecutorTenantId();
   return tenantId ? { tenant_id: tenantId } : {};
 }
 
@@ -886,23 +932,22 @@ export function generateSessionToken(
 }
 
 /**
- * Generate a tenant-scoped executor service token from Feathers params.
+ * Generate an executor service token from the same ambient tenant context used
+ * to render the command template.
  *
- * Prefer this over manually composing `generateSessionToken(app,
- * serviceTokenScopeForParams(params))` so required-from-auth deployments do not
- * accidentally drop tenant context on new executor call paths.
+ * Tenant claims are applied after extra claims so callers cannot spoof or
+ * override the trusted runtime tenant.
  */
 export function generateScopedServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  params?: Partial<AuthenticatedParams>,
   extraScope: Record<string, unknown> = {},
   expiresIn?: SignOptions['expiresIn']
 ): string {
   return generateSessionToken(
     app,
-    { ...serviceTokenScopeForParams(params), ...extraScope },
+    { ...extraScope, ...serviceTokenScopeForCurrentTenant() },
     expiresIn
   );
 }

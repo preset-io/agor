@@ -70,13 +70,11 @@ export interface SandpackConfig {
  * Discrete daemon-supplied capabilities granted to an artifact.
  *
  * Each grant maps to a fixed env var name (see GRANT_ENV_VAR_NAMES in
- * `packages/core/src/types/artifact-grants.ts`). Grants are part of the
- * consent surface — `agor_token` in particular is treated stricter than
- * informational grants like `agor_artifact_id`.
+ * `packages/core/src/types/artifact-grants.ts`). Grants that expose viewer
+ * information are part of the artifact consent surface; informational
+ * coordinates such as `agor_artifact_id` do not require consent.
  */
 export interface AgorGrants {
-  /** Mint a 15-min daemon JWT for the viewer; injected as AGOR_TOKEN. */
-  agor_token?: boolean;
   /** Inject the daemon's base URL as AGOR_API_URL. */
   agor_api_url?: boolean;
   /** Inject viewer's email as AGOR_USER_EMAIL. */
@@ -85,11 +83,6 @@ export interface AgorGrants {
   agor_artifact_id?: boolean;
   /** Inject the artifact's board ID as AGOR_BOARD_ID (informational, no consent). */
   agor_board_id?: boolean;
-  /**
-   * Inject proxy URLs for listed vendors as AGOR_PROXY_<VENDOR> env vars.
-   * e.g. `["openai", "anthropic"]` → AGOR_PROXY_OPENAI, AGOR_PROXY_ANTHROPIC.
-   */
-  agor_proxies?: string[];
 }
 
 /**
@@ -392,7 +385,7 @@ export type ArtifactLegacySignal =
   | 'has_sandpack_json'
   | 'has_agor_config_js'
   | 'no_sandpack_config'
-  | 'has_handlebars_token'
+  | 'has_handlebars_agor_grant'
   | 'has_handlebars_user_env'
   | 'has_handlebars_user_email'
   | 'has_handlebars_artifact_ref';

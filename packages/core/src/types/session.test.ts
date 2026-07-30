@@ -36,10 +36,16 @@ describe('session promptability helpers', () => {
     expect(isSessionPromptable({ status: 'failed', ready_for_prompt: false })).toBe(false);
   });
 
+  it('allows a new prompt after a permission timeout once the executor has exited', () => {
+    expect(sessionCanStartTask('timed_out', true)).toBe(true);
+    expect(sessionCanStartTask('timed_out', false)).toBe(false);
+    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: true })).toBe(true);
+    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: false })).toBe(false);
+  });
+
   it('does not confuse ready_for_prompt attention state with promptability', () => {
-    expect(sessionCanStartTask('timed_out', true)).toBe(false);
     expect(sessionCanStartTask('running', true)).toBe(false);
-    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: true })).toBe(false);
+    expect(isSessionPromptable({ status: 'running', ready_for_prompt: true })).toBe(false);
   });
 
   it('identifies execution states separately from promptability', () => {
@@ -58,10 +64,6 @@ describe('getDefaultPermissionMode', () => {
 
   it('returns "auto" for claude-code (model classifier; unresolved prompts fall through to Agor UI)', () => {
     expect(getDefaultPermissionMode('claude-code')).toBe('auto');
-  });
-
-  it('returns "auto" for claude-code-cli (shares the Claude default)', () => {
-    expect(getDefaultPermissionMode('claude-code-cli')).toBe('auto');
   });
 
   it('returns "autoEdit" for gemini (native Gemini mode)', () => {
@@ -114,7 +116,6 @@ describe('getDefaultPermissionMode', () => {
     it('handles all valid AgenticToolName values', () => {
       const allTools: AgenticToolName[] = [
         'claude-code',
-        'claude-code-cli',
         'codex',
         'gemini',
         'opencode',
@@ -128,7 +129,6 @@ describe('getDefaultPermissionMode', () => {
       }
 
       expect(results['claude-code']).toBe('auto');
-      expect(results['claude-code-cli']).toBe('auto');
       expect(results.codex).toBe('allow-all');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');
@@ -139,7 +139,6 @@ describe('getDefaultPermissionMode', () => {
     it('returns valid PermissionMode values', () => {
       const allTools: AgenticToolName[] = [
         'claude-code',
-        'claude-code-cli',
         'codex',
         'gemini',
         'opencode',

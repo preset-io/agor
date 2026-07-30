@@ -12,14 +12,17 @@ import {
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
+  getBaseUrl,
   getBranchesDir,
   getBranchPath,
   getConfigPath,
   getConfigValue,
+  getDaemonBaseUrl,
   getDaemonUrl,
   getDataHome,
   getDefaultConfig,
   getReposDir,
+  getTenantDataRoot,
   initConfig,
   isBranchRbacEnabled,
   isUnixGroupRefreshNeeded,
@@ -249,6 +252,26 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('rejects the removed proxies config surface as an unknown top-level key', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ proxies: { shortcut: { upstream: 'https://api.app.shortcut.com' } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: proxies/);
+  });
+
+  it('continues to accept daemon.trust_proxy_hops for deployment reverse proxies', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ daemon: { trust_proxy_hops: 2 } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
   });
 
   it('reports every unrecognized nested key with its full path', async () => {
@@ -633,7 +656,7 @@ describe('loadConfig cache', () => {
   });
 });
 
-describe('requirePublicBaseUrl', () => {
+describe('base URL resolution', () => {
   let tempDir: string;
   let originalBaseUrl: string | undefined;
 
@@ -656,6 +679,8 @@ describe('requirePublicBaseUrl', () => {
 
   it('returns AGOR_BASE_URL env when set', async () => {
     process.env.AGOR_BASE_URL = 'https://agor.example.com';
+    await expect(getBaseUrl()).resolves.toBe('https://agor.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
   });
 
@@ -668,6 +693,8 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
 
@@ -680,10 +707,31 @@ describe('requirePublicBaseUrl', () => {
       'utf-8'
     );
 
+    await expect(getBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
+    await expect(getDaemonBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
   });
 
+  it('separates UI links from daemon endpoints when both base URLs are configured', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: { base_url: 'http://[::1]:3030' },
+        ui: { base_url: 'http://localhost:5173' },
+      }),
+      'utf-8'
+    );
+
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:5173');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://[::1]:3030');
+    await expect(requirePublicBaseUrl()).resolves.toBe('http://[::1]:3030');
+  });
+
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
+    await expect(getBaseUrl()).resolves.toBe('http://localhost:3030');
+    await expect(getDaemonBaseUrl()).resolves.toBe('http://localhost:3030');
     await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
   });
 
@@ -1302,6 +1350,93 @@ describe('getReposDir', () => {
 
     const reposDir = getReposDir();
     expect(reposDir).toBe('/env/data/repos');
+  });
+});
+
+describe('getTenantDataRoot', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-tenant-path-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    delete process.env.AGOR_DATA_HOME;
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    __resetConfigCacheForTests();
+  });
+
+  async function writeConfig(multi_tenancy: NonNullable<AgorConfig['multi_tenancy']>) {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(path.join(agorDir, 'config.yaml'), yaml.dump({ multi_tenancy }), 'utf-8');
+    __resetConfigCacheForTests();
+  }
+
+  it('preserves the flat data root when multi-tenancy is disabled', () => {
+    expect(getTenantDataRoot()).toBe(path.join(tempDir, '.agor'));
+  });
+
+  it('uses the default tenant base folder when enabled', async () => {
+    await writeConfig({ filesystem_isolation_enabled: true });
+
+    expect(getTenantDataRoot('tenant-a')).toBe(path.join(tempDir, '.agor', 'tenants', 'tenant-a'));
+    expect(getReposDir('tenant-a')).toBe(
+      path.join(tempDir, '.agor', 'tenants', 'tenant-a', 'repos')
+    );
+    expect(getBranchPath('org/repo', 'feature', 'tenant-a')).toBe(
+      path.join(tempDir, '.agor', 'tenants', 'tenant-a', 'worktrees', 'org/repo', 'feature')
+    );
+  });
+
+  it('resolves relative tenant base folders from the daemon home', async () => {
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: 'tenant-volume',
+    });
+
+    expect(getTenantDataRoot('tenant-b')).toBe(
+      path.join(tempDir, '.agor', 'tenant-volume', 'tenant-b')
+    );
+  });
+
+  it('supports absolute and home-relative tenant base folders', async () => {
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '/data/agor-tenants',
+    });
+    expect(getTenantDataRoot('tenant-c')).toBe('/data/agor-tenants/tenant-c');
+
+    await writeConfig({
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '~/mounted-tenants',
+    });
+    expect(getTenantDataRoot('tenant-c')).toBe(path.join(tempDir, 'mounted-tenants', 'tenant-c'));
+  });
+
+  it('requires a safe tenant id when enabled', async () => {
+    await writeConfig({ filesystem_isolation_enabled: true });
+
+    expect(() => getTenantDataRoot()).toThrow(/valid tenant id/i);
+    expect(() => getTenantDataRoot('../escape')).toThrow(/valid tenant id/i);
+  });
+
+  it('fails closed instead of falling back to shared storage when config is invalid', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        multi_tenancy: { filesystem_isolation_enabled: true, unsupported_option: true },
+      }),
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+
+    expect(() => getTenantDataRoot('tenant-a')).toThrow(/unrecognized/i);
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  type AgenticToolName,
   type AgorClient,
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -35,22 +36,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot'
-    | 'cursor'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?:
-    | 'claude-code'
-    | 'claude-code-cli'
-    | 'codex'
-    | 'gemini'
-    | 'opencode'
-    | 'copilot'
-    | 'cursor';
+  agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
+  agentic_tool?: AgenticToolName;
   /**
    * Optional Feathers client. When provided AND the agentic tool supports
    * dynamic model discovery (Copilot/Cursor), the picker fetches the live
@@ -85,6 +72,7 @@ const CODEX_MODEL_OPTIONS = Object.entries(CODEX_MODEL_METADATA).map(([modelId, 
   id: modelId,
   label: meta.name,
   description: meta.description,
+  availability: meta.availability,
 }));
 
 // Gemini model options (convert from GEMINI_MODELS metadata)
@@ -133,9 +121,10 @@ const PIN_PLACEHOLDERS: Record<string, string> = {
 /**
  * Model Selector Component
  *
- * Presents a curated, richly-labelled list of model aliases (latest per family)
- * and a "Pin a specific version…" affordance for exact model IDs. Picking from
- * the list maps to `mode: 'alias'`; a pinned/custom ID maps to `mode: 'exact'`.
+ * Presents the complete discovered, richly-labelled list of model aliases with
+ * the default first, plus a "Pin a specific version…" affordance for exact
+ * model IDs. Picking from the list maps to `mode: 'alias'`; a pinned/custom ID
+ * maps to `mode: 'exact'`.
  */
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
@@ -150,7 +139,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
-  const isClaude = effectiveTool === 'claude-code' || effectiveTool === 'claude-code-cli';
+  const isClaude = effectiveTool === 'claude-code';
 
   // Dynamic model lists — fetched once when the picker opens for a given tool
   // and a client is available.
@@ -277,7 +266,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
 
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
-  // version, anything else is a curated alias selection.
+  // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
   useEffect(() => {
     setPinned(value?.mode === 'exact');
@@ -340,14 +329,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     selectAlias(curated.some((m) => m.id === currentModel) ? currentModel : fallbackModel);
   };
 
-  // Alias options: curated list, with the currently-selected alias preserved
-  // even if curation would otherwise hide it (e.g. a superseded version).
+  // Preserve the currently-selected alias even if it is absent from the latest
+  // discovery result.
   const aliasOptions = curated.map((m) => ({
     value: m.id,
     label: m.displayName,
     description: m.description,
+    availability: m.availability,
     isDefault: m.id === fallbackModel,
-    searchText: `${m.displayName} ${m.id} ${m.description ?? ''}`.toLowerCase(),
+    searchText:
+      `${m.displayName} ${m.id} ${m.description ?? ''} ${m.availability ?? ''}`.toLowerCase(),
   }));
   if (!pinned && currentModel && !aliasOptions.some((o) => o.value === currentModel)) {
     const norm = normalizedList.find((m) => m.id === currentModel);
@@ -355,6 +346,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       value: currentModel,
       label: norm?.displayName ?? getModelDisplayName(effectiveTool, currentModel),
       description: norm?.description,
+      availability: norm?.availability,
       isDefault: false,
       searchText: currentModel.toLowerCase(),
     });
@@ -374,11 +366,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </Typography.Text>
           )}
         </div>
-        {data?.isDefault && (
-          <Tag bordered={false} color="blue" style={{ marginInlineEnd: 0, fontSize: 10 }}>
-            default
-          </Tag>
-        )}
+        <Space size={4}>
+          {data?.availability === 'provider-dependent' && (
+            <Tag bordered={false} color="gold" style={{ marginInlineEnd: 0, fontSize: 10 }}>
+              account-dependent
+            </Tag>
+          )}
+          {data?.isDefault && (
+            <Tag bordered={false} color="blue" style={{ marginInlineEnd: 0, fontSize: 10 }}>
+              default
+            </Tag>
+          )}
+        </Space>
       </Flex>
     );
   };
@@ -387,11 +386,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   if (compact) {
     const compactOptions = aliasOptions.map((o) => ({
       value: o.value,
-      label: o.label,
+      label: o.availability === 'provider-dependent' ? `${o.label} (account-dependent)` : o.label,
       searchText: o.searchText,
     }));
     // Compact has no pin toggle, so an exact/pinned current value would be
-    // absent from the curated list — always surface the current selection.
+    // absent from the discovered list — always surface the current selection.
     if (currentModel && !compactOptions.some((o) => o.value === currentModel)) {
       const norm = normalizedList.find((m) => m.id === currentModel);
       compactOptions.unshift({
