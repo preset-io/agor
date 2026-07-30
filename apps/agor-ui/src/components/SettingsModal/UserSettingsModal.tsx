@@ -11,7 +11,13 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  AGENTIC_TOOL_DISPLAY_NAMES,
+  hasMinimumRole,
+  ROLE_OPTIONS,
+  ROLES,
+} from '@agor-live/client';
 import {
   BellOutlined,
   CheckCircleFilled,
@@ -53,11 +59,12 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
-import { getSettingsSearchTokens, matchesSettingsSearch } from '../../utils/settingsSearch';
+import { getSettingsSearchTokens, matchesSettingsSearchTokens } from '../../utils/settingsSearch';
 import {
   buildConfigFromFormValues,
   getClearedFormValues,
   getFormValuesFromConfig,
+  modelLabelForTool,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from '../CodexAuth';
@@ -126,10 +133,20 @@ const providerKeyFor = (tool: AgenticToolName): string => `${PROVIDER_KEY_PREFIX
 const toolFromProviderKey = (key: string): AgenticToolName =>
   key.slice(PROVIDER_KEY_PREFIX.length) as AgenticToolName;
 
+// Deep links (banners, saved URLs) may still carry pre-redesign tab ids. Map
+// them onto the current panel keys so a stale link lands on the right panel
+// instead of silently falling through to Profile.
+const LEGACY_TAB_ALIASES: Record<string, string> = {
+  general: 'profile',
+  audio: 'preferences',
+  groups: 'access',
+  'personal-api-keys': 'tokens',
+};
+
 const normalizeInitialKey = (tab?: string): string => {
   if (!tab) return 'profile';
   if (isAgenticToolTab(tab)) return providerKeyFor(tab);
-  return tab;
+  return LEGACY_TAB_ALIASES[tab] ?? tab;
 };
 
 // Flat index powering the modal's global search: every setting maps to the
@@ -144,28 +161,34 @@ interface SettingIndexEntry {
   kind: 'page' | 'setting';
 }
 
-const STATIC_PANEL_TITLES: Record<string, string> = {
-  profile: 'Profile',
-  security: 'Security',
-  preferences: 'Preferences',
-  tokens: 'API tokens',
-  'env-vars': 'Environment variables',
-  access: 'Groups & access',
-};
-
-const PAGE_KEYWORDS: Record<string, string> = {
-  profile: 'account identity name email',
-  preferences: 'audio sound interface chime',
-  security: 'account password credentials',
-  tokens: 'api token key ci pipeline',
-  'env-vars': 'env vars secrets',
-  access: 'admin groups permissions',
+// Single source of truth for each static (non-provider) panel: the nav label,
+// its icon, the PanelHeader title, and search-page keywords all read from here
+// so casing/keywords never drift across the three call sites.
+const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keywords: string }> = {
+  profile: { title: 'Profile', icon: <UserOutlined />, keywords: 'account identity name email' },
+  preferences: {
+    title: 'Preferences',
+    icon: <BellOutlined />,
+    keywords: 'audio sound interface chime',
+  },
+  security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
+  tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
+  'env-vars': {
+    title: 'Environment variables',
+    icon: <ThunderboltOutlined />,
+    keywords: 'env vars secrets',
+  },
+  access: {
+    title: 'Groups & access',
+    icon: <SafetyCertificateOutlined />,
+    keywords: 'admin groups permissions',
+  },
 };
 
 const panelTitleForKey = (key: string): string =>
   key.startsWith(PROVIDER_KEY_PREFIX)
     ? AGENTIC_TOOL_DISPLAY_NAMES[toolFromProviderKey(key)]
-    : (STATIC_PANEL_TITLES[key] ?? key);
+    : (PANEL_META[key]?.title ?? key);
 
 // A "page" hit: a page/tab entry whose visible name matched every query token.
 // A page found only via a keyword alias is NOT treated as a page match.
@@ -281,6 +304,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [agenticConfigDraftByTool, setAgenticConfigDraftByTool] = useState<
     Partial<Record<AgenticToolName, AgenticConfigFormValues>>
   >({});
+  // `default_mcp_server_ids` is USER-level, but each provider form carries its
+  // own `mcpServerIds` field seeded from that shared value. Track which tool most
+  // recently edited it so Save reads the intended list instead of whichever tool
+  // happened to sort first in the dirty set (which dropped the newer edit).
+  const [mcpEditSourceTool, setMcpEditSourceTool] = useState<AgenticToolName | null>(null);
 
   // The shared `form` (+ audioForm) backs Profile/Security/Preferences/Access.
   // Track which of those panels the user has edited so Save flushes ALL of them
@@ -307,6 +335,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       setActiveKey(normalizeInitialKey(initialTab));
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
+      setMcpEditSourceTool(null);
       setDirtyMainPanels(new Set());
       setSearch('');
 
@@ -469,6 +498,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     setGroupsLoaded(false);
     setDirtyAgenticConfigTools(new Set());
     setAgenticConfigDraftByTool({});
+    setMcpEditSourceTool(null);
     setDirtyMainPanels(new Set());
     setActiveKey('profile');
     setSearch('');
@@ -513,9 +543,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             : { source: 'workspace_default' };
     }
 
-    const mcpSourceTool = tools[0];
+    // `default_mcp_server_ids` is user-level, so read it from the tool that most
+    // recently edited it (falling back to the first saved tool). Reading from
+    // `tools[0]` alone dropped the newer edit when two tools were dirty.
+    const mcpSourceTool =
+      mcpEditSourceTool && tools.includes(mcpEditSourceTool) ? mcpEditSourceTool : tools[0];
     const defaultMcpServerIds = mcpSourceTool
-      ? (agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds') as string[] | undefined)
+      ? ((agenticConfigDraftByTool[mcpSourceTool]?.mcpServerIds ??
+          agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds')) as string[] | undefined)
       : user.default_mcp_server_ids;
     await onUpdate?.(user.user_id, {
       default_agentic_config: nextConfig,
@@ -538,6 +573,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       }
       return next;
     });
+    if (mcpEditSourceTool && tools.includes(mcpEditSourceTool)) setMcpEditSourceTool(null);
   };
 
   const saveDirtyAgenticConfigs = async () => {
@@ -769,31 +805,29 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // read from one place instead of drifting.
   const resolveProvider = useCallback(
     (tool: AgenticToolName) => {
-      const canonicalTool = tool as TenantAgenticToolName;
-      const credentialToolName: AgenticToolName = tool;
       // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Claude and Codex
       // expose an explicit method so dormant credentials are never selected by accident.
       const allToolFields = TOOL_FIELD_CONFIGS[tool] ?? [];
-      const fieldStatus: FieldStatus = agenticToolStatus[credentialToolName] ?? {};
+      const fieldStatus: FieldStatus = agenticToolStatus[tool] ?? {};
       const authMethod =
-        canonicalTool === 'claude-code'
+        tool === 'claude-code'
           ? (agenticAuthMethods['claude-code'] ??
             (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
-          : canonicalTool === 'codex'
+          : tool === 'codex'
             ? (agenticAuthMethods.codex ?? 'api_key')
             : undefined;
       const toolFields = allToolFields.filter((field) => {
-        if (canonicalTool === 'claude-code') {
+        if (tool === 'claude-code') {
           return authMethod === 'subscription'
             ? field.field === 'CLAUDE_CODE_OAUTH_TOKEN'
             : field.field !== 'CLAUDE_CODE_OAUTH_TOKEN';
         }
-        return canonicalTool !== 'codex' || authMethod === 'api_key';
+        return tool !== 'codex' || authMethod === 'api_key';
       });
-      const tenantSettings = tenantToolSettings.get(canonicalTool);
+      const tenantSettings = tenantToolSettings.get(tool as TenantAgenticToolName);
       const resolutionPolicy = tenantSettings?.resolution_policy ?? 'user_preferred';
       const personalConfigured =
-        (canonicalTool === 'codex' && authMethod === 'subscription') ||
+        (tool === 'codex' && authMethod === 'subscription') ||
         toolFields.some(({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL'));
       const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
         ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
@@ -830,8 +864,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             ? 'workspace_managed'
             : 'connected';
       return {
-        canonicalTool,
-        credentialToolName,
         allToolFields,
         fieldStatus,
         authMethod,
@@ -886,14 +918,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         key: 'grp-account',
         label: 'Account',
         children: [
-          { key: 'profile', title: 'Profile', icon: <UserOutlined /> },
-          { key: 'preferences', title: 'Preferences', icon: <BellOutlined /> },
-          { key: 'security', title: 'Security', icon: <LockOutlined /> },
+          { key: 'profile', ...PANEL_META.profile },
+          { key: 'preferences', ...PANEL_META.preferences },
+          { key: 'security', ...PANEL_META.security },
           // Personal API tokens are scoped to the signed-in caller, so they are
           // meaningless (and misleading) when an admin edits another user.
-          ...(isEditingOther
-            ? []
-            : [{ key: 'tokens', title: 'API Tokens', icon: <KeyOutlined /> }]),
+          ...(isEditingOther ? [] : [{ key: 'tokens', ...PANEL_META.tokens }]),
         ],
       },
       {
@@ -908,9 +938,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       {
         key: 'grp-environment',
         label: 'Environment',
-        children: [
-          { key: 'env-vars', title: 'Environment Variables', icon: <ThunderboltOutlined /> },
-        ],
+        children: [{ key: 'env-vars', ...PANEL_META['env-vars'] }],
       },
     ];
 
@@ -918,13 +946,22 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       groups.push({
         key: 'grp-admin',
         label: 'Admin',
-        children: [
-          { key: 'access', title: 'Groups & Access', icon: <SafetyCertificateOutlined /> },
-        ],
+        children: [{ key: 'access', ...PANEL_META.access }],
       });
     }
     return groups;
   }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
+
+  // Authorization must gate the CONTENT, not just the nav. A stale/unauthorized
+  // deep-link (e.g. `access` for a non-admin, or `tokens` while editing another
+  // user — which would show the CALLER's tokens under the target's heading) is
+  // redirected to Profile. Provider keys are skipped: they legitimately populate
+  // asynchronously as tenant tool settings load, and carry no cross-user data.
+  useEffect(() => {
+    if (!open || activeKey.startsWith(PROVIDER_KEY_PREFIX)) return;
+    const validKeys = new Set(navGroups.flatMap((group) => group.children.map((c) => c.key)));
+    if (!validKeys.has(activeKey)) setActiveKey('profile');
+  }, [open, navGroups, activeKey]);
 
   const menuItems: MenuProps['items'] = useMemo(
     () =>
@@ -1050,17 +1087,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'access',
       });
     }
+    // Provider entries mirror ONLY what each tool actually renders: the
+    // Authentication tab exists solely when the tool has credential fields, the
+    // Session defaults tab always renders its strategy/MCP controls, and the
+    // model label matches the real rendered label (e.g. "OpenCode LLM Provider").
     for (const tool of visibleAgenticToolTabs) {
       const name = AGENTIC_TOOL_DISPLAY_NAMES[tool];
       const providerKey = providerKeyFor(tool);
       const kw = (extra: string) => `${name} ${tool} ${extra}`;
-      entries.push(
-        {
+      const toolFields = TOOL_FIELD_CONFIGS[tool] ?? [];
+
+      if (toolFields.length > 0) {
+        entries.push({
           label: 'Authentication',
           kind: 'setting',
           keywords: kw('api key credentials sign in oauth'),
           panelKey: providerKey,
-        },
+        });
+        for (const field of toolFields) {
+          entries.push({
+            label: field.label,
+            kind: 'setting',
+            keywords: kw('credentials'),
+            panelKey: providerKey,
+          });
+        }
+      }
+
+      entries.push(
         {
           label: 'Session defaults',
           kind: 'setting',
@@ -1068,52 +1122,55 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           panelKey: providerKey,
         },
         {
-          label: 'Permission mode',
+          label: 'Default for new configurations',
+          kind: 'setting',
+          keywords: kw('workspace preset inline strategy'),
+          panelKey: providerKey,
+        },
+        { label: 'MCP servers', kind: 'setting', keywords: kw('tools'), panelKey: providerKey },
+        { label: 'Preset', kind: 'setting', keywords: kw('configuration'), panelKey: providerKey },
+        {
+          label: modelLabelForTool(tool),
+          kind: 'setting',
+          keywords: kw('alias'),
+          panelKey: providerKey,
+        },
+        {
+          label: 'Permission Mode',
           kind: 'setting',
           keywords: kw('approval'),
           panelKey: providerKey,
-        },
-        { label: 'Model', kind: 'setting', keywords: kw('alias'), panelKey: providerKey },
-        { label: 'MCP servers', kind: 'setting', keywords: kw('tools'), panelKey: providerKey },
-        { label: 'Preset', kind: 'setting', keywords: kw('configuration'), panelKey: providerKey }
+        }
       );
-      for (const field of TOOL_FIELD_CONFIGS[tool] ?? []) {
+      if (AGENTIC_TOOL_CAPABILITIES[tool]?.reasoningEffortLevels) {
         entries.push({
-          label: field.label,
+          label: 'Reasoning Effort',
           kind: 'setting',
-          keywords: kw('credentials'),
+          keywords: kw('thinking'),
           panelKey: providerKey,
         });
       }
       if (tool === 'codex') {
         entries.push(
           {
-            label: 'Sandbox mode',
+            label: 'Sandbox Mode',
             kind: 'setting',
             keywords: kw('filesystem'),
             panelKey: providerKey,
           },
           {
-            label: 'Approval policy',
+            label: 'Approval Policy',
             kind: 'setting',
             keywords: kw('commands'),
             panelKey: providerKey,
           },
           {
-            label: 'Network access',
+            label: 'Network Access',
             kind: 'setting',
             keywords: kw('http outbound'),
             panelKey: providerKey,
           }
         );
-      }
-      if (tool === 'claude-code') {
-        entries.push({
-          label: 'Reasoning effort',
-          kind: 'setting',
-          keywords: kw('thinking'),
-          panelKey: providerKey,
-        });
       }
     }
     // Pages last: one per nav item, from the single source of truth (navGroups).
@@ -1126,7 +1183,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           panelKey: child.key,
           keywords: isProvider
             ? `${toolFromProviderKey(child.key)} provider ai model`
-            : PAGE_KEYWORDS[child.key],
+            : PANEL_META[child.key]?.keywords,
         });
       }
     }
@@ -1151,7 +1208,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const matched = settingsIndex
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry }) =>
-        matchesSettingsSearch(entry, search, [(e) => e.label, (e) => e.keywords])
+        matchesSettingsSearchTokens(entry, tokens, [(e) => e.label, (e) => e.keywords])
       );
     const matchedTabKeys = new Set(
       matched.filter(({ entry }) => isPageMatch(entry, tokens)).map(({ entry }) => entry.panelKey)
@@ -1226,25 +1283,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user || savingModal) return;
     setSavingModal(true);
     try {
-      if (activeTool) {
-        if (providerSubtab === 'defaults') {
-          await handleAgenticConfigSave(activeTool);
-        } else {
-          await saveDirtyAgenticConfigs();
-        }
-        handleClose();
-        return;
-      }
-
-      // Flush EVERY edited main panel (plus the active one), not just the
-      // panel in view — otherwise switching panels before Save drops edits.
+      // Flush EVERY edited main panel (plus the active one if it owns the shared
+      // form), regardless of which panel is in view — a dirty Profile edit must
+      // survive saving from a provider tab just as it does from another main
+      // panel. Commit these FIRST and abort the close on validation failure.
       const mainPanels = new Set(dirtyMainPanels);
       if (MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number])) {
         mainPanels.add(activeKey);
       }
       if (mainPanels.size > 0 && !(await commitMainPanels(mainPanels))) return;
 
-      await saveDirtyAgenticConfigs();
+      // Then persist agentic configs once: the active provider's session
+      // defaults plus any dirty defaults left over from other provider tabs.
+      if (activeTool && providerSubtab === 'defaults') {
+        await handleAgenticConfigSave(activeTool);
+      } else {
+        await saveDirtyAgenticConfigs();
+      }
       handleClose();
     } finally {
       setSavingModal(false);
@@ -1253,13 +1308,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderProfilePanel = () => (
     <>
-      <PanelHeader title="Profile" />
+      <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
         <FieldRow label="Name">
           <Space.Compact style={{ width: '100%' }}>
-            <Form.Item name="emoji" noStyle>
-              <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-            </Form.Item>
+            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
             <Form.Item name="name" noStyle>
               <Input placeholder="John Doe" />
             </Form.Item>
@@ -1337,7 +1390,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderSecurityPanel = () => (
     <>
-      <PanelHeader title="Security" />
+      <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
         <FieldRow label="Password" name="password" help="Leave blank to keep current password">
           <Input.Password placeholder="••••••••" />
@@ -1367,7 +1420,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderPreferencesPanel = () => (
     <>
-      <PanelHeader title="Preferences" />
+      <PanelHeader title={PANEL_META.preferences.title} />
       <AudioSettingsTab form={audioForm} onValuesChange={() => markMainPanelDirty('preferences')} />
       <SectionDivider label="Interface" />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
@@ -1390,7 +1443,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderEnvVarsPanel = () => (
     <>
-      <PanelHeader title="Environment variables" />
+      <PanelHeader title={PANEL_META['env-vars'].title} />
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         Environment variables are encrypted at rest and available to all sessions for this user.
       </Typography.Paragraph>
@@ -1418,7 +1471,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const renderAccessPanel = () => (
     <>
-      <PanelHeader title="Groups & access" />
+      <PanelHeader title={PANEL_META.access.title} />
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         Add or remove this user from admin-managed groups.
       </Typography.Paragraph>
@@ -1438,7 +1491,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           />
         </FieldRow>
 
-        {isEditingOther && (
+        {isAdmin && isEditingOther && (
           <>
             <SectionDivider label="Danger zone" />
             <Form.Item
@@ -1458,8 +1511,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const currentForm = agenticFormByTool[tool];
     const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool];
     const {
-      canonicalTool,
-      credentialToolName,
       allToolFields,
       fieldStatus,
       authMethod,
@@ -1472,7 +1523,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } = resolveProvider(tool);
 
     const savingForTool: Partial<Record<AgenticToolConfigField, boolean>> = Object.fromEntries(
-      toolFields.map((c) => [c.field, !!savingToolField[`${credentialToolName}.${c.field}`]])
+      toolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
     );
 
     const statusTag =
@@ -1503,9 +1554,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           key={tool}
           form={currentForm}
           layout="vertical"
-          onValuesChange={(_, allValues) => {
+          onValuesChange={(changed, allValues) => {
             setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: allValues }));
             markAgenticConfigDirty(tool);
+            // The MCP list is user-level; remember who touched it last so Save
+            // reads this tool's value rather than the dirty set's first tool.
+            if (changed && 'mcpServerIds' in changed) setMcpEditSourceTool(tool);
           }}
         >
           <UserAgenticDefaultEditor tool={tool} client={client} isAdmin={isAdmin} />
@@ -1579,10 +1633,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 onConfirm={async () => {
                   for (const field of allToolFields) {
                     if (fieldStatus[field.field]) {
-                      await handleToolFieldClear(credentialToolName, field.field);
+                      await handleToolFieldClear(tool, field.field);
                     }
                   }
-                  if (canonicalTool === 'codex') {
+                  if (tool === 'codex') {
                     await handleAuthMethodChange('codex', 'api_key');
                   }
                 }}
@@ -1591,23 +1645,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               </Popconfirm>
             </Space>
           )
-        ) : canonicalTool === 'codex' ? (
+        ) : tool === 'codex' ? (
           <CodexAuthSettings
             client={client}
             authMethod={authMethod ?? 'api_key'}
             allowChatgptLogin={isSelf}
             apiKeyFields={allToolFields}
             fieldStatus={fieldStatus}
-            onSaveField={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
-            onClearField={(field) => handleToolFieldClear(credentialToolName, field)}
+            onSaveField={(field, value) => handleToolFieldSave(tool, field, value)}
+            onClearField={(field) => handleToolFieldClear(tool, field)}
             savingFields={Object.fromEntries(
-              allToolFields.map((c) => [
-                c.field,
-                !!savingToolField[`${credentialToolName}.${c.field}`],
-              ])
+              allToolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
             )}
             publicValues={
-              user?.agentic_tools_public_values?.[credentialToolName] as
+              user?.agentic_tools_public_values?.[tool] as
                 | Partial<Record<AgenticToolConfigField, string>>
                 | undefined
             }
@@ -1617,7 +1668,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Personal credentials are encrypted at rest and injected only into the agent runtime.
             </Typography.Paragraph>
-            {canonicalTool === 'claude-code' && (
+            {tool === 'claude-code' && (
               <FieldRow
                 label="Sign-in method"
                 tooltip="Choose one — Agor uses whichever is selected, the other is ignored."
@@ -1625,9 +1676,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 <Radio.Group
                   buttonStyle="solid"
                   value={authMethod}
-                  onChange={(event) =>
-                    void handleAuthMethodChange(canonicalTool, event.target.value)
-                  }
+                  onChange={(event) => void handleAuthMethodChange(tool, event.target.value)}
                 >
                   <Radio.Button value="subscription">Claude subscription</Radio.Button>
                   <Radio.Button value="api_key">API key</Radio.Button>
@@ -1638,11 +1687,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               tool={tool}
               fields={toolFields}
               fieldStatus={fieldStatus}
-              onSave={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
-              onClear={(field) => handleToolFieldClear(credentialToolName, field)}
+              onSave={(field, value) => handleToolFieldSave(tool, field, value)}
+              onClear={(field) => handleToolFieldClear(tool, field)}
               saving={savingForTool}
               publicValues={
-                user?.agentic_tools_public_values?.[credentialToolName] as
+                user?.agentic_tools_public_values?.[tool] as
                   | Partial<Record<AgenticToolConfigField, string>>
                   | undefined
               }
@@ -1692,7 +1741,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'tokens':
         return (
           <>
-            <PanelHeader title="API tokens" />
+            <PanelHeader title={PANEL_META.tokens.title} />
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Agor API tokens allow you to authenticate with the Agor API from scripts, CI
               pipelines, and external tools. Tokens have the same permissions as your user account.

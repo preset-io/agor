@@ -38,7 +38,18 @@ vi.mock('../AgenticToolConfigForm', async () => {
     </Radio.Group>
   );
 
+  // Mirror the real rendered model/provider labels so the search index (which
+  // derives provider entries from this) stays findable in tests.
+  const MODEL_LABELS: Record<string, string> = {
+    codex: 'Codex Model',
+    gemini: 'Gemini Model',
+    opencode: 'OpenCode LLM Provider',
+    copilot: 'Copilot Model',
+    cursor: 'Cursor Model',
+  };
+
   return {
+    modelLabelForTool: (tool: string) => MODEL_LABELS[tool] ?? 'Claude Model',
     AgenticToolConfigForm: ({ agenticTool }: { agenticTool: AgenticToolName }) => (
       <>
         <Form.Item name="permissionMode" label="Permission Mode">
@@ -76,6 +87,25 @@ vi.mock('../AgenticToolConfigForm', async () => {
       permissionMode: config?.permissionMode ?? 'default',
       modelConfig: config?.modelConfig,
     }),
+  };
+});
+
+// The MCP field is user-level but lives inside each provider form. Stand it in
+// with a Form-connected control so clicking it fires the form's onValuesChange
+// (how the real Select drives dirty-tracking + the mcp-edit-source tracking).
+vi.mock('../MCPServerSelect', async () => {
+  const { Form } = await import('antd');
+  const McpControl = ({ onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <button type="button" onClick={() => onChange?.(['mcp-picked'])}>
+      pick-mcp
+    </button>
+  );
+  return {
+    SessionMcpServersField: () => (
+      <Form.Item name="mcpServerIds" label="MCP servers">
+        <McpControl />
+      </Form.Item>
+    ),
   };
 });
 
@@ -609,5 +639,102 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(patch.name).toBe('Renamed');
     expect(patch.password).toBe('new-pass');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('flushes a dirty main-panel edit when saving from a provider tab', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Edit Name on Profile, then jump to a provider tab and save from there.
+    fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    await screen.findByRole('heading', { name: 'Claude Code' });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    // The provider Save path must still commit the dirty Profile edit.
+    await waitFor(() => {
+      expect(onUpdate.mock.calls.some(([, patch]) => patch?.name === 'Renamed')).toBe(true);
+    }, ASYNC);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists the most-recently-edited tool MCP servers, not the first dirty tool', async () => {
+    const user = makeUser({
+      default_agentic_config: {
+        'claude-code': { permissionMode: 'default' },
+        codex: { permissionMode: 'ask' },
+      },
+      default_agentic_selection: {
+        'claude-code': { source: 'inline' },
+        codex: { source: 'inline' },
+      },
+      default_mcp_server_ids: [],
+    });
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Dirty Claude first (so it sorts first in the dirty set), then edit the
+    // user-level MCP list from Codex — the newer edit must win on save.
+    // Claude Code has no credential fields in this mock, so its panel shows the
+    // session defaults directly (no Authentication tab strip).
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    await screen.findByRole('heading', { name: 'Claude Code' });
+    fireEvent.click(await screen.findByLabelText('claude-code acceptEdits'));
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    fireEvent.click(screen.getByText('Session defaults'));
+    fireEvent.click(await screen.findByRole('button', { name: 'pick-mcp' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      const patch = onUpdate.mock.calls.find(([, p]) => p?.default_mcp_server_ids)?.[1];
+      expect(patch?.default_mcp_server_ids).toEqual(['mcp-picked']);
+    }, ASYNC);
+  });
+
+  it('redirects an unauthorized deep-linked tab to Profile', async () => {
+    // A non-admin editing self deep-linked to the admin-only Groups & access
+    // panel must land on Profile, never rendering the admin content.
+    const user = makeUser({ role: 'member' });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+        initialTab="groups"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Groups & access' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Force password change on next login')).not.toBeInTheDocument();
   });
 });
