@@ -187,7 +187,7 @@ describe('DrizzleService event emission', () => {
 describe('DrizzleService tenant isolation', () => {
   const tenantParams = { tenant: { tenant_id: 'tenant-a', source: 'static' } } as never;
 
-  it('passes the resolved tenant_id to the repository on create', async () => {
+  it('stamps created rows with the resolved tenant_id', async () => {
     const repo = makeRepo();
     const { service } = makeService(repo);
 

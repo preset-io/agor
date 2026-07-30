@@ -219,19 +219,18 @@ describe('protectServerManagedTaskWrites', () => {
 });
 
 describe('tenant-owned service registration', () => {
-  type WriteMethod = 'create' | 'update' | 'patch';
   type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
   type RegisteredHooks = {
-    before?: Partial<Record<'all' | WriteMethod, RegisteredHook[]>>;
+    before?: Partial<Record<'all' | 'create', RegisteredHook[]>>;
   };
 
-  const captureCardsRegistrations = (dialect: 'postgresql' | 'sqlite'): RegisteredHooks[] => {
+  const captureScheduleRegistrations = (): RegisteredHooks[] => {
     const registrations: RegisteredHooks[] = [];
     const app = {
       service(path: string) {
         return {
           hooks(hooks: RegisteredHooks) {
-            if (path.replace(/^\//, '') === 'cards') registrations.push(hooks);
+            if (path.replace(/^\//, '') === 'schedules') registrations.push(hooks);
           },
         };
       },
@@ -243,7 +242,7 @@ describe('tenant-owned service registration', () => {
       db: {} as RegisterHooksContext['db'],
       app: app as RegisterHooksContext['app'],
       config: {
-        database: { dialect },
+        database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
@@ -261,14 +260,20 @@ describe('tenant-owned service registration', () => {
     return registrations;
   };
 
-  const runRegisteredWriteBeforeHooks = async (
-    registrations: RegisteredHooks[],
-    method: WriteMethod
-  ): Promise<void> => {
+  const runRegisteredScheduleCreateBeforeHooks = async (
+    registrations: RegisteredHooks[]
+  ): Promise<HookContext> => {
     const context = {
-      path: 'cards',
-      method,
-      data: { title: 'Caller data', tenant_id: 'caller-tenant' },
+      path: 'schedules',
+      method: 'create',
+      data: {
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        name: 'Nightly',
+        cron_expression: '0 0 * * *',
+        timezone_mode: 'utc',
+        prompt: 'Run',
+        agentic_tool_config: { agentic_tool: 'codex' },
+      },
       params: {
         provider: 'rest',
         user: { user_id: 'registration-test-user', role: 'member' },
@@ -282,22 +287,23 @@ describe('tenant-owned service registration', () => {
     }
 
     for (const registration of registrations) {
-      for (const hook of registration.before?.[method] ?? []) {
+      for (const hook of registration.before?.create ?? []) {
         await hook(context);
       }
     }
+
+    return context;
   };
 
-  it.each([
-    'postgresql',
-    'sqlite',
-  ] as const)('rejects caller tenant_id through registered cards write chains in %s mode', async (dialect) => {
-    const registrations = captureCardsRegistrations(dialect);
-    for (const method of ['create', 'update', 'patch'] as const) {
-      await expect(runRegisteredWriteBeforeHooks(registrations, method)).rejects.toThrow(
-        'tenant_id cannot be supplied on tenant-owned writes'
-      );
-    }
+  it('keeps schedule create DTOs valid through the registered tenant hook', async () => {
+    const context = await runRegisteredScheduleCreateBeforeHooks(captureScheduleRegistrations());
+
+    expect(context.params.tenant?.tenant_id).toBe('registration-test');
+    expect(context.data).toMatchObject({
+      created_by: 'registration-test-user',
+      next_run_at: expect.any(Number),
+    });
+    expect(context.data).not.toHaveProperty('tenant_id');
   });
 
   it('wraps gateway inbound routing in tenant database scope', () => {

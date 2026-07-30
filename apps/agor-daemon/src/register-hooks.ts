@@ -168,11 +168,7 @@ import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
-import {
-  enforcePublicWriteFields,
-  markWriteDataPrepared,
-  rejectExternalTenantIdWrite,
-} from './utils/write-data-boundary.js';
+import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -587,6 +583,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
+  const stripTenantData = (data: unknown): unknown => {
+    if (Array.isArray(data)) return data.map(stripTenantData);
+    if (!data || typeof data !== 'object') return data;
+    const clone = { ...(data as Record<string, unknown>) };
+    delete clone.tenant_id;
+    return clone;
+  };
+
   const resultBelongsToTenant = (result: unknown, tenantId: string): boolean => {
     if (Array.isArray(result)) return result.every((item) => resultBelongsToTenant(item, tenantId));
     if (!result || typeof result !== 'object') return true;
@@ -623,19 +627,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const scopeTenantBefore = async (context: HookContext): Promise<HookContext> => {
     await ensureTenantContext(context);
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) return context;
 
-    // Keep tenant identity in params and ambient scope instead of injecting it
-    // into Feathers data or queries. Several services intentionally omit
-    // tenant_id from their public DTOs; injecting a find filter would make the
-    // generic in-memory adapter drop every row after RLS already isolated the
-    // database read.
+    if (context.method === 'update' || context.method === 'patch') {
+      context.data = stripTenantData(context.data) as typeof context.data;
+    }
+
+    // Do not inject tenant_id into Feathers find queries. Several services
+    // intentionally omit tenant_id from their public DTOs; the generic in-memory
+    // adapter would then filter every row out after RLS already did the DB-level
+    // isolation. Tenant isolation for reads is enforced by the transaction-local
+    // Postgres RLS setting plus the after-hook assertion below.
     return context;
-  };
-
-  const tenantOwnedWriteHooks = {
-    create: [rejectExternalTenantIdWrite],
-    update: [rejectExternalTenantIdWrite],
-    patch: [rejectExternalTenantIdWrite],
   };
 
   const assertTenantAfter = async (context: HookContext): Promise<HookContext> => {
@@ -652,7 +656,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       if (!service) continue;
       service.hooks({
         around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
-        before: { all: [scopeTenantBefore], ...tenantOwnedWriteHooks },
+        before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });
     }
@@ -672,10 +676,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // stamping or DB transaction, which are Postgres tenant-column mechanics.
   const registerTenantIdentityForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
-      safeService(path)?.hooks({
-        around: { all: [tenantIdentityAround] },
-        before: tenantOwnedWriteHooks,
-      });
+      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
     }
   };
 

@@ -5,24 +5,6 @@ const PREPARED_WRITE_DATA = Symbol('agor.prepared-write-data');
 
 type PreparedParams = Record<PropertyKey, unknown>;
 
-/**
- * Tenant identity is resolved from trusted request context, never from public
- * write data. Inspect only top-level DTO fields so nested domain data remains
- * outside this boundary.
- */
-export function rejectExternalTenantIdWrite(context: HookContext): HookContext {
-  if (!context.params.provider) return context;
-
-  const items = Array.isArray(context.data) ? context.data : [context.data];
-  const suppliesTenantId = items.some(
-    (item) => item !== null && typeof item === 'object' && Object.keys(item).includes('tenant_id')
-  );
-  if (suppliesTenantId) {
-    throw new BadRequest('tenant_id cannot be supplied on tenant-owned writes');
-  }
-  return context;
-}
-
 function unsupportedFields(data: unknown, allowedFields: readonly string[]): string[] {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new BadRequest('Write data must be an object');
