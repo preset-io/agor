@@ -25,6 +25,7 @@ import {
   assertTenantWritable,
   BoardRepository,
   type BranchRepository,
+  getCurrentTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -663,6 +664,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (!WRITE_METHODS.has(context.method)) return context;
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
+    // Only enforce inside an active tenant database scope — the one the around
+    // hook (`tenantDatabaseScopeAround`) opens before these before-hooks run.
+    // The gate read joins that transaction; without an active scope there is no
+    // tenant transaction to read against (e.g. identity-only services, or a unit
+    // test that invokes the before-hooks directly), so there is nothing to
+    // enforce here and we must not open a stray transaction.
+    if (!getCurrentTenantDatabaseScope()) return context;
     try {
       await assertTenantWritable(db, tenantId);
     } catch (error) {
