@@ -118,6 +118,35 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('forwards a delegated read identity through a configured command template', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      {
+        executorCommandTemplate: 'launch --user {unix_user} -- {command}',
+        asUser: 'alice',
+      }
+    );
+
+    proc.stdout.emit(
+      'data',
+      Buffer.from('AGOR_EXECUTOR_RESULT {"success":true,"data":{"files":[]}}\n')
+    );
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: true,
+      data: { files: [] },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --user alice -- branch.files.browse'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
   it('calls onExit for templated spawns', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

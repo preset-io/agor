@@ -1,6 +1,7 @@
 import { loadConfigSync } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { User, UserID } from '@agor/core/types';
+import { resolveUnixUserForImpersonation } from '@agor/core/unix';
 
 /**
  * Resolve the optional `asUser` for short-lived executor read/probe commands.
@@ -35,11 +36,17 @@ export async function resolveExecutorReadAsUser(
     user = userOrId;
   }
 
-  if (!user?.unix_username) {
-    throw new Error(
-      'execution.unix_user_mode=strict requires the requesting user to have unix_username configured'
-    );
-  }
+  const resolved = resolveUnixUserForImpersonation({
+    mode: unixMode,
+    userUnixUsername: user?.unix_username,
+    executorUnixUser: config.execution?.executor_unix_user,
+  });
 
-  return user.unix_username;
+  // `asUser` serves two transport-specific roles in runExecutorCommand:
+  // local execution uses it for sudo impersonation, while templated execution
+  // reports it as `{unix_user}` to the external substrate. The canonical
+  // resolver deliberately separates those identities in delegated mode.
+  return unixMode === 'delegated'
+    ? (resolved.reportedUnixUser ?? undefined)
+    : (resolved.unixUser ?? undefined);
 }
