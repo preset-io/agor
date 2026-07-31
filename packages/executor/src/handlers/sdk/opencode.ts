@@ -14,6 +14,7 @@ import {
   OpenCodeTool,
 } from '@agor/agentic-tool-opencode/runtime';
 import { generateId, shortId } from '@agor/core';
+import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import type {
   ExecutorPulseKind,
@@ -41,7 +42,12 @@ import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';
 import { isDaemonOwnedAbort } from '../../termination-state.js';
-import { appendTaskFailureMessage, createStreamingCallbacks } from './base-executor.js';
+import {
+  appendTaskFailureMessage,
+  createStreamingCallbacks,
+  type FlushableStreamingCallbacks,
+  flushStreamingCallbacks,
+} from './base-executor.js';
 
 function reportOpenCodePulse(
   callback: SdkActivityCallback | undefined,
@@ -69,6 +75,10 @@ export async function executeOpenCodeTask(params: {
   onActivity?: SdkActivityCallback;
 }): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId, taskId, prompt } = params;
+  let callbacks: FlushableStreamingCallbacks | undefined;
+  const runtimeCleanupTimeoutMs = resolveSdkWatchdogConfig(
+    params.resolvedConfig?.execution
+  ).abort_grace_ms;
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
   const permissionService = createExecutionPermissionService(params);
@@ -84,6 +94,8 @@ export async function executeOpenCodeTask(params: {
     const repos = createFeathersBackedRepositories(client);
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;
     if (!branch?.path) throw new Error('OpenCode requires an Agor branch working directory');
+
+    callbacks = createStreamingCallbacks(client, 'opencode', sessionId, params.onActivity);
 
     const messages = await repos.messages.findBySessionId(sessionId);
     await createUserMessage(sessionId, prompt, taskId, messages.length, repos.messagesService, {
@@ -162,7 +174,7 @@ export async function executeOpenCodeTask(params: {
         },
       },
       {
-        ...createStreamingCallbacks(client, 'opencode', sessionId, params.onActivity),
+        ...callbacks,
         onPulse: (kind, detail) => reportOpenCodePulse(params.onActivity, kind, detail),
       }
     );
@@ -209,5 +221,6 @@ export async function executeOpenCodeTask(params: {
     };
   } finally {
     globalPermissionManager.unregister(sessionId);
+    await flushStreamingCallbacks(callbacks, runtimeCleanupTimeoutMs, 'opencode');
   }
 }

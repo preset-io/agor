@@ -556,6 +556,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  private async continueQueuedTasksAfterTerminalSettlement(
+    task: Task,
+    params?: TaskParams
+  ): Promise<void> {
+    if (!params?.suppressTerminalQueueProcessing) {
+      await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+      return;
+    }
+    console.log(
+      `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
+    );
+  }
+
   private async dispatchCompletionCallbacksAfterCommit(
     task: Task,
     session: Session,
@@ -766,13 +779,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         }
       });
 
-      if (!params?.suppressTerminalQueueProcessing) {
-        await this.triggerQueueProcessingAfterCommit(task.session_id, params);
-      } else {
-        console.log(
-          `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
-        );
-      }
+      await this.continueQueuedTasksAfterTerminalSettlement(task, params);
       return true;
     } catch (error) {
       console.error('❌ [TasksService] Failed to process task completion:', error);

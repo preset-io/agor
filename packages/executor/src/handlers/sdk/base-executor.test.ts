@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  createStreamingCallbacks,
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
@@ -40,6 +41,33 @@ function makeSuccessfulClient(capture: { data?: unknown }) {
     },
   } as never;
 }
+
+describe('streaming callback settlement', () => {
+  it('waits for callbacks that an adapter intentionally did not await', async () => {
+    let release!: () => void;
+    const create = vi.fn(() => new Promise<void>((resolve) => (release = resolve)));
+    const callbacks = createStreamingCallbacks(
+      { service: () => ({ create }) } as never,
+      'codex',
+      'session-1' as never
+    );
+
+    void callbacks.onStreamChunk('message-1' as never, 'partial');
+    const flush = callbacks.flushPending();
+    let flushed = false;
+    void flush.then(() => {
+      flushed = true;
+    });
+
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    release();
+    await flush;
+
+    expect(flushed).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ event: 'streaming:chunk' }));
+  });
+});
 
 describe('resolveApiKeyForTask', () => {
   it('sends the executor session token as explicit task-scoped proof', async () => {

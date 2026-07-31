@@ -139,6 +139,39 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
   });
 
+  it('preserves an explicit caller-owned queue hand-off', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(stopping('user_stop'));
+    state.settle(task(TaskStatus.STOPPED));
+
+    await requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      params: { suppressTerminalQueueProcessing: true },
+    });
+
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ suppressTerminalQueueProcessing: true })
+    );
+  });
+
+  it('allows verified health containment to continue distinct queued work', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(stopping('sdk_health_failure'));
+    state.settle(task(TaskStatus.FAILED));
+
+    await request(state.app, 'sdk_health_failure');
+
+    expect(state.settleTermination).toHaveBeenCalledWith(expect.anything(), {
+      provider: undefined,
+    });
+  });
+
   it('accepts a scoped remote executor quiescence report without local signaling', async () => {
     const state = appDouble();
     const remoteStopping = {

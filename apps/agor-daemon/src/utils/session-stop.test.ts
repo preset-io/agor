@@ -137,7 +137,11 @@ describe('stopSessionPreserveQueue', () => {
       queuedTasksPreserved: 1,
     });
     expect(requestTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: runningTask.task_id, cause: 'user_stop' })
+      expect.objectContaining({
+        taskId: runningTask.task_id,
+        cause: 'user_stop',
+        params: expect.objectContaining({ suppressTerminalQueueProcessing: true }),
+      })
     );
   });
 

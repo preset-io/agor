@@ -104,7 +104,8 @@ export async function stopSessionPreserveQueue(
     taskId: latestTask.task_id,
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
-    params,
+    // This caller owns the queue hand-off until its session lock is released.
+    params: { ...params, suppressTerminalQueueProcessing: true },
   });
   if (termination.status !== 'terminal') {
     return {

@@ -165,7 +165,12 @@ export interface BaseTool {
 export interface ExecutionContext {
   client: AgorClient;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
-  callbacks: StreamingCallbacks;
+  callbacks: FlushableStreamingCallbacks;
+}
+
+export interface FlushableStreamingCallbacks extends StreamingCallbacks {
+  /** Wait for streaming side effects whose callers intentionally did not await them. */
+  flushPending(): Promise<void>;
 }
 
 /**
@@ -180,29 +185,41 @@ export function createStreamingCallbacks(
   toolName: string,
   sessionId: SessionID,
   onActivity?: StreamingCallbacks['onActivity']
-): StreamingCallbacks {
+): FlushableStreamingCallbacks {
   // Use session_id passed in (available before any streaming starts)
   // This ensures thinking events have session_id even if they fire before onStreamStart
   const currentSessionId: SessionID = sessionId;
 
   // Track sequence numbers per message for ordering guarantees
   const sequenceCounters = new Map<string, number>();
+  const pending = new Set<Promise<void>>();
+
+  const track = (promise: Promise<void>): Promise<void> => {
+    pending.add(promise);
+    const remove = () => pending.delete(promise);
+    void promise.then(remove, remove);
+    return promise;
+  };
 
   // Helper to broadcast streaming events via custom route
-  const broadcastEvent = async (event: StreamingEventType, data: Record<string, unknown>) => {
-    await client.service('/messages/streaming').create({
-      event,
-      data,
-    });
-  };
+  const broadcastEvent = (event: StreamingEventType, data: Record<string, unknown>) =>
+    track(
+      client
+        .service('/messages/streaming')
+        .create({ event, data })
+        .then(() => undefined)
+    );
 
   return {
     onActivity,
-    onStreamStart: async (message_id, data) => {
-      // Initialize sequence counter for this message
+    flushPending: async () => {
+      while (pending.size > 0) {
+        await Promise.allSettled([...pending]);
+      }
+    },
+    onStreamStart: (message_id, data) => {
       sequenceCounters.set(message_id, 0);
-
-      await broadcastEvent('streaming:start', {
+      return broadcastEvent('streaming:start', {
         message_id,
         session_id: currentSessionId,
         task_id: data.task_id,
@@ -210,61 +227,64 @@ export function createStreamingCallbacks(
         timestamp: data.timestamp,
       });
     },
-    onStreamChunk: async (message_id, chunk, _sequenceOverride?: number) => {
-      // Get and increment sequence number for this message
-      const currentSeq = sequenceCounters.get(message_id) || 0;
-      const sequence = _sequenceOverride !== undefined ? _sequenceOverride : currentSeq;
+    onStreamChunk: (message_id, chunk, sequenceOverride?: number) => {
+      const currentSequence = sequenceCounters.get(message_id) || 0;
+      const sequence = sequenceOverride ?? currentSequence;
       sequenceCounters.set(message_id, sequence + 1);
-
-      await broadcastEvent('streaming:chunk', {
+      return broadcastEvent('streaming:chunk', {
         message_id,
         session_id: currentSessionId,
         chunk,
-        sequence, // Add sequence number for ordering
+        sequence,
       });
     },
     onStreamEnd: async (message_id) => {
-      // Get final sequence number for this message
       const finalSequence = sequenceCounters.get(message_id) || 0;
-
-      await broadcastEvent('streaming:end', {
-        message_id,
-        session_id: currentSessionId,
-        sequence: finalSequence, // Include final sequence for validation
-      });
-
-      // Clean up sequence counter
-      sequenceCounters.delete(message_id);
+      try {
+        await broadcastEvent('streaming:end', {
+          message_id,
+          session_id: currentSessionId,
+          sequence: finalSequence,
+        });
+      } finally {
+        sequenceCounters.delete(message_id);
+      }
     },
-    onStreamError: async (message_id, error) => {
+    onStreamError: (message_id, error) => {
       console.error(`[${toolName}] Stream error for ${message_id}:`, error);
-      await broadcastEvent('streaming:error', {
+      return broadcastEvent('streaming:error', {
         message_id,
         session_id: currentSessionId,
         error: error.message,
       });
     },
-    onThinkingStart: async (message_id, metadata) => {
-      await broadcastEvent('thinking:start', {
+    onThinkingStart: (message_id, metadata) =>
+      broadcastEvent('thinking:start', {
         message_id,
         session_id: currentSessionId,
         ...metadata,
-      });
-    },
-    onThinkingChunk: async (message_id, chunk) => {
-      await broadcastEvent('thinking:chunk', {
+      }),
+    onThinkingChunk: (message_id, chunk) =>
+      broadcastEvent('thinking:chunk', {
         message_id,
         session_id: currentSessionId,
         chunk,
-      });
-    },
-    onThinkingEnd: async (message_id) => {
-      await broadcastEvent('thinking:end', {
+      }),
+    onThinkingEnd: (message_id) =>
+      broadcastEvent('thinking:end', {
         message_id,
         session_id: currentSessionId,
-      });
-    },
+      }),
   };
+}
+
+export async function flushStreamingCallbacks(
+  callbacks: FlushableStreamingCallbacks | undefined,
+  timeoutMs: number,
+  toolName: string
+): Promise<void> {
+  if (!callbacks) return;
+  await awaitRuntimeCleanup(callbacks.flushPending(), timeoutMs, `${toolName} streaming flush`);
 }
 
 /**
@@ -460,6 +480,10 @@ export async function executeToolTask(params: {
 
   let abortHandler: (() => Promise<void>) | undefined;
   let abortCompletion: Promise<void> | undefined;
+  let callbacks: FlushableStreamingCallbacks | undefined;
+  const runtimeCleanupTimeoutMs = resolveSdkWatchdogConfig(
+    params.resolvedConfig?.execution
+  ).abort_grace_ms;
 
   try {
     // Ensure plain git commands launched by the agent SDK inherit safe.directory
@@ -505,6 +529,7 @@ export async function executeToolTask(params: {
 
     // Create execution context
     const ctx = createExecutionContext(client, toolName, sessionId, params.onActivity);
+    callbacks = ctx.callbacks;
 
     // Create tool instance using factory function
     // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -523,7 +548,7 @@ export async function executeToolTask(params: {
           }
           console.log(`[${toolName}] Tool stopped successfully`);
         })(),
-        resolveSdkWatchdogConfig(params.resolvedConfig?.execution).abort_grace_ms,
+        runtimeCleanupTimeoutMs,
         toolName
       );
       void abortCompletion.catch(() => undefined);
@@ -703,5 +728,8 @@ export async function executeToolTask(params: {
     // AbortSignal dispatch does not await async listeners. Do not report the
     // executor quiesced until the provider-specific stop hook has completed.
     await abortCompletion;
+    // Full messages are persisted by the adapter before it returns. Drain any
+    // fire-and-forget stream broadcasts before exposing the terminal outcome.
+    await flushStreamingCallbacks(callbacks, runtimeCleanupTimeoutMs, toolName);
   }
 }
