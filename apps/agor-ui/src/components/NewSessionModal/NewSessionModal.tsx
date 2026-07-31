@@ -84,8 +84,6 @@ export interface NewSessionModalProps {
   branch?: Branch; // Optional - branch details for display
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
-  /** Tool chosen by a quick-start tile that requires explicit configuration. */
-  initialAgent?: AgenticToolName;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -97,7 +95,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   branch,
   currentUser,
   client,
-  initialAgent,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -142,7 +139,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    const startingTool = initialAgent ?? 'claude-code';
+    const startingTool: AgenticToolName = 'claude-code';
     setSelectedAgent(startingTool);
     setIsCreating(false); // Reset creating state when modal opens
     setEnvVarNames([]);
@@ -169,7 +166,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           ? branchMcpIds
           : currentUser?.default_mcp_server_ids,
     });
-  }, [open, initialAgent, form]);
+  }, [open, form]);
 
   // Update permission mode and other defaults when agent changes
   useEffect(() => {

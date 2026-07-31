@@ -234,7 +234,7 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     expect(label.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/Coding Agent\s*\*$/);
   });
 
-  it('opens on the tool selected by quick-start and allows retry after a failed create', async () => {
+  it('allows retry after a failed create', async () => {
     const onCreate = vi.fn().mockResolvedValue(false);
     render(
       <NewSessionModal
@@ -244,11 +244,10 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
         availableAgents={[]}
         branchId="branch-1"
         client={null}
-        initialAgent="opencode"
       />
     );
 
-    expect(screen.getByTestId('selected-agent')).toHaveTextContent('opencode');
+    expect(screen.getByTestId('selected-agent')).toHaveTextContent('claude-code');
     const create = screen.getByRole('button', { name: 'Create Session' });
     fireEvent.click(create);
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));

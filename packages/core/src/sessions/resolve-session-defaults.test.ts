@@ -423,6 +423,44 @@ describe('resolveSessionDefaults', () => {
       });
     });
 
+    it('uses a dynamic integration fallback only after configured model sources', () => {
+      const fallback = {
+        mode: 'exact' as const,
+        provider: 'fallback-provider',
+        model: 'fallback-model',
+      };
+
+      expect(
+        resolveSessionDefaults({
+          agenticTool: 'cursor',
+          source: {},
+          modelFallback: fallback,
+          now,
+          modelConfiguration: exactProviderPolicy,
+        }).model_config
+      ).toMatchObject(fallback);
+      expect(
+        resolveSessionDefaults({
+          agenticTool: 'cursor',
+          user: makeUser({
+            cursor: {
+              modelConfig: {
+                mode: 'exact',
+                provider: 'personal-provider',
+                model: 'personal-model',
+              },
+            },
+          }),
+          modelFallback: fallback,
+          now,
+          modelConfiguration: exactProviderPolicy,
+        }).model_config
+      ).toMatchObject({
+        provider: 'personal-provider',
+        model: 'personal-model',
+      });
+    });
+
     it('uses an integration-owned error when required model selection is absent', () => {
       expect(() =>
         resolveSessionDefaults({

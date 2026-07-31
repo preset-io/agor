@@ -1,7 +1,3 @@
-import {
-  agenticToolRequiresModelSelection,
-  isAgenticToolModelSelectionComplete,
-} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -76,10 +72,7 @@ import {
   buildTeammateOnboardingSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import {
-  getUserAgenticToolDefault,
-  getUserDefaultConfigurationSource,
-} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -261,19 +254,6 @@ const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
-interface NewSessionRequest {
-  branchId: string;
-  initialAgent?: AgenticToolName;
-  replacingSessionId?: string;
-}
-
-function canCreateDirectlyFromUserDefault(user: User | null | undefined, tool: AgenticToolName) {
-  if (!agenticToolRequiresModelSelection(tool)) return true;
-  const { selection, configuration } = getUserAgenticToolDefault(user, tool);
-  const usesInline = selection?.source === 'inline' || (!selection && Boolean(configuration));
-  return usesInline && isAgenticToolModelSelectionComplete(tool, configuration?.modelConfig);
-}
-
 // 320px keeps the three left-panel tabs (Teammate / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
@@ -392,7 +372,7 @@ export const App: React.FC<AppProps> = ({
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
-  const [newSessionRequest, setNewSessionRequest] = useState<NewSessionRequest | null>(null);
+  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   // Set instead of creating a session immediately when quick-start can't
   // resolve a tool (no preference, no prior session for this user). Opens
   // the drawer straight away in a "pick a tool" empty state rather than the
@@ -893,10 +873,9 @@ export const App: React.FC<AppProps> = ({
   const handleCreateSession = async (config: NewSessionConfig): Promise<boolean> => {
     const sessionId = await onCreateSession?.(config, currentBoardId);
     if (!sessionId) return false;
-    const replacingSessionId = newSessionRequest?.replacingSessionId;
-    setNewSessionRequest(null);
+    setNewSessionBranchId(null);
 
-    await finishSessionCreation(sessionId, replacingSessionId);
+    await finishSessionCreation(sessionId);
     return true;
   };
 
@@ -912,12 +891,6 @@ export const App: React.FC<AppProps> = ({
   // `handleQuickStartSession` reads.
   const chooseAgenticTool = useCallback(
     async (branchId: string, tool: AgenticToolName, replacingSessionId?: string) => {
-      if (!canCreateDirectlyFromUserDefault(user, tool)) {
-        setNewSessionRequest({ branchId, initialAgent: tool, replacingSessionId });
-        setPendingToolChoiceBranchId(null);
-        return null;
-      }
-
       // Read the branch at call time instead of subscribing — `branchById` gets
       // a new identity on every branch event (env heartbeats, git-state), which
       // would otherwise churn this callback's identity and re-render every
@@ -926,17 +899,25 @@ export const App: React.FC<AppProps> = ({
       const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
       const agenticToolPresetId = getUserDefaultConfigurationSource(user, tool);
 
-      const sessionId = await onCreateSession?.(
-        { branch_id: branchId, agent: tool, agenticToolPresetId, mcpServerIds },
-        currentBoardId
-      );
+      let sessionId: string | null | undefined;
+      try {
+        sessionId = await onCreateSession?.(
+          { branch_id: branchId, agent: tool, agenticToolPresetId, mcpServerIds },
+          currentBoardId
+        );
+      } catch (error) {
+        showError(
+          `Failed to create session: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        return null;
+      }
       if (!sessionId) return null;
 
       await finishSessionCreation(sessionId, replacingSessionId);
 
       return sessionId;
     },
-    [user, onCreateSession, currentBoardId, finishSessionCreation]
+    [user, onCreateSession, currentBoardId, finishSessionCreation, showError]
   );
 
   // Default "Add session" entry point. Always opens the tool-choice empty
@@ -1245,12 +1226,8 @@ export const App: React.FC<AppProps> = ({
 
   // Find branch for NewSessionModal
   const newSessionBranch =
-    useAgorStore(
-      useMemo(
-        () => makeBranchSelector(newSessionRequest?.branchId ?? null),
-        [newSessionRequest?.branchId]
-      )
-    ) ?? null;
+    useAgorStore(useMemo(() => makeBranchSelector(newSessionBranchId), [newSessionBranchId])) ??
+    null;
 
   // Branch for the environment-logs modal (open only while the id is set).
   const logsModalBranch = useAgorStore(
@@ -1710,7 +1687,7 @@ export const App: React.FC<AppProps> = ({
                           }}
                           onClose={handleCloseSessionPanel}
                           onAdvancedSetup={() => {
-                            setNewSessionRequest({ branchId: pendingToolChoiceBranchId });
+                            setNewSessionBranchId(pendingToolChoiceBranchId);
                             setPendingToolChoiceBranchId(null);
                           }}
                         />
@@ -1738,17 +1715,16 @@ export const App: React.FC<AppProps> = ({
               registered even after the SessionPanel (which contains FileUpload)
               unmounts. Without this, antd GC's the Upload CSS on panel close. */}
         <Upload style={{ display: 'none' }} openFileDialogOnClick={false} showUploadList={false} />
-        {newSessionRequest && (
+        {newSessionBranchId && (
           <NewSessionModal
             open={true}
-            onClose={() => setNewSessionRequest(null)}
+            onClose={() => setNewSessionBranchId(null)}
             onCreate={handleCreateSession}
             availableAgents={availableAgents}
-            branchId={newSessionRequest.branchId}
+            branchId={newSessionBranchId}
             branch={newSessionBranch || undefined}
             currentUser={user}
             client={client}
-            initialAgent={newSessionRequest.initialAgent}
           />
         )}
         <SettingsModal

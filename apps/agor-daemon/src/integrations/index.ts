@@ -1,5 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
-import type { AgenticToolName, Session } from '@agor/core/types';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import type { ModelConfigInput } from '@agor/core/models';
+import type { AgenticToolName, AuthenticatedParams, Session, UserID } from '@agor/core/types';
 import type { RegisterServicesContext } from '../register-services.js';
 import { OPENCODE_DAEMON_INTEGRATION } from './opencode/index.js';
 
@@ -15,6 +17,12 @@ interface DaemonAgenticToolIntegration {
     session: Pick<Session, 'created_by' | 'unix_username'>;
     homeDir: string;
   }): Record<string, unknown>;
+  resolveCreateModelFallback?(input: {
+    db: TenantScopeAwareDatabase;
+    branchId: string;
+    executionOwnerId: UserID;
+    params: AuthenticatedParams;
+  }): Promise<ModelConfigInput | undefined>;
   registerServices(context: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>): void;
 }
 
@@ -62,4 +70,16 @@ export function getAgenticToolExecutorPayload(
       (integration) => integration.name === tool
     )?.getExecutorPayload?.(input) ?? {}
   );
+}
+
+export async function resolveAgenticToolCreateModelFallback(input: {
+  tool: AgenticToolName;
+  db: TenantScopeAwareDatabase;
+  branchId: string;
+  executionOwnerId: UserID;
+  params: AuthenticatedParams;
+}): Promise<ModelConfigInput | undefined> {
+  return INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS.find(
+    (integration) => integration.name === input.tool
+  )?.resolveCreateModelFallback?.(input);
 }

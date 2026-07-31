@@ -181,6 +181,7 @@ describe('opencode.auth executor command', () => {
       data: {
         runtimeVersion: '1.14.33',
         projectConfigured: { providerId: 'openai', modelId: 'gpt-5' },
+        suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
         providers: [
           {
             id: 'openai',
@@ -251,7 +252,7 @@ describe('opencode.auth executor command', () => {
     expect(JSON.stringify(result)).not.toContain('must-not-cross');
   });
 
-  it('does not suggest a provider when multiple available providers have saved credentials', async () => {
+  it('deterministically suggests the first configured provider when several are available', async () => {
     runtime.readAuthFile.mockResolvedValue(
       JSON.stringify({
         'kimi-for-coding': { type: 'api', key: 'must-not-cross' },
@@ -294,7 +295,48 @@ describe('opencode.auth executor command', () => {
 
     expect(result).toEqual({
       success: true,
-      data: expect.not.objectContaining({ suggestedSelection: expect.anything() }),
+      data: expect.objectContaining({
+        suggestedSelection: { providerId: 'kimi-for-coding', modelId: 'k3' },
+      }),
+    });
+  });
+
+  it('falls back to the first runtime-available provider without saved credentials', async () => {
+    runtime.readAuthFile.mockResolvedValue('{}');
+    const discoveryClient = {
+      provider: {
+        list: vi.fn(async () => providerList(['opencode'])),
+      },
+      config: {
+        providers: vi.fn(async () => ({
+          data: {
+            providers: [
+              {
+                id: 'opencode',
+                name: 'OpenCode Zen',
+                models: { zen: { id: 'zen', name: 'Zen', status: 'active' } },
+              },
+            ],
+            default: { opencode: 'zen' },
+          },
+        })),
+        get: vi.fn(async () => ({ data: {} })),
+      },
+      instance: { dispose: vi.fn(async () => ({ data: true })) },
+    };
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover-models' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        suggestedSelection: { providerId: 'opencode', modelId: 'zen' },
+      }),
     });
   });
 

@@ -21,9 +21,27 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { CreateSessionInput, Session, Task, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus, USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { beforeEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { resolveAgenticToolCreateModelFallback } from '../integrations/index.js';
 import { type SessionParams, SessionsService } from './sessions';
+
+vi.mock('../integrations/index.js', async () => {
+  const actual = await vi.importActual<typeof import('../integrations/index.js')>(
+    '../integrations/index.js'
+  );
+  return {
+    ...actual,
+    resolveAgenticToolCreateModelFallback: vi.fn(),
+  };
+});
+
+const resolveCreateModelFallback = vi.mocked(resolveAgenticToolCreateModelFallback);
+
+beforeEach(() => {
+  resolveCreateModelFallback.mockReset();
+  resolveCreateModelFallback.mockResolvedValue(undefined);
+});
 
 // The guard only touches the session/task repos built from `db`; the stored
 // `app` is never read on this path. A bare cast keeps the harness minimal.
@@ -393,6 +411,44 @@ describe('SessionsService OpenCode model_config validation', () => {
     await expect(service.create(data)).rejects.toThrow(/select.*provider.*model/i);
     expect(await new SessionRepository(db).findById(data.session_id)).toBeNull();
   });
+
+  dbTest(
+    'persists the integration fallback when configured sources have no pair',
+    async ({ db }) => {
+      const branchId = await createBranch(db);
+      const owner = await new UsersRepository(db).create({
+        email: `opencode-fallback-${generateId()}@example.com`,
+        name: 'OpenCode owner',
+      });
+      const data = {
+        ...createInput(branchId, null),
+        created_by: owner.user_id,
+      };
+      const params = { user: owner } as SessionParams;
+      resolveCreateModelFallback.mockResolvedValue({
+        mode: 'exact',
+        provider: 'kimi-for-coding',
+        model: 'k3',
+      });
+
+      const created = (await new SessionsService(db, STUB_APP).create(data, params)) as Session;
+      const persisted = await new SessionRepository(db).findById(created.session_id);
+
+      expect(created.model_config).toMatchObject({
+        mode: 'exact',
+        provider: 'kimi-for-coding',
+        model: 'k3',
+      });
+      expect(persisted?.model_config).toEqual(created.model_config);
+      expect(resolveCreateModelFallback).toHaveBeenCalledWith({
+        tool: 'opencode',
+        db,
+        branchId,
+        executionOwnerId: owner.user_id,
+        params,
+      });
+    }
+  );
 
   dbTest(
     'keeps a legacy incomplete session readable but rejects runtime materialization',

@@ -89,22 +89,19 @@ vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
 vi.mock('../NewSessionModal', () => ({
   NewSessionModal: ({
-    initialAgent,
     branchId,
     onCreate,
     onClose,
   }: {
-    initialAgent?: string;
     branchId: string;
     onCreate: (config: unknown) => void;
     onClose: () => void;
   }) => (
     <div data-testid="new-session-modal">
-      <output data-testid="modal-initial-agent">{initialAgent}</output>
       <button
         type="button"
         data-testid="modal-create"
-        onClick={() => onCreate({ branch_id: branchId, agent: initialAgent })}
+        onClick={() => onCreate({ branch_id: branchId, agent: 'claude-code' })}
       >
         create configured session
       </button>
@@ -360,7 +357,7 @@ describe('App quick-start — always shows the tool picker', () => {
     );
   });
 
-  it('opens OpenCode configuration instead of using another tool workspace default', async () => {
+  it('creates OpenCode directly when another tool owns the workspace default', async () => {
     const onCreateSession = optimisticCreate(SESSION_A);
     const userWithClaudeWorkspaceDefault = {
       ...USER,
@@ -371,11 +368,19 @@ describe('App quick-start — always shows the tool picker', () => {
     renderShell(userWithClaudeWorkspaceDefault, onCreateSession);
 
     fireEvent.click(await screen.findByTestId('quick-start'));
-    fireEvent.click(await screen.findByTestId('opencode-picker'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('opencode-picker'));
+    });
 
-    expect(await screen.findByTestId('new-session-modal')).toBeInTheDocument();
-    expect(screen.getByTestId('modal-initial-agent')).toHaveTextContent('opencode');
-    expect(onCreateSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'opencode',
+        agenticToolPresetId: undefined,
+      }),
+      BOARD_ID
+    );
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
   });
 
   it('creates OpenCode directly from a complete personal inline default', async () => {
@@ -470,7 +475,7 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(drawerPanel.unmounts).toBe(0);
   });
 
-  it('keeps the existing session when OpenCode switch configuration is cancelled', async () => {
+  it('keeps the existing session when direct OpenCode creation fails', async () => {
     const remove = vi.fn();
     const client = { service: () => ({ remove }) };
     const onCreateSession = optimisticCreate(SESSION_A);
@@ -482,34 +487,13 @@ describe('App quick-start — always shows the tool picker', () => {
     });
     await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A));
 
-    fireEvent.click(screen.getByTestId('switch-opencode'));
-    expect(await screen.findByTestId('new-session-modal')).toBeInTheDocument();
-    expect(screen.getByTestId('modal-initial-agent')).toHaveTextContent('opencode');
-    fireEvent.click(screen.getByTestId('modal-cancel'));
-
-    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
-    expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  it('keeps the existing session when configured OpenCode creation fails', async () => {
-    const remove = vi.fn();
-    const client = { service: () => ({ remove }) };
-    const onCreateSession = optimisticCreate(SESSION_A);
-    renderShell(USER, onCreateSession, client);
-
-    fireEvent.click(await screen.findByTestId('quick-start'));
+    onCreateSession.mockRejectedValueOnce(new Error('No OpenCode model is available'));
     await act(async () => {
-      fireEvent.click(await screen.findByTestId('tool-picker'));
+      fireEvent.click(screen.getByTestId('switch-opencode'));
     });
-    await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A));
-
-    onCreateSession.mockResolvedValueOnce(null);
-    fireEvent.click(screen.getByTestId('switch-opencode'));
-    fireEvent.click(await screen.findByTestId('modal-create'));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(2));
-    expect(screen.getByTestId('new-session-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
     expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
     expect(remove).not.toHaveBeenCalled();
   });

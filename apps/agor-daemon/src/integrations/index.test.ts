@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { admitAgenticToolExecutor, getAgenticToolExecutorPayload } from './index.js';
+import { OPENCODE_DAEMON_INTEGRATION } from './opencode/index.js';
 
 describe('OpenCode executor admission', () => {
   it('rejects hosted native auth before token creation or executor spawn', async () => {
@@ -58,5 +59,16 @@ describe('OpenCode executor admission', () => {
     const context = payload.agenticToolContext as { dataHome: string };
     expect(context.dataHome.startsWith('/home/alice/.local/share/agor/opencode/')).toBe(true);
     expect(payload).not.toHaveProperty('dataHome');
+  });
+
+  it("does not discover a create fallback from another user's native credentials", async () => {
+    await expect(
+      OPENCODE_DAEMON_INTEGRATION.resolveCreateModelFallback({
+        db: {} as never,
+        branchId: 'branch-1',
+        executionOwnerId: 'owner-1' as never,
+        params: { user: { user_id: 'caller-2' } as never },
+      })
+    ).resolves.toBeUndefined();
   });
 });

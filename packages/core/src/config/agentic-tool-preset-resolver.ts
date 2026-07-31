@@ -4,7 +4,10 @@ import {
   TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '../db/repositories';
-import type { AgenticToolModelConfigurationPolicy } from '../models/resolve-config';
+import type {
+  AgenticToolModelConfigurationPolicy,
+  ModelConfigInput,
+} from '../models/resolve-config';
 import { resolveSessionDefaults } from '../sessions/resolve-session-defaults';
 import type {
   AgenticToolConfigurationReference,
@@ -37,6 +40,8 @@ export interface MaterializeAgenticToolConfigurationArgs {
   mcpServerIds?: string[];
   now?: Date;
   modelConfiguration?: AgenticToolModelConfigurationPolicy;
+  /** Dynamic integration default, considered only after configured sources. */
+  modelFallback?: ModelConfigInput;
 }
 
 export interface MaterializedAgenticToolConfiguration {
@@ -166,6 +171,7 @@ export async function materializeAgenticToolConfiguration(
     mcpServerIds: args.mcpServerIds,
     now: args.now,
     modelConfiguration: args.modelConfiguration,
+    modelFallback: args.modelFallback,
   });
 
   return {

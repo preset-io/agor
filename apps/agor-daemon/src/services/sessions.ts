@@ -33,7 +33,7 @@ import {
   Forbidden,
   NotAuthenticated,
 } from '@agor/core/feathers';
-import type { ResolvedModelConfig } from '@agor/core/models';
+import type { ModelConfigInput, ResolvedModelConfig } from '@agor/core/models';
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
@@ -62,6 +62,7 @@ import type {
 import { ROLES, SessionStatus } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { resolveAgenticToolCreateModelFallback } from '../integrations/index.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
   determineSpawnIdentity,
@@ -411,7 +412,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     agenticTool: AgenticToolName,
     source: AgenticToolConfigurationSource,
     executionOwnerId: string | UserID | UUID | null | undefined,
-    parent?: AgenticConfigParent
+    parent?: AgenticConfigParent,
+    modelFallback?: ModelConfigInput
   ) {
     try {
       return await materializeAgenticToolConfiguration(this.db, {
@@ -419,6 +421,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         source,
         executionOwnerId: executionOwnerId as UserID | undefined,
         parent,
+        modelFallback,
       });
     } catch (error) {
       if (
@@ -428,6 +431,57 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         throw new BadRequest(error.message);
       }
       throw error;
+    }
+  }
+
+  private async materializeCreateConfiguration(input: {
+    agenticTool: AgenticToolName;
+    source: AgenticToolConfigurationSource;
+    executionOwnerId: string | UserID | UUID | null | undefined;
+    branchId: string | undefined;
+    params?: SessionParams;
+    parent?: AgenticConfigParent;
+    allowIntegrationFallback: boolean;
+  }) {
+    try {
+      return await this.materializeConfiguration(
+        input.agenticTool,
+        input.source,
+        input.executionOwnerId,
+        input.parent
+      );
+    } catch (error) {
+      const missingSelectionError = getAgenticToolIntegration(input.agenticTool).configuration
+        .missingSelectionError;
+      const executionOwnerId = input.executionOwnerId as UserID | undefined;
+      if (
+        !input.allowIntegrationFallback ||
+        !(error instanceof BadRequest) ||
+        !missingSelectionError ||
+        error.message !== missingSelectionError ||
+        !input.branchId ||
+        !executionOwnerId ||
+        !input.params?.user
+      ) {
+        throw error;
+      }
+
+      const modelFallback = await resolveAgenticToolCreateModelFallback({
+        tool: input.agenticTool,
+        db: this.db,
+        branchId: input.branchId,
+        executionOwnerId,
+        params: input.params,
+      });
+      if (!modelFallback) throw error;
+
+      return this.materializeConfiguration(
+        input.agenticTool,
+        input.source,
+        executionOwnerId,
+        input.parent,
+        modelFallback
+      );
     }
   }
 
@@ -518,16 +572,20 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       );
     }
     const parent = params?._agenticConfigParent;
-    const materialized = await this.materializeConfiguration(
+    const source: AgenticToolConfigurationSource = configurationReference
+      ? { reference: configurationReference }
+      : {
+          configuration: sessionInputsToInlineConfiguration(modelConfig, permissionConfig),
+        };
+    const materialized = await this.materializeCreateConfiguration({
       agenticTool,
-      configurationReference
-        ? { reference: configurationReference }
-        : {
-            configuration: sessionInputsToInlineConfiguration(modelConfig, permissionConfig),
-          },
-      data.created_by ?? params?.user?.user_id,
-      parent
-    );
+      source,
+      executionOwnerId: data.created_by ?? params?.user?.user_id,
+      branchId: data.branch_id,
+      params,
+      parent,
+      allowIntegrationFallback: modelConfig == null,
+    });
     this.assertSupportedModelConfig(agenticTool, materialized.model_config);
     const createData: Partial<Session> = {
       ...sessionData,

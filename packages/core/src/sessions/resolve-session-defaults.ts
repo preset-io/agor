@@ -21,6 +21,7 @@
 
 import {
   type AgenticToolModelConfigurationPolicy,
+  type ModelConfigInput,
   resolveModelConfigWithFallback,
 } from '../models/resolve-config.js';
 import type { AgenticToolName, DefaultAgenticToolConfig, Session, User } from '../types/index.js';
@@ -49,6 +50,8 @@ export interface ResolveSessionDefaultsArgs {
   now?: Date;
   /** Tool-owned model semantics supplied by the integration registry. */
   modelConfiguration?: AgenticToolModelConfigurationPolicy;
+  /** Dynamic integration default, considered only after configured sources. */
+  modelFallback?: ModelConfigInput;
 }
 
 export interface ResolvedSessionDefaults {
@@ -67,7 +70,17 @@ export interface ResolvedSessionDefaults {
 }
 
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
-  const { agenticTool, user, source, parent, branch, mcpServerIds, now, modelConfiguration } = args;
+  const {
+    agenticTool,
+    user,
+    source,
+    parent,
+    branch,
+    mcpServerIds,
+    now,
+    modelConfiguration,
+    modelFallback,
+  } = args;
   const userToolDefaults =
     user?.default_agentic_config?.[agenticTool] ??
     user?.default_agentic_config?.[canonicalTenantAgenticTool(agenticTool)];
@@ -89,7 +102,12 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
   });
 
   const model_config = resolveModelConfigWithFallback(
-    [source?.modelConfig, sameToolParent?.model_config, userToolDefaults?.modelConfig],
+    [
+      source?.modelConfig,
+      sameToolParent?.model_config,
+      userToolDefaults?.modelConfig,
+      modelFallback,
+    ],
     { now, policy: modelConfiguration }
   );
 

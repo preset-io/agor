@@ -206,6 +206,22 @@ describe('agentic tool preset resolution', () => {
     expect(result.permission_config.mode).toBe('allow-all');
   });
 
+  dbTest(
+    'uses a dynamic model fallback only after configured materialization sources',
+    async ({ db }) => {
+      const result = await materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: { configuration: {} },
+        modelFallback: { mode: 'exact', model: 'runtime-default' },
+      });
+
+      expect(result.model_config).toMatchObject({
+        mode: 'exact',
+        model: 'runtime-default',
+      });
+    }
+  );
+
   dbTest('keeps a selected preset as a live reference', async ({ db }) => {
     const preset = await new AgenticToolPresetRepository(db).create(
       {

@@ -2,7 +2,7 @@ import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { BranchRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
-import { createOpenCodeModelsService } from './models-service';
+import { createOpenCodeModelsService, resolveOpenCodeCreateModelFallback } from './models-service';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -119,6 +119,22 @@ describe('OpenCode model catalog service', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  it('turns the catalog suggestion into an exact create-time fallback', async () => {
+    runCommand.mockResolvedValue({
+      success: true,
+      data: {
+        ...catalog,
+        suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
+      },
+    });
+
+    const fallback = await runWithTenantContext('tenant-a', () =>
+      resolveOpenCodeCreateModelFallback(db, params, 'branch-1')
+    );
+
+    expect(fallback).toEqual({ mode: 'exact', provider: 'openai', model: 'gpt-5' });
   });
 
   it('rejects an unauthorized or missing branch before executor activity', async () => {

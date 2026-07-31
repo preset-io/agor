@@ -126,12 +126,19 @@ invariant before persistence. A session may still select a named preset that
 inherits from its execution owner's configuration through the ordinary host
 precedence rules.
 
-Catalog discovery may return an advisory empty-state selection only when one
-runtime-available provider has confirmed saved credentials and its active
-native default is present in the catalog. The browser may apply that suggestion
-only to an empty form. It never overwrites stored, manually entered, stale, or
-project-configured pairs, and the daemon never selects it during execution.
-Every created Session persists the exact pair it will run.
+When configured sources still cannot produce a required model selection during
+session creation, the host may ask the selected integration for a dynamic
+create-time fallback. OpenCode derives that fallback from the authenticated,
+branch-aware catalog: prefer the first deterministically ordered provider with
+confirmed saved credentials, then the first other runtime-available provider,
+and use only an active native default model. The returned pair is fed through
+the same generic resolver as the lowest-precedence source and is persisted on
+the new Session.
+
+This fallback never overwrites explicit, preset, parent, personal, workspace,
+or stale selections. It is not consulted while executing or resuming an
+existing Session; execution validates the exact persisted pair and never
+silently substitutes another model.
 
 ### Runtime
 

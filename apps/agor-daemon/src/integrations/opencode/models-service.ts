@@ -91,3 +91,18 @@ export class OpenCodeModelsService {
 export function createOpenCodeModelsService(db: TenantScopeAwareDatabase) {
   return new OpenCodeModelsService(db);
 }
+
+export async function resolveOpenCodeCreateModelFallback(
+  db: TenantScopeAwareDatabase,
+  params: AuthenticatedParams,
+  branchId: string
+) {
+  const catalog = await createOpenCodeModelsService(db).find({
+    ...params,
+    query: { branch_id: branchId },
+  });
+  const suggestion = catalog.suggestedSelection;
+  return suggestion
+    ? { mode: 'exact' as const, provider: suggestion.providerId, model: suggestion.modelId }
+    : undefined;
+}

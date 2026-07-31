@@ -203,8 +203,17 @@ async function discoverModels(
             (provider) => provider.runtimeAvailable && credentialProviderIds.has(provider.id)
           )
         : [];
-      const suggestedProvider =
-        credentialedProviders.length === 1 ? credentialedProviders[0] : undefined;
+      const suggestedProvider = [
+        ...credentialedProviders,
+        ...providers.filter(
+          (provider) =>
+            provider.runtimeAvailable && !credentialedProviders.some(({ id }) => id === provider.id)
+        ),
+      ].find((provider) =>
+        provider.models.some(
+          (candidate) => candidate.id === provider.suggestedModel && candidate.status === 'active'
+        )
+      );
       const suggestedModel = suggestedProvider?.suggestedModel;
       const suggestedSelection =
         suggestedModel &&
