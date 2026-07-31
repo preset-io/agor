@@ -18,7 +18,7 @@
 
 import { generateId, shortId } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole, PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import type {
   PermissionHandler,
   PermissionRequest,
@@ -30,7 +30,11 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
 } from '../../db/feathers-repositories.js';
-import type { PermissionService } from '../../permissions/permission-service.js';
+import {
+  getPermissionStatus,
+  type PermissionService,
+} from '../../permissions/permission-service.js';
+import { isDaemonOwnedAbort, markInteractionAbort } from '../../termination-state.js';
 import type { PermissionMode } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 
@@ -54,6 +58,7 @@ export interface PermissionDeps {
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpServerRepo?: MCPServerRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
+  abortController: AbortController;
 }
 
 /**
@@ -284,21 +289,14 @@ export function createPermissionHandler(
       });
 
       // Wait for UI decision (Promise pauses SDK execution)
-      // Create a minimal AbortSignal — Copilot SDK doesn't pass one to onPermissionRequest
-      const abortController = new AbortController();
-      const decision = await deps.permissionService.waitForDecision(
+      const resolution = await deps.permissionService.waitForDecision(
         requestId,
         taskId,
         sessionId,
-        abortController.signal
+        deps.abortController.signal
       );
 
-      // Determine the resulting permission status
-      const permissionStatus = decision.timedOut
-        ? PermissionStatus.TIMED_OUT
-        : decision.allow
-          ? PermissionStatus.APPROVED
-          : PermissionStatus.DENIED;
+      const permissionStatus = getPermissionStatus(resolution);
 
       // Update permission request message with outcome
       if (deps.messagesService) {
@@ -311,34 +309,45 @@ export function createPermissionHandler(
           content: {
             ...(baseContent as Record<string, unknown>),
             status: permissionStatus,
-            scope: decision.remember ? decision.scope : undefined,
-            approved_by: decision.decidedBy,
+            scope: resolution.remember ? resolution.scope : undefined,
+            approved_by: resolution.decidedBy,
             approved_at: new Date().toISOString(),
           },
         } as Partial<Message>);
       }
 
-      // Handle timeout
-      if (decision.timedOut) {
-        console.log(
-          `⏰ [Copilot Permission] Permission timed out for ${toolName}, setting timed_out state...`
-        );
+      if (isDaemonOwnedAbort(deps.abortController)) {
+        return {
+          kind: 'denied-interactively-by-user',
+          feedback: resolution.reason ?? 'Task termination requested',
+        };
+      }
 
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.TIMED_OUT,
-          completed_at: new Date().toISOString(),
+      if (resolution.outcome === 'unavailable') {
+        const message = resolution.reason ?? `Permission cannot be requested for: ${toolName}`;
+        markInteractionAbort(deps.abortController, {
+          status: TaskStatus.FAILED,
+          errorMessage: message,
         });
+        return {
+          kind: 'denied-interactively-by-user',
+          feedback: message,
+        };
+      }
 
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.TIMED_OUT,
-            ready_for_prompt: true,
-          });
-        }
+      // Abort the Copilot runtime first. The executor finalizer persists the
+      // timeout only after the SDK and host cleanup have settled.
+      if (resolution.outcome === 'timed_out') {
+        const message = `Permission request timed out for: ${toolName}`;
+        console.log(`⏰ [Copilot Permission] ${message}`);
+        markInteractionAbort(deps.abortController, {
+          status: TaskStatus.TIMED_OUT,
+          errorMessage: message,
+        });
 
         return {
           kind: 'denied-interactively-by-user',
-          feedback: `Permission request timed out for: ${toolName}`,
+          feedback: message,
         };
       }
 
@@ -358,12 +367,12 @@ export function createPermissionHandler(
 
       // A denial rejects only this tool call. Copilot decides how to continue
       // the turn after receiving the interactive-denial result.
-      if (!decision.allow) {
+      if (resolution.outcome !== 'approved') {
         console.log(`🛑 [Copilot Permission] Permission denied for ${toolName}; continuing turn`);
 
         return {
           kind: 'denied-interactively-by-user',
-          feedback: decision.reason || `Permission denied for: ${toolName}`,
+          feedback: resolution.reason || `Permission denied for: ${toolName}`,
         };
       }
 
@@ -372,18 +381,17 @@ export function createPermissionHandler(
     } catch (error) {
       console.error('[Copilot Permission] Error in permission flow:', error);
 
-      try {
-        await deps.tasksService.patch(taskId, {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!isDaemonOwnedAbort(deps.abortController)) {
+        markInteractionAbort(deps.abortController, {
           status: TaskStatus.FAILED,
-          report: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          errorMessage,
         });
-      } catch (updateError) {
-        console.error('[Copilot Permission] Failed to update task status:', updateError);
       }
 
       return {
         kind: 'denied-interactively-by-user',
-        feedback: error instanceof Error ? error.message : 'Unknown error in permission flow',
+        feedback: errorMessage,
       };
     } finally {
       // STEP 3: Always release the lock when done

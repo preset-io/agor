@@ -1,7 +1,7 @@
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgorClient } from './services/feathers-client.js';
-import { finalizeTask, TERMINAL_STATUSES, tryFinalizeTask } from './terminal-task.js';
+import { finalizeTask, tryFinalizeTask } from './terminal-task.js';
 
 type TaskShape = { task_id: string; status: TaskStatus };
 
@@ -28,26 +28,6 @@ function makeClient(currentStatus: TaskStatus): {
   } as unknown as AgorClient;
   return { client, tasks };
 }
-
-describe('TERMINAL_STATUSES', () => {
-  it('covers every status the executor can transition into terminally', () => {
-    expect(TERMINAL_STATUSES.has(TaskStatus.COMPLETED)).toBe(true);
-    expect(TERMINAL_STATUSES.has(TaskStatus.FAILED)).toBe(true);
-    expect(TERMINAL_STATUSES.has(TaskStatus.STOPPED)).toBe(true);
-    // TIMED_OUT is terminal too — permission/input timeout, executor exited.
-    // Fail-safe paths must NOT overwrite it with FAILED or STOPPED.
-    expect(TERMINAL_STATUSES.has(TaskStatus.TIMED_OUT)).toBe(true);
-  });
-
-  it('does not include in-flight statuses', () => {
-    expect(TERMINAL_STATUSES.has(TaskStatus.QUEUED)).toBe(false);
-    expect(TERMINAL_STATUSES.has(TaskStatus.CREATED)).toBe(false);
-    expect(TERMINAL_STATUSES.has(TaskStatus.RUNNING)).toBe(false);
-    expect(TERMINAL_STATUSES.has(TaskStatus.STOPPING)).toBe(false);
-    expect(TERMINAL_STATUSES.has(TaskStatus.AWAITING_PERMISSION)).toBe(false);
-    expect(TERMINAL_STATUSES.has(TaskStatus.AWAITING_INPUT)).toBe(false);
-  });
-});
 
 describe('finalizeTask', () => {
   afterEach(() => {

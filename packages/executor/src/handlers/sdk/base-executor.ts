@@ -21,7 +21,7 @@ import type {
   StreamingEventType,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
+import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -565,7 +565,11 @@ export async function executeToolTask(params: {
     const interactionOutcome = getInteractionAbortOutcome(params.abortController);
     const taskStatus =
       interactionOutcome?.status ??
-      (result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed');
+      (result.wasStopped
+        ? TaskStatus.STOPPED
+        : result.hadError
+          ? TaskStatus.FAILED
+          : TaskStatus.COMPLETED);
 
     if (result.hadError) {
       console.error(
@@ -682,7 +686,7 @@ export async function executeToolTask(params: {
     await appendTaskFailureMessage(client, sessionId, taskId, err, failureMessage);
 
     return {
-      status: interactionOutcome?.status ?? 'failed',
+      status: interactionOutcome?.status ?? TaskStatus.FAILED,
       taskPatch: patchData,
       ...(interactionOutcome ? {} : { error: err }),
     };

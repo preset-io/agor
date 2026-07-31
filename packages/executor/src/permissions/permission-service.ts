@@ -23,9 +23,14 @@
  */
 
 import { shortId } from '@agor/core/db';
-import type { SessionID, TaskID } from '@agor/core/types';
-import { PermissionScope } from '@agor/core/types';
-import type { InteractionMode } from '../payload-types.js';
+import type { ExecutorPulseKind, SessionID, TaskID } from '@agor/core/types';
+import {
+  PermissionScope,
+  PermissionStatus,
+  ExecutorPulseKind as PulseKind,
+} from '@agor/core/types';
+import type { InteractionMode, ResolvedConfigSlice } from '../payload-types.js';
+import type { AgorClient } from '../services/feathers-client.js';
 
 export interface PermissionRequest {
   requestId: string;
@@ -45,8 +50,27 @@ export interface PermissionDecision {
   remember: boolean;
   scope: PermissionScope;
   decidedBy: string; // userId
-  timedOut?: boolean; // true when the decision was an automatic timeout (not an explicit deny)
-  unavailable?: boolean; // true when the launch surface has no response path
+}
+
+type PermissionResolutionBase = Omit<PermissionDecision, 'allow'>;
+export type PermissionResolution =
+  | (PermissionResolutionBase & { outcome: 'approved' })
+  | (PermissionResolutionBase & { outcome: 'denied' })
+  | (PermissionResolutionBase & { outcome: 'cancelled' })
+  | (PermissionResolutionBase & { outcome: 'timed_out' })
+  | (PermissionResolutionBase & { outcome: 'unavailable' });
+
+export function getPermissionStatus(resolution: PermissionResolution): PermissionStatus {
+  switch (resolution.outcome) {
+    case 'approved':
+      return PermissionStatus.APPROVED;
+    case 'timed_out':
+      return PermissionStatus.TIMED_OUT;
+    case 'denied':
+    case 'cancelled':
+    case 'unavailable':
+      return PermissionStatus.DENIED;
+  }
 }
 
 // Re-export for convenience
@@ -54,6 +78,11 @@ export { PermissionScope };
 
 /** Default permission timeout: 10 minutes */
 const DEFAULT_PERMISSION_TIMEOUT_MS = 600_000;
+const PermissionEvent = {
+  REQUEST: 'permission:request',
+  TIMEOUT: 'permission:timeout',
+} as const;
+type PermissionEvent = (typeof PermissionEvent)[keyof typeof PermissionEvent];
 
 /**
  * Executor version of PermissionService
@@ -64,7 +93,7 @@ export class PermissionService {
     string,
     {
       sessionId: SessionID;
-      resolve: (decision: PermissionDecision) => void;
+      resolve: (resolution: PermissionResolution) => void;
       timeout: NodeJS.Timeout;
     }
   >();
@@ -74,7 +103,7 @@ export class PermissionService {
    * @param timeoutMs - Permission request timeout in ms (default: 10 minutes)
    */
   constructor(
-    private emitEvent: (event: string, data: unknown) => Promise<void>,
+    private emitEvent: (event: PermissionEvent, data: unknown) => Promise<void>,
     private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
     private interactionMode: InteractionMode = 'interactive'
   ) {}
@@ -84,7 +113,7 @@ export class PermissionService {
    */
   async emitRequest(sessionId: SessionID, request: Omit<PermissionRequest, 'sessionId'>) {
     const fullRequest: PermissionRequest = { ...request, sessionId };
-    await this.emitEvent('permission:request', fullRequest);
+    await this.emitEvent(PermissionEvent.REQUEST, fullRequest);
     console.log(
       `🛡️  [executor] Permission request emitted via IPC: ${request.toolName} for task ${request.taskId}`
     );
@@ -99,12 +128,12 @@ export class PermissionService {
     taskId: TaskID,
     sessionId: SessionID,
     signal: AbortSignal
-  ): Promise<PermissionDecision> {
+  ): Promise<PermissionResolution> {
     if (signal.aborted) {
       return Promise.resolve({
         requestId,
         taskId,
-        allow: false,
+        outcome: 'cancelled',
         reason: 'Cancelled',
         remember: false,
         scope: PermissionScope.ONCE,
@@ -116,12 +145,11 @@ export class PermissionService {
       return Promise.resolve({
         requestId,
         taskId,
-        allow: false,
+        outcome: 'unavailable',
         reason: 'This execution surface cannot answer permission requests',
         remember: false,
         scope: PermissionScope.ONCE,
         decidedBy: 'system',
-        unavailable: true,
       });
     }
 
@@ -137,7 +165,7 @@ export class PermissionService {
         resolve({
           requestId,
           taskId,
-          allow: false,
+          outcome: 'cancelled',
           reason: 'Cancelled',
           remember: false,
           scope: PermissionScope.ONCE,
@@ -152,7 +180,7 @@ export class PermissionService {
 
         // Broadcast timeout to UI via daemon
         try {
-          await this.emitEvent('permission:timeout', { requestId, sessionId, taskId });
+          await this.emitEvent(PermissionEvent.TIMEOUT, { requestId, sessionId, taskId });
         } catch (err) {
           console.error(`⚠️  [executor] Failed to emit permission:timeout event:`, err);
         }
@@ -160,12 +188,11 @@ export class PermissionService {
         resolve({
           requestId,
           taskId,
-          allow: false,
+          outcome: 'timed_out',
           reason: 'Timed out',
           remember: false,
           scope: PermissionScope.ONCE,
           decidedBy: 'system',
-          timedOut: true,
         });
       }, this.timeoutMs);
 
@@ -184,7 +211,11 @@ export class PermissionService {
     const pending = this.pendingRequests.get(decision.requestId);
     if (pending) {
       clearTimeout(pending.timeout);
-      pending.resolve(decision);
+      const { allow, ...resolution } = decision;
+      pending.resolve({
+        ...resolution,
+        outcome: allow ? 'approved' : 'denied',
+      });
       this.pendingRequests.delete(decision.requestId);
       console.log(
         `🛡️  [executor] Permission resolved: ${decision.requestId} → ${decision.allow ? 'ALLOW' : 'DENY'}`
@@ -206,7 +237,7 @@ export class PermissionService {
         pending.resolve({
           requestId,
           taskId: '' as TaskID,
-          allow: false,
+          outcome: 'cancelled',
           reason: 'Cancelled due to previous permission denial',
           remember: false,
           scope: PermissionScope.ONCE,
@@ -223,4 +254,27 @@ export class PermissionService {
       );
     }
   }
+}
+
+export function createExecutionPermissionService(params: {
+  client: AgorClient;
+  resolvedConfig?: ResolvedConfigSlice;
+  interactionMode?: InteractionMode;
+  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+}): PermissionService {
+  const timeoutMs =
+    params.resolvedConfig?.execution?.permission_timeout_ms ?? DEFAULT_PERMISSION_TIMEOUT_MS;
+
+  return new PermissionService(
+    async (event, data) => {
+      if (event === PermissionEvent.REQUEST) {
+        params.onPulse?.(PulseKind.WAITING, 'permission.request');
+      } else {
+        params.onPulse?.(PulseKind.SDK_STARTED, 'permission.timeout');
+      }
+      params.client.service('sessions').emit(event, data);
+    },
+    timeoutMs,
+    params.interactionMode
+  );
 }

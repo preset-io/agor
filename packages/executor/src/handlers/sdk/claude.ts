@@ -14,7 +14,7 @@ import type {
 } from '@agor/core/types';
 import type { InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
-import { PermissionService } from '../../permissions/permission-service.js';
+import { createExecutionPermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';
@@ -36,25 +36,12 @@ export async function executeClaudeCodeTask(params: {
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
   interactionMode?: InteractionMode;
 }): Promise<AgenticToolOutcome | undefined> {
-  const { client, sessionId } = params;
+  const { sessionId } = params;
 
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
-  // Permission timeout: daemon-resolved slice, fallback to 10-minute default.
-  const permissionTimeoutMs = params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000;
-
-  // Create PermissionService that emits via Feathers WebSocket
-  const permissionService = new PermissionService(
-    async (event, data) => {
-      if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
-      if (event === 'permission:timeout') params.onPulse?.('sdk_started', 'permission.timeout');
-      // Emit permission events directly via Feathers
-      client.service('sessions').emit(event, data);
-    },
-    permissionTimeoutMs,
-    params.interactionMode ?? 'interactive'
-  );
+  const permissionService = createExecutionPermissionService(params);
 
   // Register with global manager
   globalPermissionManager.register(sessionId, permissionService);

@@ -1,61 +1,74 @@
-type DaemonOwnedAbortCause = 'coordinator_termination' | 'sdk_health_failure';
-type InteractionAbortCause =
-  | 'interaction_denied'
-  | 'interaction_timeout'
-  | 'interaction_unavailable'
-  | 'interaction_error';
-export type AgorAbortCause = DaemonOwnedAbortCause | InteractionAbortCause;
+import type { TaskStatus } from '@agor/core/types';
 
-interface AgorAbortDisposition {
-  cause: AgorAbortCause;
-  message?: string;
+const DaemonAbortCause = {
+  COORDINATOR_TERMINATION: 'coordinator_termination',
+  SDK_HEALTH_FAILURE: 'sdk_health_failure',
+} as const;
+type DaemonOwnedAbortCause = (typeof DaemonAbortCause)[keyof typeof DaemonAbortCause];
+
+export interface InteractionAbortOutcome {
+  status: typeof TaskStatus.FAILED | typeof TaskStatus.TIMED_OUT;
+  errorMessage: string;
 }
+
+type AgorAbortDisposition =
+  | {
+      owner: 'daemon';
+      cause: DaemonOwnedAbortCause;
+    }
+  | {
+      owner: 'executor';
+      outcome: InteractionAbortOutcome;
+    };
 
 const abortDispositions = new WeakMap<AbortController, AgorAbortDisposition>();
 
-export function markAgorAbortCause(
-  controller: AbortController,
-  cause: AgorAbortCause,
-  message?: string
-): void {
-  abortDispositions.set(controller, { cause, message });
+function markDaemonOwnedAbort(controller: AbortController, cause: DaemonOwnedAbortCause): void {
+  abortDispositions.set(controller, { owner: 'daemon', cause });
 }
 
-export function hasAgorAbortCause(controller: AbortController, cause: AgorAbortCause): boolean {
-  return abortDispositions.get(controller)?.cause === cause;
+function hasDaemonOwnedAbortCause(
+  controller: AbortController,
+  cause: DaemonOwnedAbortCause
+): boolean {
+  const disposition = abortDispositions.get(controller);
+  return disposition?.owner === 'daemon' && disposition.cause === cause;
 }
 
 /** Mark an abort whose terminal task transition is owned by the daemon coordinator. */
 export function markCoordinatorTerminationAbort(controller: AbortController): void {
-  markAgorAbortCause(controller, 'coordinator_termination');
+  markDaemonOwnedAbort(controller, DaemonAbortCause.COORDINATOR_TERMINATION);
 }
 
 export function isCoordinatorTerminationAbort(controller: AbortController): boolean {
-  return hasAgorAbortCause(controller, 'coordinator_termination');
+  return hasDaemonOwnedAbortCause(controller, DaemonAbortCause.COORDINATOR_TERMINATION);
+}
+
+export function markSdkHealthFailureAbort(controller: AbortController): void {
+  markDaemonOwnedAbort(controller, DaemonAbortCause.SDK_HEALTH_FAILURE);
+}
+
+export function isSdkHealthFailureAbort(controller: AbortController): boolean {
+  return hasDaemonOwnedAbortCause(controller, DaemonAbortCause.SDK_HEALTH_FAILURE);
 }
 
 /** Whether a daemon workflow, rather than the executor fail-safe, owns terminality. */
 export function isDaemonOwnedAbort(controller: AbortController): boolean {
-  const cause = abortDispositions.get(controller)?.cause;
-  return cause === 'coordinator_termination' || cause === 'sdk_health_failure';
+  return abortDispositions.get(controller)?.owner === 'daemon';
 }
 
 export function markInteractionAbort(
   controller: AbortController,
-  cause: InteractionAbortCause,
-  message: string
+  outcome: InteractionAbortOutcome
 ): void {
-  markAgorAbortCause(controller, cause, message);
+  if (isDaemonOwnedAbort(controller)) return;
+  abortDispositions.set(controller, { owner: 'executor', outcome });
   controller.abort();
 }
 
 export function getInteractionAbortOutcome(
   controller: AbortController
-): { status: 'failed' | 'timed_out'; errorMessage: string } | undefined {
+): InteractionAbortOutcome | undefined {
   const disposition = abortDispositions.get(controller);
-  if (!disposition?.cause.startsWith('interaction_')) return undefined;
-  return {
-    status: disposition.cause === 'interaction_timeout' ? 'timed_out' : 'failed',
-    errorMessage: disposition.message ?? 'Agentic-tool interaction could not be completed',
-  };
+  return disposition?.owner === 'executor' ? disposition.outcome : undefined;
 }

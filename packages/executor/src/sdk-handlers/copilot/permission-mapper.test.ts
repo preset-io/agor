@@ -15,8 +15,7 @@ describe('createPermissionHandler', () => {
       permissionService: {
         emitRequest: vi.fn(),
         waitForDecision: vi.fn().mockResolvedValue({
-          allow: true,
-          timedOut: false,
+          outcome: 'approved',
           remember: false,
           decidedBy: 'test-user',
         }),

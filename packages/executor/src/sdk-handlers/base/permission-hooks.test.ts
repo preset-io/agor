@@ -1,4 +1,5 @@
 import type { SessionID, TaskID } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core', () => ({
@@ -9,6 +10,12 @@ vi.mock('@agor/core', () => ({
 }));
 
 import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from './mcp-tool-permissions.js';
+import {
+  getInteractionAbortOutcome,
+  isDaemonOwnedAbort,
+  markCoordinatorTerminationAbort,
+  markInteractionAbort,
+} from '../../termination-state.js';
 import { createCanUseToolCallback } from './permission-hooks.js';
 
 /**
@@ -27,7 +34,9 @@ describe('createCanUseToolCallback', () => {
   };
 
   function createBaseDeps() {
+    const abortController = new AbortController();
     return {
+      abortController,
       permissionService: {
         emitRequest: vi.fn(),
         waitForDecision: vi.fn(),
@@ -100,8 +109,7 @@ describe('createCanUseToolCallback', () => {
       const deps = createBaseDeps();
       deps.sessionMCPRepo.listServers.mockResolvedValue([]); // no attached servers
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: false,
-        timedOut: false,
+        outcome: 'denied',
         remember: false,
         decidedBy: 'test-user',
       });
@@ -119,8 +127,7 @@ describe('createCanUseToolCallback', () => {
     it('approves a tool when the UI returns allow', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: true,
-        timedOut: false,
+        outcome: 'approved',
         remember: false,
         decidedBy: 'test-user',
       });
@@ -138,15 +145,6 @@ describe('createCanUseToolCallback', () => {
       expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
         status: 'running',
       });
-      expect(deps.messagesService.patch).toHaveBeenCalledWith(
-        'test-generated-id',
-        expect.objectContaining({
-          content: expect.objectContaining({
-            status: 'approved',
-            approved_by: 'test-user',
-          }),
-        })
-      );
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
     });
@@ -154,8 +152,7 @@ describe('createCanUseToolCallback', () => {
     it('emits an SDK persistence rule when the user picks "remember"', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: true,
-        timedOut: false,
+        outcome: 'approved',
         remember: true,
         scope: 'project',
         decidedBy: 'test-user',
@@ -178,8 +175,7 @@ describe('createCanUseToolCallback', () => {
     it('denies only the tool and restores active execution when the UI returns deny', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: false,
-        timedOut: false,
+        outcome: 'denied',
         remember: false,
         decidedBy: 'test-user',
       });
@@ -196,6 +192,8 @@ describe('createCanUseToolCallback', () => {
         status: 'running',
       });
       expect(deps.permissionService.cancelPendingRequests).not.toHaveBeenCalled();
+      expect(deps.abortController.signal.aborted).toBe(false);
+      expect(getInteractionAbortOutcome(deps.abortController)).toBeUndefined();
       expect(deps.sessionsService.patch).toHaveBeenLastCalledWith(sessionId, {
         status: 'running',
         ready_for_prompt: false,
@@ -211,11 +209,10 @@ describe('createCanUseToolCallback', () => {
       );
     });
 
-    it('marks task and session timed_out when the permission request times out', async () => {
+    it('aborts the runtime with a timed_out outcome when the permission request times out', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: false,
-        timedOut: true,
+        outcome: 'timed_out',
         remember: false,
         decidedBy: 'system',
       });
@@ -225,21 +222,21 @@ describe('createCanUseToolCallback', () => {
 
       expect(result.behavior).toBe('deny');
       expect(result.message).toMatch(/timed out/i);
-      expect(deps.tasksService.patch).toHaveBeenCalledWith(
+      expect(deps.abortController.signal.aborted).toBe(true);
+      expect(getInteractionAbortOutcome(deps.abortController)).toMatchObject({
+        status: 'timed_out',
+        errorMessage: expect.stringMatching(/timed out/i),
+      });
+      expect(deps.tasksService.patch).not.toHaveBeenCalledWith(
         taskId,
         expect.objectContaining({ status: 'timed_out' })
-      );
-      expect(deps.sessionsService.patch).toHaveBeenCalledWith(
-        sessionId,
-        expect.objectContaining({ status: 'timed_out', ready_for_prompt: true })
       );
     });
 
     it('always releases the per-session permission lock, even on timeout', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
-        allow: false,
-        timedOut: true,
+        outcome: 'timed_out',
         remember: false,
         decidedBy: 'system',
       });
@@ -251,6 +248,30 @@ describe('createCanUseToolCallback', () => {
       // this guarantee, every subsequent tool call on the same session would
       // wait forever for a never-resolving promise.
       expect(deps.permissionLocks.has(sessionId)).toBe(false);
+    });
+
+    it('does not replace daemon-owned termination with a permission failure', async () => {
+      const deps = createBaseDeps();
+      deps.permissionService.waitForDecision.mockResolvedValue({
+        outcome: 'cancelled',
+        remember: false,
+        decidedBy: 'system',
+        reason: 'Cancelled',
+      });
+      markCoordinatorTerminationAbort(deps.abortController);
+      deps.abortController.abort();
+
+      const callback = createCanUseToolCallback(sessionId, taskId, deps);
+      await expect(callback('Bash', { command: 'ls' }, noopOptions)).resolves.toMatchObject({
+        behavior: 'deny',
+      });
+
+      markInteractionAbort(deps.abortController, {
+        status: TaskStatus.FAILED,
+        errorMessage: 'must not replace daemon ownership',
+      });
+      expect(isDaemonOwnedAbort(deps.abortController)).toBe(true);
+      expect(getInteractionAbortOutcome(deps.abortController)).toBeUndefined();
     });
   });
 });

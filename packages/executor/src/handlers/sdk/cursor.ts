@@ -23,7 +23,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -646,7 +646,7 @@ export async function executeCursorTask(params: {
       }
       if (isDaemonOwnedAbort(params.abortController)) return;
       return {
-        status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
+        status: stopped ? TaskStatus.STOPPED : failed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
         taskPatch,
       };
     } finally {
@@ -669,7 +669,7 @@ export async function executeCursorTask(params: {
     }
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
     return {
-      status: params.abortController.signal.aborted ? 'stopped' : 'failed',
+      status: params.abortController.signal.aborted ? TaskStatus.STOPPED : TaskStatus.FAILED,
       taskPatch,
       ...(params.abortController.signal.aborted ? {} : { error: err }),
     };

@@ -1,13 +1,14 @@
 /** Executor-owned task finalization. */
 import { shortId } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, type TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
-export type AgenticToolTerminalStatus = Extract<
-  Task['status'],
-  'completed' | 'failed' | 'stopped' | 'timed_out'
->;
+export type AgenticToolTerminalStatus =
+  | typeof TaskStatus.COMPLETED
+  | typeof TaskStatus.FAILED
+  | typeof TaskStatus.STOPPED
+  | typeof TaskStatus.TIMED_OUT;
 
 export type AgenticToolTaskPatch = Omit<Partial<Task>, 'status' | 'completed_at'>;
 
@@ -23,19 +24,6 @@ export interface AgenticToolOutcome {
 }
 
 /**
- * Statuses past which any subsequent terminal-write is a no-op.
- * Includes `TIMED_OUT` so a subsequent uncaught-rejection/SIGTERM
- * doesn't overwrite a permission/input timeout with `FAILED` or
- * `STOPPED`.
- */
-export const TERMINAL_STATUSES: ReadonlySet<Task['status']> = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
-/**
  * Persist the one normalized outcome produced after an agentic-tool runtime
  * has settled. Already-terminal tasks are left untouched so daemon-owned
  * termination and process fail-safes remain idempotent.
@@ -46,7 +34,7 @@ export async function finalizeTask(
   outcome: AgenticToolOutcome
 ): Promise<boolean> {
   const current = (await client.service('tasks').get(taskId)) as Task;
-  if (TERMINAL_STATUSES.has(current.status)) {
+  if (isTerminalTaskStatus(current.status)) {
     console.log(
       `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${outcome.status} finalization`
     );
