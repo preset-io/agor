@@ -1,4 +1,8 @@
-import { AGENTIC_TOOL_DISPLAY_NAMES, agenticToolRequiresModelSelection } from '@agor/agentic-tools';
+import {
+  AGENTIC_TOOL_DISPLAY_NAMES,
+  AGENTIC_TOOL_NAMES,
+  agenticToolRequiresModelSelection,
+} from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticAuthMethod,
@@ -69,14 +73,7 @@ import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
 
-const AGENTIC_TOOL_TABS = [
-  'claude-code',
-  'codex',
-  'gemini',
-  'opencode',
-  'copilot',
-  'cursor',
-] as const satisfies readonly AgenticToolName[];
+const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES;
 
 type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
   defaultSelectionSource?: 'workspace_default' | 'preset' | 'inline';
@@ -86,6 +83,13 @@ type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] &
 
 const isAgenticToolTab = (value: string): value is AgenticToolName =>
   AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
+
+function recordForEveryAgenticTool<T>(value: () => T): Record<AgenticToolName, T> {
+  return Object.fromEntries(AGENTIC_TOOL_NAMES.map((tool) => [tool, value()])) as Record<
+    AgenticToolName,
+    T
+  >;
+}
 
 type EffectiveCredentialSource =
   | 'Personal configuration'
@@ -208,14 +212,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
   // tracking. The actual presence map is rebuilt from `user.agentic_tools`
   // each time the modal opens.
-  const [agenticToolStatus, setAgenticToolStatus] = useState<Record<AgenticToolName, FieldStatus>>({
-    'claude-code': {},
-    codex: {},
-    gemini: {},
-    opencode: {},
-    copilot: {},
-    cursor: {},
-  });
+  const [agenticToolStatus, setAgenticToolStatus] = useState<Record<AgenticToolName, FieldStatus>>(
+    () => recordForEveryAgenticTool(() => ({}))
+  );
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
   const [agenticAuthMethods, setAgenticAuthMethods] = useState<
     Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>
@@ -235,14 +234,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   );
 
   // Saving state for agentic tool tabs
-  const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>({
-    'claude-code': false,
-    codex: false,
-    gemini: false,
-    opencode: false,
-    copilot: false,
-    cursor: false,
-  });
+  const [savingAgenticConfig, setSavingAgenticConfig] = useState<Record<AgenticToolName, boolean>>(
+    () => recordForEveryAgenticTool(() => false)
+  );
   const [dirtyAgenticConfigTools, setDirtyAgenticConfigTools] = useState<Set<AgenticToolName>>(
     () => new Set()
   );
@@ -380,14 +374,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    const next: Record<AgenticToolName, FieldStatus> = {
-      'claude-code': {},
-      codex: {},
-      gemini: {},
-      opencode: {},
-      copilot: {},
-      cursor: {},
-    };
+    const next = recordForEveryAgenticTool<FieldStatus>(() => ({}));
     const stored = user?.agentic_tools;
     if (stored) {
       for (const tool of Object.keys(next) as AgenticToolName[]) {
@@ -750,13 +737,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'audio':
         if (!(await handleAudioSave())) return;
         break;
-      case 'claude-code':
-      case 'codex':
-      case 'gemini':
-      case 'opencode':
-      case 'copilot':
-      case 'cursor':
-        await handleAgenticConfigSave(activeTab as AgenticToolName);
+      default:
+        if (isAgenticToolTab(activeTab)) {
+          await handleAgenticConfigSave(activeTab);
+        }
         break;
     }
 
@@ -810,38 +794,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       key: 'agentic-tools',
       label: 'Agentic Tools',
       type: 'group',
-      children: [
-        {
-          key: 'claude-code',
-          label: 'Claude Code',
-          icon: <ToolIcon tool="claude-code" size={18} />,
-        },
-        {
-          key: 'codex',
-          label: 'Codex',
-          icon: <ToolIcon tool="codex" size={18} />,
-        },
-        {
-          key: 'gemini',
-          label: 'Gemini',
-          icon: <ToolIcon tool="gemini" size={18} />,
-        },
-        {
-          key: 'opencode',
-          label: 'OpenCode',
-          icon: <ToolIcon tool="opencode" size={18} />,
-        },
-        {
-          key: 'cursor',
-          label: 'Cursor SDK',
-          icon: <ToolIcon tool="cursor" size={18} />,
-        },
-        {
-          key: 'copilot',
-          label: 'GitHub Copilot',
-          icon: <ToolIcon tool="copilot" size={18} />,
-        },
-      ].filter((item) => visibleAgenticToolTabs.includes(item.key as AgenticToolName)),
+      children: visibleAgenticToolTabs.map((tool) => ({
+        key: tool,
+        label: AGENTIC_TOOL_DISPLAY_NAMES[tool],
+        icon: <ToolIcon tool={tool} size={18} />,
+      })),
     },
   ];
 
@@ -1063,13 +1020,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         );
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
-      case 'claude-code':
-      case 'codex':
-      case 'gemini':
-      case 'opencode':
-      case 'copilot':
-      case 'cursor': {
-        const toolName = activeTab as AgenticToolName;
+      default: {
+        if (!isAgenticToolTab(activeTab)) return null;
+        const toolName = activeTab;
         const currentForm = agenticFormByTool[toolName];
         const displayNames = AGENTIC_TOOL_DISPLAY_NAMES;
         const canonicalTool = toolName as TenantAgenticToolName;
@@ -1271,8 +1224,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           />
         );
       }
-      default:
-        return null;
     }
   };
 

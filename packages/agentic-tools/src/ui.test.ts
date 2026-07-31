@@ -6,6 +6,9 @@ describe('agentic-tool UI registry', () => {
     const integration = getAgenticToolUIIntegration('opencode');
 
     expect(integration).toMatchObject({
+      agentSelectionOption: {
+        description: expect.stringMatching(/open-source terminal ai/i),
+      },
       modelLabel: 'OpenCode LLM Provider',
       onboardingOption: {
         title: 'Multiple providers',

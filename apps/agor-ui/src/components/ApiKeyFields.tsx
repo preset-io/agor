@@ -42,7 +42,7 @@ export interface AgenticToolFieldConfig {
  * means: (a) declare it here, (b) declare it on `AgenticToolsConfig` in
  * packages/core/src/types/user.ts, (c) the migration is automatic.
  */
-export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
+export const TOOL_FIELD_CONFIGS: Partial<Record<AgenticToolName, AgenticToolFieldConfig[]>> = {
   'claude-code': [
     {
       field: 'ANTHROPIC_API_KEY',
@@ -131,7 +131,6 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
       docUrl: 'https://cursor.com/dashboard/integrations',
     },
   ],
-  opencode: [],
 };
 
 /** Map field name → presence flag (true if the user has a value stored). */

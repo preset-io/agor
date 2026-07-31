@@ -19,6 +19,11 @@ export interface AgenticToolModelSelectorProps {
 }
 
 export interface AgenticToolUIIntegration {
+  agentSelectionOption?: {
+    icon: string;
+    description: string;
+    beta?: boolean;
+  };
   onboardingOption?: {
     symbol: string;
     title: string;
@@ -37,13 +42,7 @@ export interface AgenticToolUIIntegration {
 }
 
 const UI_INTEGRATIONS: Partial<Record<AgenticToolName, AgenticToolUIIntegration>> = {
-  [OPENCODE_UI_CONTRIBUTION.name]: {
-    onboardingOption: OPENCODE_UI_CONTRIBUTION.onboardingOption,
-    modelLabel: OPENCODE_UI_CONTRIBUTION.modelLabel,
-    ModelSelector: OPENCODE_UI_CONTRIBUTION.ModelSelector,
-    ProviderSettings: OPENCODE_UI_CONTRIBUTION.ProviderSettings,
-    permissionModes: OPENCODE_UI_CONTRIBUTION.permissionModes,
-  },
+  [OPENCODE_UI_CONTRIBUTION.name]: OPENCODE_UI_CONTRIBUTION,
 };
 
 export function getAgenticToolUIIntegration(
@@ -57,5 +56,3 @@ export function getAgenticToolUIIntegrations(): ReadonlyArray<
 > {
   return Object.entries(UI_INTEGRATIONS) as Array<[AgenticToolName, AgenticToolUIIntegration]>;
 }
-
-export * from '@agor/agentic-tool-opencode/ui';

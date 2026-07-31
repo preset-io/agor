@@ -5,7 +5,22 @@
  * Used across NewSessionModal, ScheduleTab, and other agent selection UIs.
  */
 
+import { getAgenticToolDisplayName } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegrations } from '@agor/agentic-tools/ui';
 import type { AgenticToolOption } from './AgentSelectionGrid';
+
+const CONTRIBUTED_AGENTS: AgenticToolOption[] = getAgenticToolUIIntegrations().flatMap(
+  ([id, integration]) =>
+    integration.agentSelectionOption
+      ? [
+          {
+            id,
+            name: getAgenticToolDisplayName(id),
+            ...integration.agentSelectionOption,
+          },
+        ]
+      : []
+);
 
 export const AVAILABLE_AGENTS: AgenticToolOption[] = [
   {
@@ -26,12 +41,7 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     icon: '💎',
     description: 'Google Gemini coding agent',
   },
-  {
-    id: 'opencode',
-    name: 'OpenCode',
-    icon: '🌐',
-    description: 'Open-source terminal AI with 75+ LLM providers',
-  },
+  ...CONTRIBUTED_AGENTS,
   {
     id: 'cursor',
     name: 'Cursor SDK',

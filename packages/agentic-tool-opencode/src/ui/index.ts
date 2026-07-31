@@ -11,6 +11,10 @@ export { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog.js';
 
 export const OPENCODE_UI_CONTRIBUTION = {
   name: 'opencode',
+  agentSelectionOption: {
+    icon: '🌐',
+    description: 'Open-source terminal AI with 75+ LLM providers',
+  },
   onboardingOption: {
     symbol: '⚙',
     title: 'Multiple providers',

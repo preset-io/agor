@@ -6,7 +6,7 @@
  * - Building a config object from form values (for persistence)
  * - Clearing form fields to defaults
  *
- * Used by DefaultAgenticSettings, UserSettingsModal, and NewSessionModal.
+ * Used by UserSettingsModal and NewSessionModal.
  */
 
 import {

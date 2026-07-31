@@ -1,8 +1,11 @@
-import { OpenCodeProviderSettings } from '@agor/agentic-tools/ui';
-import type { AgorClient, OpenCodeProviderSettings as Settings } from '@agor-live/client';
+// @vitest-environment jsdom
+
+import type { AgorClient } from '@agor/core/client';
+import type { OpenCodeProviderSettings as Settings } from '@agor/core/types';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
+import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
 
 const initial: Settings = {
   runtime: 'available',
@@ -61,6 +64,19 @@ function renderSettings(service: {
   );
 }
 
+type AuthServiceMock = Parameters<typeof renderSettings>[0];
+
+function createAuthService(overrides: Partial<AuthServiceMock> = {}): AuthServiceMock {
+  return {
+    find: vi.fn(),
+    get: vi.fn(),
+    create: vi.fn(),
+    patch: vi.fn(),
+    remove: vi.fn(),
+    ...overrides,
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -103,13 +119,7 @@ describe('OpenCodeProviderSettings', () => {
         ...initial.providers,
       ],
     };
-    const service = {
-      find: vi.fn().mockResolvedValue(nativeScale),
-      get: vi.fn(),
-      create: vi.fn(),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    const service = createAuthService({ find: vi.fn().mockResolvedValue(nativeScale) });
     renderSettings(service);
 
     expect(await screen.findByText('GLM')).toBeInTheDocument();
@@ -374,15 +384,12 @@ describe('OpenCodeProviderSettings', () => {
     };
     const connectA = deferred<Settings>();
     const connectB = deferred<Settings>();
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(providers),
-      get: vi.fn(),
       create: vi.fn((data: { providerId: string }) =>
         data.providerId === 'provider-a' ? connectA.promise : connectB.promise
       ),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     fireEvent.mouseDown(await screen.findByLabelText('Provider to connect'));
@@ -461,15 +468,12 @@ describe('OpenCodeProviderSettings', () => {
     };
     const oauthA = deferred<typeof attemptA>();
     const oauthB = deferred<typeof attemptB>();
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(providers),
-      get: vi.fn(),
       create: vi.fn((data: { providerId: string }) =>
         data.providerId === 'oauth-a' ? oauthA.promise : oauthB.promise
       ),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     fireEvent.mouseDown(await screen.findByLabelText('Provider to connect'));
@@ -514,13 +518,10 @@ describe('OpenCodeProviderSettings', () => {
           : provider
       ),
     };
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(initial),
-      get: vi.fn(),
       create: vi.fn().mockResolvedValue(configured),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     expect(await screen.findByText(/separate logical namespaces/i)).toBeInTheDocument();
@@ -569,13 +570,10 @@ describe('OpenCodeProviderSettings', () => {
         },
       ],
     };
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(available),
-      get: vi.fn(),
       create: vi.fn().mockResolvedValue(configured),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     fireEvent.change(await screen.findByLabelText('GLM API key'), {
@@ -604,13 +602,10 @@ describe('OpenCodeProviderSettings', () => {
           : provider
       ),
     };
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(initial),
-      get: vi.fn(),
-      create: vi.fn(),
-      patch: vi.fn(),
       remove: vi.fn().mockResolvedValue(disconnected),
-    };
+    });
     renderSettings(service);
 
     expect(await screen.findByText('GLM')).toBeInTheDocument();
@@ -633,13 +628,7 @@ describe('OpenCodeProviderSettings', () => {
         },
       ],
     };
-    const service = {
-      find: vi.fn().mockResolvedValue(zen),
-      get: vi.fn(),
-      create: vi.fn(),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    const service = createAuthService({ find: vi.fn().mockResolvedValue(zen) });
     renderSettings(service);
 
     expect(await screen.findByText(/available in the OpenCode runtime/i)).toBeInTheDocument();
@@ -662,13 +651,7 @@ describe('OpenCodeProviderSettings', () => {
         },
       ],
     };
-    const service = {
-      find: vi.fn().mockResolvedValue(unknown),
-      get: vi.fn(),
-      create: vi.fn(),
-      patch: vi.fn(),
-      remove: vi.fn(),
-    };
+    const service = createAuthService({ find: vi.fn().mockResolvedValue(unknown) });
     renderSettings(service);
 
     expect(
@@ -726,13 +709,12 @@ describe('OpenCodeProviderSettings', () => {
         instructions: 'Open the synthetic authorization page.',
       },
     };
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthOnly),
       get: vi.fn().mockResolvedValue(attempt),
       create: vi.fn().mockResolvedValue(attempt),
       patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'cancelled' }),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     fireEvent.mouseDown(await screen.findByLabelText('OAuth region'));
@@ -791,13 +773,12 @@ describe('OpenCodeProviderSettings', () => {
         instructions: 'Paste the one-time code.',
       },
     };
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthOnly),
       get: vi.fn().mockResolvedValue({ ...attempt, phase: 'completing' }),
       create: vi.fn().mockResolvedValue(attempt),
       patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'completing' }),
-      remove: vi.fn(),
-    };
+    });
     renderSettings(service);
 
     fireEvent.change(await screen.findByLabelText('Code account'), {
@@ -844,13 +825,12 @@ describe('OpenCodeProviderSettings', () => {
     const completing = { ...attempt, phase: 'completing' as const };
     const poll = deferred<typeof attempt>();
     const submission = deferred<typeof completing>();
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthOnly),
       get: vi.fn().mockReturnValue(poll.promise),
       create: vi.fn().mockResolvedValue(attempt),
       patch: vi.fn().mockReturnValue(submission.promise),
-      remove: vi.fn(),
-    };
+    });
 
     try {
       renderSettings(service);
@@ -948,13 +928,12 @@ describe('OpenCodeProviderSettings', () => {
     };
     const poll = deferred<typeof stalePoll>();
     const disconnect = deferred<Settings>();
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthSettings),
       get: vi.fn().mockReturnValueOnce(poll.promise).mockResolvedValue(attempt),
       create: vi.fn().mockResolvedValue(attempt),
-      patch: vi.fn(),
       remove: vi.fn().mockReturnValue(disconnect.promise),
-    };
+    });
 
     try {
       renderSettings(service);
@@ -1019,7 +998,7 @@ describe('OpenCodeProviderSettings', () => {
       },
     };
     let resolvePoll!: (value: typeof attempt & { phase: 'configured'; settings: Settings }) => void;
-    const service = {
+    const service = createAuthService({
       find: vi.fn().mockResolvedValue(oauthOnly),
       get: vi.fn(
         () =>
@@ -1029,8 +1008,7 @@ describe('OpenCodeProviderSettings', () => {
       ),
       create: vi.fn().mockResolvedValue(attempt),
       patch: vi.fn().mockResolvedValue({ ...attempt, phase: 'cancelled' as const }),
-      remove: vi.fn(),
-    };
+    });
     try {
       renderSettings(service);
       const connect = await screen.findByRole('button', { name: 'Connect with Browser flow' });

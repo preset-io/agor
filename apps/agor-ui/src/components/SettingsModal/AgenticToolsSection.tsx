@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_DISPLAY_NAMES, AGENTIC_TOOL_NAMES } from '@agor/agentic-tools';
 import type {
   AgenticToolConfigField,
   AgenticToolName,
@@ -22,25 +23,14 @@ export interface AgenticToolsSectionProps {
   client: AgorClient | null;
 }
 
-const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  gemini: 'Gemini',
-  copilot: 'GitHub Copilot',
-  cursor: 'Cursor SDK',
-  opencode: 'OpenCode',
-};
-
-const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]> = {
-  'claude-code': TOOL_FIELD_CONFIGS['claude-code'].filter(
-    (field) => field.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
-  ),
-  codex: TOOL_FIELD_CONFIGS.codex,
-  gemini: TOOL_FIELD_CONFIGS.gemini,
-  copilot: TOOL_FIELD_CONFIGS.copilot,
-  cursor: TOOL_FIELD_CONFIGS.cursor,
-  opencode: [],
-};
+const TENANT_TOOL_FIELDS = Object.fromEntries(
+  AGENTIC_TOOL_NAMES.map((tool) => [
+    tool,
+    (TOOL_FIELD_CONFIGS[tool] ?? []).filter(
+      (field) => tool !== 'claude-code' || field.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
+    ),
+  ])
+) as Record<TenantAgenticToolName, AgenticToolFieldConfig[]>;
 
 const RESOLUTION_POLICIES: Array<{
   value: ProviderResolutionPolicy;
@@ -154,11 +144,11 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       />
       <Tabs
         defaultActiveKey={
-          (Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).find(
+          (AGENTIC_TOOL_NAMES as readonly TenantAgenticToolName[]).find(
             (tool) => settings[tool]?.enabled !== false
           ) ?? 'claude-code'
         }
-        items={(Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).map((tool) => {
+        items={(AGENTIC_TOOL_NAMES as readonly TenantAgenticToolName[]).map((tool) => {
           const current = settings[tool] ?? {
             tool,
             enabled: true,
@@ -174,7 +164,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
             label: (
               <Space size={6}>
                 <ToolIcon tool={tool} size={18} />
-                <span>{TOOL_LABELS[tool]}</span>
+                <span>{AGENTIC_TOOL_DISPLAY_NAMES[tool]}</span>
               </Space>
             ),
             children: (
@@ -247,7 +237,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                             type="info"
                             showIcon
                             title="No workspace authentication settings"
-                            description={`${TOOL_LABELS[tool]} does not currently expose a centrally managed connection.`}
+                            description={`${AGENTIC_TOOL_DISPLAY_NAMES[tool]} does not currently expose a centrally managed connection.`}
                           />
                         ),
                     },

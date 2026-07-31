@@ -3,6 +3,7 @@ import {
   AGENTIC_TOOL_CAPABILITIES,
   AGENTIC_TOOL_DISPLAY_NAMES,
   AGENTIC_TOOL_INTEGRATIONS,
+  AGENTIC_TOOL_NAMES,
   getAgenticToolIntegration,
   getDefaultModelForTool,
   TOOL_API_KEY_NAMES,
@@ -18,6 +19,7 @@ describe('agentic-tool integration registry', () => {
       'copilot',
       'cursor',
     ]);
+    expect(AGENTIC_TOOL_NAMES).toEqual(Object.keys(AGENTIC_TOOL_INTEGRATIONS));
     expect(AGENTIC_TOOL_DISPLAY_NAMES.opencode).toBe('OpenCode');
     expect(AGENTIC_TOOL_CAPABILITIES.codex.supportsSessionFork).toBe(true);
     expect(TOOL_API_KEY_NAMES.opencode).toBeUndefined();

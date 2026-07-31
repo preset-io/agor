@@ -4,7 +4,7 @@ import {
   type OpenCodeCredentialNamespace,
   type OpenCodeNativeUnixUserMode,
   resolveOpenCodeCredentialNamespace,
-} from '@agor/agentic-tools/daemon';
+} from '@agor/agentic-tool-opencode/daemon';
 import { type AgorConfig, isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,

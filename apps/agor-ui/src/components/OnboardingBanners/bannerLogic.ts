@@ -8,6 +8,7 @@
  * the server-side check-auth probe, not by a presence check.
  */
 
+import { AGENTIC_TOOL_NAMES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AuthCheckStatus,
@@ -34,17 +35,18 @@ const CLAUDE_CREDENTIAL_FIELDS = [
  * owns native provider credentials, so it never contributes a stored key. Its
  * generic check-auth result remains unknown unless a tool-owned probe is used.
  */
-const SUPPORTED_AGENTIC_TOOLS: readonly {
-  tool: AgenticToolName;
-  credentialFields: readonly string[];
-}[] = [
-  { tool: 'claude-code', credentialFields: CLAUDE_CREDENTIAL_FIELDS },
-  { tool: 'codex', credentialFields: ['OPENAI_API_KEY'] },
-  { tool: 'gemini', credentialFields: ['GEMINI_API_KEY'] },
-  { tool: 'copilot', credentialFields: ['COPILOT_GITHUB_TOKEN'] },
-  { tool: 'cursor', credentialFields: ['CURSOR_API_KEY'] },
-  { tool: 'opencode', credentialFields: [] },
-];
+const CREDENTIAL_FIELDS: Partial<Record<AgenticToolName, readonly string[]>> = {
+  'claude-code': CLAUDE_CREDENTIAL_FIELDS,
+  codex: ['OPENAI_API_KEY'],
+  gemini: ['GEMINI_API_KEY'],
+  copilot: ['COPILOT_GITHUB_TOKEN'],
+  cursor: ['CURSOR_API_KEY'],
+};
+
+const SUPPORTED_AGENTIC_TOOLS = AGENTIC_TOOL_NAMES.map((tool) => ({
+  tool,
+  credentialFields: CREDENTIAL_FIELDS[tool] ?? [],
+}));
 
 /** Reliably server-probeable native tools, tried as a fallback before concluding "No AI". */
 const NATIVE_FALLBACK_TOOLS: readonly AgenticToolName[] = ['claude-code', 'codex'];

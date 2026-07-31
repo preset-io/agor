@@ -19,10 +19,7 @@ interface DaemonAgenticToolIntegration {
 }
 
 const DAEMON_INTEGRATIONS: Partial<Record<AgenticToolName, DaemonAgenticToolIntegration>> = {
-  [OPENCODE_DAEMON_CONTRIBUTION.name]: {
-    admitExecutor: OPENCODE_DAEMON_CONTRIBUTION.admitExecutor,
-    getExecutorPayload: OPENCODE_DAEMON_CONTRIBUTION.getExecutorPayload,
-  },
+  [OPENCODE_DAEMON_CONTRIBUTION.name]: OPENCODE_DAEMON_CONTRIBUTION,
 };
 
 export async function admitAgenticToolExecutor<T>(
@@ -46,5 +43,3 @@ export function getAgenticToolExecutorPayload(
 ): Record<string, unknown> {
   return DAEMON_INTEGRATIONS[tool]?.getExecutorPayload?.(input) ?? {};
 }
-
-export * from '@agor/agentic-tool-opencode/daemon';

@@ -475,7 +475,9 @@ describe('configured executor spawning', () => {
     const onEvent = vi.fn();
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const unix = await import('@agor/core/unix');
       const handle = startOpenCodeOAuthExecutor(
         {
@@ -554,7 +556,8 @@ describe('configured executor spawning', () => {
   it('rejects non-containable templated OAuth without spawning', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
-    const { configureExecutor, startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+    const { configureExecutor } = await import('./spawn-executor');
+    const { startOpenCodeOAuthExecutor } = await import('../integrations/opencode/oauth-executor');
     configureExecutor({ executor_command_template: 'remote {command}' });
 
     const handle = startOpenCodeOAuthExecutor({ command: 'opencode.auth' }, {}, vi.fn());
@@ -575,7 +578,9 @@ describe('configured executor spawning', () => {
     const { proc } = fixture;
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' }, timeoutMs: 25 },
@@ -602,7 +607,9 @@ describe('configured executor spawning', () => {
     const { proc } = fixture;
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },
@@ -639,7 +646,9 @@ describe('configured executor spawning', () => {
     const { proc } = fixture;
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },
@@ -674,7 +683,9 @@ describe('configured executor spawning', () => {
     });
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },
@@ -725,7 +736,9 @@ describe('configured executor spawning', () => {
     const fixture = installMockExecutor('agor-oauth-code-', proc);
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },
@@ -771,7 +784,9 @@ describe('configured executor spawning', () => {
     const fixture = installMockExecutor('agor-oauth-code-final-', proc);
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },
@@ -811,7 +826,9 @@ describe('configured executor spawning', () => {
     const fixture = installMockExecutor('agor-oauth-initial-write-', proc);
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         {
           command: 'opencode.auth',
@@ -858,7 +875,9 @@ describe('configured executor spawning', () => {
     const fixture = installMockExecutor('agor-oauth-code-write-', proc);
 
     try {
-      const { startOpenCodeOAuthExecutor } = await import('./spawn-executor');
+      const { startOpenCodeOAuthExecutor } = await import(
+        '../integrations/opencode/oauth-executor'
+      );
       const handle = startOpenCodeOAuthExecutor(
         { command: 'opencode.auth' },
         { env: { PATH: '/usr/bin' } },

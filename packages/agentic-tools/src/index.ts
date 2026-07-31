@@ -12,7 +12,6 @@ import type {
   AgenticToolIntegrationRegistry,
 } from './types.js';
 
-export * from '@agor/agentic-tool-opencode';
 export type {
   AgenticToolDisplayNames,
   AgenticToolIntegration,
@@ -95,6 +94,10 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     configuration: {},
   }),
 }) satisfies AgenticToolIntegrationRegistry;
+
+export const AGENTIC_TOOL_NAMES = Object.freeze(
+  Object.keys(AGENTIC_TOOL_INTEGRATIONS) as AgenticToolName[]
+);
 
 export function getAgenticToolIntegration(tool: AgenticToolName): AgenticToolIntegration {
   return AGENTIC_TOOL_INTEGRATIONS[tool];

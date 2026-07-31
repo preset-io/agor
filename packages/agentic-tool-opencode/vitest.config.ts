@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 const coreSrcDir = fileURLToPath(new URL('../core/src', import.meta.url));
@@ -18,10 +19,11 @@ const coreSourceResolver = {
 };
 
 export default defineConfig({
-  plugins: [coreSourceResolver],
+  plugins: [react(), coreSourceResolver],
   test: {
     globals: true,
     environment: 'node',
-    testTimeout: 10000,
+    setupFiles: './src/test/setup.ts',
+    testTimeout: 15_000,
   },
 });

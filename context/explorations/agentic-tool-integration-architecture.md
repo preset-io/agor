@@ -266,8 +266,6 @@ containment work:
 
 - core default-permission selection and permission-mode mapping;
 - executor normalizer selection and the watchdog's native heartbeat filter; and
-- the daemon's OpenCode-typed wrapper around generic interactive subprocess
-  framing and process containment; and
 - exhaustive settings-tab and form-instance maps in the UI.
 
 They are not extension points for new OpenCode behavior. Migrate each only when
