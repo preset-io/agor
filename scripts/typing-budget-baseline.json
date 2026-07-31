@@ -1,0 +1,70 @@
+{
+  "$schema": "./typing-budget-baseline.schema.json",
+  "methodology": "TypeScript compiler API over production TS/TSX source roots; tests, specs, fixtures, mocks, stories, and generated/build directories excluded.",
+  "workspaces": {
+    "apps/agor-cli": {
+      "explicitAny": 3,
+      "asAny": 3,
+      "doubleAssertion": 1,
+      "nonNullAssertion": 2,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 3
+    },
+    "apps/agor-daemon": {
+      "explicitAny": 142,
+      "asAny": 52,
+      "doubleAssertion": 155,
+      "nonNullAssertion": 79,
+      "tsExpectError": 3,
+      "typingBiomeIgnore": 113
+    },
+    "apps/agor-docs": {
+      "explicitAny": 0,
+      "asAny": 0,
+      "doubleAssertion": 1,
+      "nonNullAssertion": 0,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 0
+    },
+    "apps/agor-ui": {
+      "explicitAny": 14,
+      "asAny": 4,
+      "doubleAssertion": 72,
+      "nonNullAssertion": 25,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 14
+    },
+    "packages/client": {
+      "explicitAny": 0,
+      "asAny": 0,
+      "doubleAssertion": 0,
+      "nonNullAssertion": 2,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 0
+    },
+    "packages/core": {
+      "explicitAny": 44,
+      "asAny": 25,
+      "doubleAssertion": 51,
+      "nonNullAssertion": 37,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 43
+    },
+    "packages/executor": {
+      "explicitAny": 4,
+      "asAny": 0,
+      "doubleAssertion": 13,
+      "nonNullAssertion": 46,
+      "tsExpectError": 4,
+      "typingBiomeIgnore": 3
+    },
+    "packages/git": {
+      "explicitAny": 0,
+      "asAny": 0,
+      "doubleAssertion": 0,
+      "nonNullAssertion": 2,
+      "tsExpectError": 0,
+      "typingBiomeIgnore": 0
+    }
+  }
+}

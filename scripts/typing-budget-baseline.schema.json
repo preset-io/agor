@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["workspaces"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "methodology": { "type": "string" },
+    "workspaces": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "explicitAny",
+          "asAny",
+          "doubleAssertion",
+          "nonNullAssertion",
+          "tsExpectError",
+          "typingBiomeIgnore"
+        ],
+        "additionalProperties": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "additionalProperties": false
+}
