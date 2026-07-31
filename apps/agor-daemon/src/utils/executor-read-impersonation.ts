@@ -7,9 +7,11 @@ import type { User, UserID } from '@agor/core/types';
  *
  * These commands are not long-running agent sessions and should not force sudo
  * on default installs. In `insulated` mode, leaving this undefined allows the
- * globally configured executor_unix_user to apply. Only `strict` requires the
+ * globally configured executor_unix_user to apply. `strict` requires the
  * caller's Unix identity so reads happen with the same OS-level access as the
- * requesting user.
+ * requesting user. `delegated` needs that identity only when a command template
+ * hands execution to the external substrate; local delegated execution must
+ * continue to run as the daemon user rather than attempting sudo.
  */
 export async function resolveExecutorReadAsUser(
   db: TenantScopeAwareDatabase,
@@ -17,8 +19,11 @@ export async function resolveExecutorReadAsUser(
 ): Promise<string | undefined> {
   const config = loadConfigSync();
   const unixMode = config.execution?.unix_user_mode ?? 'simple';
+  const needsRequestingUser =
+    unixMode === 'strict' ||
+    (unixMode === 'delegated' && Boolean(config.execution?.executor_command_template));
 
-  if (unixMode !== 'strict') {
+  if (!needsRequestingUser) {
     return undefined;
   }
 

@@ -290,6 +290,31 @@ describe('configured executor spawning', () => {
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
   });
 
+  it('preserves the exit-0/no-result protocol failure diagnostic', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch --user {unix_user} -- {command}' }
+    );
+
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESULT_MISSING',
+        message: 'Executor exited with code 0 but did not emit a JSON result',
+        details: {
+          command: 'branch.files.browse',
+          exitCode: 0,
+          stderr: '',
+        },
+      },
+    });
+  });
+
   it('refuses every unscoped executor launch when tenant context is required', async () => {
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
     configureExecutor(null, { requireTenantContext: true });
