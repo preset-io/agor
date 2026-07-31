@@ -9,6 +9,9 @@ export interface MeasuredHeading extends KnowledgeDocumentHeading {
   top: number;
 }
 
+// Sections are headings, so a document with none — or the prose above the first
+// heading — has no gutter affordance. Those threads go through the doc-header
+// toggle and land at document level.
 const HEADING_SELECTOR = 'h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]';
 
 function measureHeadings(container: HTMLElement): MeasuredHeading[] {

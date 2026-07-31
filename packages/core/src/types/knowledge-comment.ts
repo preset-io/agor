@@ -68,13 +68,27 @@ export const KNOWLEDGE_COMMENT_DOCUMENT_ANCHOR_LABEL = 'Whole page';
 export const KNOWLEDGE_COMMENT_ORPHANED_ANCHOR_LABEL = 'Removed sections';
 
 /**
+ * A slug ending in `-<n>` was the nth same-titled heading in the document, so
+ * its heading text was never enough to identify it on its own.
+ */
+const DEDUPED_SLUG = /-\d+$/;
+
+/**
  * Resolve a stored anchor against the headings currently rendered.
  *
  * Fallback ladder, so an edit never drops a thread:
  * 1. exact slug match — the common case, survives edits inside the section
- * 2. heading-text match — survives a heading being moved or re-slugged
+ * 2. heading-text match, but only when that text identifies exactly one
+ *    section now AND identified exactly one when the thread was written.
+ *    Otherwise orphan: showing a thread against a same-titled but unrelated
+ *    section is worse than admitting it came unmoored.
  * 3. orphaned — section is gone; the thread degrades to document level and
  *    keeps its stored label so the original context stays readable
+ *
+ * Known limitation: slugs carry positional dedup suffixes, so deleting the
+ * first of two same-titled headings renumbers the second onto the first's slug
+ * and rung 1 matches it. Distinguishing those needs a stored heading ordinal or
+ * section content hash.
  */
 export function resolveKnowledgeCommentAnchor(
   comment: Pick<KnowledgeDocumentComment, 'anchor_slug' | 'anchor_label'>,
@@ -90,10 +104,10 @@ export function resolveKnowledgeCommentAnchor(
   }
 
   const label = comment.anchor_label?.trim();
-  if (label) {
-    const byLabel = headings.find((heading) => heading.text.trim() === label);
-    if (byLabel) {
-      return { state: 'anchored', slug: byLabel.slug, label: byLabel.text };
+  if (label && !DEDUPED_SLUG.test(comment.anchor_slug)) {
+    const byLabel = headings.filter((heading) => heading.text.trim() === label);
+    if (byLabel.length === 1) {
+      return { state: 'anchored', slug: byLabel[0].slug, label: byLabel[0].text };
     }
   }
 

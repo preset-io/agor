@@ -414,6 +414,10 @@ async function resolvePublishScope(
     return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
   }
 
+  // `kb/*` has no case here on purpose, not by oversight: KB events fall through
+  // to tenant-wide delivery today, so private-namespace document and comment
+  // bodies reach sockets that could not fetch them. Scoping them to namespace
+  // readers is tracked in https://github.com/preset-io/agor/issues/2110.
   return { kind: 'global' };
 }
 

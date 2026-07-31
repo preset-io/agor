@@ -18,6 +18,11 @@ interface KnowledgeCommentGutterProps {
  * Google-Docs-style margin affordances: a comment button beside every section
  * heading, always visible once a section has threads and revealed on hover
  * otherwise (via CSS `:hover` on the parent, which inline styles cannot express).
+ *
+ * The buttons are absolutely positioned but precede the prose in DOM order, so
+ * on a long document a keyboard user tabs through every section's button before
+ * reaching the content. Moving them after the body would fix the tab order at
+ * the cost of the visual offsets they are measured against.
  */
 export const KnowledgeCommentGutter: React.FC<KnowledgeCommentGutterProps> = ({
   headings,
