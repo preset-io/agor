@@ -7,10 +7,6 @@
 
 import { homedir } from 'node:os';
 import {
-  admitAgenticToolExecutor,
-  getAgenticToolExecutorPayload,
-} from '@agor/agentic-tools/daemon';
-import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
@@ -40,6 +36,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
@@ -64,7 +61,11 @@ import {
   markExecutorProcessExited,
   trackExecutorProcess,
 } from './executor-tracking.js';
-import { registerAgenticToolIntegrationServices } from './integrations/index.js';
+import {
+  admitAgenticToolExecutor,
+  getAgenticToolExecutorPayload,
+  registerAgenticToolIntegrationServices,
+} from './integrations/index.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -800,7 +801,7 @@ function createExecuteHandler(
 
     const sessionToken = await admitAgenticToolExecutor(
       {
-        tool: session.agentic_tool as import('@agor/core/types').AgenticToolName,
+        tool: session.agentic_tool as AgenticToolName,
         tenantId,
         config,
       },
@@ -965,26 +966,17 @@ function createExecuteHandler(
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...getAgenticToolExecutorPayload(
-        session.agentic_tool as import('@agor/core/types').AgenticToolName,
-        {
-          tenantId: tenantId!,
-          session,
-          homeDir: executorHomeDir ?? homedir(),
-        }
-      ),
+      ...getAgenticToolExecutorPayload(session.agentic_tool as AgenticToolName, {
+        tenantId: tenantId!,
+        session,
+        homeDir: executorHomeDir ?? homedir(),
+      }),
       env: executorEnv,
       params: {
         sessionId,
         taskId,
         prompt: data.prompt,
-        tool: session.agentic_tool as
-          | 'claude-code'
-          | 'gemini'
-          | 'codex'
-          | 'opencode'
-          | 'copilot'
-          | 'cursor',
+        tool: session.agentic_tool as AgenticToolName,
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,

@@ -69,11 +69,6 @@ export function normalizeRawSdkResponse(
           rawSdkResponse as Parameters<typeof copilotNormalizer.normalize>[0]
         );
 
-      case 'opencode':
-        // OpenCode doesn't have a normalizer yet - return undefined
-        console.debug('[Normalizer] OpenCode normalizer not implemented yet');
-        return undefined;
-
       case 'cursor':
         // Cursor runtime adapter and event normalizer are not implemented yet.
         console.debug('[Normalizer] Cursor normalizer not implemented yet');

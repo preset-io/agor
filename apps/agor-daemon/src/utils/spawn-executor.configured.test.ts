@@ -12,6 +12,13 @@ const { containMock, spawnMock, trackMock, untrackMock } = vi.hoisted(() => ({
   untrackMock: vi.fn(),
 }));
 
+const OAUTH_DATA_HOME = '/private/synthetic-home';
+const OAUTH_REQUEST = {
+  operation: 'connect-oauth',
+  providerId: 'openai',
+  method: 0,
+};
+
 vi.mock('node:child_process', () => ({
   spawn: spawnMock,
 }));
@@ -444,7 +451,7 @@ describe('configured executor spawning', () => {
       });
       const { runExecutorCommand } = await import('./spawn-executor');
       const result = await runExecutorCommand(
-        { command: 'opencode.auth', params: { operation: 'discover' } },
+        { command: 'test.inspect', params: {} },
         {
           cwd: missingCwd,
           asUser: 'alice',
@@ -480,15 +487,11 @@ describe('configured executor spawning', () => {
       );
       const unix = await import('@agor/core/unix');
       const handle = startOpenCodeOAuthExecutor(
+        OAUTH_DATA_HOME,
         {
-          command: 'opencode.auth',
-          dataHome: '/private/synthetic-home',
-          params: {
-            operation: 'connect-oauth',
-            providerId: 'openai',
-            method: 1,
-            inputs: { account: 'synthetic-secret-input' },
-          },
+          ...OAUTH_REQUEST,
+          method: 1,
+          inputs: { account: 'synthetic-secret-input' },
         },
         { env: { PATH: '/usr/bin' } },
         onEvent
@@ -560,7 +563,7 @@ describe('configured executor spawning', () => {
     const { startOpenCodeOAuthExecutor } = await import('../integrations/opencode/oauth-executor');
     configureExecutor({ executor_command_template: 'remote {command}' });
 
-    const handle = startOpenCodeOAuthExecutor({ command: 'opencode.auth' }, {}, vi.fn());
+    const handle = startOpenCodeOAuthExecutor(OAUTH_DATA_HOME, OAUTH_REQUEST, {}, vi.fn());
 
     await expect(handle.result).resolves.toEqual({
       success: false,
@@ -582,7 +585,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' }, timeoutMs: 25 },
         vi.fn()
       );
@@ -611,7 +615,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -650,7 +655,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -687,7 +693,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -740,7 +747,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -788,7 +796,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -830,11 +839,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        {
-          command: 'opencode.auth',
-          dataHome: '/private/path',
-          params: { operation: 'connect-oauth', providerId: 'openai', method: 0 },
-        },
+        '/private/path',
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );
@@ -879,7 +885,8 @@ describe('configured executor spawning', () => {
         '../integrations/opencode/oauth-executor'
       );
       const handle = startOpenCodeOAuthExecutor(
-        { command: 'opencode.auth' },
+        OAUTH_DATA_HOME,
+        OAUTH_REQUEST,
         { env: { PATH: '/usr/bin' } },
         vi.fn()
       );

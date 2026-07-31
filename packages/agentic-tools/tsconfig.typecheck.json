@@ -5,7 +5,6 @@
     "rootDir": "..",
     "paths": {
       "@agor/agentic-tool-opencode": ["../agentic-tool-opencode/src/shared/index.ts"],
-      "@agor/agentic-tool-opencode/daemon": ["../agentic-tool-opencode/src/daemon/index.ts"],
       "@agor/agentic-tool-opencode/ui": ["../agentic-tool-opencode/src/ui/index.ts"],
       "@agor/core/client": ["../core/src/client/index.ts"],
       "@agor/core/models": ["../core/src/models/index.ts"],

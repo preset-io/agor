@@ -5,6 +5,7 @@ import {
   type RunExecutorCommandOptions,
   startInteractiveExecutor,
 } from '../../utils/spawn-executor.js';
+import { createOpenCodeExecutorInvocation } from './executor-command.js';
 
 export type OpenCodeOAuthProcessEvent =
   | {
@@ -64,13 +65,14 @@ function parseEvent(value: unknown): OpenCodeOAuthProcessEvent | undefined {
  * OAuth event validation, code submission rules, and public-safe failures.
  */
 export function startOpenCodeOAuthExecutor(
-  payload: Record<string, unknown>,
+  dataHome: string,
+  request: Record<string, unknown>,
   options: RunExecutorCommandOptions,
   onEvent: (event: OpenCodeOAuthProcessEvent) => void
 ): OpenCodeOAuthExecutorHandle {
   let codeSubmitted = false;
   let transport!: InteractiveExecutorHandle;
-  transport = startInteractiveExecutor(payload, {
+  transport = startInteractiveExecutor(createOpenCodeExecutorInvocation(dataHome, request), {
     ...options,
     failures: {
       localProcessRequired: failure(

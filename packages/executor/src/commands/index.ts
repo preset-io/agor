@@ -7,11 +7,13 @@
  * 3. Returning an ExecutorResult
  */
 
-import type { ExecutorPayload, ExecutorResult, PromptPayload } from '../payload-types.js';
-import {
-  handleOpenCodeAuth,
-  handleOpenCodeOAuthInteractive,
-} from '../sdk-handlers/opencode/auth-command.js';
+import { initializeToolRegistry, ToolRegistry } from '../handlers/sdk/tool-registry.js';
+import type {
+  AgenticToolInvokePayload,
+  ExecutorPayload,
+  ExecutorResult,
+  PromptPayload,
+} from '../payload-types.js';
 import {
   handleBranchArtifactLand,
   handleBranchArtifactPublish,
@@ -209,13 +211,42 @@ async function handlePromptCommand(
   };
 }
 
+async function handleAgenticToolInvoke(
+  payload: AgenticToolInvokePayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  await initializeToolRegistry();
+  return ToolRegistry.executeAuxiliary(payload.params.tool, {
+    context: payload.agenticToolContext,
+    request: payload.params.request,
+    dryRun: options.dryRun,
+  });
+}
+
+async function handleInteractiveAgenticToolInvoke(
+  payload: AgenticToolInvokePayload,
+  options: CommandOptions,
+  channel: InteractiveCommandChannel
+): Promise<ExecutorResult> {
+  await initializeToolRegistry();
+  return ToolRegistry.executeInteractiveAuxiliary(
+    payload.params.tool,
+    {
+      context: payload.agenticToolContext,
+      request: payload.params.request,
+      dryRun: options.dryRun,
+    },
+    channel
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 // Register All Commands
 // ═══════════════════════════════════════════════════════════
 
 registerCommand('prompt', handlePromptCommand);
-registerCommand('opencode.auth', handleOpenCodeAuth);
-registerInteractiveCommand('opencode.auth', handleOpenCodeOAuthInteractive);
+registerCommand('agentic-tool.invoke', handleAgenticToolInvoke);
+registerInteractiveCommand('agentic-tool.invoke', handleInteractiveAgenticToolInvoke);
 registerCommand('git.clone', handleGitClone);
 registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);

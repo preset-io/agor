@@ -4,7 +4,6 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     config: 'src/config.ts',
-    daemon: 'src/daemon.ts',
     ui: 'src/ui.ts',
   },
   format: ['cjs', 'esm'],
@@ -14,7 +13,6 @@ export default defineConfig({
   shims: true,
   external: [
     '@agor/agentic-tool-opencode',
-    '@agor/agentic-tool-opencode/daemon',
     '@agor/agentic-tool-opencode/ui',
     '@agor/core',
     '@agor/core/client',

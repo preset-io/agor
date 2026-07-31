@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { admitAgenticToolExecutor, getAgenticToolExecutorPayload } from './daemon';
+import { admitAgenticToolExecutor, getAgenticToolExecutorPayload } from './index.js';
 
 describe('OpenCode executor admission', () => {
   it('rejects hosted native auth before token creation or executor spawn', async () => {
@@ -35,9 +35,7 @@ describe('OpenCode executor admission', () => {
         {
           tool: 'opencode',
           tenantId: 'tenant-a',
-          config: {
-            execution: { unix_user_mode: 'delegated' },
-          },
+          config: { execution: { unix_user_mode: 'delegated' } },
         },
         async () => {
           await generateToken();
@@ -50,13 +48,10 @@ describe('OpenCode executor admission', () => {
     expect(spawnExecutor).not.toHaveBeenCalled();
   });
 
-  it('contributes an opaque adapter context instead of adding host payload fields', () => {
+  it('contributes opaque adapter context instead of host payload fields', () => {
     const payload = getAgenticToolExecutorPayload('opencode', {
       tenantId: 'tenant-a',
-      session: {
-        created_by: 'user-1',
-        unix_username: 'alice',
-      } as never,
+      session: { created_by: 'user-1', unix_username: 'alice' } as never,
       homeDir: '/home/alice',
     });
 

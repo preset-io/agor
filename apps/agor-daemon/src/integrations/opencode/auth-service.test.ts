@@ -131,12 +131,15 @@ describe('OpenCode provider auth service', () => {
 
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: 'opencode.auth',
+        command: 'agentic-tool.invoke',
         params: {
-          operation: 'connect-api-key',
-          providerId: 'kimi-for-coding',
-          apiKey: 'synthetic-key',
-          metadata: { region: 'us', accountId: 'synthetic-account' },
+          tool: 'opencode',
+          request: {
+            operation: 'connect-api-key',
+            providerId: 'kimi-for-coding',
+            apiKey: 'synthetic-key',
+            metadata: { region: 'us', accountId: 'synthetic-account' },
+          },
         },
       }),
       expect.any(Object)
@@ -146,7 +149,7 @@ describe('OpenCode provider auth service', () => {
   it('routes identical user IDs in different tenants to different opaque namespaces', async () => {
     const seen: string[] = [];
     runCommand.mockImplementation(async (payload) => {
-      seen.push(String(payload.dataHome));
+      seen.push(String((payload.agenticToolContext as { dataHome?: string }).dataHome));
       return { success: true, data: discovery };
     });
 
@@ -202,13 +205,13 @@ describe('OpenCode provider auth service', () => {
     };
     let firstMutation = true;
     runCommand.mockImplementation(async (payload) => {
-      if (payload.params.operation === 'connect-api-key' && firstMutation) {
+      if (payload.params.request.operation === 'connect-api-key' && firstMutation) {
         firstMutation = false;
         await firstGate;
       }
       return {
         success: true,
-        data: payload.params.operation === 'discover' ? present : discovery,
+        data: payload.params.request.operation === 'discover' ? present : discovery,
       };
     });
 
@@ -252,7 +255,9 @@ describe('OpenCode provider auth service', () => {
 
     expect(runCommand).toHaveBeenCalledOnce();
     expect(runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ params: { operation: 'discover' } }),
+      expect.objectContaining({
+        params: { tool: 'opencode', request: { operation: 'discover' } },
+      }),
       expect.any(Object)
     );
   });
@@ -287,7 +292,7 @@ describe('OpenCode provider auth service', () => {
       service().remove('opencode', params)
     );
 
-    expect(runCommand.mock.calls.map(([payload]) => payload.params)).toEqual([
+    expect(runCommand.mock.calls.map(([payload]) => payload.params.request)).toEqual([
       { operation: 'discover' },
       { operation: 'disconnect', providerId: 'opencode' },
     ]);
@@ -299,13 +304,13 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('keeps one OAuth attempt on one executor through authorize and callback states', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: {
       success: boolean;
       data?: unknown;
       error?: { code: string; message: string };
     }) => void;
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -375,20 +380,18 @@ describe('OpenCode provider auth service', () => {
       ).toBe('configured')
     );
     expect(startOAuth).toHaveBeenCalledOnce();
-    expect(startOAuth.mock.calls[0]?.[0]).toMatchObject({
-      params: {
-        operation: 'connect-oauth',
-        providerId: 'openai',
-        method: 1,
-        inputs: { region: 'us' },
-      },
+    expect(startOAuth.mock.calls[0]?.[1]).toMatchObject({
+      operation: 'connect-oauth',
+      providerId: 'openai',
+      method: 1,
+      inputs: { region: 'us' },
     });
   });
 
   it('holds the namespace mutation slot for OAuth across providers while another tenant stays independent', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -401,7 +404,7 @@ describe('OpenCode provider auth service', () => {
     runCommand.mockImplementation(async (payload) => ({
       success: true,
       data:
-        payload.params.operation === 'discover'
+        payload.params.request.operation === 'discover'
           ? {
               ...discovery,
               providers: [
@@ -435,7 +438,7 @@ describe('OpenCode provider auth service', () => {
       authService.remove('kimi-for-coding', params)
     );
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
-    expect(runCommand.mock.calls.map(([payload]) => payload.params)).toEqual([
+    expect(runCommand.mock.calls.map(([payload]) => payload.params.request)).toEqual([
       { operation: 'discover' },
       { operation: 'disconnect', providerId: 'kimi-for-coding' },
     ]);
@@ -449,7 +452,7 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('isolates attempts by tenant and subject and cancels the full executor handle', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
     const cancel = vi.fn(async () => {
       const result = {
@@ -459,7 +462,7 @@ describe('OpenCode provider auth service', () => {
       finish(result);
       return result;
     });
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -502,12 +505,12 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('maps a bounded executor timeout to an expired attempt without exposing failure detail', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: {
       success: boolean;
       error: { code: string; message: string; details?: unknown };
     }) => void;
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -553,10 +556,10 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('submits one code to the same attempt without storing or returning the secret', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
     const submitCode = vi.fn(async () => true);
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -601,7 +604,7 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('blocks every later namespace mutation until retained containment verifies absence', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     const cleanupFailure = {
       success: false,
       error: {
@@ -620,7 +623,7 @@ describe('OpenCode provider auth service', () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {
@@ -686,7 +689,7 @@ describe('OpenCode provider auth service', () => {
   });
 
   it('does not let an in-flight code submission reverse cancellation', async () => {
-    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[2];
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
     let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
     let releaseCode!: (accepted: boolean) => void;
     const submitCode = vi.fn(
@@ -703,7 +706,7 @@ describe('OpenCode provider auth service', () => {
       finish(cancelledResult);
       return cancelledResult;
     });
-    startOAuth.mockImplementation((_payload, _options, onEvent) => {
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
         result: new Promise((resolve) => {

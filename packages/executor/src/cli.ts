@@ -23,6 +23,7 @@ import {
   executeInteractiveCommand,
   getRegisteredCommands,
 } from './commands/index.js';
+import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -215,7 +216,6 @@ async function handlePromptPayload(
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
 
   if (!ToolRegistry.has(payload.params.tool)) {
@@ -275,11 +275,11 @@ async function handleLegacyMode(values: {
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
+  const tool = values.tool as string;
 
-  if (!ToolRegistry.has(values.tool as string)) {
-    console.error(`Invalid tool: ${values.tool}`);
+  if (!ToolRegistry.has(tool)) {
+    console.error(`Invalid tool: ${tool}`);
     console.error(`Valid tools: ${ToolRegistry.getAll().join(', ')}`);
     process.exit(1);
   }
@@ -295,7 +295,7 @@ async function handleLegacyMode(values: {
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
     prompt: values.prompt as string,
-    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
+    tool,
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
     daemonUrl: resolvedDaemonUrl,
   });
@@ -322,9 +322,7 @@ function printUsage(): void {
   console.error('  --session-id <id>        Session ID to execute prompt for');
   console.error('  --task-id <id>           Task ID created by daemon');
   console.error('  --prompt <text>          User prompt to execute');
-  console.error(
-    '  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)'
-  );
+  console.error(`  --tool <name>            SDK tool (${ToolRegistry.getAll().join(', ')})`);
   console.error('  --permission-mode <mode> Permission mode (ask, auto, allow-all)');
   console.error('  --daemon-url <url>       Daemon WebSocket URL (default: http://localhost:3030)');
   console.error('');
@@ -343,6 +341,7 @@ async function main() {
   // Register Handlebars helpers ONCE at startup (needed for template rendering)
   const { registerHandlebarsHelpers } = await import('@agor/core/templates/handlebars-helpers');
   registerHandlebarsHelpers();
+  await initializeToolRegistry();
 
   // Parse command-line arguments
   const { values } = parseArgs({

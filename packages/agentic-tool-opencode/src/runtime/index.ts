@@ -1,11 +1,4 @@
-export {
-  handleOpenCodeAuth,
-  handleOpenCodeOAuth,
-  type OpenCodeCommandOptions,
-  type OpenCodeOAuthExecutorEvent,
-  type OpenCodeOAuthPayload,
-} from './auth-handler.js';
-export { OpenCodeAuthParamsSchema, type OpenCodeAuthPayload } from './auth-payload.js';
+export { OPENCODE_AUXILIARY_ADAPTER } from './auxiliary-adapter.js';
 export {
   createOpenCodeEventTranslator,
   type OpenCodeEventEffect,

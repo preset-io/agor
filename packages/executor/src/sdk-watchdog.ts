@@ -24,7 +24,6 @@ const STARTED = new Set([
   'codex:event_msg.turn_context',
   'gemini:model_info',
   'copilot:assistant.turn_start',
-  'opencode:permission.updated',
 ]);
 const WAITING = new Set([
   'claude-code:permission.request',
@@ -32,7 +31,6 @@ const WAITING = new Set([
   'copilot:permission.request',
   'copilot:user_input.request',
   'gemini:tool_call_confirmation',
-  'opencode:permission.asked',
 ]);
 const PROGRESS = new Set([
   'claude-code:assistant',
@@ -58,9 +56,6 @@ const PROGRESS = new Set([
   'copilot:subagent.started',
   'copilot:subagent.completed',
   'copilot:assistant.turn_end',
-  'opencode:message.updated',
-  'opencode:message.part.updated',
-  'opencode:session.status',
 ]);
 
 function boundedDetail(value: string): string {
@@ -71,8 +66,6 @@ export function mapSdkActivity(
   adapter: SdkActivityAdapter,
   discriminator: string
 ): { kind: ExecutorPulseKind; detail: string } | undefined {
-  if (adapter === 'opencode' && discriminator === 'server.heartbeat') return undefined;
-
   const detail = boundedDetail(discriminator);
   const key = `${adapter}:${detail}`;
   if (WAITING.has(key)) return { kind: 'waiting', detail };

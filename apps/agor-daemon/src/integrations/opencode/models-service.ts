@@ -9,6 +9,7 @@ import type { AuthenticatedParams, OpenCodeModelCatalog, UUID } from '@agor/core
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { resolveAuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
+import { createOpenCodeExecutorInvocation } from './executor-command.js';
 
 type ModelCatalogQuery = { branch_id?: string };
 
@@ -66,14 +67,10 @@ export class OpenCodeModelsService {
     let result: Awaited<ReturnType<typeof runExecutorCommand>>;
     try {
       result = await runExecutorCommand(
-        {
-          command: 'opencode.auth',
-          dataHome: context.dataHome,
-          params: {
-            operation: 'discover-models',
-            ...(directory ? { directory } : {}),
-          },
-        },
+        createOpenCodeExecutorInvocation(context.dataHome, {
+          operation: 'discover-models',
+          ...(directory ? { directory } : {}),
+        }),
         {
           asUser: context.asUser,
           env: context.executorEnv,

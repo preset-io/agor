@@ -17,6 +17,7 @@
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
+  AgenticToolName,
   MessageSource,
   PermissionMode,
   PermissionScope,
@@ -50,7 +51,7 @@ export interface ExecutorConfig {
   sessionId: string;
   taskId: string;
   prompt: string;
-  tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
+  tool: AgenticToolName;
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;

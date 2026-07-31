@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AgenticToolInvokePayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
@@ -16,7 +17,6 @@ import {
   isGitClonePayload,
   isPromptPayload,
   isZellijAttachPayload,
-  OpenCodeAuthPayloadSchema,
   PromptPayloadSchema,
   parseExecutorPayload,
   ZellijAttachPayloadSchema,
@@ -97,27 +97,38 @@ describe('PromptPayloadSchema', () => {
   });
 });
 
-describe('OpenCodeAuthPayloadSchema', () => {
-  it('accepts private configured-model discovery with an optional runtime directory', () => {
+describe('AgenticToolInvokePayloadSchema', () => {
+  it('accepts an opaque adapter-owned request and context', () => {
     expect(
-      OpenCodeAuthPayloadSchema.parse({
-        command: 'opencode.auth',
-        dataHome: '/opaque/data-home',
-        params: { operation: 'discover-models', directory: '/authorized/branch' },
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        agenticToolContext: { dataHome: '/opaque/data-home' },
+        params: {
+          tool: 'opencode',
+          request: { operation: 'discover-models', directory: '/authorized/branch' },
+        },
       })
     ).toMatchObject({
-      params: { operation: 'discover-models', directory: '/authorized/branch' },
+      params: {
+        tool: 'opencode',
+        request: { operation: 'discover-models', directory: '/authorized/branch' },
+      },
     });
   });
 
-  it('rejects a blank runtime directory', () => {
+  it('rejects an unknown agentic tool but leaves request policy to the adapter', () => {
     expect(() =>
-      OpenCodeAuthPayloadSchema.parse({
-        command: 'opencode.auth',
-        dataHome: '/opaque/data-home',
-        params: { operation: 'discover-models', directory: '' },
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'unknown', request: { operation: 'anything' } },
       })
     ).toThrow();
+    expect(() =>
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'opencode', request: { operation: 'future-operation' } },
+      })
+    ).not.toThrow();
   });
 });
 
@@ -597,7 +608,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands).toContain('opencode.auth');
+    expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
     expect(commands.length).toBe(32);
   });

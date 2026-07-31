@@ -13,6 +13,7 @@ import {
   type AuthenticatedOpenCodeSubjectContext,
   resolveAuthenticatedOpenCodeSubjectContext,
 } from './credential-namespace.js';
+import { createOpenCodeExecutorInvocation } from './executor-command.js';
 import { type OpenCodeOAuthExecutorHandle, startOpenCodeOAuthExecutor } from './oauth-executor.js';
 
 const mutationSlots = new Map<string, Promise<void>>();
@@ -151,11 +152,7 @@ export class OpenCodeAuthService {
       | { operation: 'disconnect'; providerId: string }
   ): Promise<OpenCodeProviderDiscovery> {
     const result = await runExecutorCommand(
-      {
-        command: 'opencode.auth',
-        dataHome: context.dataHome,
-        params,
-      },
+      createOpenCodeExecutorInvocation(context.dataHome, params),
       {
         asUser: context.asUser,
         env: context.executorEnv,
@@ -281,17 +278,14 @@ export class OpenCodeAuthService {
       }
 
       const handle = startOpenCodeOAuthExecutor(
+        context.dataHome,
         {
-          command: 'opencode.auth',
-          dataHome: context.dataHome,
-          params: {
-            operation: 'connect-oauth',
-            providerId: request.providerId,
-            method: request.method,
-            ...(request.inputs && Object.keys(request.inputs).length > 0
-              ? { inputs: request.inputs }
-              : {}),
-          },
+          operation: 'connect-oauth',
+          providerId: request.providerId,
+          method: request.method,
+          ...(request.inputs && Object.keys(request.inputs).length > 0
+            ? { inputs: request.inputs }
+            : {}),
         },
         {
           asUser: context.asUser,

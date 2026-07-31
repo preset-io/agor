@@ -248,7 +248,7 @@ export async function handleOpenCodeAuth(
   if (options.dryRun) {
     return {
       success: true,
-      data: { dryRun: true, command: payload.command, operation: payload.params.operation },
+      data: { dryRun: true, operation: payload.params.operation },
     };
   }
 
@@ -356,7 +356,7 @@ export async function handleOpenCodeOAuth(
   if (options.dryRun) {
     return {
       success: true,
-      data: { dryRun: true, command: payload.command, operation: payload.params.operation },
+      data: { dryRun: true, operation: payload.params.operation },
     };
   }
 

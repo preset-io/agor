@@ -18,12 +18,6 @@
       "import": "./dist/config.js",
       "require": "./dist/config.cjs"
     },
-    "./daemon": {
-      "source": "./src/daemon.ts",
-      "types": "./dist/daemon.d.ts",
-      "import": "./dist/daemon.js",
-      "require": "./dist/daemon.cjs"
-    },
     "./ui": {
       "source": "./src/ui.ts",
       "types": "./dist/ui.d.ts",

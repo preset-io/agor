@@ -5,7 +5,7 @@
  */
 
 import type { PaginatedResult, Session } from '@agor-live/client';
-import { PAGINATION, SessionStatus, shortId } from '@agor-live/client';
+import { AGENTIC_TOOL_NAMES, PAGINATION, SessionStatus, shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -35,7 +35,7 @@ export default class SessionList extends BaseCommand {
     agent: Flags.string({
       char: 'a',
       description: 'Filter by agent',
-      options: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot'],
+      options: [...AGENTIC_TOOL_NAMES],
     }),
     board: Flags.string({
       char: 'b',

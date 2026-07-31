@@ -1,18 +1,10 @@
-import type { AgenticToolName } from './agentic-tool';
+import { AGENTIC_TOOL_NAMES, type AgenticToolName } from './agentic-tool';
 import type { AgenticToolConfigField, AgenticToolsConfig } from './user';
 
 /** Tenant-configurable tools. */
-export const TENANT_AGENTIC_TOOL_NAMES = [
-  'claude-code',
-  'codex',
-  'gemini',
-  'copilot',
-  'cursor',
-  'opencode',
-] as const;
+export const TENANT_AGENTIC_TOOL_NAMES = AGENTIC_TOOL_NAMES;
 
-export type TenantAgenticToolName = (typeof TENANT_AGENTIC_TOOL_NAMES)[number];
-export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode'>;
+export type TenantAgenticToolName = AgenticToolName;
 
 export const PROVIDER_RESOLUTION_POLICIES = [
   'user_required',
@@ -22,10 +14,6 @@ export const PROVIDER_RESOLUTION_POLICIES = [
 ] as const;
 export type ProviderResolutionPolicy = (typeof PROVIDER_RESOLUTION_POLICIES)[number];
 export const DEFAULT_PROVIDER_RESOLUTION_POLICY: ProviderResolutionPolicy = 'user_preferred';
-
-export type ProviderConnection<T extends ProviderConnectionTool = ProviderConnectionTool> = Partial<
-  NonNullable<AgenticToolsConfig[T]>
->;
 
 export const PROVIDER_CONNECTION_FIELDS = {
   'claude-code': [
@@ -38,7 +26,13 @@ export const PROVIDER_CONNECTION_FIELDS = {
   gemini: ['GEMINI_API_KEY'],
   copilot: ['COPILOT_GITHUB_TOKEN'],
   cursor: ['CURSOR_API_KEY'],
-} as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
+} as const satisfies Partial<Record<TenantAgenticToolName, readonly AgenticToolConfigField[]>>;
+
+export type ProviderConnectionTool = keyof typeof PROVIDER_CONNECTION_FIELDS;
+
+export type ProviderConnection<T extends ProviderConnectionTool = ProviderConnectionTool> = Partial<
+  NonNullable<AgenticToolsConfig[T]>
+>;
 
 /** Credential-bearing subset of each atomic provider connection (excludes endpoints). */
 export const PROVIDER_CREDENTIAL_FIELDS = {
@@ -92,7 +86,7 @@ export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgentic
 export function isProviderConnectionTool(
   tool: TenantAgenticToolName
 ): tool is ProviderConnectionTool {
-  return tool !== 'opencode';
+  return Object.hasOwn(PROVIDER_CONNECTION_FIELDS, tool);
 }
 
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {

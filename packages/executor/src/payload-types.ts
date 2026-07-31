@@ -8,7 +8,6 @@
  * (filesystem + DB + events). Unix operations are internal to git commands.
  */
 
-import { OpenCodeAuthParamsSchema } from '@agor/agentic-tool-opencode/runtime/auth-payload';
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
@@ -162,17 +161,19 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// OpenCode Provider Authentication Payload
+// Agentic-tool Auxiliary Invocation Payload
 // ═══════════════════════════════════════════════════════════
 
-export const OpenCodeAuthPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('opencode.auth'),
-  /** OpenCode auth/catalog commands are themselves adapter-owned payloads. */
-  dataHome: z.string().min(1),
-  params: OpenCodeAuthParamsSchema,
+export const AgenticToolInvokePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('agentic-tool.invoke'),
+  params: z.object({
+    tool: ToolTypeSchema,
+    /** Adapter-owned request validated by the selected integration. */
+    request: z.record(z.string(), z.unknown()),
+  }),
 });
 
-export type OpenCodeAuthPayload = z.infer<typeof OpenCodeAuthPayloadSchema>;
+export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Git Clone Payload
@@ -952,7 +953,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
  */
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
-  OpenCodeAuthPayloadSchema,
+  AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
@@ -1030,7 +1031,7 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
 export function getSupportedCommands(): string[] {
   return [
     'prompt',
-    'opencode.auth',
+    'agentic-tool.invoke',
     'git.clone',
     'git.branch.add',
     'git.branch.remove',

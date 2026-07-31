@@ -9,7 +9,8 @@
 Adding an agentic tool should require:
 
 1. implementing one package;
-2. registering that package once at the application composition root; and
+2. adding one explicit composition entry in each build surface it participates
+   in; and
 3. adding only genuinely shared host behavior to an existing host contract.
 
 Removing that registration and package should remove the integration. The
@@ -146,6 +147,14 @@ not grow `dataHome`, provider, or other OpenCode-named fields.
 The existing executor `ToolRegistry` is the runtime composition point. Extend
 it; do not add a second runtime registry.
 
+The same registry optionally exposes bounded auxiliary operations such as
+authentication and model-catalog discovery. Those operations reuse the
+executor's generic subprocess transport but are not Task executions: they do
+not create Tasks, report Task lifecycle outcomes, or introduce another durable
+lifecycle. The daemon supplies authorized context, the selected adapter parses
+its opaque request, and the transport remains unaware of tool-specific
+protocols.
+
 For OpenCode, the runtime handler returns completion facts only after managed
 cleanup. The executor's top-level finalizer then asks the daemon-owned Task
 service to settle the durable Task. Runtime failures likewise unwind through
@@ -237,6 +246,10 @@ service registration and hook files do not name OpenCode.
 Interactive executor commands use one generic bounded JSON-lines transport.
 The transport only frames payloads, events, and control messages; the
 OpenCode command adapter owns OAuth payload validation and event semantics.
+This separation is compatible with the proposed
+[task runtime architecture](https://github.com/preset-io/agor/pull/2090): Task
+execution still settles through the host finalizer and daemon containment,
+while auxiliary operations remain bounded non-Task commands.
 
 ## Native-state and concurrency contract
 
@@ -266,7 +279,7 @@ containment work:
 
 - core default-permission selection and permission-mode mapping;
 - executor normalizer selection and the watchdog's native heartbeat filter; and
-- exhaustive settings-tab and form-instance maps in the UI.
+- host-owned static presentation such as bundled tool artwork.
 
 They are not extension points for new OpenCode behavior. Migrate each only when
 its host contract can express the behavior for every affected tool without

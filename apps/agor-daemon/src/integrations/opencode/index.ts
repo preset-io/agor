@@ -1,3 +1,4 @@
+import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import type { RegisterServicesContext } from '../../register-services.js';
 
 export { createOpenCodeAuthService } from './auth-service.js';
@@ -7,7 +8,7 @@ import { createOpenCodeAuthService } from './auth-service.js';
 import { createOpenCodeModelsService } from './models-service.js';
 
 export const OPENCODE_DAEMON_INTEGRATION = {
-  name: 'opencode',
+  ...OPENCODE_DAEMON_CONTRIBUTION,
   tenantIdentityOnlyServicePaths: ['opencode-auth', 'opencode-models'],
   registerServices(ctx: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>) {
     ctx.app.use('/opencode-auth', createOpenCodeAuthService(ctx.db));

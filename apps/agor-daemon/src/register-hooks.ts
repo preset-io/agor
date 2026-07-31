@@ -293,7 +293,7 @@ function validateBranchEnvPolicyHook() {
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
  *   - executor git-SHA capture → `git_state` (per-message current_sha)
- *   - executor opencode init   → `sdk_session_id` (SDK session handle)
+ *   - executor runtime init    → `sdk_session_id` (SDK session handle)
  *
  * When a `patch` touches ONLY these fields, the sessions hook chain downgrades
  * the required branch permission from `'all'` to the same tier that

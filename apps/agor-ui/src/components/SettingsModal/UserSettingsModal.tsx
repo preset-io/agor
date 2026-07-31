@@ -183,26 +183,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
-  // Separate forms for each agentic tool tab
-  const [claudeForm] = Form.useForm();
-  const [codexForm] = Form.useForm();
-  const [geminiForm] = Form.useForm();
-  const [opencodeForm] = Form.useForm();
-  const [copilotForm] = Form.useForm();
-  const [cursorForm] = Form.useForm();
+  // Inactive tool values live in agenticConfigDraftByTool; only the active tab needs a form.
+  const [agenticForm] = Form.useForm();
   const [audioForm] = Form.useForm();
-
-  const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
-    () => ({
-      'claude-code': claudeForm,
-      codex: codexForm,
-      gemini: geminiForm,
-      opencode: opencodeForm,
-      copilot: copilotForm,
-      cursor: cursorForm,
-    }),
-    [claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
-  );
 
   // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
   useEffect(() => {
@@ -342,7 +325,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!open || !user) return;
 
     if (isAgenticToolTab(activeTab)) {
-      agenticFormByTool[activeTab].setFieldsValue({
+      agenticForm.resetFields();
+      agenticForm.setFieldsValue({
         ...(agenticConfigDraftByTool[activeTab] ??
           getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])),
         mcpServerIds: user.default_mcp_server_ids ?? [],
@@ -367,7 +351,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     }
-  }, [activeTab, audioForm, agenticFormByTool, open, user]);
+  }, [activeTab, agenticForm, audioForm, open, user]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
@@ -428,10 +412,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       ...(user.default_agentic_selection ?? {}),
     };
 
+    const valuesForTool = (tool: AgenticToolName): AgenticConfigFormValues => {
+      const draft = agenticConfigDraftByTool[tool];
+      if (draft) return draft;
+      if (activeTab === tool) return agenticForm.getFieldsValue() as AgenticConfigFormValues;
+      return {
+        ...getFormValuesFromConfig(tool, user.default_agentic_config?.[tool]),
+        mcpServerIds: user.default_mcp_server_ids ?? [],
+        defaultSelectionSource:
+          user.default_agentic_selection?.[tool]?.source ??
+          (user.default_agentic_config?.[tool] ? 'inline' : 'workspace_default'),
+        defaultPresetId:
+          user.default_agentic_selection?.[tool]?.source === 'preset'
+            ? user.default_agentic_selection[tool].preset_id
+            : undefined,
+      };
+    };
+
     for (const tool of tools) {
-      const values: AgenticConfigFormValues =
-        agenticConfigDraftByTool[tool] ??
-        (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
+      const values = valuesForTool(tool);
       if (agenticToolRequiresModelSelection(tool) && !values.modelConfig) {
         // Clearing removes atomic personal selections entirely instead of
         // persisting an incomplete configuration blob.
@@ -444,7 +443,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     const mcpSourceTool = tools[0];
     const defaultMcpServerIds = mcpSourceTool
-      ? (agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds') as string[] | undefined)
+      ? valuesForTool(mcpSourceTool).mcpServerIds
       : user.default_mcp_server_ids;
     await onUpdate?.(user.user_id, {
       default_agentic_config: nextConfig,
@@ -685,7 +684,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         defaultPresetId: undefined,
       }),
     };
-    agenticFormByTool[tool].setFieldsValue(clearedValues);
+    agenticForm.setFieldsValue(clearedValues);
     setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: clearedValues }));
     markAgenticConfigDirty(tool);
   };
@@ -1023,7 +1022,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       default: {
         if (!isAgenticToolTab(activeTab)) return null;
         const toolName = activeTab;
-        const currentForm = agenticFormByTool[toolName];
+        const currentForm = agenticForm;
         const displayNames = AGENTIC_TOOL_DISPLAY_NAMES;
         const canonicalTool = toolName as TenantAgenticToolName;
         const credentialToolName = toolName;
@@ -1300,16 +1299,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       }}
       closeIcon={<CloseOutlined />}
     >
-      {/* Keep inactive tab form instances connected to Ant Form. Without these
-          lightweight hidden connectors, calling form methods while switching
-          tabs can produce noisy "useForm is not connected" console warnings. */}
+      {/* Keep the inactive audio form connected; agentic tabs share their active form. */}
       <div hidden aria-hidden="true">
         {activeTab !== 'audio' && <Form component={false} form={audioForm} />}
-        {visibleAgenticToolTabs.map((tool) =>
-          activeTab === tool ? null : (
-            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
-          )
-        )}
       </div>
       <Layout style={{ height: '100%', background: token.colorBgContainer }}>
         <Sider

@@ -108,10 +108,13 @@ describe('OpenCode model catalog service', () => {
     expect(result).toEqual(catalog);
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: 'opencode.auth',
+        command: 'agentic-tool.invoke',
         params: {
-          operation: 'discover-models',
-          directory: '/worktrees/authorized-branch',
+          tool: 'opencode',
+          request: {
+            operation: 'discover-models',
+            directory: '/worktrees/authorized-branch',
+          },
         },
       }),
       expect.any(Object)
@@ -189,8 +192,11 @@ describe('OpenCode model catalog service', () => {
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         params: {
-          operation: 'discover-models',
-          directory: '/worktrees/server-owned-path',
+          tool: 'opencode',
+          request: {
+            operation: 'discover-models',
+            directory: '/worktrees/server-owned-path',
+          },
         },
       }),
       expect.any(Object)
@@ -200,7 +206,7 @@ describe('OpenCode model catalog service', () => {
   it('routes identical user IDs in different tenants to isolated opaque namespaces', async () => {
     const seen: string[] = [];
     runCommand.mockImplementation(async (payload) => {
-      seen.push(String(payload.dataHome));
+      seen.push(String((payload.agenticToolContext as { dataHome?: string }).dataHome));
       return { success: true, data: catalog };
     });
 

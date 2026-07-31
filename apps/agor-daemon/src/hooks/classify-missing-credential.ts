@@ -63,7 +63,7 @@ export function classifyMissingCredentialFailure(
       const tool = session.agentic_tool;
       if (!isAgenticToolName(tool)) return context;
       const keyName = TOOL_API_KEY_NAMES[tool];
-      // Tools with no mapped key (e.g. opencode) aren't credential-gated.
+      // Runtime-managed authentication has no host-mapped API key.
       if (!keyName) return context;
 
       if (isZeroTurnResult && !isMissingCredentialFailure) {

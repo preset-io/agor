@@ -24,12 +24,6 @@
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.cjs"
     },
-    "./runtime/auth-payload": {
-      "source": "./src/runtime/auth-payload.ts",
-      "types": "./dist/runtime/auth-payload.d.ts",
-      "import": "./dist/runtime/auth-payload.js",
-      "require": "./dist/runtime/auth-payload.cjs"
-    },
     "./ui": {
       "source": "./src/ui/index.ts",
       "types": "./dist/ui/index.d.ts",

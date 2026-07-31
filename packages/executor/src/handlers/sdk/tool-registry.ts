@@ -14,7 +14,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -51,8 +51,29 @@ export type ToolRunner = (params: {
 export interface ToolConfig {
   /** Tool identifier */
   tool: Tool;
-  /** Tool runner function */
-  runner: ToolRunner;
+  /** Lazy task runner loader. */
+  loadRunner: () => Promise<ToolRunner>;
+  /** Optional adapter for bounded non-Task operations such as auth or catalogs. */
+  loadAuxiliaryAdapter?: () => Promise<AgenticToolAuxiliaryAdapter>;
+}
+
+export interface AgenticToolAuxiliaryInput {
+  context: unknown;
+  request: unknown;
+  dryRun?: boolean;
+}
+
+export interface AgenticToolInteractiveChannel {
+  emit(event: unknown): void;
+  read(): Promise<unknown>;
+}
+
+export interface AgenticToolAuxiliaryAdapter {
+  execute(input: AgenticToolAuxiliaryInput): Promise<ExecutorResult>;
+  executeInteractive?(
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult>;
 }
 
 /**
@@ -123,7 +144,52 @@ export class ToolRegistry {
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);
     }
-    return config.runner(params);
+    return (await config.loadRunner())(params);
+  }
+
+  static async executeAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput
+  ): Promise<ExecutorResult> {
+    const loader = ToolRegistry.get(tool)?.loadAuxiliaryAdapter;
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    return (await loader()).execute(input);
+  }
+
+  static async executeInteractiveAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult> {
+    const loader = ToolRegistry.get(tool)?.loadAuxiliaryAdapter;
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    const adapter = await loader();
+    if (!adapter.executeInteractive) {
+      return {
+        success: false,
+        error: {
+          code: 'INTERACTIVE_COMMAND_UNSUPPORTED',
+          message: `Agentic tool does not support interactive auxiliary operations: ${tool}`,
+        },
+      };
+    }
+    return adapter.executeInteractive(input, channel);
   }
 }
 
@@ -131,16 +197,6 @@ export class ToolRegistry {
  * Initialize tool registry with all available tools
  */
 export async function initializeToolRegistry(): Promise<void> {
-  // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
-    import('./claude.js'),
-    import('./codex.js'),
-    import('./gemini.js'),
-    import('./opencode.js'),
-    import('./copilot.js'),
-    import('./cursor.js'),
-  ]);
-
   const legacyRunner =
     (runner: (params: Parameters<ToolRunner>[0]) => Promise<void>): ToolRunner =>
     async (params) => {
@@ -148,12 +204,32 @@ export async function initializeToolRegistry(): Promise<void> {
       return {};
     };
   const adapters: ToolConfig[] = [
-    { tool: 'claude-code', runner: legacyRunner(claude.executeClaudeCodeTask) },
-    { tool: 'codex', runner: legacyRunner(codex.executeCodexTask) },
-    { tool: 'gemini', runner: legacyRunner(gemini.executeGeminiTask) },
-    { tool: 'opencode', runner: opencode.executeOpenCodeTask },
-    { tool: 'copilot', runner: legacyRunner(copilot.executeCopilotTask) },
-    { tool: 'cursor', runner: legacyRunner(cursor.executeCursorTask) },
+    {
+      tool: 'claude-code',
+      loadRunner: async () => legacyRunner((await import('./claude.js')).executeClaudeCodeTask),
+    },
+    {
+      tool: 'codex',
+      loadRunner: async () => legacyRunner((await import('./codex.js')).executeCodexTask),
+    },
+    {
+      tool: 'gemini',
+      loadRunner: async () => legacyRunner((await import('./gemini.js')).executeGeminiTask),
+    },
+    {
+      tool: 'opencode',
+      loadRunner: async () => (await import('./opencode.js')).executeOpenCodeTask,
+      loadAuxiliaryAdapter: async () =>
+        (await import('@agor/agentic-tool-opencode/runtime')).OPENCODE_AUXILIARY_ADAPTER,
+    },
+    {
+      tool: 'copilot',
+      loadRunner: async () => legacyRunner((await import('./copilot.js')).executeCopilotTask),
+    },
+    {
+      tool: 'cursor',
+      loadRunner: async () => legacyRunner((await import('./cursor.js')).executeCursorTask),
+    },
   ];
   for (const adapter of adapters) ToolRegistry.register(adapter);
 }

@@ -417,12 +417,15 @@ describe('interactive command registry', () => {
   it('routes bounded OpenCode OAuth through the generic transport contract', async () => {
     const result = await executeInteractiveCommand(
       {
-        command: 'opencode.auth',
-        dataHome: '/opaque/data-home',
+        command: 'agentic-tool.invoke',
+        agenticToolContext: { dataHome: '/opaque/data-home' },
         params: {
-          operation: 'connect-oauth',
-          providerId: 'openai',
-          method: 0,
+          tool: 'opencode',
+          request: {
+            operation: 'connect-oauth',
+            providerId: 'openai',
+            method: 0,
+          },
         },
       },
       { dryRun: true },
@@ -438,9 +441,24 @@ describe('interactive command registry', () => {
       success: true,
       data: {
         dryRun: true,
-        command: 'opencode.auth',
         operation: 'connect-oauth',
       },
+    });
+  });
+
+  it('rejects interactive operations for tools without an auxiliary adapter', async () => {
+    const result = await executeInteractiveCommand(
+      {
+        command: 'agentic-tool.invoke',
+        params: { tool: 'codex', request: { operation: 'discover' } },
+      },
+      {},
+      { emit() {}, async read() {} }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED' },
     });
   });
 });
