@@ -10,6 +10,7 @@ import { getTenantDataRoot } from '@agor/core/config';
 import type {
   SessionID,
   TenantID,
+  UploadIngressPolicy,
   UploadMetadata,
   UploadRef,
   UploadStagingStore,
@@ -55,13 +56,7 @@ export const MAX_UPLOAD_FILES_PER_REQUEST = 10;
 /** Max combined size of all files in a single request (bytes). */
 export const MAX_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024; // 100 MB
 
-export interface UploadLimits {
-  maxFileBytes: number;
-  maxTotalBytes: number;
-  maxFiles: number;
-}
-
-let uploadLimits: UploadLimits = {
+let uploadLimits: UploadIngressPolicy = {
   maxFileBytes: MAX_UPLOAD_FILE_SIZE,
   maxTotalBytes: MAX_UPLOAD_TOTAL_SIZE,
   maxFiles: MAX_UPLOAD_FILES_PER_REQUEST,
@@ -79,7 +74,7 @@ export function configureUploadLimits(maxFileBytes: number): void {
   };
 }
 
-export function getUploadLimits(): Readonly<UploadLimits> {
+export function getUploadLimits(): Readonly<UploadIngressPolicy> {
   return uploadLimits;
 }
 
@@ -137,7 +132,7 @@ type UploadRequest = Request & {
  */
 export function createUploadStorage(
   store: UploadStagingStore,
-  limits: Readonly<UploadLimits> = getUploadLimits()
+  limits: Readonly<UploadIngressPolicy> = getUploadLimits()
 ): multer.StorageEngine {
   return {
     _handleFile(req: UploadRequest, file, callback) {

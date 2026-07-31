@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { ArtifactsService } from './artifacts.js';
 import { GatewayChannelsService } from './gateway-channels.js';
 
-vi.mock('../utils/upload.js', () => ({ MAX_UPLOAD_FILE_SIZE: 4 }));
+vi.mock('../utils/upload.js', () => ({
+  getUploadLimits: () => ({ maxFileBytes: 4, maxTotalBytes: 8, maxFiles: 10 }),
+}));
 
 const gatewayChannel = {
   id: '019fa073-fbd5-74a4-ad28-b37a6bf037ce',

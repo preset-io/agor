@@ -296,6 +296,7 @@ export interface SessionPanelProps {
   sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
+  uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
 const SessionPanel: React.FC<SessionPanelProps> = ({
@@ -306,6 +307,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   sessionMcpServerIds = [],
   open,
   onClose,
+  uploadPolicy,
 }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
@@ -526,6 +528,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
     showError,
+    uploadPolicy,
   });
   const composerSendInFlightRef = React.useRef(false);
 

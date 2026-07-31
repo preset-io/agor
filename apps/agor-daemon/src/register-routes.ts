@@ -3987,6 +3987,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
           branchStorage: resolveBranchStorageConfig(),
+          uploadPolicy: getUploadLimits(),
         },
       };
 

@@ -1,4 +1,8 @@
-import { buildUploadAttachmentPrompt, formatUploadBytes } from '@agor/core/types';
+import {
+  buildUploadAttachmentPrompt,
+  formatUploadBytes,
+  type UploadIngressPolicy,
+} from '@agor/core/types';
 import type { UploadedFile } from '../FileUpload';
 
 export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
@@ -103,7 +107,12 @@ export function isSupportedComposerUploadFile(file: File): boolean {
 
 export function validateComposerFileIntake(
   files: File[],
-  currentAttachments: ComposerAttachment[] = []
+  currentAttachments: ComposerAttachment[] = [],
+  policy: UploadIngressPolicy = {
+    maxFileBytes: MAX_COMPOSER_UPLOAD_FILE_SIZE,
+    maxTotalBytes: MAX_COMPOSER_UPLOAD_TOTAL_SIZE,
+    maxFiles: MAX_COMPOSER_UPLOAD_FILES,
+  }
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
   const rejections: ComposerFileRejection[] = [];
   const currentUploadBatch = currentAttachments.filter(
@@ -121,10 +130,10 @@ export function validateComposerFileIntake(
       continue;
     }
 
-    if (file.size > MAX_COMPOSER_UPLOAD_FILE_SIZE) {
+    if (file.size > policy.maxFileBytes) {
       rejections.push({
         file,
-        reason: `File is larger than ${formatUploadBytes(MAX_COMPOSER_UPLOAD_FILE_SIZE)}`,
+        reason: `File is larger than ${formatUploadBytes(policy.maxFileBytes)}`,
       });
       continue;
     }
@@ -132,11 +141,12 @@ export function validateComposerFileIntake(
     candidates.push(normalizeComposerUploadFile(file));
   }
 
-  if (currentUploadBatch.length + candidates.length > MAX_COMPOSER_UPLOAD_FILES) {
+  if (currentUploadBatch.length + candidates.length > policy.maxFiles) {
+    const filesMessage = `Composer supports up to ${policy.maxFiles} pending files`;
     rejections.push(
       ...candidates.map((file) => ({
         file,
-        reason: MAX_COMPOSER_UPLOAD_FILES_MESSAGE,
+        reason: filesMessage,
       }))
     );
     return { acceptedFiles: [], rejections };
@@ -144,10 +154,10 @@ export function validateComposerFileIntake(
 
   const acceptedFiles: File[] = [];
   for (const file of candidates) {
-    if (totalSize + file.size > MAX_COMPOSER_UPLOAD_TOTAL_SIZE) {
+    if (totalSize + file.size > policy.maxTotalBytes) {
       rejections.push({
         file,
-        reason: `Selected files exceed ${formatUploadBytes(MAX_COMPOSER_UPLOAD_TOTAL_SIZE)} total`,
+        reason: `Selected files exceed ${formatUploadBytes(policy.maxTotalBytes)} total`,
       });
       continue;
     }
@@ -163,7 +173,7 @@ export function summarizeComposerFileRejections(rejections: ComposerFileRejectio
   if (rejections.length === 0) return '';
 
   const first =
-    rejections.find((rejection) => rejection.reason === MAX_COMPOSER_UPLOAD_FILES_MESSAGE) ??
+    rejections.find((rejection) => rejection.reason.startsWith('Composer supports up to ')) ??
     rejections[0];
   const suffix = rejections.length > 1 ? ` (+${rejections.length - 1} more)` : '';
   return `${first.file.name}: ${first.reason}${suffix}`;

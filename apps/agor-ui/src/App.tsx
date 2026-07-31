@@ -1875,6 +1875,7 @@ function AppContent() {
       instanceDescription={instanceConfig?.description}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
+      uploadPolicy={featuresConfig?.uploadPolicy}
       onRestartOnboarding={handleRestartOnboarding}
     />
   );

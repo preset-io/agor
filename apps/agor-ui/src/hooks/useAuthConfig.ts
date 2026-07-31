@@ -6,6 +6,7 @@
  */
 
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
+import type { UploadIngressPolicy } from '@agor/core/types';
 import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import type { BranchStorageConfig } from '../utils/branchStorage';
@@ -57,6 +58,8 @@ export interface FeaturesConfig {
    * allowedModes: ['worktree', 'clone'] } when unset.
    */
   branchStorage?: BranchStorageConfig;
+  /** Resolved upload limits enforced by the daemon. */
+  uploadPolicy?: UploadIngressPolicy;
 }
 
 interface HealthResponse {

@@ -34,6 +34,13 @@ export interface UploadPromptAttachment {
 
 export const UPLOAD_VIRTUAL_URL_PREFIX = 'https://agor.live/_uploads/';
 
+/** Public, resolved ingress limits shared by daemon and browser clients. */
+export interface UploadIngressPolicy {
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  maxFiles: number;
+}
+
 export function formatUploadBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;

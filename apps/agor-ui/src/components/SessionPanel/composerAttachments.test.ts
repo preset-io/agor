@@ -10,6 +10,17 @@ import {
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
+  it('honors daemon-provided upload limits', () => {
+    const file = new File(['12345'], 'small.txt', { type: 'text/plain' });
+    const { acceptedFiles, rejections } = validateComposerFileIntake([file], [], {
+      maxFileBytes: 4,
+      maxTotalBytes: 8,
+      maxFiles: 10,
+    });
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections[0]?.reason).toContain('4 B');
+  });
+
   const chart = {
     ref: 'upl_00000000-0000-4000-8000-000000000001',
     filename: 'chart.png',
@@ -183,8 +194,7 @@ describe('composerAttachments', () => {
 
     const { acceptedFiles, rejections } = validateComposerFileIntake(
       incomingFiles,
-      currentAttachments,
-      'branch'
+      currentAttachments
     );
 
     expect(acceptedFiles).toHaveLength(0);
