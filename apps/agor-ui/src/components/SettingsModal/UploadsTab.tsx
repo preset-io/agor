@@ -1,7 +1,9 @@
 import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
-import { Button, Empty, message, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { getDaemonUrl } from '../../config/daemon';
 import { getAuthHeaders } from '../../utils/authHeaders';
+import { useThemedMessage } from '../../utils/message';
 
 interface UploadRow {
   ref: string;
@@ -19,8 +21,12 @@ function humanBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+function uploadsUrl(path = ''): string {
+  return `${getDaemonUrl().replace(/\/$/, '')}/uploads${path}`;
+}
+
 async function fetchContent(upload: UploadRow): Promise<Blob> {
-  const response = await fetch(`/uploads/${encodeURIComponent(upload.ref)}/content`, {
+  const response = await fetch(uploadsUrl(`/${encodeURIComponent(upload.ref)}/content`), {
     headers: getAuthHeaders(),
   });
   if (!response.ok) throw new Error('Upload is unavailable');
@@ -28,22 +34,23 @@ async function fetchContent(upload: UploadRow): Promise<Blob> {
 }
 
 export function UploadsTab() {
+  const { showError } = useThemedMessage();
   const [uploads, setUploads] = useState<UploadRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch('/uploads', { headers: getAuthHeaders() });
+      const response = await fetch(uploadsUrl(), { headers: getAuthHeaders() });
       if (!response.ok) throw new Error('Unable to load uploads');
       const body = (await response.json()) as { uploads?: UploadRow[] };
       setUploads(body.uploads ?? []);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : 'Unable to load uploads');
+      showError(error instanceof Error ? error.message : 'Unable to load uploads');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showError]);
 
   useEffect(() => {
     void refresh();
@@ -60,35 +67,37 @@ export function UploadsTab() {
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : 'Upload is unavailable');
+      showError(error instanceof Error ? error.message : 'Upload is unavailable');
     }
   };
 
   const remove = async (upload: UploadRow) => {
-    const response = await fetch(`/uploads/${encodeURIComponent(upload.ref)}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders(),
-    });
-    if (!response.ok) {
-      void message.error('Unable to delete upload');
-      return;
+    try {
+      const response = await fetch(uploadsUrl(`/${encodeURIComponent(upload.ref)}`), {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!response.ok) throw new Error('Unable to delete upload');
+      setUploads((current) => current.filter((item) => item.ref !== upload.ref));
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Unable to delete upload');
     }
-    setUploads((current) => current.filter((item) => item.ref !== upload.ref));
   };
 
   const rename = async (upload: UploadRow, displayName: string) => {
-    const response = await fetch(`/uploads/${encodeURIComponent(upload.ref)}`, {
-      method: 'PATCH',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ displayName }),
-    });
-    if (!response.ok) {
-      void message.error('Unable to rename upload');
-      return;
+    try {
+      const response = await fetch(uploadsUrl(`/${encodeURIComponent(upload.ref)}`), {
+        method: 'PATCH',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName }),
+      });
+      if (!response.ok) throw new Error('Unable to rename upload');
+      setUploads((current) =>
+        current.map((item) => (item.ref === upload.ref ? { ...item, displayName } : item))
+      );
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Unable to rename upload');
     }
-    setUploads((current) =>
-      current.map((item) => (item.ref === upload.ref ? { ...item, displayName } : item))
-    );
   };
 
   return (
