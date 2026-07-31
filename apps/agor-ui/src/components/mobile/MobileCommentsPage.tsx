@@ -2,7 +2,7 @@ import type { AgorClient, Board, BoardComment, Branch, User } from '@agor-live/c
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
-import { CommentsPanel } from '../CommentsPanel';
+import { CommentsPanel, useBoardCommentGroupResolver } from '../CommentsPanel';
 import { MobileHeader } from './MobileHeader';
 
 interface MobileCommentsPageProps {
@@ -38,6 +38,10 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
 
   const board = boardId ? boardById.get(boardId) : undefined;
   const boardComments = mapToArray(commentById).filter((c: BoardComment) => c.board_id === boardId);
+  const resolveGroup = useBoardCommentGroupResolver({
+    boardObjects: board?.objects,
+    branchById,
+  });
 
   if (!boardId) {
     return (
@@ -66,12 +70,11 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
       <div style={{ flex: 1, overflow: 'hidden' }}>
         <CommentsPanel
           client={client}
-          boardId={boardId}
           comments={boardComments}
           userById={userById}
           currentUserId={currentUser?.user_id || 'unknown'}
-          boardObjects={board?.objects}
-          branchById={branchById}
+          resolveGroup={resolveGroup}
+          emptyDescription="Start a conversation about this board"
           onSendComment={(content) => onSendComment(boardId, content)}
           onReplyComment={onReplyComment}
           onResolveComment={onResolveComment}

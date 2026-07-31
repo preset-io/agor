@@ -1,16 +1,12 @@
 import type {
   AgorClient,
-  BoardComment,
-  BoardObject,
-  Branch,
   CommentReaction,
   ReactionSummary,
+  ThreadedComment,
   User,
 } from '@agor-live/client';
 import { groupReactions, isThreadRoot } from '@agor-live/client';
 import {
-  AppstoreOutlined,
-  BranchesOutlined,
   CheckOutlined,
   CloseOutlined,
   CommentOutlined,
@@ -38,22 +34,34 @@ import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MetaRow } from '../MetaRow';
-import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 
 const { Text, Title } = Typography;
 
-export interface CommentsPanelProps {
+/** The scope a thread belongs to, e.g. a board zone or a document section. */
+export interface CommentGroup {
+  key: string;
+  label: string;
+  icon?: React.ReactNode;
+  /** Lower ranks list first; ties sort by label. */
+  sortRank?: number;
+}
+
+export interface CommentsPanelProps<TComment extends ThreadedComment = ThreadedComment> {
   client: AgorClient | null;
-  boardId: string;
-  comments: BoardComment[];
+  comments: TComment[];
   userById: Map<string, User>;
   currentUserId: string;
-  boardObjects?: Record<string, BoardObject>; // For zone names
-  branchById?: Map<string, Branch>; // For branch names
+  /** Buckets threads by domain scope; the panel itself stays domain-agnostic. */
+  resolveGroup: (comment: TComment) => CommentGroup;
+  title?: string;
+  emptyDescription?: string;
+  /** Rendered above the composer, e.g. which section a new thread will anchor to. */
+  composerHint?: React.ReactNode;
   loading?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  onSendComment: (content: string) => void;
+  /** Omit to hide the composer, e.g. for read-only viewers. */
+  onSendComment?: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
   onToggleReaction?: (commentId: string, emoji: string) => void;
@@ -166,7 +174,7 @@ const EmojiPickerButton: React.FC<{
  * Individual reply component
  */
 const ReplyItem: React.FC<{
-  reply: BoardComment;
+  reply: ThreadedComment;
   userById: Map<string, User>;
   currentUserId: string;
   onToggleReaction?: (commentId: string, emoji: string) => void;
@@ -267,8 +275,8 @@ const ReplyItem: React.FC<{
  * Individual comment thread component (root + nested replies)
  */
 const CommentThread: React.FC<{
-  comment: BoardComment;
-  replies: BoardComment[];
+  comment: ThreadedComment;
+  replies: ThreadedComment[];
   userById: Map<string, User>;
   currentUserId: string;
   onReply?: (parentId: string, content: string) => void;
@@ -543,14 +551,15 @@ function checkMentionsUser(content: string, userName?: string, userEmail?: strin
 /**
  * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
-export const CommentsPanel: React.FC<CommentsPanelProps> = ({
+export function CommentsPanel<TComment extends ThreadedComment>({
   client,
-  boardId,
   comments,
   userById,
   currentUserId,
-  boardObjects = {},
-  branchById,
+  resolveGroup,
+  title = 'Comments',
+  emptyDescription = 'Start a conversation',
+  composerHint,
   loading = false,
   collapsed = false,
   onToggleCollapse,
@@ -561,7 +570,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
-}) => {
+}: CommentsPanelProps<TComment>) {
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
@@ -606,7 +615,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
 
   // Group replies by parent
   const repliesByParent = useMemo(() => {
-    const grouped: Record<string, BoardComment[]> = {};
+    const grouped: Record<string, ThreadedComment[]> = {};
     for (const reply of allReplies) {
       if (reply.parent_comment_id) {
         if (!grouped[reply.parent_comment_id]) {
@@ -620,7 +629,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
 
   // Check if a thread (including its replies) mentions the current user
   const threadMentionsUser = useMemo(() => {
-    return (thread: BoardComment) => {
+    return (thread: ThreadedComment) => {
       // Check thread root
       if (checkMentionsUser(thread.content, currentUserName, currentUserEmail)) {
         return true;
@@ -641,82 +650,27 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [threadRoots, filter]);
 
-  // Group filtered threads by scope (zone, branch, or board-level)
   const groupedThreads = useMemo(() => {
-    const groups: Record<
-      string,
-      {
-        type: 'zone' | 'branch' | 'board';
-        label: string;
-        color?: string;
-        threads: BoardComment[];
-      }
-    > = {};
+    const groups: Record<string, CommentGroup & { threads: TComment[] }> = {};
 
     for (const thread of filteredThreads) {
-      let groupKey = 'board';
-      let groupLabel = 'Board';
-      let groupType: 'zone' | 'branch' | 'board' = 'board';
-      let groupColor: string | undefined;
-
-      // Check if comment has relative positioning (pinned to zone/branch)
-      if (thread.position?.relative) {
-        const { parent_id, parent_type } = thread.position.relative;
-
-        if (parent_type === 'zone') {
-          groupKey = `zone-${parent_id}`;
-          const zone = boardObjects?.[`zone-${parent_id}`]; // Zone keys have 'zone-' prefix
-          // Zone objects have a label field and color
-          groupLabel = zone && 'label' in zone ? zone.label : 'Zone';
-          groupColor = zone && 'color' in zone ? zone.color : undefined;
-          groupType = 'zone';
-        } else if (parent_type === 'branch') {
-          groupKey = `branch-${parent_id}`;
-          const branch = branchById?.get(parent_id);
-          groupLabel = branch ? branch.name : 'Unknown Branch';
-          groupType = 'branch';
-        }
-      } else if (thread.branch_id) {
-        // Check for FK-based branch attachment
-        groupKey = `branch-${thread.branch_id}`;
-        const branch = branchById?.get(thread.branch_id);
-        groupLabel = branch ? branch.name : 'Unknown Branch';
-        groupType = 'branch';
+      const group = resolveGroup(thread);
+      if (!groups[group.key]) {
+        groups[group.key] = { ...group, threads: [] };
       }
-
-      if (!groups[groupKey]) {
-        groups[groupKey] = {
-          type: groupType,
-          label: groupLabel,
-          color: groupColor,
-          threads: [],
-        };
-      }
-
-      groups[groupKey].threads.push(thread);
+      groups[group.key].threads.push(thread);
     }
 
     return groups;
-  }, [filteredThreads, boardObjects, branchById]);
+  }, [filteredThreads, resolveGroup]);
 
-  // Sort groups by scope hierarchy: Board → Zones → Branches (larger to smaller)
-  const sortedGroupEntries = useMemo(() => {
-    const entries = Object.entries(groupedThreads);
-
-    return entries.sort(([, a], [, b]) => {
-      // Type priority: board (0) < zone (1) < branch (2)
-      const typeOrder = { board: 0, zone: 1, branch: 2 };
-      const aOrder = typeOrder[a.type];
-      const bOrder = typeOrder[b.type];
-
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-
-      // Within same type, sort alphabetically by label
-      return a.label.localeCompare(b.label);
-    });
-  }, [groupedThreads]);
+  const sortedGroupEntries = useMemo(
+    () =>
+      Object.entries(groupedThreads).sort(
+        ([, a], [, b]) => (a.sortRank ?? 0) - (b.sortRank ?? 0) || a.label.localeCompare(b.label)
+      ),
+    [groupedThreads]
+  );
 
   // Scroll to selected comment when it changes
   useEffect(() => {
@@ -758,7 +712,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         <Space>
           <CommentOutlined />
           <Title level={5} style={{ margin: 0 }}>
-            Comments
+            {title}
           </Title>
           <Badge
             count={filteredThreads.length}
@@ -829,7 +783,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           >
             <CommentOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
             <div>No comments yet</div>
-            <div style={{ fontSize: 12, marginTop: 8 }}>Start a conversation about this board</div>
+            <div style={{ fontSize: 12, marginTop: 8 }}>{emptyDescription}</div>
           </div>
         ) : (
           <Collapse
@@ -839,27 +793,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               key: groupKey,
               label: (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {group.type === 'board' && (
-                    <AppstoreOutlined style={{ fontSize: 14, color: token.colorPrimary }} />
-                  )}
-                  {group.type === 'zone' && group.color && (
-                    <div
-                      style={{
-                        width: 12,
-                        height: 12,
-                        // Transparent fill matching zone background
-                        backgroundColor: `${group.color}${Math.round(ZONE_CONTENT_OPACITY * 255)
-                          .toString(16)
-                          .padStart(2, '0')}`,
-                        // Solid border in zone color
-                        border: `1px solid ${group.color}`,
-                        borderRadius: 2,
-                      }}
-                    />
-                  )}
-                  {group.type === 'branch' && (
-                    <BranchesOutlined style={{ fontSize: 14, color: token.colorPrimary }} />
-                  )}
+                  {group.icon}
                   <Text strong>{group.label}</Text>
                   <Badge
                     count={group.threads.length}
@@ -908,57 +842,60 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       </div>
 
       {/* Input Box for new top-level comment */}
-      <div
-        style={{
-          padding: 12,
-          borderTop: `1px solid ${token.colorBorder}`,
-          backgroundColor: token.colorBgContainer,
-          display: 'flex',
-          gap: 8,
-          alignItems: 'flex-end',
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <AutocompleteTextarea
-            value={commentInputValue}
-            onChange={setCommentInputValue}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (commentInputValue.trim() && mutationGate.canMutate) {
-                  sendComment(commentInputValue);
-                  setCommentInputValue('');
-                }
-              }
-            }}
-            placeholder={
-              mutationGate.canMutate
-                ? 'Add a comment... (type @ for autocomplete)'
-                : (mutationGate.message ?? 'Add a comment...')
-            }
-            autoSize={{ minRows: 1, maxRows: 4 }}
-            client={client}
-            sessionId={null}
-            userById={userById}
-          />
-        </div>
-        <Tooltip
-          title={mutationGate.canMutate ? '' : (mutationGate.message ?? '')}
-          placement="topRight"
+      {sendComment && (
+        <div
+          style={{
+            padding: 12,
+            borderTop: `1px solid ${token.colorBorder}`,
+            backgroundColor: token.colorBgContainer,
+          }}
         >
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={() => {
-              if (commentInputValue.trim()) {
-                sendComment(commentInputValue);
-                setCommentInputValue('');
-              }
-            }}
-            disabled={!commentInputValue.trim() || !mutationGate.canMutate}
-          />
-        </Tooltip>
-      </div>
+          {composerHint && <div style={{ marginBottom: 8 }}>{composerHint}</div>}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <AutocompleteTextarea
+                value={commentInputValue}
+                onChange={setCommentInputValue}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (commentInputValue.trim() && mutationGate.canMutate) {
+                      sendComment(commentInputValue);
+                      setCommentInputValue('');
+                    }
+                  }
+                }}
+                placeholder={
+                  mutationGate.canMutate
+                    ? 'Add a comment... (type @ for autocomplete)'
+                    : (mutationGate.message ?? 'Add a comment...')
+                }
+                autoSize={{ minRows: 1, maxRows: 4 }}
+                client={client}
+                sessionId={null}
+                userById={userById}
+              />
+            </div>
+            <Tooltip
+              title={mutationGate.canMutate ? '' : (mutationGate.message ?? '')}
+              placement="topRight"
+            >
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                aria-label="Send comment"
+                onClick={() => {
+                  if (commentInputValue.trim()) {
+                    sendComment(commentInputValue);
+                    setCommentInputValue('');
+                  }
+                }}
+                disabled={!commentInputValue.trim() || !mutationGate.canMutate}
+              />
+            </Tooltip>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+}

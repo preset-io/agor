@@ -28,6 +28,7 @@ import {
   ApartmentOutlined,
   ArrowLeftOutlined,
   BulbOutlined,
+  CommentOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
@@ -96,6 +97,15 @@ import { BrandLogo } from '../components/BrandLogo';
 import { AgorEmojiPicker } from '../components/EmojiPickerInput';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { HighlightMatch } from '../components/HighlightMatch';
+import {
+  KNOWLEDGE_COMMENT_GUTTER_WIDTH,
+  type KnowledgeCommentAnchorInput,
+  KnowledgeCommentGutter,
+  KnowledgeCommentsPanel,
+  summarizeKnowledgeAnchors,
+  useKnowledgeDocumentComments,
+  useMeasuredHeadings,
+} from '../components/KnowledgeComments';
 import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
@@ -940,6 +950,28 @@ export function KnowledgePage({
     [activeSpace, namespaceSlugById, selectedNamespace?.slug]
   );
 
+  const activeDocNamespace = useMemo(
+    () =>
+      activeDoc
+        ? (namespaces.find((ns) => ns.namespace_id === activeDoc.namespace_id) ?? null)
+        : null,
+    [activeDoc, namespaces]
+  );
+  // Commenting follows namespace write access; read-only viewers still see threads.
+  const canCommentOnActiveDoc =
+    activeDocNamespace?.effective_permission === 'write' ||
+    activeDocNamespace?.effective_permission === 'own';
+
+  const commentableDocId = activeDoc && !isDraftDocument ? activeDoc.document_id : null;
+  const documentComments = useKnowledgeDocumentComments(client, commentableDocId);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [pendingAnchor, setPendingAnchor] = useState<KnowledgeCommentAnchorInput>({
+    anchor_slug: null,
+    anchor_label: null,
+  });
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  const documentBodyRef = useRef<HTMLDivElement | null>(null);
+
   const namespaceAclSubjectOptions = useMemo(() => {
     const users = new Map(userById);
     for (const user of namespaceUsers) users.set(user.user_id, user);
@@ -1030,6 +1062,56 @@ export function KnowledgePage({
       navigate(`${url.pathname}${url.search}${url.hash}`);
     },
     [navigate]
+  );
+
+  const readingContent = useMemo(
+    () =>
+      hydrateKbLinks(titleFromContent ? stripFirstMarkdownTitleLine(markdownDraft) : markdownDraft),
+    [hydrateKbLinks, markdownDraft, titleFromContent]
+  );
+
+  const commentsAvailable = Boolean(commentableDocId && client);
+  const commentHeadings = useMeasuredHeadings(
+    documentBodyRef,
+    commentsAvailable && !isEditing,
+    readingContent
+  );
+  const anchorSummary = useMemo(
+    () => summarizeKnowledgeAnchors(documentComments.comments, commentHeadings),
+    [documentComments.comments, commentHeadings]
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset panel state when the open document changes.
+  useEffect(() => {
+    setCommentsOpen(false);
+    setSelectedCommentId(null);
+    setPendingAnchor({ anchor_slug: null, anchor_label: null });
+  }, [commentableDocId]);
+
+  const scrollToSection = useCallback((slug: string) => {
+    documentBodyRef.current?.querySelector(`#${CSS.escape(slug)}`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, []);
+
+  const openCommentsForSection = useCallback(
+    (heading: { slug: string; text: string }) => {
+      setCommentsOpen(true);
+      setPendingAnchor({ anchor_slug: heading.slug, anchor_label: heading.text });
+      const firstThread = documentComments.comments.find(
+        (comment) => !comment.parent_comment_id && comment.anchor_slug === heading.slug
+      );
+      setSelectedCommentId(firstThread?.comment_id ?? null);
+    },
+    [documentComments.comments]
+  );
+
+  const addComment = useCallback(
+    (content: string, anchor: KnowledgeCommentAnchorInput) => {
+      void documentComments.addComment(content, anchor);
+    },
+    [documentComments]
   );
 
   const nextDraftTitle = useMemo(() => {
@@ -3393,6 +3475,25 @@ export function KnowledgePage({
                       >
                         {!isEditing ? (
                           <>
+                            {commentsAvailable && (
+                              <Button
+                                icon={<CommentOutlined />}
+                                type={commentsOpen ? 'primary' : 'default'}
+                                aria-pressed={commentsOpen}
+                                onClick={() => setCommentsOpen((open) => !open)}
+                              >
+                                Comments
+                                {anchorSummary.unresolvedTotal > 0 && (
+                                  <Tag
+                                    color="blue"
+                                    variant="filled"
+                                    style={{ marginInlineStart: 6, marginInlineEnd: 0 }}
+                                  >
+                                    {anchorSummary.unresolvedTotal}
+                                  </Tag>
+                                )}
+                              </Button>
+                            )}
                             {showReadActions && (
                               <>
                                 <Button
@@ -3517,21 +3618,28 @@ export function KnowledgePage({
                       </Flex>
                     ) : (
                       <div
+                        ref={documentBodyRef}
                         onClick={handleKbContentClick}
+                        className={commentsAvailable ? 'knowledge-comment-body' : undefined}
                         style={{
+                          position: 'relative',
                           padding: '8px 0 80px',
+                          paddingInlineStart: commentsAvailable
+                            ? KNOWLEDGE_COMMENT_GUTTER_WIDTH
+                            : undefined,
                           fontSize: 16,
                           lineHeight: 1.7,
                         }}
                       >
-                        <MarkdownRenderer
-                          content={hydrateKbLinks(
-                            titleFromContent
-                              ? stripFirstMarkdownTitleLine(markdownDraft)
-                              : markdownDraft
-                          )}
-                          headingAnchors
-                        />
+                        {commentsAvailable && (
+                          <KnowledgeCommentGutter
+                            headings={commentHeadings}
+                            summary={anchorSummary}
+                            activeSlug={pendingAnchor.anchor_slug}
+                            onSelectSection={openCommentsForSection}
+                          />
+                        )}
+                        <MarkdownRenderer content={readingContent} headingAnchors />
                       </div>
                     )}
                   </div>
@@ -3579,6 +3687,49 @@ export function KnowledgePage({
               </div>
             </main>
           </Panel>
+          {commentsAvailable && commentsOpen && (
+            <>
+              <PanelResizeHandle
+                style={{
+                  width: '4px',
+                  background: token.colorBorderSecondary,
+                  cursor: 'col-resize',
+                }}
+              />
+              <Panel id="knowledge-comments" order={3} defaultSize={26} minSize={18} maxSize={45}>
+                <KnowledgeCommentsPanel
+                  client={client}
+                  comments={documentComments.comments}
+                  headings={commentHeadings}
+                  userById={userById}
+                  currentUserId={currentUser?.user_id ?? 'unknown'}
+                  pendingAnchor={pendingAnchor}
+                  onClearPendingAnchor={() =>
+                    setPendingAnchor({ anchor_slug: null, anchor_label: null })
+                  }
+                  canComment={canCommentOnActiveDoc}
+                  loading={documentComments.loading}
+                  error={documentComments.error}
+                  onClose={() => setCommentsOpen(false)}
+                  onAddComment={addComment}
+                  onReplyComment={(parentId, content) => {
+                    void documentComments.replyToComment(parentId, content);
+                  }}
+                  onToggleResolved={(commentId) => {
+                    void documentComments.toggleResolved(commentId);
+                  }}
+                  onToggleReaction={(commentId, emoji) => {
+                    void documentComments.toggleReaction(commentId, emoji);
+                  }}
+                  onDeleteComment={(commentId) => {
+                    void documentComments.deleteComment(commentId);
+                  }}
+                  selectedCommentId={selectedCommentId}
+                  onSelectSection={scrollToSection}
+                />
+              </Panel>
+            </>
+          )}
         </PanelGroup>
       </Content>
 
