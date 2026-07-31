@@ -83,6 +83,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
+  isTerminalTaskStatus,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -164,11 +165,6 @@ import {
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
 import { createSessionMcpTokenAfterHooks } from './utils/session-mcp-token-hook.js';
-import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
-import {
-  isTerminalQueueProcessingSuppressed,
-  sessionCanStartTask,
-} from './utils/session-task-state.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -338,28 +334,6 @@ export function isPromptFlowPatchOnly(data: unknown): boolean {
   const keys = Object.keys(data);
   if (keys.length === 0) return false;
   return keys.every((key) => PROMPT_FLOW_PATCH_FIELDS.includes(key));
-}
-
-export function shouldRunSessionPostTurnHooks(
-  session: Pick<Session, 'status' | 'ready_for_prompt'>
-): boolean {
-  return sessionCanStartTask(session.status, session.ready_for_prompt);
-}
-
-export function shouldDrainQueueAfterSessionPostTurnPatch(
-  session: Pick<Session, 'status' | 'ready_for_prompt'>,
-  params?: Params
-): boolean {
-  return (
-    shouldRunSessionPostTurnHooks(session) &&
-    session.ready_for_prompt === true &&
-    !isTerminalQueueProcessingSuppressed(params)
-  );
-}
-
-export function getTrustedSessionTenantId(session: unknown): string | undefined {
-  const tenantId = (session as { tenant_id?: unknown } | undefined)?.tenant_id;
-  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
 }
 
 export async function enrichSessionFindResultWithRemoteRelationships(
@@ -581,6 +555,9 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
       : undefined;
   if (!write || Object.keys(write).some((field) => !EXECUTOR_TASK_PATCH_FIELDS.has(field))) {
     throw new Forbidden('Task patch contains fields that are not executor-managed');
+  }
+  if (isTerminalTaskStatus(write.status as Task['status'] | undefined)) {
+    throw new Forbidden('Executor terminal outcomes must use reportExecutorSettlement');
   }
 
   return context;
@@ -2742,81 +2719,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         sessionMcpTokenAfterHooks.create,
         // TODO: OpenCode session creation moved to executor - implement via IPC if needed
       ],
-      patch: [
-        async (context) => {
-          // Automatically run post-turn side effects when a session becomes promptable.
-          // Historically that meant IDLE; failed terminal tasks are now promptable too
-          // (status=failed, ready_for_prompt=true) so the UI can surface the failure
-          // without blocking queue draining or gateway finalization.
-          const session = Array.isArray(context.result) ? context.result[0] : context.result;
-
-          if (session && shouldRunSessionPostTurnHooks(session)) {
-            // Flush the gateway outbound buffer (fire-and-forget).
-            // When a GitHub/Shortcut-connected session finishes its turn, post
-            // the last buffered message as a PR/issue/story comment. Must happen
-            // before queue processing so the response posts before the next prompt.
-            //
-            // Defer outside the just-finished transaction, then re-enter a fresh
-            // tenant scope so gateway DB work keeps Cloud RLS context without
-            // inheriting a committed transaction object.
-            deferWithTenantContext(context.params, async () => {
-              try {
-                const gatewayService = context.app.service('gateway') as unknown as GatewayService;
-                await gatewayService.flushOutboundBuffer(session.session_id);
-                await gatewayService.updateProgress({
-                  session_id: session.session_id,
-                  state: 'done',
-                });
-              } catch (error) {
-                console.warn(
-                  `[gateway] Failed to flush gateway buffers/status for session ${shortId(session.session_id)}:`,
-                  error
-                );
-              }
-            });
-
-            if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
-              const sessionTenantId = getTrustedSessionTenantId(session);
-              // Same fresh-scope pattern: queue processing must run outside the
-              // outer transaction but still inside the session tenant for RLS.
-              // Some completion/background paths have minimal params, so this
-              // relies on params.tenant, current tenant ALS, the already-returned
-              // session row tenant_id, or static tenant config and otherwise
-              // fails closed.
-              deferWithSessionQueueTenantScope(
-                {
-                  db,
-                  config,
-                  sessionId: session.session_id,
-                  params: context.params,
-                  tenantIdHint: sessionTenantId,
-                  label: 'SessionsService.after.patch queue drain',
-                },
-                async (queueParams) => {
-                  console.log(
-                    `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became promptable (${session.status}), checking for queued tasks...`
-                  );
-
-                  await sessionsService.triggerQueueProcessing(session.session_id, queueParams);
-                },
-                (error) => {
-                  console.error(
-                    `❌ [SessionsService.after.patch] Failed to process queue for session ${shortId(session.session_id)}:`,
-                    error
-                  );
-                  // Don't throw - queue processing failure shouldn't break session patches
-                }
-              );
-            } else {
-              console.log(
-                `⏭️  [SessionsService.after.patch] Queue drain suppressed for session ${shortId(session.session_id)} (suppressTerminalQueueProcessing or not ready)`
-              );
-            }
-          }
-
-          return context;
-        },
-      ],
+      patch: [],
     },
   });
   app.service('leaderboard').hooks({
@@ -2938,6 +2841,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
       reportTerminationComplete: [requireExecutorRuntimeToken()],
+      reportExecutorSettlement: [requireExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireExecutorRuntimeToken()],
       remove: [

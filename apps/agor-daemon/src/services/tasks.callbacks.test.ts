@@ -1,5 +1,5 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
-import { type Session, type Task, TaskStatus } from '@agor/core/types';
+import { type MessageID, type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { TasksService } from './tasks';
@@ -114,6 +114,8 @@ function makeService(
     return { ...target };
   });
   const triggerQueueProcessing = vi.fn(async () => undefined);
+  const gatewayFlush = vi.fn(async () => undefined);
+  const gatewayProgress = vi.fn(async () => undefined);
   const messagesFind = vi.fn(async () => [
     {
       role: 'assistant',
@@ -146,6 +148,9 @@ function makeService(
       }
       if (name === 'messages') return { find: messagesFind };
       if (name === 'branches') return { get: vi.fn() };
+      if (name === 'gateway') {
+        return { flushOutboundBuffer: gatewayFlush, updateProgress: gatewayProgress };
+      }
       throw new Error(`unexpected service ${name}`);
     }),
   };
@@ -157,15 +162,46 @@ function makeService(
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
+    gatewayFlush,
+    gatewayProgress,
     getStoredTask: (id = taskId) => tasksById.get(id),
     childSession,
   };
 }
 
 describe('TasksService completion callbacks', () => {
+  it('does not inject a BTW result twice after terminal reconciliation is retried', async () => {
+    const { service, childSession, messagesFind, getStoredTask } = makeService({
+      task: {
+        metadata: {
+          btw_result_delivery: {
+            parent_session_id: parentSessionId,
+            message_id: '018f0000-0000-7000-8000-000000000501' as MessageID,
+            delivered_at: '2026-01-01T00:00:05.000Z',
+          },
+        },
+      },
+      childSession: {
+        fork_origin: 'btw',
+        genealogy: {
+          forked_from_session_id: parentSessionId,
+          children: [],
+        },
+      },
+    });
+
+    await (
+      service as unknown as {
+        injectBtwResultMessage(task: Task, session: Session): Promise<void>;
+      }
+    ).injectBtwResultMessage(getStoredTask()!, childSession);
+
+    expect(messagesFind).not.toHaveBeenCalled();
+  });
+
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
-    const { service, createPending } = makeService();
+    const { service, createPending, gatewayFlush, gatewayProgress } = makeService();
     const tx = {
       execute: vi.fn(async () => []),
     };
@@ -209,8 +245,18 @@ describe('TasksService completion callbacks', () => {
       'tx:committed',
       'tx:start',
       'tx:committed',
+      'tx:start',
+      'tx:committed',
     ]);
     expect(createPending).toHaveBeenCalledTimes(1);
+    expect(gatewayFlush).toHaveBeenCalledWith(childSessionId);
+    expect(gatewayProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: childSessionId,
+        task_id: taskId,
+        state: 'done',
+      })
+    );
   });
 
   it('queues exactly one templated callback with last-message metadata for a completed subsession task', async () => {
@@ -270,6 +316,19 @@ describe('TasksService completion callbacks', () => {
         }),
       ])
     );
+  });
+
+  it('uses the same terminal callback for a failed task', async () => {
+    const { service, createPending } = makeService();
+
+    await service.patch(taskId, {
+      status: TaskStatus.FAILED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+      error_message: 'SDK activity stalled (progress_stalled).',
+    });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    expect(createPending.mock.calls[0][0].full_prompt).toContain('failed');
   });
 
   it('includeOriginalPrompt=false queues one templated callback without an original prompt section', async () => {

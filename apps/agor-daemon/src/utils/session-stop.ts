@@ -23,8 +23,8 @@ export interface StopSessionDeps {
 }
 
 /**
- * Mark a stopped session promptable without letting the session after.patch
- * hook drain the queue while the Stop route still holds the turn lock.
+ * Mark a stopped session promptable without draining the queue while the Stop
+ * route still holds the turn lock.
  *
  * The route schedules queue processing after the lock is released. Doing it
  * here would deadlock/retry against the same in-flight lock.

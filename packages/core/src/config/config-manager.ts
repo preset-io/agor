@@ -548,7 +548,9 @@ function validateConfig(config: AgorConfig): void {
     'mode',
     'first_progress_timeout_ms',
     'abort_grace_ms',
+    'operation_absolute_timeout_ms',
     'claude_idle_timeout_ms',
+    'codex_idle_timeout_ms',
   ]);
   if (config.execution?.sdk_watchdog) {
     resolveSdkWatchdogConfig(config.execution);

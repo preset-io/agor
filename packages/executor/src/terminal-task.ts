@@ -1,16 +1,9 @@
-/** Executor-owned task finalization. */
-import { shortId } from '@agor/core/db';
-import type { Task } from '@agor/core/types';
-import { isTerminalTaskStatus, type TaskStatus } from '@agor/core/types';
+/** Executor-side settlement reporting. The daemon owns durable terminality. */
+import type { ExecutorOutcomePatch, ExecutorSettlementStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
-export type AgenticToolTerminalStatus =
-  | typeof TaskStatus.COMPLETED
-  | typeof TaskStatus.FAILED
-  | typeof TaskStatus.STOPPED
-  | typeof TaskStatus.TIMED_OUT;
-
-export type AgenticToolTaskPatch = Omit<Partial<Task>, 'status' | 'completed_at'>;
+export type AgenticToolTerminalStatus = ExecutorSettlementStatus;
+export type AgenticToolTaskPatch = ExecutorOutcomePatch;
 
 /**
  * Normalized result returned by an agentic-tool adapter after its runtime has
@@ -23,29 +16,57 @@ export interface AgenticToolOutcome {
   error?: Error;
 }
 
+export async function awaitRuntimeCleanup(
+  cleanup: Promise<void>,
+  timeoutMs: number,
+  label: string
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      cleanup,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} cleanup exceeded ${timeoutMs}ms`)),
+          timeoutMs
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
- * Persist the one normalized outcome produced after an agentic-tool runtime
- * has settled. Already-terminal tasks are left untouched so daemon-owned
- * termination and process fail-safes remain idempotent.
+ * Report the one normalized outcome produced after an agentic-tool runtime
+ * has settled. The daemon applies lifecycle race guards and terminal timing.
  */
 export async function finalizeTask(
   client: AgorClient,
   taskId: string,
   outcome: AgenticToolOutcome
 ): Promise<boolean> {
-  const current = (await client.service('tasks').get(taskId)) as Task;
-  if (isTerminalTaskStatus(current.status)) {
-    console.log(
-      `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${outcome.status} finalization`
-    );
-    return false;
-  }
-  await client.service('tasks').patch(taskId, {
-    ...(outcome.taskPatch ?? {}),
+  const settled = await client.service('tasks').reportExecutorSettlement({
+    task_id: taskId,
+    kind: 'quiesced',
     status: outcome.status,
-    completed_at: new Date().toISOString(),
+    task_patch: outcome.taskPatch,
   });
-  return true;
+  return settled.status === outcome.status;
+}
+
+export async function requestContainment(
+  client: AgorClient,
+  taskId: string,
+  error: unknown
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  await client.service('tasks').reportExecutorSettlement({
+    task_id: taskId,
+    kind: 'containment_required',
+    error_message: `Agentic-tool runtime cleanup could not be verified: ${message}`,
+  });
 }
 
 /**
@@ -62,5 +83,17 @@ export async function tryFinalizeTask(
   } catch (patchError) {
     console.error('[executor] Failed to update task status:', patchError);
     return false;
+  }
+}
+
+export async function tryRequestContainment(
+  client: AgorClient,
+  taskId: string,
+  error: unknown
+): Promise<void> {
+  try {
+    await requestContainment(client, taskId, error);
+  } catch (reportError) {
+    console.error('[executor] Failed to request runtime containment:', reportError);
   }
 }

@@ -52,12 +52,14 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
+export { reportCodexActivity } from './sdk-activity.js';
+import { isCodexReconnectEvent, reportCodexActivity } from './sdk-activity.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 type CodexSdkReasoningEffort = NonNullable<
@@ -1285,13 +1287,13 @@ export class CodexPromptService {
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
-        const activityEvent = event as { type: string; payload?: { type?: string } };
-        const activityPayloadType =
-          activityEvent.type === 'event_msg' ? activityEvent.payload?.type : undefined;
-        reportSdkActivity(
+        reportCodexActivity(
           onActivity,
-          'codex',
-          activityPayloadType ? `${activityEvent.type}.${activityPayloadType}` : activityEvent.type
+          event as {
+            type: string;
+            item?: { type?: string };
+            payload?: { type?: string };
+          }
         );
 
         // Check if stop was requested
@@ -1573,12 +1575,8 @@ export class CodexPromptService {
           }
 
           case 'error': {
-            const streamErrorMessage = (event as { message?: unknown }).message;
-            if (
-              typeof streamErrorMessage === 'string' &&
-              /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+\b/.test(streamErrorMessage)
-            ) {
-              console.warn(`⚠️  [Codex] ${streamErrorMessage}`);
+            if (isCodexReconnectEvent(event)) {
+              console.warn(`⚠️  [Codex] ${event.message}`);
               break;
             }
 

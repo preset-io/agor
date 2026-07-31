@@ -8,6 +8,7 @@
 import {
   AGOR_USER_ENV_KEYS_VAR,
   type ApiKeyName,
+  resolveSdkWatchdogConfig,
   stripProviderCredentialEnvironment,
 } from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
@@ -24,10 +25,15 @@ import type {
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import type { AgenticToolOutcome, AgenticToolTaskPatch } from '../../terminal-task.js';
+import {
+  type AgenticToolOutcome,
+  type AgenticToolTaskPatch,
+  awaitRuntimeCleanup,
+} from '../../terminal-task.js';
 import { getInteractionAbortOutcome, isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
@@ -173,7 +179,7 @@ export function createStreamingCallbacks(
   client: AgorClient,
   toolName: string,
   sessionId: SessionID,
-  onPulse?: StreamingCallbacks['onPulse']
+  onActivity?: StreamingCallbacks['onActivity']
 ): StreamingCallbacks {
   // Use session_id passed in (available before any streaming starts)
   // This ensures thinking events have session_id even if they fire before onStreamStart
@@ -191,7 +197,7 @@ export function createStreamingCallbacks(
   };
 
   return {
-    onPulse,
+    onActivity,
     onStreamStart: async (message_id, data) => {
       // Initialize sequence counter for this message
       sequenceCounters.set(message_id, 0);
@@ -268,12 +274,12 @@ export function createExecutionContext(
   client: AgorClient,
   toolName: string,
   sessionId: SessionID,
-  onPulse?: StreamingCallbacks['onPulse']
+  onActivity?: StreamingCallbacks['onActivity']
 ): ExecutionContext {
   return {
     client,
     repos: createFeathersBackedRepositories(client),
-    callbacks: createStreamingCallbacks(client, toolName, sessionId, onPulse),
+    callbacks: createStreamingCallbacks(client, toolName, sessionId, onActivity),
   };
 }
 
@@ -437,8 +443,9 @@ export async function executeToolTask(params: {
   abortController: AbortController;
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
-  onPulse?: StreamingCallbacks['onPulse'];
+  onActivity?: StreamingCallbacks['onActivity'];
   messageSource?: MessageSource;
+  resolvedConfig?: ResolvedConfigSlice;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -497,7 +504,7 @@ export async function executeToolTask(params: {
     }
 
     // Create execution context
-    const ctx = createExecutionContext(client, toolName, sessionId, params.onPulse);
+    const ctx = createExecutionContext(client, toolName, sessionId, params.onActivity);
 
     // Create tool instance using factory function
     // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -506,23 +513,20 @@ export async function executeToolTask(params: {
     // Wire up abort signal to tool's stopTask method. The primary path is a
     // durable STOPPING patch over the socket; SIGTERM remains a fallback.
     abortHandler = () => {
-      abortCompletion ??= (async () => {
-        console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
-        if (tool.stopTask) {
-          try {
-            const stopResult = await tool.stopTask(sessionId, taskId);
-            if (stopResult.success) {
-              console.log(`[${toolName}] Tool stopped successfully`);
-            } else {
-              console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
-            }
-          } catch (error) {
-            console.error(`[${toolName}] Error calling stopTask:`, error);
+      abortCompletion ??= awaitRuntimeCleanup(
+        (async () => {
+          console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+          if (!tool.stopTask) throw new Error(`${toolName} does not implement stopTask`);
+          const stopResult = await tool.stopTask(sessionId, taskId);
+          if (!stopResult.success) {
+            throw new Error(stopResult.reason ?? `${toolName} stop was not confirmed`);
           }
-        } else {
-          console.warn(`[${toolName}] Tool does not implement stopTask method`);
-        }
-      })();
+          console.log(`[${toolName}] Tool stopped successfully`);
+        })(),
+        resolveSdkWatchdogConfig(params.resolvedConfig?.execution).abort_grace_ms,
+        toolName
+      );
+      void abortCompletion.catch(() => undefined);
       return abortCompletion;
     };
 
@@ -566,7 +570,7 @@ export async function executeToolTask(params: {
     const taskStatus =
       interactionOutcome?.status ??
       (result.wasStopped
-        ? TaskStatus.STOPPED
+        ? TaskStatus.FAILED
         : result.hadError
           ? TaskStatus.FAILED
           : TaskStatus.COMPLETED);
@@ -580,12 +584,14 @@ export async function executeToolTask(params: {
     // Build patch data
     const patchData: AgenticToolTaskPatch = {
       ...(interactionOutcome ? { error_message: interactionOutcome.errorMessage } : {}),
+      ...(result.wasStopped && !interactionOutcome
+        ? { error_message: 'Agentic-tool runtime stopped without a daemon termination request.' }
+        : {}),
     };
 
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
     if (gitStateAtEnd) {
-      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
         ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
@@ -676,7 +682,6 @@ export async function executeToolTask(params: {
     // Add git_state if we captured a SHA
     // Note: This will be deep-merged with existing git_state by the repository layer
     if (gitStateAtEnd) {
-      // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
         ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,

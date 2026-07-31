@@ -6,18 +6,13 @@
  */
 
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
-import type {
-  ExecutorPulseKind,
-  MessageSource,
-  PermissionMode,
-  SessionID,
-  TaskID,
-} from '@agor/core/types';
+import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type {
   ExecutorResult,
   InteractionMode,
   ResolvedConfigSlice,
 } from '../../payload-types.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';
 
@@ -40,7 +35,7 @@ export type ToolRunner = (params: {
   agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
-  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+  onActivity?: SdkActivityCallback;
   interactionMode?: InteractionMode;
 }) => Promise<AgenticToolOutcome | undefined>;
 
@@ -143,7 +138,7 @@ export class ToolRegistry {
       messageSource?: MessageSource;
       agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
-      onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+      onActivity?: SdkActivityCallback;
       interactionMode?: InteractionMode;
     }
   ): Promise<AgenticToolOutcome | undefined> {

@@ -5,11 +5,12 @@
  * to avoid duplicating the stale-detection / icon-selection logic.
  */
 
+import type { TaskRuntimeProgressState } from '@agor-live/client';
 import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { Spin, Tooltip } from 'antd';
 import type React from 'react';
 
-export type ToolStatus = 'success' | 'error' | 'pending' | 'stale';
+export type ToolStatus = 'success' | 'error' | 'pending' | 'stalled' | 'stale';
 
 /**
  * Tools whose invocation payload itself represents terminal state, even without
@@ -31,8 +32,8 @@ interface ToolStatusInput {
    * them have a subsequent result, so they all remain "pending".
    */
   isPotentiallyRunning: boolean;
-  /** Whether the parent task is still running */
-  isTaskRunning: boolean;
+  /** How the parent task should present unfinished work */
+  taskProgressState: TaskRuntimeProgressState;
 }
 
 /**
@@ -42,16 +43,44 @@ interface ToolStatusInput {
  * - Has result + error → 'error'
  * - Has result + no error → 'success'
  * - No result + potentially running + task running → 'pending' (spinner)
+ * - No result + potentially running + task stalled → 'stalled' (neutral)
  * - No result + (not potentially running OR task done) → 'stale' (agent moved on)
  */
 export function deriveToolStatus({
   hasResult,
   isError,
   isPotentiallyRunning,
-  isTaskRunning,
+  taskProgressState,
 }: ToolStatusInput): ToolStatus {
   if (hasResult) return isError ? 'error' : 'success';
-  return isPotentiallyRunning && isTaskRunning ? 'pending' : 'stale';
+  if (!isPotentiallyRunning) return 'stale';
+  if (taskProgressState === 'working' || taskProgressState === 'waiting') return 'pending';
+  return taskProgressState === 'stalled' ? 'stalled' : 'stale';
+}
+
+function renderNeutralStatus(label: string): React.ReactNode {
+  return (
+    <Tooltip title={label} trigger={['hover', 'focus']}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
+        style={{
+          display: 'inline-flex',
+          padding: 0,
+          color: 'inherit',
+          lineHeight: 1,
+          background: 'none',
+          border: 0,
+          cursor: 'help',
+        }}
+      >
+        <ClockCircleOutlined aria-hidden style={{ fontSize: 14 }} />
+      </button>
+    </Tooltip>
+  );
 }
 
 /** Render the icon for a given tool status. */
@@ -63,11 +92,9 @@ export function renderToolStatusIcon(status: ToolStatus): React.ReactNode {
       return <CheckCircleOutlined style={{ fontSize: 14 }} />;
     case 'pending':
       return <Spin size="small" />;
+    case 'stalled':
+      return renderNeutralStatus('Agent progress stalled');
     case 'stale':
-      return (
-        <Tooltip title="Agent moved on — result not captured">
-          <ClockCircleOutlined style={{ fontSize: 14 }} />
-        </Tooltip>
-      );
+      return renderNeutralStatus('Agent moved on — result not captured');
   }
 }

@@ -23,9 +23,9 @@ export interface TodoItem {
  * parent task is no longer running. They never appear in the raw TodoWrite
  * tool input and are only produced by the rendering layer.
  *
- * - 'stopped': user explicitly halted the task (TaskStatus.STOPPED/STOPPING)
- * - 'unknown': task ended (completed/failed/timed_out) without the agent
- *   marking this item — we can't tell whether it actually finished
+ * - 'stopped': a user halt reached terminal TaskStatus.STOPPED
+ * - 'unknown': the task is stopping or ended without the agent marking this
+ *   item — we can't tell whether it actually finished
  */
 export type RenderableTodoStatus = TodoItem['status'] | 'stopped' | 'unknown';
 

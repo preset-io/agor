@@ -31,7 +31,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -416,18 +416,36 @@ export class CopilotPromptService {
       // Wire up event listeners for streaming
       const sessionEvents = copilotSession as unknown as CopilotSessionEvents;
 
-      for (const eventName of [
-        'assistant.turn_start',
-        'assistant.turn_end',
-        'assistant.reasoning_delta',
-        'subagent.started',
-        'subagent.completed',
-      ]) {
-        sessionEvents.on(eventName, () => reportSdkActivity(onActivity, 'copilot', eventName));
-      }
+      sessionEvents.on('assistant.turn_start', () =>
+        onActivity?.({ type: 'sdk_started', detail: 'assistant.turn_start' })
+      );
+      sessionEvents.on('assistant.turn_end', () =>
+        onActivity?.({ type: 'progress', detail: 'assistant.turn_end' })
+      );
+      sessionEvents.on('assistant.reasoning_delta', () =>
+        onActivity?.({ type: 'progress', detail: 'assistant.reasoning_delta' })
+      );
+      sessionEvents.on('subagent.started', (event) => {
+        if (event.data.toolCallId) {
+          onActivity?.({
+            type: 'operation_started',
+            id: `subagent:${event.data.toolCallId}`,
+            kind: event.data.agentName,
+          });
+        } else {
+          onActivity?.({ type: 'unknown_activity', detail: 'subagent.started_without_id' });
+        }
+      });
+      sessionEvents.on('subagent.completed', (event) => {
+        if (event.data.toolCallId) {
+          onActivity?.({ type: 'operation_finished', id: `subagent:${event.data.toolCallId}` });
+        } else {
+          onActivity?.({ type: 'unknown_activity', detail: 'subagent.completed_without_id' });
+        }
+      });
 
       sessionEvents.on('assistant.message_delta', (event) => {
-        reportSdkActivity(onActivity, 'copilot', 'assistant.message_delta');
+        onActivity?.({ type: 'progress', detail: 'assistant.message_delta' });
         const chunk = event.data.deltaContent;
         if (chunk) {
           textChunks.push(chunk);
@@ -435,11 +453,11 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('tool.execution_start', (event) => {
-        reportSdkActivity(onActivity, 'copilot', 'tool.execution_start');
         const data = event.data;
         const toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
           : data.toolName;
+        onActivity?.({ type: 'operation_started', id: data.toolCallId, kind: toolName });
 
         // Yield tool_start event (collected below in event loop)
         toolUses.push({
@@ -450,11 +468,15 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('tool.execution_complete', (event) => {
-        reportSdkActivity(onActivity, 'copilot', 'tool.execution_complete');
         const data = event.data;
         const _toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
           : data.toolName;
+        onActivity?.({
+          type: 'operation_finished',
+          id: data.toolCallId,
+          outcome: data.status,
+        });
 
         // Update existing tool use entry with output/status
         const existing = toolUses.find((t) => t.id === data.toolCallId);
@@ -465,7 +487,7 @@ export class CopilotPromptService {
       });
 
       sessionEvents.on('assistant.usage', (event) => {
-        reportSdkActivity(onActivity, 'copilot', 'assistant.usage');
+        onActivity?.({ type: 'progress', detail: 'assistant.usage' });
         const data = event.data;
         usageData = {
           input_tokens: data.input_tokens,

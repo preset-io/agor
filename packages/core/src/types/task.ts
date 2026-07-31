@@ -46,11 +46,17 @@ export interface ExecutorPulse {
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
+  progress?: Omit<ExecutorPulse, 'observed_at'> & {
+    kind: typeof ExecutorPulseKind.PROGRESS;
+  };
 }
 
 export const SDK_WATCHDOG_FAILURE_REASONS = [
   'no_first_progress',
   'progress_stalled',
+  'operation_stalled',
+  'operation_timed_out',
+  'wait_timed_out',
   'unknown_activity',
 ] as const;
 
@@ -67,6 +73,8 @@ export interface SdkFailure {
   detected_at: string;
   tool: PersistedAgenticToolName;
   last_pulse?: ExecutorPulse;
+  /** Executor-local pulse sequence captured when the watchdog made its decision. */
+  pulse_sequence_at_detection?: number;
   elapsed_ms?: number;
   watchdog_action?: 'would_fire' | 'enforced';
   unknown_event_count?: number;
@@ -76,14 +84,19 @@ export interface SdkFailure {
 
 export type SdkHealthFailureInput = Pick<
   SdkFailure,
-  'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
+  | 'elapsed_ms'
+  | 'watchdog_action'
+  | 'unknown_event_count'
+  | 'sdk_version'
+  | 'pulse_sequence_at_detection'
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
 export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
   | 'heartbeat_lost'
-  | 'sdk_health_failure';
+  | 'sdk_health_failure'
+  | 'runtime_cleanup_failed';
 
 /**
  * Expiring, database-fenced ownership of one containment attempt.
@@ -159,6 +172,12 @@ export interface TaskMetadata {
     queued_task_id?: TaskID;
     dispatched_at: string;
   }>;
+  /** Durable idempotency marker for the system message emitted by a BTW fork. */
+  btw_result_delivery?: {
+    parent_session_id: SessionID;
+    message_id: MessageID;
+    delivered_at: string;
+  };
   /**
    * Marks a task whose prompt was authored by the daemon (not typed by a
    * human). Used by widget auto-resume so the UI can label the queued
@@ -411,6 +430,8 @@ export interface Task {
   executor_mode?: ExecutorMode;
   /** Latest bounded SDK activity fact; this is not an event history. */
   latest_executor_pulse?: ExecutorPulse;
+  /** Latest accepted meaningful-progress pulse, retained across later non-progress activity. */
+  latest_executor_progress?: ExecutorPulse & { kind: typeof ExecutorPulseKind.PROGRESS };
   /** Bounded SDK/process health diagnosis. */
   sdk_failure?: SdkFailure;
   /** Durable intent while verified local containment is pending. */
@@ -418,4 +439,113 @@ export interface Task {
   /** Immutable watchdog policy snapshot for this dispatch. */
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
+}
+
+/**
+ * Result fields an executor may report after its agentic-tool runtime has
+ * quiesced. Lifecycle fields are deliberately absent: the daemon derives and
+ * commits terminal timing atomically.
+ */
+export type ExecutorOutcomePatch = Omit<
+  Partial<
+    Pick<
+      Task,
+      | 'git_state'
+      | 'message_range'
+      | 'model'
+      | 'raw_sdk_response'
+      | 'normalized_sdk_response'
+      | 'computed_context_window'
+      | 'tool_use_count'
+      | 'duration_ms'
+      | 'agent_session_id'
+      | 'error_message'
+      | 'report'
+    >
+  >,
+  'git_state'
+> & {
+  /** Repository settlement deep-merges this with the immutable start snapshot. */
+  git_state?: Partial<Task['git_state']>;
+};
+
+export type ExecutorSettlementStatus =
+  | typeof TaskStatus.COMPLETED
+  | typeof TaskStatus.FAILED
+  | typeof TaskStatus.TIMED_OUT;
+
+/**
+ * One semantic report from the executor finalizer. A quiesced runtime may be
+ * settled normally; cleanup uncertainty must converge on daemon containment.
+ */
+export type ExecutorSettlementInput =
+  | {
+      task_id: string;
+      kind: 'quiesced';
+      status: ExecutorSettlementStatus;
+      task_patch?: ExecutorOutcomePatch;
+    }
+  | {
+      task_id: string;
+      kind: 'containment_required';
+      error_message: string;
+    };
+
+export type TaskRuntimeProgressState = 'working' | 'waiting' | 'stalled' | 'terminal' | 'inactive';
+
+const STALL_DIAGNOSIS_REASONS: ReadonlySet<SdkFailureReason> = new Set([
+  'no_first_progress',
+  'progress_stalled',
+  'operation_stalled',
+  'operation_timed_out',
+  'wait_timed_out',
+]);
+
+/**
+ * Shared, read-only runtime presentation projection for UI and gateway
+ * consumers. It never invents a durable lifecycle state and never equates a
+ * RUNNING row or fresh wrapper heartbeat with meaningful SDK progress.
+ */
+export function deriveTaskRuntimeProgressState(
+  task: Pick<Task, 'status' | 'latest_executor_pulse' | 'latest_executor_progress' | 'sdk_failure'>
+): TaskRuntimeProgressState {
+  if (isTerminalTaskStatus(task.status)) return 'terminal';
+  if (!EXECUTING_TASK_STATUSES.has(task.status)) return 'inactive';
+
+  const failure = task.sdk_failure;
+  const latestProgress =
+    task.latest_executor_progress ??
+    (task.latest_executor_pulse?.kind === ExecutorPulseKind.PROGRESS
+      ? task.latest_executor_pulse
+      : undefined);
+  const supersededObserveDiagnosis =
+    failure?.watchdog_action === 'would_fire' &&
+    failure.termination === 'not_requested' &&
+    latestProgress !== undefined &&
+    (failure.pulse_sequence_at_detection !== undefined
+      ? latestProgress.sequence > failure.pulse_sequence_at_detection
+      : Date.parse(latestProgress.observed_at) > Date.parse(failure.detected_at));
+  if (failure && STALL_DIAGNOSIS_REASONS.has(failure.reason) && !supersededObserveDiagnosis) {
+    return 'stalled';
+  }
+  // STOPPING is containment work, not evidence that the agentic tool is still
+  // making progress. Its durable status remains available to consumers.
+  if (task.status === TaskStatus.STOPPING) return 'inactive';
+
+  if (
+    task.status === TaskStatus.AWAITING_PERMISSION ||
+    task.status === TaskStatus.AWAITING_INPUT ||
+    task.latest_executor_pulse?.kind === ExecutorPulseKind.WAITING
+  ) {
+    return 'waiting';
+  }
+
+  if (
+    task.latest_executor_pulse?.kind === ExecutorPulseKind.SDK_STARTED ||
+    task.latest_executor_pulse?.kind === ExecutorPulseKind.PROGRESS ||
+    latestProgress
+  ) {
+    return 'working';
+  }
+  return 'inactive';
 }

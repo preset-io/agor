@@ -20,6 +20,7 @@ import {
   PermissionScope,
   PermissionStatus,
   shortId,
+  type TaskRuntimeProgressState,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -87,7 +88,7 @@ interface MessageBlockProps {
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
   userById?: Map<string, User>;
   currentUserId?: string;
-  isTaskRunning?: boolean; // Whether the task is running (for loading state)
+  taskProgressState?: TaskRuntimeProgressState;
   agentic_tool?: string; // Agentic tool name for showing tool icon
   sessionId?: string | null;
   taskId?: string;
@@ -318,7 +319,7 @@ function DaemonRestartNotice({
 //     gets a new ref each chunk — correct: it should re-render)
 //   - `userById`: from AppUserDataContext (stable across session patches)
 //   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `teammateEmoji`,
-//     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
+//     `taskProgressState`, `isLatestMessage`, `isFirstPending*`: primitives or
 //     stable derived values
 //   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
 //     and passed through useMemo'd AppActionsContext
@@ -326,7 +327,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   message,
   userById = new Map(),
   currentUserId,
-  isTaskRunning = false,
+  taskProgressState = 'inactive',
   agentic_tool,
   sessionId,
   taskId,
@@ -338,6 +339,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onOpenAgenticToolSettings,
 }) => {
   const { token } = theme.useToken();
+  const isTaskRunning = taskProgressState === 'working';
 
   // Handle permission request messages specially
   if (message.type === 'permission_request') {
@@ -409,8 +411,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const isUser = message.role === 'user' && !isTaskPrompt && !isTaskResult;
   const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem;
 
-  // Check if message is currently streaming
-  const isStreaming = 'isStreaming' in message && message.isStreaming === true;
+  const displayedIsStreaming =
+    isTaskRunning && 'isStreaming' in message && message.isStreaming === true;
+  const displayedIsThinking =
+    isTaskRunning && 'isThinking' in message && message.isThinking === true;
 
   // Determine loading vs typing state:
   // - loading: task is running but no streaming chunks yet (waiting for first token)
@@ -420,7 +424,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       ? message.content.trim().length > 0
       : Array.isArray(message.content) && message.content.length > 0;
   const isLoading = isTaskRunning && !hasContent && isAgent;
-  const shouldUseTyping = isStreaming && hasContent;
+  const shouldUseTyping = displayedIsStreaming && hasContent;
 
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
@@ -638,7 +642,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   // Also check for streaming thinking content
   const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
-  const isThinking = 'isThinking' in message ? message.isThinking : false;
 
   // Skip rendering if message has no meaningful content
   const hasThinking =
@@ -663,7 +666,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasThinking && (
         <ThinkingBlock
           content={streamingThinking || thinkingBlocks.join('\n\n')}
-          isStreaming={isThinking}
+          isStreaming={displayedIsThinking}
           defaultExpanded={false}
         />
       )}
@@ -719,12 +722,16 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               <CollapsibleMarkdown
                                 maxLines={10}
                                 defaultExpanded={isLatestMessage}
-                                isStreaming={isStreaming}
+                                isStreaming={displayedIsStreaming}
                               >
                                 {text}
                               </CollapsibleMarkdown>
                             ) : (
-                              <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
+                              <MarkdownRenderer
+                                content={text}
+                                inline
+                                isStreaming={displayedIsStreaming}
+                              />
                             )}
                           </div>
                         );
@@ -789,7 +796,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 hasResult: !!toolResult || hasImplicitResult,
                 isError: !!toolResult?.is_error,
                 isPotentiallyRunning,
-                isTaskRunning,
+                taskProgressState,
               });
               const icon = renderToolStatusIcon(status);
 
@@ -854,7 +861,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           <CollapsibleMarkdown
                             maxLines={10}
                             defaultExpanded={isLatestMessage}
-                            isStreaming={isStreaming}
+                            isStreaming={displayedIsStreaming}
                           >
                             {combinedText}
                           </CollapsibleMarkdown>
@@ -862,7 +869,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           <MarkdownRenderer
                             content={combinedText}
                             inline
-                            isStreaming={isStreaming}
+                            isStreaming={displayedIsStreaming}
                           />
                         );
                       })()}

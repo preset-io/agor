@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCursorAssistantContent,
   normalizeCursorToolInput,
   normalizeCursorToolName,
+  reportCursorActivity,
 } from './cursor.js';
 
 describe('Cursor SDK handler helpers', () => {
@@ -59,5 +60,56 @@ describe('Cursor SDK handler helpers', () => {
       cursor_tool_name: 'edit',
       status: 'completed',
     });
+  });
+
+  it.each([
+    { type: 'system' },
+    { type: 'user' },
+    { type: 'status', status: 'CREATING' },
+    { type: 'status', status: 'RUNNING' },
+  ])('keeps Cursor initialization as startup activity %#', (event) => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, event as never);
+    expect(onActivity).toHaveBeenCalledWith({ type: 'sdk_started', detail: event.type });
+  });
+
+  it.each([
+    { type: 'assistant' },
+    { type: 'thinking' },
+    { type: 'task' },
+    { type: 'usage' },
+    { type: 'status', status: 'FINISHED' },
+  ])('recognizes meaningful Cursor progress %#', (event) => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, event as never);
+    expect(onActivity).toHaveBeenCalledWith({ type: 'progress', detail: event.type });
+  });
+
+  it('maps Cursor tool calls to an identified operation lifecycle', () => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, {
+      type: 'tool_call',
+      call_id: 'call-1',
+      name: 'run_terminal_cmd',
+      status: 'running',
+      args: { cmd: 'pnpm test' },
+    } as never);
+    reportCursorActivity(onActivity, {
+      type: 'tool_call',
+      call_id: 'call-1',
+      name: 'run_terminal_cmd',
+      status: 'completed',
+      args: { cmd: 'pnpm test' },
+    } as never);
+    expect(onActivity.mock.calls).toEqual([
+      [{ type: 'operation_started', id: 'call-1', kind: 'Bash' }],
+      [{ type: 'operation_finished', id: 'call-1', outcome: 'completed' }],
+    ]);
+  });
+
+  it('keeps unreviewed Cursor request events fail-open', () => {
+    const onActivity = vi.fn();
+    reportCursorActivity(onActivity, { type: 'request' } as never);
+    expect(onActivity).toHaveBeenCalledWith({ type: 'unknown_activity', detail: 'request' });
   });
 });

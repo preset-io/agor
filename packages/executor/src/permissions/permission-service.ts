@@ -23,13 +23,10 @@
  */
 
 import { shortId } from '@agor/core/db';
-import type { ExecutorPulseKind, SessionID, TaskID } from '@agor/core/types';
-import {
-  PermissionScope,
-  PermissionStatus,
-  ExecutorPulseKind as PulseKind,
-} from '@agor/core/types';
+import type { SessionID, TaskID } from '@agor/core/types';
+import { PermissionScope, PermissionStatus } from '@agor/core/types';
 import type { InteractionMode, ResolvedConfigSlice } from '../payload-types.js';
+import type { SdkActivityCallback } from '../sdk-watchdog.js';
 import type { AgorClient } from '../services/feathers-client.js';
 
 export interface PermissionRequest {
@@ -105,7 +102,8 @@ export class PermissionService {
   constructor(
     private emitEvent: (event: PermissionEvent, data: unknown) => Promise<void>,
     private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
-    private interactionMode: InteractionMode = 'interactive'
+    private interactionMode: InteractionMode = 'interactive',
+    private onActivity?: SdkActivityCallback
   ) {}
 
   /**
@@ -153,6 +151,13 @@ export class PermissionService {
       });
     }
 
+    this.onActivity?.({
+      type: 'waiting_started',
+      id: requestId,
+      reason: 'permission',
+      absoluteTimeoutMs: this.timeoutMs,
+    });
+
     return new Promise((resolve) => {
       // Handle cancellation
       signal.addEventListener('abort', () => {
@@ -161,6 +166,7 @@ export class PermissionService {
           clearTimeout(pending.timeout);
           this.pendingRequests.delete(requestId);
         }
+        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'cancelled' });
         console.log(`🛡️  [executor] Permission request cancelled: ${requestId}`);
         resolve({
           requestId,
@@ -176,6 +182,7 @@ export class PermissionService {
       // Timeout (configurable, default 10 minutes)
       const timeout = setTimeout(async () => {
         this.pendingRequests.delete(requestId);
+        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'timed_out' });
         console.warn(`⏰ [executor] Permission request timed out: ${requestId}`);
 
         // Broadcast timeout to UI via daemon
@@ -217,6 +224,11 @@ export class PermissionService {
         outcome: allow ? 'approved' : 'denied',
       });
       this.pendingRequests.delete(decision.requestId);
+      this.onActivity?.({
+        type: 'waiting_finished',
+        id: decision.requestId,
+        outcome: allow ? 'approved' : 'denied',
+      });
       console.log(
         `🛡️  [executor] Permission resolved: ${decision.requestId} → ${decision.allow ? 'ALLOW' : 'DENY'}`
       );
@@ -244,6 +256,7 @@ export class PermissionService {
           decidedBy: 'system',
         });
         this.pendingRequests.delete(requestId);
+        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'cancelled' });
         cancelledCount++;
       }
     }
@@ -260,21 +273,15 @@ export function createExecutionPermissionService(params: {
   client: AgorClient;
   resolvedConfig?: ResolvedConfigSlice;
   interactionMode?: InteractionMode;
-  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+  onActivity?: SdkActivityCallback;
 }): PermissionService {
   const timeoutMs =
     params.resolvedConfig?.execution?.permission_timeout_ms ?? DEFAULT_PERMISSION_TIMEOUT_MS;
 
   return new PermissionService(
-    async (event, data) => {
-      if (event === PermissionEvent.REQUEST) {
-        params.onPulse?.(PulseKind.WAITING, 'permission.request');
-      } else {
-        params.onPulse?.(PulseKind.SDK_STARTED, 'permission.timeout');
-      }
-      params.client.service('sessions').emit(event, data);
-    },
+    async (event, data) => params.client.service('sessions').emit(event, data),
     timeoutMs,
-    params.interactionMode
+    params.interactionMode,
+    params.onActivity
   );
 }

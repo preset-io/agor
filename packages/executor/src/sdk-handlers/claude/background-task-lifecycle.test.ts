@@ -118,7 +118,7 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(lifecycle.observe(started('agent-1')).taskTransition).toBe('started');
     expect(lifecycle.observe(started('agent-1')).taskTransition).toBeUndefined();
     expect(lifecycle.observe(settled('unknown')).taskTransition).toBeUndefined();
-    expect(lifecycle.clearActiveTasks()).toBe(1);
-    expect(lifecycle.clearActiveTasks()).toBe(0);
+    expect(lifecycle.clearActiveTasks()).toEqual(['agent-1']);
+    expect(lifecycle.clearActiveTasks()).toEqual([]);
   });
 });

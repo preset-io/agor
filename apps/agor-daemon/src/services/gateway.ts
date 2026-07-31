@@ -230,7 +230,7 @@ interface SlackHistoryConnector extends GatewayConnector {
   fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult>;
 }
 
-export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
+export type GatewayProgressState = 'queued' | 'working' | 'waiting' | 'stalled' | 'done' | 'failed';
 
 export interface GatewayProgressData {
   session_id: string;
@@ -1159,6 +1159,8 @@ export class GatewayService {
   ): string {
     if (data.state === 'done') return '';
     if (data.state === 'failed') return 'ran into an error.';
+    if (data.state === 'stalled') return 'appears to be stalled.';
+    if (data.state === 'waiting') return 'is waiting for input.';
     if (data.state === 'queued') {
       const position =
         typeof data.queue_position === 'number' ? ` at position ${data.queue_position}` : '';
@@ -1181,6 +1183,8 @@ export class GatewayService {
   ): string | undefined {
     if (data.state === 'done') return undefined;
     if (data.state === 'failed') return this.formatSlackLoadingMessage('Agor ran into an error.');
+    if (data.state === 'stalled') return this.formatSlackLoadingMessage('Agor appears stalled.');
+    if (data.state === 'waiting') return this.formatSlackLoadingMessage('Waiting for input…');
     if (data.state === 'queued') return this.formatSlackLoadingMessage('Queued in Agor…');
 
     const latestToolSummary =
@@ -1387,7 +1391,10 @@ export class GatewayService {
     const isNewTask =
       typeof data.task_id === 'string' && data.task_id !== metadata.slack_status_task_id;
     const isRestartingAfterTerminal =
-      (data.state === 'queued' || data.state === 'working') &&
+      (data.state === 'queued' ||
+        data.state === 'working' ||
+        data.state === 'waiting' ||
+        data.state === 'stalled') &&
       (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed');
     const lastUpdate = this.slackProgressLastUpdate.get(data.session_id) ?? 0;
     if (

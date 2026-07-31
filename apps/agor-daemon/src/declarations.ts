@@ -159,6 +159,25 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,
     params?: FeathersParams
   ): Promise<Task>;
+  reportExecutorSettlement(
+    data: import('@agor/core/types').ExecutorSettlementInput,
+    params?: FeathersParams
+  ): Promise<Task>;
+  reconcileTerminalTask(
+    task: Task,
+    status: Task['status'],
+    params?: FeathersParams & {
+      suppressTerminalQueueProcessing?: boolean;
+      suppressBtwCleanup?: boolean;
+    }
+  ): Promise<boolean>;
+  reconcileSessionState(
+    sessionId: string,
+    params?: FeathersParams & {
+      suppressTerminalQueueProcessing?: boolean;
+      suppressBtwCleanup?: boolean;
+    }
+  ): Promise<Session>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,

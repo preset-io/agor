@@ -6,17 +6,12 @@
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
-import type {
-  ExecutorPulseKind,
-  MessageSource,
-  PermissionMode,
-  SessionID,
-  TaskID,
-} from '@agor/core/types';
+import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type { InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { createExecutionPermissionService } from '../../permissions/permission-service.js';
 import { CopilotTool } from '../../sdk-handlers/copilot/index.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';
 
@@ -34,7 +29,7 @@ export async function executeCopilotTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
-  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+  onActivity?: SdkActivityCallback;
   interactionMode?: InteractionMode;
 }): Promise<AgenticToolOutcome | undefined> {
   const { sessionId } = params;

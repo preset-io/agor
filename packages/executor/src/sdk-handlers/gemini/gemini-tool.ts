@@ -176,7 +176,7 @@ export class GeminiTool implements ITool {
       prompt,
       taskId,
       permissionMode,
-      streamingCallbacks?.onPulse,
+      streamingCallbacks?.onActivity,
       abortController?.signal
     )) {
       // Capture resolved model from partial/complete events

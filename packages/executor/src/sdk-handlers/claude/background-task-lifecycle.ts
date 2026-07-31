@@ -6,6 +6,7 @@ const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped']);
 export interface ClaudeQueryLifecycleTransition {
   resultDisposition: ResultDisposition;
   taskTransition?: 'started' | 'settled';
+  taskId?: string;
 }
 
 /**
@@ -23,6 +24,7 @@ export class ClaudeBackgroundTaskLifecycle {
       return {
         resultDisposition: 'not-result',
         taskTransition: wasActive ? undefined : 'started',
+        taskId: wasActive ? undefined : message.task_id,
       };
     }
 
@@ -61,10 +63,10 @@ export class ClaudeBackgroundTaskLifecycle {
     return this.activeTaskIds.size;
   }
 
-  clearActiveTasks(): number {
-    const count = this.activeTaskIds.size;
+  clearActiveTasks(): string[] {
+    const taskIds = [...this.activeTaskIds];
     this.activeTaskIds.clear();
-    return count;
+    return taskIds;
   }
 
   private settleTask(taskId: string): ClaudeQueryLifecycleTransition {
@@ -72,6 +74,7 @@ export class ClaudeBackgroundTaskLifecycle {
     return {
       resultDisposition: 'not-result',
       taskTransition: settled ? 'settled' : undefined,
+      taskId: settled ? taskId : undefined,
     };
   }
 }

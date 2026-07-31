@@ -1,50 +1,45 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  mapSdkActivity,
-  reportSdkActivity,
-  SDK_ACTIVITY_VERSION_MANIFEST,
-} from '../sdk-watchdog.js';
+import { SDK_ACTIVITY_VERSION_MANIFEST } from '../sdk-watchdog.js';
+import { reportCodexActivity } from './codex/sdk-activity.js';
 
-describe('SDK activity mapping', () => {
-  it.each([
-    ['claude-code', 'assistant'],
-    ['codex', 'item.started'],
-    ['gemini', 'content'],
-    ['copilot', 'assistant.message_delta'],
-  ] as const)('%s maps healthy activity to progress', (adapter, event) => {
-    expect(mapSdkActivity(adapter, event)).toEqual({ kind: 'progress', detail: event });
-  });
-
-  it('does not treat the observed Codex initialization signature as progress', () => {
-    expect(mapSdkActivity('codex', 'event_msg.turn_context')).toEqual({
-      kind: 'sdk_started',
-      detail: 'event_msg.turn_context',
-    });
-  });
-
-  it.each([
-    ['claude-code', 'future.event'],
-    ['codex', 'future.event'],
-    ['gemini', 'future.event'],
-    ['copilot', 'future.event'],
-  ] as const)('%s keeps unknown activity visible but non-progressing', (adapter, event) => {
-    expect(mapSdkActivity(adapter, event)).toEqual({
-      kind: 'unknown_activity',
-      detail: event,
-    });
-  });
-
-  it('bounds diagnostic detail', () => {
-    const pulse = mapSdkActivity('codex', `bad secret ${'x'.repeat(200)}`);
-    expect(pulse?.detail).toMatch(/^[a-zA-Z0-9._-]+$/);
-    expect(pulse?.detail.length).toBe(128);
-  });
-
-  it('invokes one in-memory callback without retaining raw payloads', () => {
+describe('provider-owned SDK activity translation', () => {
+  it('maps Codex item lifecycles to an identified operation', () => {
     const callback = vi.fn();
-    reportSdkActivity(callback, 'claude-code', 'assistant');
-    expect(callback).toHaveBeenCalledWith('progress', 'assistant');
+
+    reportCodexActivity(callback, {
+      type: 'item.started',
+      item: { id: 'item-1', type: 'command_execution' },
+    });
+    reportCodexActivity(callback, {
+      type: 'item.updated',
+      item: { id: 'item-1', type: 'command_execution' },
+    });
+    reportCodexActivity(callback, {
+      type: 'item.completed',
+      item: { id: 'item-1', type: 'command_execution' },
+    });
+
+    expect(callback.mock.calls).toEqual([
+      [{ type: 'operation_started', id: 'item-1', kind: 'command_execution' }],
+      [{ type: 'operation_progress', id: 'item-1' }],
+      [{ type: 'operation_finished', id: 'item-1' }],
+    ]);
+  });
+
+  it('surfaces new Codex vocabulary as diagnosis rather than progress', () => {
+    const callback = vi.fn();
+    reportCodexActivity(callback, { type: 'future.event' });
+    expect(callback).toHaveBeenCalledWith({
+      type: 'unknown_activity',
+      detail: 'future.event',
+    });
+  });
+
+  it('does not treat reconnect bookkeeping as progress', () => {
+    const callback = vi.fn();
+    reportCodexActivity(callback, { type: 'error', message: 'Reconnecting... 1 / 5' });
+    expect(callback).not.toHaveBeenCalled();
   });
 });
 
@@ -52,7 +47,7 @@ describe('SDK activity version manifest', () => {
   it('matches every reviewed resolved dependency version', () => {
     const lockfile = readFileSync(new URL('../../../../pnpm-lock.yaml', import.meta.url), 'utf8');
     expect(Object.keys(SDK_ACTIVITY_VERSION_MANIFEST).sort()).toEqual(
-      ['claude-code', 'codex', 'gemini', 'copilot'].sort()
+      ['claude-code', 'codex', 'gemini', 'copilot', 'opencode', 'cursor'].sort()
     );
     for (const dependency of Object.values(SDK_ACTIVITY_VERSION_MANIFEST)) {
       expect(lockfile).toContain(`'${dependency}':`);

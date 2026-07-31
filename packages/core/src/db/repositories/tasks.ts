@@ -5,8 +5,10 @@
  */
 
 import type {
-  ExecutorPulse,
+  ExecutorOutcomePatch,
+  ExecutorSettlementStatus,
   ExecutorTerminationCompleteInput,
+  RuntimeTelemetryInput,
   SdkFailure,
   SessionID,
   Task,
@@ -19,6 +21,7 @@ import type {
 } from '@agor/core/types';
 import {
   EXECUTING_TASK_STATUSES,
+  ExecutorPulseKind,
   isTerminalTaskStatus,
   SessionStatus,
   sessionCanStartTask,
@@ -62,8 +65,7 @@ function isExecutorResultStatus(status: Task['status']): boolean {
   return (
     status === TaskStatus.RUNNING ||
     status === TaskStatus.AWAITING_PERMISSION ||
-    status === TaskStatus.AWAITING_INPUT ||
-    isTerminalTaskStatus(status)
+    status === TaskStatus.AWAITING_INPUT
   );
 }
 
@@ -195,6 +197,11 @@ export interface TaskRuntimeDiscoveryOptions {
   after?: TaskRuntimeDiscoveryCursor;
   /** Deterministic test clock. PostgreSQL uses database time when omitted. */
   now?: Date;
+}
+
+export interface ExecutorOutcomeSettlementResult {
+  outcome: 'transitioned' | 'condition_changed' | 'terminal';
+  task: Task;
 }
 
 /**
@@ -426,6 +433,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
         executor_mode: task.executor_mode,
         latest_executor_pulse: task.latest_executor_pulse,
+        latest_executor_progress: task.latest_executor_progress,
         sdk_failure: task.sdk_failure,
         termination_request: storedTerminationRequest,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
@@ -933,10 +941,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
-  /** Atomically stamp heartbeat time and advance the latest pulse fact. */
+  /** Atomically stamp heartbeat time and advance the latest general/progress pulse facts. */
   async reportRuntimeTelemetry(
     id: string,
-    pulse?: Omit<ExecutorPulse, 'observed_at'>,
+    pulse?: RuntimeTelemetryInput['pulse'],
+    progress?: RuntimeTelemetryInput['progress'],
     observedAt?: Date
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
@@ -945,11 +954,33 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const heartbeatAt = await this.mutationNow(txDb, fullId, observedAt);
 
       const previous = row.data.latest_executor_pulse;
-      const latest =
+      const accepted =
         pulse && (!previous || pulse.sequence > previous.sequence)
           ? { ...pulse, observed_at: heartbeatAt.toISOString() }
-          : previous;
-      const data = { ...row.data, latest_executor_pulse: latest };
+          : undefined;
+      const previousProgress: Task['latest_executor_progress'] =
+        row.data.latest_executor_progress ??
+        (previous?.kind === ExecutorPulseKind.PROGRESS
+          ? { ...previous, kind: ExecutorPulseKind.PROGRESS }
+          : undefined);
+      const pulseProgress =
+        pulse?.kind === ExecutorPulseKind.PROGRESS
+          ? { ...pulse, kind: ExecutorPulseKind.PROGRESS }
+          : undefined;
+      const incomingProgress =
+        pulseProgress && (!progress || pulseProgress.sequence > progress.sequence)
+          ? pulseProgress
+          : progress;
+      const latestProgress: Task['latest_executor_progress'] =
+        incomingProgress &&
+        (!previousProgress || incomingProgress.sequence > previousProgress.sequence)
+          ? { ...incomingProgress, observed_at: heartbeatAt.toISOString() }
+          : previousProgress;
+      const data = {
+        ...row.data,
+        latest_executor_pulse: accepted ?? previous,
+        latest_executor_progress: latestProgress,
+      };
       await update(txDb, tasks)
         .set({ last_executor_heartbeat_at: heartbeatAt, data })
         .where(eq(tasks.task_id, fullId))
@@ -1303,6 +1334,55 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           termination_unverified_at: null,
         }),
       };
+    });
+  }
+
+  /**
+   * Atomically commit an executor-reported outcome only while that executor
+   * still owns the active Task. STOPPING remains coordinator-owned.
+   */
+  async settleExecutorOutcome(input: {
+    taskId: string;
+    status: ExecutorSettlementStatus;
+    taskPatch?: ExecutorOutcomePatch;
+    now?: Date;
+  }): Promise<ExecutorOutcomeSettlementResult> {
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+      if (!executorOwnsTask(row)) return { outcome: 'condition_changed', task: current };
+
+      const { git_state: gitStatePatch, ...outcomePatch } = input.taskPatch ?? {};
+      const taskPatch: Partial<Task> = {
+        ...outcomePatch,
+        ...(gitStatePatch ? { git_state: { ...current.git_state, ...gitStatePatch } } : {}),
+      };
+
+      const terminal = withTerminalTiming(
+        current,
+        {
+          ...taskPatch,
+          status: input.status,
+        },
+        input.now ?? new Date()
+      );
+      const merged = {
+        ...deepMerge(current, terminal),
+        task_id: current.task_id,
+        session_id: current.session_id,
+        created_by: current.created_by,
+        created_at: current.created_at,
+      };
+      const insertData = this.taskToInsert(merged);
+      await update(txDb, tasks)
+        .set({
+          status: insertData.status,
+          completed_at: insertData.completed_at,
+          data: insertData.data,
+        })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return { outcome: 'transitioned', task: merged };
     });
   }
 

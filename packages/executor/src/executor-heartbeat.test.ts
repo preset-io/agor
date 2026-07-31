@@ -66,6 +66,52 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
+  it('asks the executor to reconcile durable ownership after a rejected write', async () => {
+    const error = new Error('task is no longer active');
+    const onReportError = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service: () => ({ reportRuntimeTelemetry: vi.fn().mockRejectedValue(error) }),
+    } as never;
+
+    const handle = startExecutorHeartbeat({
+      client,
+      taskId: 'task-1',
+      onReportError,
+      warn: vi.fn(),
+    });
+
+    await vi.waitFor(() => expect(onReportError).toHaveBeenCalledWith(error));
+    handle.stop();
+  });
+
+  it('still persists coalesced SDK pulses when periodic heartbeats are disabled', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({
+        client,
+        taskId: 'task-1',
+        enabled: false,
+        intervalMs: 1000,
+      });
+
+      handle.recordPulse('progress', 'item.completed');
+      handle.recordPulse('waiting', 'permission.request');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(reportRuntimeTelemetry).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reportRuntimeTelemetry).toHaveBeenCalledWith({
+        task_id: 'task-1',
+        pulse: { sequence: 2, kind: 'waiting', detail: 'permission.request' },
+        progress: { sequence: 1, kind: 'progress', detail: 'item.completed' },
+      });
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces many pulses into the latest fact at heartbeat cadence', async () => {
     vi.useFakeTimers();
     try {
@@ -84,6 +130,30 @@ describe('startExecutorHeartbeat', () => {
       expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
         task_id: 'task-1',
         pulse: { sequence: 100, kind: 'progress', detail: 'event.100' },
+        progress: { sequence: 100, kind: 'progress', detail: 'event.100' },
+      });
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains progress when later activity arrives before the next heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({ client, taskId: 'task-1', intervalMs: 1000 });
+      await Promise.resolve();
+
+      handle.recordPulse('progress', 'item.completed');
+      handle.recordPulse('waiting', 'permission.request');
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
+        task_id: 'task-1',
+        pulse: { sequence: 2, kind: 'waiting', detail: 'permission.request' },
+        progress: { sequence: 1, kind: 'progress', detail: 'item.completed' },
       });
       handle.stop();
     } finally {

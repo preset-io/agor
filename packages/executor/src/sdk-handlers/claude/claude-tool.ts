@@ -362,7 +362,7 @@ export class ClaudeTool implements ITool {
       mappedPermissionMode,
       undefined, // chunkCallback (unused)
       abortController,
-      streamingCallbacks?.onPulse
+      streamingCallbacks?.onActivity
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

@@ -125,9 +125,16 @@ describe('executor acknowledgement failure convergence', () => {
     const taskService = Object.create(TasksService.prototype) as TasksService & {
       app: typeof app;
       get: (id: string) => Promise<Task>;
-      taskRepo: { updateFromExecutor: (id: string, data: Partial<Task>) => Promise<Task> };
+      taskRepo: {
+        updateFromExecutor: (id: string, data: Partial<Task>) => Promise<Task>;
+        settleExecutorOutcome: (input: {
+          status: Task['status'];
+          taskPatch?: Partial<Task>;
+        }) => Promise<{ outcome: 'transitioned'; task: Task }>;
+      };
       id: string;
       emit: () => boolean;
+      reconcileTerminalTask: (task: Task) => Promise<boolean>;
     };
     taskService.app = app;
     taskService.get = async () => task;
@@ -136,10 +143,23 @@ describe('executor acknowledgement failure convergence', () => {
         task = { ...task, ...data };
         return task;
       },
+      async settleExecutorOutcome(input) {
+        task = { ...task, ...input.taskPatch, status: input.status };
+        return { outcome: 'transitioned', task };
+      },
     };
     taskService.id = 'task_id';
     taskService.emit = () => false;
-    app.use('tasks', taskService);
+    taskService.reconcileTerminalTask = async (terminalTask) => {
+      session = {
+        ...session,
+        status:
+          terminalTask.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+        ready_for_prompt: true,
+      };
+      return true;
+    };
+    app.use('tasks', taskService, { methods: ['reportExecutorSettlement'] });
     app.service('tasks').hooks({
       before: {
         all: [

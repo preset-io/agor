@@ -10,7 +10,7 @@
  * - [start, complete] → Completion UI with metadata
  */
 
-import type { Message } from '@agor-live/client';
+import type { Message, TaskRuntimeProgressState } from '@agor-live/client';
 import { CheckCircleFilled } from '@ant-design/icons';
 import { Space, Spin, Typography, theme } from 'antd';
 import type React from 'react';
@@ -21,9 +21,14 @@ const { Text } = Typography;
 interface CompactionBlockProps {
   messages: Message[]; // Array of system messages (start, complete)
   agentic_tool?: string;
+  taskProgressState: TaskRuntimeProgressState;
 }
 
-export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agentic_tool }) => {
+export const CompactionBlock: React.FC<CompactionBlockProps> = ({
+  messages,
+  agentic_tool,
+  taskProgressState,
+}) => {
   const { token } = theme.useToken();
 
   // Find start and complete messages
@@ -92,13 +97,19 @@ export const CompactionBlock: React.FC<CompactionBlockProps> = ({ messages, agen
     }
   }
 
-  // Otherwise, show in-progress state (spinner)
-  const spinnerContent = (
+  const statusText =
+    taskProgressState === 'working'
+      ? 'Compacting conversation context...'
+      : taskProgressState === 'stalled'
+        ? 'Context compaction stalled'
+        : 'Context compaction did not complete';
+
+  const inProgressContent = (
     <Space>
-      <Spin size="small" />
-      <Text type="secondary">Compacting conversation context...</Text>
+      {taskProgressState === 'working' && <Spin size="small" />}
+      <Text type="secondary">{statusText}</Text>
     </Space>
   );
 
-  return <SystemMessage content={spinnerContent} agenticTool={agentic_tool} />;
+  return <SystemMessage content={inProgressContent} agenticTool={agentic_tool} />;
 };

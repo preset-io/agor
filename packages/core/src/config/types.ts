@@ -365,7 +365,9 @@ export interface AgorExecutionSettings {
     mode?: 'disabled' | 'observe' | 'enforce';
     first_progress_timeout_ms?: number;
     abort_grace_ms?: number;
+    operation_absolute_timeout_ms?: number;
     claude_idle_timeout_ms?: number | null;
+    codex_idle_timeout_ms?: number | null;
   };
 
   dispatch_connect_timeout_ms?: number | null;

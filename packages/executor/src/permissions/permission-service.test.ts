@@ -1,5 +1,5 @@
 import type { SessionID, TaskID } from '@agor/core/types';
-import { ExecutorPulseKind, PermissionScope } from '@agor/core/types';
+import { PermissionScope } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutionPermissionService, PermissionService } from './permission-service.js';
@@ -85,13 +85,13 @@ describe('PermissionService interaction capability', () => {
     });
   });
 
-  it('maps permission request emission to the shared waiting pulse', async () => {
+  it('reports an identified, bounded permission wait lifecycle', async () => {
     const emit = vi.fn();
-    const onPulse = vi.fn();
+    const onActivity = vi.fn();
     const client = {
       service: vi.fn(() => ({ emit })),
     } as unknown as AgorClient;
-    const service = createExecutionPermissionService({ client, onPulse });
+    const service = createExecutionPermissionService({ client, onActivity });
 
     await service.emitRequest(sessionId, {
       requestId: 'request-1',
@@ -101,7 +101,32 @@ describe('PermissionService interaction capability', () => {
       timestamp: new Date().toISOString(),
     });
 
-    expect(onPulse).toHaveBeenCalledWith(ExecutorPulseKind.WAITING, 'permission.request');
+    const resolution = service.waitForDecision(
+      'request-1',
+      taskId,
+      sessionId,
+      new AbortController().signal
+    );
+    expect(onActivity).toHaveBeenCalledWith({
+      type: 'waiting_started',
+      id: 'request-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 600_000,
+    });
+    service.resolvePermission({
+      requestId: 'request-1',
+      taskId,
+      allow: true,
+      remember: false,
+      scope: PermissionScope.ONCE,
+      decidedBy: 'user-1',
+    });
+    await expect(resolution).resolves.toMatchObject({ outcome: 'approved' });
+    expect(onActivity).toHaveBeenLastCalledWith({
+      type: 'waiting_finished',
+      id: 'request-1',
+      outcome: 'approved',
+    });
     expect(emit).toHaveBeenCalledWith(
       'permission:request',
       expect.objectContaining({ requestId: 'request-1', sessionId, taskId })

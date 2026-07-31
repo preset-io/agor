@@ -30,27 +30,37 @@ interface StickyTodoRendererProps {
 
   /**
    * Status of the parent task. Used to decide whether items still marked
-   * `in_progress` should be displayed as `stopped` (user halted the task) or
+   * `in_progress` should be displayed as `stopped` (verified user halt) or
    * `unknown` (task ended without the agent updating this item).
    */
   taskStatus: TaskStatus;
+
+  /** Whether the task should still be presented as actively making progress. */
+  isTaskRunning: boolean;
 }
 
 /**
- * If the parent task is no longer running, items still in `in_progress` cannot
- * truly be running. Map them to a display-only status that conveys what we
- * actually know:
+ * If the parent task is no longer presented as running, items still in
+ * `in_progress` cannot be presented as making progress. Map them to a
+ * display-only status that conveys what we actually know:
  *
- * - User halted (STOPPED/STOPPING): we know the work didn't finish → 'stopped'
+ * - Durable RUNNING with an active stall diagnosis: state is unknown
+ * - Stop requested but unverified (STOPPING): state is unknown
+ * - User halt verified (STOPPED): we know the work didn't finish → 'stopped'
  * - Task ended otherwise (COMPLETED/FAILED/TIMED_OUT) without the agent
  *   updating this item: we don't know if it finished → 'unknown'
- * - Active/waiting states (RUNNING, CREATED, AWAITING_*): leave as-is
+ * - Other active/waiting states: leave as-is
  */
-function inProgressOverrideFor(taskStatus: TaskStatus): RenderableTodoStatus | null {
+function inProgressOverrideFor(
+  taskStatus: TaskStatus,
+  isTaskRunning: boolean
+): RenderableTodoStatus | null {
+  if (taskStatus === TaskStatus.RUNNING && !isTaskRunning) return 'unknown';
+
   switch (taskStatus) {
     case TaskStatus.STOPPED:
-    case TaskStatus.STOPPING:
       return 'stopped';
+    case TaskStatus.STOPPING:
     case TaskStatus.COMPLETED:
     case TaskStatus.FAILED:
     case TaskStatus.TIMED_OUT:
@@ -66,7 +76,11 @@ function inProgressOverrideFor(taskStatus: TaskStatus): RenderableTodoStatus | n
  *
  * Performance: Uses useMemo + early exit strategy (O(1) to O(5) in practice)
  */
-export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererProps) {
+export function StickyTodoRenderer({
+  messages,
+  taskStatus,
+  isTaskRunning,
+}: StickyTodoRendererProps) {
   const { token } = theme.useToken();
 
   // Scan messages in reverse to find latest TodoWrite
@@ -94,12 +108,12 @@ export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererP
   // is untouched — historical tool blocks render the original status.
   const displayTodos = useMemo<RenderableTodoItem[] | null>(() => {
     if (!latestTodo) return null;
-    const override = inProgressOverrideFor(taskStatus);
+    const override = inProgressOverrideFor(taskStatus, isTaskRunning);
     if (!override) return latestTodo;
     return latestTodo.map((todo) =>
       todo.status === 'in_progress' ? { ...todo, status: override } : todo
     );
-  }, [latestTodo, taskStatus]);
+  }, [isTaskRunning, latestTodo, taskStatus]);
 
   // Don't render if no TODOs found
   if (!displayTodos) return null;

@@ -47,7 +47,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 import { CodexTool } from './codex-tool.js';
-import { CodexPromptService } from './prompt-service.js';
+import { CodexPromptService, reportCodexActivity } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
@@ -2058,6 +2058,97 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     }
 
     expect(emitted.some((e) => e.type === 'complete')).toBe(true);
+  });
+
+  it.each([
+    'agent_message',
+    'command_execution',
+    'file_change',
+    'mcp_tool_call',
+    'reasoning',
+    'web_search',
+  ])('normalizes known %s item lifecycle as progress', (itemType) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, {
+      type: 'item.started',
+      item: { id: 'item-1', type: itemType },
+    });
+    reportCodexActivity(onActivity, {
+      type: 'item.updated',
+      item: { id: 'item-1', type: itemType },
+    });
+    reportCodexActivity(onActivity, {
+      type: 'item.completed',
+      item: { id: 'item-1', type: itemType },
+    });
+    expect(onActivity.mock.calls).toEqual([
+      [{ type: 'operation_started', id: 'item-1', kind: itemType }],
+      [{ type: 'operation_progress', id: 'item-1' }],
+      [{ type: 'operation_finished', id: 'item-1' }],
+    ]);
+  });
+
+  it('does not treat a future item lifecycle as a supervision lease', () => {
+    const onActivity = vi.fn();
+    for (const type of ['item.started', 'item.updated', 'item.completed']) {
+      reportCodexActivity(onActivity, {
+        type,
+        item: { id: 'item-1', type: 'future_operation' },
+      });
+    }
+    expect(onActivity.mock.calls).toEqual([
+      [{ type: 'unknown_activity', detail: 'item.started:future_operation' }],
+      [{ type: 'unknown_activity', detail: 'item.updated:future_operation' }],
+      [{ type: 'unknown_activity', detail: 'item.completed:future_operation' }],
+    ]);
+  });
+
+  it('keeps todo lifecycle as progress without suspending supervision', () => {
+    const onActivity = vi.fn();
+    for (const type of ['item.started', 'item.updated', 'item.completed']) {
+      reportCodexActivity(onActivity, { type, item: { id: 'todo-1', type: 'todo_list' } });
+    }
+    expect(onActivity.mock.calls).toEqual([
+      [{ type: 'operation_started', id: 'todo-1', kind: 'todo_list' }],
+      [{ type: 'operation_progress', id: 'todo-1' }],
+      [{ type: 'operation_finished', id: 'todo-1' }],
+    ]);
+  });
+
+  it('does not report reconnect continuation warnings as SDK activity', () => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, {
+      type: 'error',
+      message:
+        'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server)',
+    });
+    expect(onActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ type: 'thread.started' }, 'sdk_started'],
+    [{ type: 'turn.started' }, 'sdk_started'],
+    [{ type: 'event_msg', payload: { type: 'turn_context' } }, 'sdk_started'],
+    [{ type: 'turn.completed' }, 'progress'],
+    [{ type: 'turn.failed' }, 'progress'],
+    [{ type: 'error' }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'agent_message' } }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'task_complete' } }, 'progress'],
+    [{ type: 'event_msg', payload: { type: 'turn_complete' } }, 'progress'],
+  ])('normalizes known startup and terminal activity %#', (event, expected) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, event);
+    expect(onActivity).toHaveBeenCalledWith({ type: expected, detail: event.type });
+  });
+
+  it.each([
+    { type: 'future.event' },
+    { type: 'event_msg', payload: { type: 'future_payload' } },
+    { type: 'event_msg', payload: { type: 'token_count' } },
+  ])('fails open for unknown activity %#', (event) => {
+    const onActivity = vi.fn();
+    reportCodexActivity(onActivity, event);
+    expect(onActivity).toHaveBeenCalledWith({ type: 'unknown_activity', detail: event.type });
   });
 });
 

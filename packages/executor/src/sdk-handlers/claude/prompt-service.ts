@@ -6,7 +6,7 @@
  */
 
 import { shortId } from '@agor/core/db';
-import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
+import type { PermissionMode, SDKMessage, SDKResultMessage } from '@agor/core/sdk';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -17,7 +17,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -46,6 +46,28 @@ export interface PromptResult {
   inputTokens: number;
   /** Number of output tokens */
   outputTokens: number;
+}
+
+function reportClaudeActivity(
+  callback: SdkActivityCallback | undefined,
+  message: SDKMessage
+): void {
+  switch (message.type) {
+    case 'assistant':
+    case 'stream_event':
+    case 'result':
+      callback?.({ type: 'progress', detail: message.type });
+      return;
+    case 'system':
+    case 'user':
+      callback?.({ type: 'sdk_started', detail: message.type });
+      return;
+    default:
+      callback?.({
+        type: 'unknown_activity',
+        detail: String((message as { type?: unknown }).type),
+      });
+  }
 }
 
 export class ClaudePromptService {
@@ -218,9 +240,12 @@ If you continue to see authentication errors, please contact your Agor administr
     const backgroundTasks = new ClaudeBackgroundTaskLifecycle();
     const sdkResults: SDKResultMessage[] = [];
     const clearBackgroundTaskActivity = () => {
-      const activeTaskCount = backgroundTasks.clearActiveTasks();
-      for (let index = 0; index < activeTaskCount; index++) {
-        onActivity?.('progress', 'background_task.complete');
+      for (const backgroundTaskId of backgroundTasks.clearActiveTasks()) {
+        onActivity?.({
+          type: 'operation_finished',
+          id: `background:${backgroundTaskId}`,
+          outcome: 'abandoned',
+        });
       }
     };
 
@@ -229,7 +254,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
-        reportSdkActivity(onActivity, 'claude-code', msg.type);
+        reportClaudeActivity(onActivity, msg);
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
         if (
@@ -242,18 +267,33 @@ If you continue to see authentication errors, please contact your Agor administr
         if (lifecycleTransition.taskTransition === 'started') {
           // Keep the SDK watchdog paused for the documented lifetime of the
           // background task, not merely the Agent/Workflow launch tool call.
-          onActivity?.('progress', 'background_task.start');
+          onActivity?.({
+            type: 'operation_started',
+            id: `background:${lifecycleTransition.taskId}`,
+            kind: 'background_task',
+          });
         }
         if (lifecycleTransition.taskTransition === 'settled') {
-          onActivity?.('progress', 'background_task.complete');
+          onActivity?.({
+            type: 'operation_finished',
+            id: `background:${lifecycleTransition.taskId}`,
+          });
         }
         // Process message through processor
         const events = await processor.process(msg);
 
         // Handle each event from processor
         for (const event of events) {
-          if (event.type === 'tool_start') onActivity?.('progress', 'tool.start');
-          if (event.type === 'tool_complete') onActivity?.('progress', 'tool.complete');
+          if (event.type === 'tool_start') {
+            onActivity?.({
+              type: 'operation_started',
+              id: event.toolUseId,
+              kind: event.toolName,
+            });
+          }
+          if (event.type === 'tool_complete') {
+            onActivity?.({ type: 'operation_finished', id: event.toolUseId });
+          }
           // Handle session ID capture (only set if not already set — sdk_session_id is immutable)
           if (event.type === 'session_id_captured') {
             if (this.sessionsRepo && !existingSdkSessionId) {

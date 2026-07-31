@@ -5,14 +5,8 @@
  * Not to be confused with AI agents (internal personas)
  */
 
-import type {
-  AgenticToolName,
-  ExecutorPulseKind,
-  Message,
-  MessageID,
-  SessionID,
-  TaskID,
-} from '@agor/core/types';
+import type { AgenticToolName, Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 
 /**
  * Supported tool types
@@ -36,7 +30,7 @@ export type ToolType = AgenticToolName;
  */
 export interface StreamingCallbacks {
   /** Reports bounded semantic SDK activity to the executor-local health observer. */
-  onPulse?(kind: ExecutorPulseKind, detail?: string): void;
+  onActivity?: SdkActivityCallback;
 
   /**
    * Called when message streaming starts

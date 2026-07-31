@@ -80,7 +80,7 @@ export function resolveSdkWatchdogConfig(
     );
   }
   return {
-    mode: raw?.mode ?? 'observe',
+    mode: raw?.mode ?? 'enforce',
     first_progress_timeout_ms: positiveSafeInteger(
       raw?.first_progress_timeout_ms,
       180_000,
@@ -91,6 +91,11 @@ export function resolveSdkWatchdogConfig(
       15_000,
       'execution.sdk_watchdog.abort_grace_ms'
     ),
+    operation_absolute_timeout_ms: positiveSafeInteger(
+      raw?.operation_absolute_timeout_ms,
+      4 * 60 * 60_000,
+      'execution.sdk_watchdog.operation_absolute_timeout_ms'
+    ),
     claude_idle_timeout_ms:
       raw?.claude_idle_timeout_ms === null
         ? null
@@ -98,6 +103,14 @@ export function resolveSdkWatchdogConfig(
             raw?.claude_idle_timeout_ms,
             3_600_000,
             'execution.sdk_watchdog.claude_idle_timeout_ms'
+          ),
+    codex_idle_timeout_ms:
+      raw?.codex_idle_timeout_ms == null
+        ? null
+        : positiveSafeInteger(
+            raw.codex_idle_timeout_ms,
+            3_600_000,
+            'execution.sdk_watchdog.codex_idle_timeout_ms'
           ),
   };
 }

@@ -187,7 +187,7 @@ export class CopilotTool implements ITool {
       taskId,
       permissionMode,
       abortController,
-      streamingCallbacks?.onPulse
+      streamingCallbacks?.onActivity
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

@@ -67,6 +67,7 @@ import type {
 import {
   hasMinimumRole,
   isTaskPendingDispatch,
+  isTerminalTaskStatus,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -990,19 +991,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     const sessionTasks = await taskRepo.findBySession(session.session_id);
     if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
+    const ignoredTaskIds = new Set(options.ignoredTaskIds ?? []);
+    const terminalTask = [...sessionTasks]
+      .reverse()
+      .find((task) => !ignoredTaskIds.has(task.task_id) && isTerminalTaskStatus(task.status));
+    if (!terminalTask) return session;
 
     console.warn(
-      `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
+      `🧹 [PromptState] Reconciling terminal Task ${shortId(terminalTask.task_id)} for stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (await app.service('sessions').patch(
+    return (app.service('tasks') as unknown as TasksServiceImpl).reconcileSessionState(
       session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
+      { ...params, suppressTerminalQueueProcessing: true }
+    );
   }
 
   /**

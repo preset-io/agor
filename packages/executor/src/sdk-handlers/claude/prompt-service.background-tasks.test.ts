@@ -129,8 +129,15 @@ describe('ClaudePromptService background task query lifetime', () => {
       num_turns: 2,
       usage: { input_tokens: 20, output_tokens: 10 },
     });
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_started',
+      id: 'background:task-1',
+      kind: 'background_task',
+    });
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_finished',
+      id: 'background:task-1',
+    });
   });
 
   it('settles an early task_updated completion when no task_notification follows', async () => {
@@ -175,8 +182,15 @@ describe('ClaudePromptService background task query lifetime', () => {
 
     expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
     expect(query.releaseInput).toHaveBeenCalledTimes(1);
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_started',
+      id: 'background:task-1',
+      kind: 'background_task',
+    });
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_finished',
+      id: 'background:task-1',
+    });
   });
 
   it('releases input and balances watchdog activity when cancellation interrupts a task', async () => {
@@ -215,7 +229,15 @@ describe('ClaudePromptService background task query lifetime', () => {
 
     expect(events).toContainEqual({ type: 'stopped' });
     expect(query.releaseInput).toHaveBeenCalledTimes(1);
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
-    expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_started',
+      id: 'background:task-1',
+      kind: 'background_task',
+    });
+    expect(activity).toHaveBeenCalledWith({
+      type: 'operation_finished',
+      id: 'background:task-1',
+      outcome: 'abandoned',
+    });
   });
 });

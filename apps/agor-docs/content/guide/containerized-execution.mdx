@@ -26,14 +26,14 @@ The daemon owns orchestration and delegates all git **mutations** to the executo
 
 ### What the Executor Does
 
-| Command               | Purpose                                        |
-| --------------------- | ---------------------------------------------- |
-| `prompt`              | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
-| `git.clone`           | Clone repository with Unix group setup         |
-| `git.branch.add`    | Create git branch with permissions           |
-| `git.branch.remove` | Remove branch and cleanup                    |
-| `zellij.attach`       | Attach to terminal session                     |
-| `unix.sync-*`         | Synchronize Unix users/groups                  |
+| Command             | Purpose                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `prompt`            | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
+| `git.clone`         | Clone repository with Unix group setup                                       |
+| `git.branch.add`    | Create git branch with permissions                                           |
+| `git.branch.remove` | Remove branch and cleanup                                                    |
+| `zellij.attach`     | Attach to terminal session                                                   |
+| `unix.sync-*`       | Synchronize Unix users/groups                                                |
 
 ---
 
@@ -46,7 +46,7 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 | Static Deploys       | Agor Dev Environments   |
 | -------------------- | ----------------------- |
 | Immutable containers | Interactive development |
-| No shared state      | Shared git branches    |
+| No shared state      | Shared git branches     |
 | Scale out replicas   | User-specific sessions  |
 | Ephemeral storage    | Persistent filesystem   |
 
@@ -370,7 +370,7 @@ execution:
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
 | `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
 | `{user_id}`       | Trusted authenticated Agor user UUID    | `01user789...`        |
-| `{tenant_id}`     | Trusted ambient tenant ID                | `tenant-abc`          |
+| `{tenant_id}`     | Trusted ambient tenant ID               | `tenant-abc`          |
 
 `{tenant_id}` comes from the authenticated operation's ambient tenant context
 and is rendered as one shell-escaped argument because tenant identity may
@@ -499,12 +499,12 @@ spec:
 
 Different executor commands have different timeout needs:
 
-| Command            | Typical Duration | Recommended Timeout |
-| ------------------ | ---------------- | ------------------- |
-| `prompt`           | 5-60 minutes     | 2 hours             |
-| `git.clone`        | 1-10 minutes     | 30 minutes          |
+| Command          | Typical Duration | Recommended Timeout |
+| ---------------- | ---------------- | ------------------- |
+| `prompt`         | 5-60 minutes     | 2 hours             |
+| `git.clone`      | 1-10 minutes     | 30 minutes          |
 | `git.branch.add` | 1-30 seconds     | 5 minutes           |
-| `zellij.attach`    | Session duration | 8 hours             |
+| `zellij.attach`  | Session duration | 8 hours             |
 
 ### Timeout Configuration
 
@@ -737,14 +737,14 @@ If you can't set up shared identity, the daemon must explicitly pass all require
 
 The executor command template supports these variables:
 
-| Variable                  | Description                        |
-| ------------------------- | ---------------------------------- |
-| `{unix_user}`             | Username                           |
-| `{unix_user_uid}`         | User's UID                         |
-| `{unix_user_primary_gid}` | User's primary GID                 |
-| `{supplemental_gids}`     | JSON array of all GIDs user needs  |
-| `{repo_gid}`              | Current repo's GID (if scoped)     |
-| `{branch_gid}`          | Current branch's GID (if scoped) |
+| Variable                  | Description                       |
+| ------------------------- | --------------------------------- |
+| `{unix_user}`             | Username                          |
+| `{unix_user_uid}`         | User's UID                        |
+| `{unix_user_primary_gid}` | User's primary GID                |
+| `{supplemental_gids}`     | JSON array of all GIDs user needs |
+| `{repo_gid}`              | Current repo's GID (if scoped)    |
+| `{branch_gid}`            | Current branch's GID (if scoped)  |
 
 ---
 
@@ -1054,27 +1054,57 @@ not a supported rollout mode. Before downgrading to a release that predates the
 ### SDK Health Watchdog
 
 Agor can detect an executor whose wrapper is alive but whose SDK stream stops
-making progress. The watchdog starts in observe-only mode so upgrades collect
-diagnostics without stopping work:
+making progress. The watchdog defaults to enforced supervision for recognized,
+actionable SDK failures:
 
 ```yaml
 execution:
   sdk_watchdog:
-    mode: observe # disabled | observe | enforce
+    mode: enforce # disabled | observe | enforce
     first_progress_timeout_ms: 180000
+    operation_absolute_timeout_ms: 14400000 # 4h; never extended by progress
     abort_grace_ms: 15000
     claude_idle_timeout_ms: 3600000 # null disables Claude's post-progress check
+    codex_idle_timeout_ms: null # set a positive value to opt in for Codex
 ```
 
-`observe` records what would have fired. Use `enforce` only after reviewing
-real-workload diagnostics for false positives; `disabled` is the rollback
-switch. Unknown SDK events fail open while they continue, permission/input
-waits pause the clock, and known active Claude tools are not timed out.
+`enforce` records the diagnosis and begins the existing executor containment
+path. Set `mode: observe` explicitly to record and display the diagnosis while
+leaving the executor running, or use `disabled` to turn off SDK watchdog
+diagnosis. Unknown SDK events continue to fail open, permission/input waits
+pause quiet deadlines, and meaningful SDK events reset only their applicable
+quiet deadline. Identified tool, item, and background work is tracked per
+operation with an absolute deadline; progress cannot extend that deadline.
+
+An active diagnosis is shown separately from the executor heartbeat: a current
+heartbeat means the wrapper is communicating, not that the agent is making
+progress. For an actionable observe-only diagnosis, a later meaningful progress
+pulse clears only the active UI warning while preserving the recorded diagnosis.
+It does not rearm the first-progress deadline. Provider post-progress detection
+is enabled for Claude by default through `claude_idle_timeout_ms`. Codex
+post-progress detection is opt-in and backward-compatible:
+`codex_idle_timeout_ms` defaults to `null`, and a positive value enables the
+deadline.
+
+The Codex adapter normalizes reviewed SDK item lifecycles into identified operations.
+Commands, MCP calls, web searches, file changes, reasoning, agent messages, and
+todo-list changes have independent start/progress/finish facts. New item kinds
+remain unknown activity until reviewed.
+`event_msg.agent_message`, `event_msg.task_complete`,
+`event_msg.turn_complete`, and `turn.completed` are also progress or terminal
+facts. Thread/turn startup and `event_msg.turn_context` only establish SDK
+startup; `event_msg.token_count` and unrecognized future vocabulary normalize
+to unknown activity that fails open instead of authorizing containment.
+Cursor stream messages participate in first-progress supervision; its
+post-progress deadline remains disabled because no Cursor-specific idle timeout
+is configured.
 
 SDK activity facts share the existing executor heartbeat transport. Disabling
-`execution.executor_heartbeat.enabled` therefore disables persisted pulse
-diagnostics and the stale-wrapper backstop, but the executor-local watchdog and
-its direct failure report remain active.
+`execution.executor_heartbeat.enabled` disables periodic liveness writes and the
+stale-wrapper backstop. Actual SDK pulses remain coalesced at
+`interval_ms` and persisted so observe-only recovery and diagnostics continue
+to work. The executor-local watchdog and its direct failure report also remain
+active.
 
 User Stop first persists the Task's `stopping` state. That normal realtime Task
 patch travels over the executor's authenticated WebSocket, so the executor can
@@ -1083,16 +1113,25 @@ daemon. Reconnecting executors read the durable Task state instead of relying on
 an ephemeral cancellation event. The executor reports quiescence only after its
 SDK and stop hooks return.
 
-For locally spawned executors, Agor additionally verifies process-group absence
-before the session becomes promptable; a short cooperative grace is followed by
-SIGTERM/SIGKILL only when the wrapper does not exit itself. A scoped remote
-executor's quiescence report is the authoritative cooperative result because
-the daemon cannot inspect a process group on another host. Missing reports still
-flow through the heartbeat supervisor and remain visible and blocked rather
-than being treated as proof of termination. OpenCode server-side execution also
-remains unverified. After an abrupt daemon restart, Agor keeps its existing
-orphan cleanup behavior; diagnostics disclose that logical release does not
-prove remote process termination.
+For locally spawned executors, enforced watchdog failures enter `STOPPING` and
+wait for bounded process-group termination and absence verification. A short
+cooperative grace is followed by SIGTERM/SIGKILL only when the wrapper does not
+exit itself. Verified SDK health containment settles as `FAILED`; user-requested
+Stop settles as `STOPPED`. If process absence cannot be verified, the task
+remains `STOPPING` and the session stays blocked rather than claiming successful
+containment.
+
+A scoped remote executor's quiescence report is the authoritative cooperative
+result because the daemon cannot inspect a process group on another host.
+Missing reports still flow through the heartbeat supervisor and remain visible
+and blocked rather than being treated as proof of termination. Templated or
+remote execution that cannot prove absence likewise remains blocked until a
+branch owner or administrator explicitly force-fails it. OpenCode server-side
+execution also remains unverified. After a verified failure, the user can prompt
+again manually; the watchdog does not replay the prompt or automatically drain
+queued work. After an abrupt daemon restart, Agor keeps its existing orphan
+cleanup behavior; diagnostics disclose that logical release does not prove
+remote process termination.
 
 ### Step 5: Test Single Executor
 

@@ -386,6 +386,11 @@ export interface TasksService extends AgorService<Task> {
     data: import('../types/task').ExecutorTerminationCompleteInput,
     params?: Params
   ): Promise<Task>;
+  /** Report a quiesced outcome or request containment after failed cleanup. */
+  reportExecutorSettlement(
+    data: import('../types/task').ExecutorSettlementInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
@@ -954,6 +959,7 @@ function extendTasksService(client: AgorClient): void {
     tasksService.methods(
       'connectExecutor',
       'reportTerminationComplete',
+      'reportExecutorSettlement',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure'
     );

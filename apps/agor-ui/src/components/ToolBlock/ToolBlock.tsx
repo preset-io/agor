@@ -11,6 +11,7 @@ import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import type { ToolStatus } from './toolStatus';
 
 export interface ToolBlockProps {
   /** Tool/block icon (Ant Design icon element) */
@@ -22,7 +23,7 @@ export interface ToolBlockProps {
   /** Override the description display with custom ReactNode (e.g. code block) */
   descriptionNode?: React.ReactNode;
   /** Status indicator */
-  status?: 'success' | 'error' | 'pending' | 'stale';
+  status?: ToolStatus;
   /** Whether to expand by default. Defaults to false; the caller decides
    *  which tools should land open. */
   expandedByDefault?: boolean;

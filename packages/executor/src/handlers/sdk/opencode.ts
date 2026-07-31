@@ -28,7 +28,7 @@ import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
-import { PermissionService } from '../../permissions/permission-service.js';
+import { createExecutionPermissionService } from '../../permissions/permission-service.js';
 import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
 import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from '../../sdk-handlers/base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../../sdk-handlers/base/permission-hooks.js';
@@ -37,10 +37,24 @@ import {
   reportWithheldMcpServers,
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import type { AgenticToolOutcome } from '../../terminal-task.js';
 import { isDaemonOwnedAbort } from '../../termination-state.js';
 import { appendTaskFailureMessage, createStreamingCallbacks } from './base-executor.js';
+
+function reportOpenCodePulse(
+  callback: SdkActivityCallback | undefined,
+  kind: ExecutorPulseKind,
+  detail?: string
+): void {
+  if (kind === 'waiting') return; // PermissionService reports the bounded wait with its real ID.
+  if (kind === 'progress') callback?.({ type: 'progress', ...(detail ? { detail } : {}) });
+  if (kind === 'sdk_started') callback?.({ type: 'sdk_started', ...(detail ? { detail } : {}) });
+  if (kind === 'unknown_activity') {
+    callback?.({ type: 'unknown_activity', detail: detail ?? 'unknown.event' });
+  }
+}
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -52,16 +66,12 @@ export async function executeOpenCodeTask(params: {
   messageSource?: MessageSource;
   agenticToolContext?: Record<string, unknown>;
   resolvedConfig?: ResolvedConfigSlice;
-  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+  onActivity?: SdkActivityCallback;
 }): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId, taskId, prompt } = params;
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
-  const permissionService = new PermissionService(async (event, data) => {
-    if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
-    if (event === 'permission:timeout') params.onPulse?.('sdk_started', 'permission.timeout');
-    client.service('sessions').emit(event, data);
-  }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
+  const permissionService = createExecutionPermissionService(params);
   globalPermissionManager.register(sessionId, permissionService);
 
   try {
@@ -151,7 +161,10 @@ export async function executeOpenCodeTask(params: {
           await client.service('sessions').patch(sessionId, { sdk_session_id: openCodeSessionId });
         },
       },
-      createStreamingCallbacks(client, 'opencode', sessionId, params.onPulse)
+      {
+        ...createStreamingCallbacks(client, 'opencode', sessionId, params.onActivity),
+        onPulse: (kind, detail) => reportOpenCodePulse(params.onActivity, kind, detail),
+      }
     );
 
     if (isDaemonOwnedAbort(params.abortController)) return;

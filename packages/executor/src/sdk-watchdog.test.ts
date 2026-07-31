@@ -1,183 +1,209 @@
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
-import type { AgenticToolName, SdkHealthFailureInput } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  activityToPulse,
   getSdkActivityVersion,
   isSdkHealthAbort,
   markSdkHealthAbort,
   SdkWatchdog,
 } from './sdk-watchdog.js';
 
-const baseConfig: ResolvedSdkWatchdogConfig = {
-  mode: 'observe',
-  first_progress_timeout_ms: 1_000,
-  abort_grace_ms: 100,
-  claude_idle_timeout_ms: 2_000,
-};
-
-type Evidence = Omit<SdkHealthFailureInput, 'task_id'>;
-
-function harness(
-  overrides: Partial<ResolvedSdkWatchdogConfig> = {},
-  tool: AgenticToolName = 'codex'
-) {
-  const decisions: Evidence[] = [];
-  const watchdog = new SdkWatchdog({
-    tool,
-    config: { ...baseConfig, ...overrides },
-    sdkVersion: getSdkActivityVersion(tool),
-    now: Date.now,
-    onDecision: (evidence) => decisions.push(evidence),
-  });
-  return { watchdog, decisions };
-}
+const config = {
+  mode: 'enforce',
+  first_progress_timeout_ms: 100,
+  abort_grace_ms: 25,
+  operation_absolute_timeout_ms: 300,
+  claude_idle_timeout_ms: 100,
+  codex_idle_timeout_ms: 100,
+} as unknown as ResolvedSdkWatchdogConfig;
 
 describe('SdkWatchdog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+    vi.setSystemTime(0);
   });
 
   afterEach(() => vi.useRealTimers());
 
-  it('includes the package-owned OpenCode SDK version in watchdog evidence', () => {
-    const { watchdog, decisions } = harness({}, 'opencode');
-    watchdog.record('sdk_started');
-    vi.advanceTimersByTime(1_000);
+  function setup(overrides: Partial<typeof config> = {}) {
+    const decisions: Array<Record<string, unknown>> = [];
+    const watchdog = new SdkWatchdog({
+      tool: 'codex',
+      config: { ...config, ...overrides } as ResolvedSdkWatchdogConfig,
+      now: () => Date.now(),
+      onDecision: (evidence) => decisions.push(evidence),
+    });
+    return { watchdog, decisions };
+  }
+
+  it('enforces a bounded first-progress deadline', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'sdk_started' });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'no_first_progress', watchdog_action: 'enforced' }),
+    ]);
+  });
+
+  it('includes the package-owned OpenCode SDK version in watchdog evidence', async () => {
+    const decisions: Array<Record<string, unknown>> = [];
+    const watchdog = new SdkWatchdog({
+      tool: 'opencode',
+      config,
+      sdkVersion: getSdkActivityVersion('opencode'),
+      now: () => Date.now(),
+      onDecision: (evidence) => decisions.push(evidence),
+    });
+    watchdog.record({ type: 'sdk_started' });
+
+    await vi.advanceTimersByTimeAsync(100);
+
     expect(decisions[0]?.sdk_version).toBe('@opencode-ai/sdk@1.14.33');
   });
 
-  it.each(['observe', 'enforce'] as const)(
-    'uses the same first-progress decision in %s mode',
-    (mode) => {
-      const { watchdog, decisions } = harness({ mode });
-      watchdog.record('sdk_started');
-      vi.advanceTimersByTime(1_000);
-      expect(decisions).toMatchObject([
-        {
-          reason: 'no_first_progress',
-          watchdog_action: mode === 'enforce' ? 'enforced' : 'would_fire',
-        },
-      ]);
-      vi.advanceTimersByTime(5_000);
-      expect(decisions).toHaveLength(1);
-    }
-  );
-
-  it('disarms first-progress policy after meaningful progress', () => {
-    const { watchdog, decisions } = harness();
-    watchdog.record('sdk_started');
-    vi.advanceTimersByTime(999);
-    watchdog.record('progress', 'item.started');
-    vi.advanceTimersByTime(10_000);
-    expect(decisions).toEqual([]);
-  });
-
-  it('fails open while unknown vocabulary remains active, then fires after silence', () => {
-    const { watchdog, decisions } = harness({ mode: 'enforce' });
-    watchdog.record('sdk_started');
-    vi.advanceTimersByTime(500);
-    watchdog.record('unknown_activity', 'future.event');
-    vi.advanceTimersByTime(500);
-    expect(decisions).toMatchObject([
-      { reason: 'unknown_activity', watchdog_action: 'would_fire' },
-    ]);
-    watchdog.record('unknown_activity', 'future.event');
-    vi.advanceTimersByTime(999);
-    expect(decisions).toHaveLength(1);
-    vi.advanceTimersByTime(1);
-    expect(decisions[1]).toMatchObject({
-      reason: 'no_first_progress',
-      watchdog_action: 'enforced',
+  it('tracks parallel operations independently by ID', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'operation_started',
+      id: 'a',
+      kind: 'command',
+      quietTimeoutMs: 100,
     });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({
+      type: 'operation_started',
+      id: 'b',
+      kind: 'command',
+      quietTimeoutMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    watchdog.record({ type: 'operation_finished', id: 'a' });
+
+    await vi.advanceTimersByTimeAsync(89);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_stalled' })]);
   });
 
-  it('preserves the remaining timeout across a permission wait', () => {
-    const { watchdog, decisions } = harness();
-    watchdog.record('sdk_started');
-    vi.advanceTimersByTime(400);
-    watchdog.record('waiting');
-    vi.advanceTimersByTime(5_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('progress', 'unrelated');
-    vi.advanceTimersByTime(5_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('sdk_started', 'permission.resolved');
-    vi.advanceTimersByTime(599);
-    expect(decisions).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(decisions[0]?.reason).toBe('no_first_progress');
+  it('enforces an absolute operation deadline despite ongoing progress', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'operation_started',
+      id: 'long',
+      kind: 'command',
+      quietTimeoutMs: 100,
+      absoluteTimeoutMs: 120,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'operation_progress', id: 'long' });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'operation_progress', id: 'long' });
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_timed_out' })]);
   });
 
-  it('pauses Claude idle policy while a known tool is active', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    vi.advanceTimersByTime(1_000);
-    watchdog.record('progress', 'tool.start');
-    vi.advanceTimersByTime(10_000);
+  it('pauses quiet supervision during an identified wait but bounds the wait itself', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'operation_started',
+      id: 'command',
+      kind: 'command',
+      quietTimeoutMs: 60,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(99);
     expect(decisions).toEqual([]);
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'wait_timed_out' })]);
   });
 
-  it('pauses Claude idle policy while an SDK background task is active', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    watchdog.record('progress', 'background_task.start');
-    vi.advanceTimersByTime(10_000);
+  it('resumes quiet supervision after the matching wait finishes', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'operation_started',
+      id: 'command',
+      kind: 'command',
+      quietTimeoutMs: 60,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+    await vi.advanceTimersByTimeAsync(19);
     expect(decisions).toEqual([]);
-    watchdog.record('progress', 'background_task.complete');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toEqual([]);
-    vi.advanceTimersByTime(1);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_stalled' })]);
   });
 
-  it('keeps Claude idle policy paused until every parallel tool completes', () => {
-    const { watchdog, decisions } = harness({}, 'claude-code');
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    watchdog.record('progress', 'tool.start');
-    watchdog.record('progress', 'tool.start');
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(10_000);
-    expect(decisions).toEqual([]);
-    watchdog.record('progress', 'tool.complete');
-    vi.advanceTimersByTime(2_000);
-    expect(decisions[0]?.reason).toBe('progress_stalled');
-  });
+  it('diagnoses unknown activity without treating it as meaningful progress', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'sdk_started' });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'unknown_activity', detail: 'future.event' });
+    await Promise.resolve();
 
-  it('does not enforce Claude idle while unknown SDK activity continues', () => {
-    const { watchdog, decisions } = harness({ mode: 'enforce' }, 'claude-code');
-    watchdog.record('sdk_started');
-    watchdog.record('progress', 'assistant');
-    vi.advanceTimersByTime(1_500);
-    watchdog.record('unknown_activity', 'future.delta');
-    vi.advanceTimersByTime(500);
-    expect(decisions).toMatchObject([
-      { reason: 'unknown_activity', watchdog_action: 'would_fire' },
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'unknown_activity', watchdog_action: 'would_fire' }),
     ]);
-    watchdog.record('unknown_activity', 'future.delta');
-    vi.advanceTimersByTime(1_999);
-    expect(decisions).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'unknown_activity' }),
+      expect.objectContaining({ reason: 'no_first_progress', watchdog_action: 'enforced' }),
+    ]);
   });
 
-  it('does nothing when disabled or stopped', () => {
-    const disabled = harness({ mode: 'disabled' });
-    disabled.watchdog.record('sdk_started');
-    vi.advanceTimersByTime(10_000);
-    expect(disabled.decisions).toEqual([]);
+  it('diagnoses an unmatched operation event without refreshing progress', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'sdk_started' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(watchdog.record({ type: 'operation_finished', id: 'missing' })).toEqual({
+      type: 'unknown_activity',
+      detail: 'operation_finished:missing',
+    });
+    await Promise.resolve();
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'unknown_activity' })]);
 
-    const stopped = harness();
-    stopped.watchdog.record('sdk_started');
-    stopped.watchdog.stop();
-    vi.advanceTimersByTime(10_000);
-    expect(stopped.decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(decisions.at(-1)).toEqual(expect.objectContaining({ reason: 'no_first_progress' }));
+  });
+
+  it('does not let a duplicate operation start move its absolute deadline', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'operation_started',
+      id: 'command',
+      kind: 'command',
+      quietTimeoutMs: 100,
+      absoluteTimeoutMs: 120,
+    });
+    await vi.advanceTimersByTimeAsync(80);
+    watchdog.record({
+      type: 'operation_started',
+      id: 'command',
+      kind: 'command',
+      quietTimeoutMs: 100,
+      absoluteTimeoutMs: 120,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'operation_timed_out' })]);
   });
 
   it('marks coordinator-owned aborts distinctly from user Stop', () => {
@@ -186,5 +212,25 @@ describe('SdkWatchdog', () => {
     markSdkHealthAbort(controller);
     expect(controller.signal.aborted).toBe(true);
     expect(isSdkHealthAbort(controller)).toBe(true);
+  });
+});
+
+describe('activityToPulse', () => {
+  it('persists only bounded semantic telemetry', () => {
+    expect(
+      activityToPulse({
+        type: 'operation_started',
+        id: 'secret-operation-id',
+        kind: `command ${'x'.repeat(200)}`,
+      })
+    ).toEqual({ kind: 'progress', detail: `command_${'x'.repeat(120)}` });
+    expect(
+      activityToPulse({
+        type: 'waiting_started',
+        id: 'permission-1',
+        reason: 'permission',
+        absoluteTimeoutMs: 100,
+      })
+    ).toEqual({ kind: 'waiting', detail: 'permission' });
   });
 });

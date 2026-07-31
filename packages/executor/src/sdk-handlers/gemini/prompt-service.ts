@@ -40,7 +40,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -215,7 +215,6 @@ export class GeminiPromptService {
 
         // Stream all events from this turn
         for await (const event of stream) {
-          reportSdkActivity(onActivity, 'gemini', String(event.type));
           // Debug logging for all events
           const eventValue = 'value' in event ? event.value : undefined;
           console.debug(
@@ -226,6 +225,7 @@ export class GeminiPromptService {
           // Handle different event types from Gemini SDK
           switch (event.type) {
             case Gemini.GeminiEventType.Content: {
+              onActivity?.({ type: 'progress', detail: 'content' });
               // Text chunk from model - stream it immediately!
               const textChunk = event.value || '';
               fullTextContent += textChunk;
@@ -266,6 +266,7 @@ export class GeminiPromptService {
                 name,
                 args,
               });
+              onActivity?.({ type: 'operation_started', id: callId, kind: name });
 
               // Notify consumer that tool started
               yield {
@@ -279,16 +280,27 @@ export class GeminiPromptService {
             case Gemini.GeminiEventType.ToolCallResponse: {
               // Tool execution completed
               const toolResponse = event.value as unknown as Record<string, unknown>;
+              const responseName = (toolResponse.name as string) || 'unknown';
+              const responseId =
+                typeof toolResponse.callId === 'string'
+                  ? toolResponse.callId
+                  : pendingToolCalls.find((call) => call.name === responseName)?.callId;
+              if (responseId) {
+                onActivity?.({ type: 'operation_finished', id: responseId });
+              } else {
+                onActivity?.({ type: 'unknown_activity', detail: 'tool_response_without_id' });
+              }
 
               yield {
                 type: 'tool_complete',
-                toolName: (toolResponse.name as string) || 'unknown',
+                toolName: responseName,
                 result: toolResponse.response || toolResponse,
               };
               break;
             }
 
             case Gemini.GeminiEventType.Finished: {
+              onActivity?.({ type: 'progress', detail: 'finished' });
               // Turn complete - yield final message (if we have any content)
               console.debug(
                 `[Gemini Turn Finished] Text: ${fullTextContent.length} chars, Tools: ${toolUses.length}`
@@ -345,6 +357,7 @@ export class GeminiPromptService {
             }
 
             case Gemini.GeminiEventType.Error: {
+              onActivity?.({ type: 'progress', detail: 'error' });
               // Error occurred during execution
               const errorValue = 'value' in event ? event.value : 'Unknown error';
               console.error(`Gemini SDK error: ${JSON.stringify(errorValue)}`);
@@ -370,6 +383,7 @@ export class GeminiPromptService {
             }
 
             case Gemini.GeminiEventType.Thought: {
+              onActivity?.({ type: 'progress', detail: 'thought' });
               // Agent thinking/reasoning (could stream to UI in future)
               const thoughtValue = 'value' in event ? event.value : '';
               console.debug(`[Gemini Thought] ${thoughtValue}`);
@@ -377,6 +391,7 @@ export class GeminiPromptService {
             }
 
             case Gemini.GeminiEventType.ToolCallConfirmation: {
+              onActivity?.({ type: 'unknown_activity', detail: 'tool_call_confirmation' });
               // User approval needed (should be handled by ApprovalMode config)
               console.warn(
                 '[Gemini] Tool call needs confirmation - this should not happen in AUTO_EDIT/YOLO mode!'
@@ -386,6 +401,7 @@ export class GeminiPromptService {
             }
 
             default: {
+              onActivity?.({ type: 'unknown_activity', detail: String(event.type) });
               // Log other event types for debugging
               const debugValue = 'value' in event ? event.value : '';
               console.debug(`[Gemini Event] ${event.type}:`, debugValue);

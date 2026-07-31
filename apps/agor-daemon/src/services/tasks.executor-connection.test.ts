@@ -89,6 +89,43 @@ describe('TasksService executor patches', () => {
       undefined
     );
   });
+
+  it('commits a quiesced outcome and invokes the single Session reconciler', async () => {
+    const terminalTask = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: TaskStatus.COMPLETED,
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const settleExecutorOutcome = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task: terminalTask,
+    });
+    const reconcileTerminalTask = vi.fn().mockResolvedValue(true);
+    const emit = vi.fn();
+    Reflect.set(service, 'taskRepo', { settleExecutorOutcome });
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    Reflect.set(service, 'reconcileTerminalTask', reconcileTerminalTask);
+
+    await service.reportExecutorSettlement({
+      task_id: terminalTask.task_id,
+      kind: 'quiesced',
+      status: TaskStatus.COMPLETED,
+      task_patch: { model: 'test-model' },
+    });
+
+    expect(settleExecutorOutcome).toHaveBeenCalledWith({
+      taskId: terminalTask.task_id,
+      status: TaskStatus.COMPLETED,
+      taskPatch: { model: 'test-model' },
+    });
+    expect(reconcileTerminalTask).toHaveBeenCalledWith(
+      terminalTask,
+      TaskStatus.COMPLETED,
+      expect.objectContaining({ provider: undefined })
+    );
+  });
 });
 
 describe('TasksService runtime telemetry', () => {
@@ -118,14 +155,23 @@ describe('TasksService runtime telemetry', () => {
     const result = await service.reportRuntimeTelemetry({
       task_id: task.task_id,
       pulse: { sequence: 1, kind: 'progress', detail: 'tool.start' },
+      progress: { sequence: 1, kind: 'progress', detail: 'tool.start' },
     });
 
     expect(result).toBe(task);
-    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(task.task_id, {
-      sequence: 1,
-      kind: 'progress',
-      detail: 'tool.start',
-    });
+    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(
+      task.task_id,
+      {
+        sequence: 1,
+        kind: 'progress',
+        detail: 'tool.start',
+      },
+      {
+        sequence: 1,
+        kind: 'progress',
+        detail: 'tool.start',
+      }
+    );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
 
@@ -138,6 +184,18 @@ describe('TasksService runtime telemetry', () => {
     Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry: vi.fn() });
     await expect(
       service.reportRuntimeTelemetry({ task_id: task.task_id, pulse })
+    ).rejects.toThrow();
+  });
+
+  it('rejects a non-progress value in the retained progress slot', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry: vi.fn() });
+
+    await expect(
+      service.reportRuntimeTelemetry({
+        task_id: task.task_id,
+        progress: { sequence: 1, kind: 'waiting' },
+      } as never)
     ).rejects.toThrow();
   });
 });
