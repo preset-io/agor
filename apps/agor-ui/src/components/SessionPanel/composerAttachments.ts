@@ -101,6 +101,8 @@ export function isSupportedComposerUploadFile(file: File): boolean {
 }
 
 function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   const mb = bytes / (1024 * 1024);
   return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
 }
@@ -195,13 +197,23 @@ export function getLatestComposerPromptText({
   return promptHandle?.getValue() ?? inputValueRefValue ?? sendStartValue;
 }
 
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
+export interface PromptAttachment {
+  ref: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
+export function buildPromptWithAttachments(text: string, attachments: PromptAttachment[]): string {
   const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
+  if (attachments.length === 0) return trimmedText;
 
   const attachmentBlock = [
-    'Attached staged files (read with agor_upload_materialize; handles expire):',
-    ...attachmentPaths.map((uploadRef) => `- ${uploadRef}`),
+    'Attachments — use `agor_upload_materialize` to access:',
+    ...attachments.map(
+      (attachment) =>
+        `- \`${attachment.filename}\` (${attachment.mimeType}, ${formatBytes(attachment.size)}): \`${attachment.ref}\``
+    ),
   ].join('\n');
   if (trimmedText.startsWith('/')) {
     return `${trimmedText}\n\n${attachmentBlock}`;

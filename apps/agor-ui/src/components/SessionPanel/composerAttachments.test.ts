@@ -10,31 +10,34 @@ import {
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
-  it('builds a hidden file-path preamble without modifying visible text', () => {
-    expect(
-      buildPromptWithAttachments('Compare these charts', [
-        'upl_00000000-0000-4000-8000-000000000001',
-        'upl_00000000-0000-4000-8000-000000000002',
-      ])
-    ).toBe(
-      'Attached staged files (read with agor_upload_materialize; handles expire):\n- upl_00000000-0000-4000-8000-000000000001\n- upl_00000000-0000-4000-8000-000000000002\n\nCompare these charts'
+  const chart = {
+    ref: 'upl_00000000-0000-4000-8000-000000000001',
+    filename: 'chart.png',
+    mimeType: 'image/png',
+    size: 5,
+  };
+
+  it('includes useful attachment metadata and a terse materialization hint', () => {
+    const data = {
+      ref: 'upl_00000000-0000-4000-8000-000000000002',
+      filename: 'data.csv',
+      mimeType: 'text/csv',
+      size: 1024 * 1024,
+    };
+    expect(buildPromptWithAttachments('Compare these charts', [chart, data])).toBe(
+      'Attachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`\n- `data.csv` (text/csv, 1 MB): `upl_00000000-0000-4000-8000-000000000002`\n\nCompare these charts'
     );
   });
 
   it('preserves slash commands at the start of the sent prompt', () => {
-    expect(
-      buildPromptWithAttachments('/compact focus on this chart', [
-        'upl_00000000-0000-4000-8000-000000000003',
-      ])
-    ).toBe(`/compact focus on this chart
-
-Attached staged files (read with agor_upload_materialize; handles expire):
-- upl_00000000-0000-4000-8000-000000000003`);
+    expect(buildPromptWithAttachments('/compact focus on this chart', [chart])).toBe(
+      '/compact focus on this chart\n\nAttachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`'
+    );
   });
 
   it('supports attachment-only prompts', () => {
-    expect(buildPromptWithAttachments('   ', ['upl_00000000-0000-4000-8000-000000000001'])).toBe(
-      'Attached staged files (read with agor_upload_materialize; handles expire):\n- upl_00000000-0000-4000-8000-000000000001'
+    expect(buildPromptWithAttachments('   ', [chart])).toBe(
+      'Attachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`'
     );
   });
 

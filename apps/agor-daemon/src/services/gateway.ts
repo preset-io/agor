@@ -2451,13 +2451,13 @@ export class GatewayService {
             branchId: channel.target_branch_id,
             createdBy: channel.agor_user_id,
           });
-          const uploadRefs = ingestion.uploads.map((upload) => upload.ref);
+          const stagedUploads = ingestion.uploads;
           const { failed } = ingestion;
           failedAttachments = failed;
-          if (uploadRefs.length > 0) {
-            promptText = buildPromptWithAttachments(promptText, uploadRefs);
+          if (stagedUploads.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, stagedUploads);
             console.log(
-              `[gateway] Ingested ${uploadRefs.length} Slack attachment(s) for session ${shortId(sessionId)}`
+              `[gateway] Ingested ${stagedUploads.length} Slack attachment(s) for session ${shortId(sessionId)}`
             );
           }
         } else {

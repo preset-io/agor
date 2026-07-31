@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadsTab } from './UploadsTab';
 
@@ -21,10 +21,34 @@ describe('UploadsTab', () => {
 
   it('loads uploads from the daemon rather than the UI origin', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ uploads: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      new Response(
+        JSON.stringify({
+          uploads: [
+            {
+              ref: 'upl_older',
+              displayName: 'older.txt',
+              mimeType: 'text/plain',
+              size: 1,
+              provenance: 'browser',
+              createdAt: '2026-01-01T12:00:00.000Z',
+              expiresAt: null,
+            },
+            {
+              ref: 'upl_newer',
+              displayName: 'newer.png',
+              mimeType: 'image/png',
+              size: 2,
+              provenance: 'browser',
+              createdAt: '2026-02-01T12:00:00.000Z',
+              expiresAt: '2026-03-01T12:00:00.000Z',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -36,6 +60,11 @@ describe('UploadsTab', () => {
       })
     );
     expect(showError).not.toHaveBeenCalled();
+    expect(screen.getByRole('columnheader', { name: 'Uploaded' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Expires' })).not.toBeInTheDocument();
+    const rows = screen.getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('newer.png');
+    expect(rows[2]).toHaveTextContent('older.txt');
   });
 
   it('reports response parsing failures through the themed message component', async () => {

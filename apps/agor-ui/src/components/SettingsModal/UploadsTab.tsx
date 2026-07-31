@@ -1,5 +1,5 @@
 import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
-import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Popconfirm, Space, Table, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { getAuthHeaders } from '../../utils/authHeaders';
@@ -44,7 +44,7 @@ export function UploadsTab() {
       const response = await fetch(uploadsUrl(), { headers: getAuthHeaders() });
       if (!response.ok) throw new Error('Unable to load uploads');
       const body = (await response.json()) as { uploads?: UploadRow[] };
-      setUploads(body.uploads ?? []);
+      setUploads([...(body.uploads ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Unable to load uploads');
     } finally {
@@ -108,46 +108,57 @@ export function UploadsTab() {
       </Typography.Paragraph>
       <Table
         rowKey="ref"
+        size="small"
         loading={loading}
         dataSource={uploads}
         locale={{ emptyText: <Empty description="No uploads" /> }}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: 25, showSizeChanger: false }}
         columns={[
           {
             title: 'File',
             dataIndex: 'displayName',
             render: (name: string, row) => (
-              <Space direction="vertical" size={0}>
-                <Typography.Text editable={{ onChange: (value) => void rename(row, value) }}>
-                  {name}
-                </Typography.Text>
-                <Typography.Text type="secondary">{row.mimeType}</Typography.Text>
-              </Space>
+              <Typography.Text editable={{ onChange: (value) => void rename(row, value) }}>
+                {name}
+              </Typography.Text>
             ),
           },
           { title: 'Size', dataIndex: 'size', render: humanBytes },
           {
-            title: 'Created',
+            title: 'Uploaded',
             dataIndex: 'createdAt',
-            render: (value: string) => new Date(value).toLocaleString(),
-          },
-          {
-            title: 'Expires',
-            dataIndex: 'expiresAt',
-            render: (value: string | null) =>
-              value ? new Date(value).toLocaleDateString() : <Tag>Never</Tag>,
+            defaultSortOrder: 'descend',
+            sorter: (a, b) => a.createdAt.localeCompare(b.createdAt),
+            render: (value: string, row) => (
+              <Tooltip
+                title={
+                  <Space orientation="vertical" size={0}>
+                    <span>Uploaded: {new Date(value).toLocaleString()}</span>
+                    <span>
+                      Expires: {row.expiresAt ? new Date(row.expiresAt).toLocaleString() : 'Never'}
+                    </span>
+                    <span>Type: {row.mimeType}</span>
+                    <span>Source: {row.provenance}</span>
+                  </Space>
+                }
+              >
+                <Typography.Text>{new Date(value).toLocaleDateString()}</Typography.Text>
+              </Tooltip>
+            ),
           },
           {
             title: '',
             key: 'actions',
             render: (_, row) => (
-              <Space>
+              <Space size={4}>
                 <Button
+                  size="small"
                   aria-label={`Preview ${row.displayName}`}
                   icon={<EyeOutlined />}
                   onClick={() => void openBlob(row, false)}
                 />
                 <Button
+                  size="small"
                   aria-label={`Download ${row.displayName}`}
                   icon={<DownloadOutlined />}
                   onClick={() => void openBlob(row, true)}
@@ -159,6 +170,7 @@ export function UploadsTab() {
                 >
                   <Button
                     danger
+                    size="small"
                     aria-label={`Delete ${row.displayName}`}
                     icon={<DeleteOutlined />}
                   />

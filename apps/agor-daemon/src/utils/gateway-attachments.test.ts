@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
-import type { SessionID, TenantID } from '@agor/core/types';
+import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPromptWithAttachments,
@@ -77,25 +77,35 @@ describe('isIngestableFile', () => {
 
 describe('buildPromptWithAttachments', () => {
   const uploadRef = 'upl_00000000-0000-4000-8000-000000000001';
+  const attachment = {
+    ref: uploadRef as UploadRef,
+    name: 'error.log',
+    mimeType: 'text/plain',
+    size: 1024,
+    provenance: 'slack' as const,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: null,
+  };
+
   it('returns the trimmed text when there are no attachments', () => {
     expect(buildPromptWithAttachments('  hello  ', [])).toBe('hello');
   });
 
-  it('prepends the attachment block to regular prompts', () => {
-    expect(buildPromptWithAttachments('look at this', [uploadRef])).toBe(
-      `Attached staged files (read with agor_upload_materialize; handles expire):\n- ${uploadRef}\n\nlook at this`
+  it('prepends useful attachment metadata to regular prompts', () => {
+    expect(buildPromptWithAttachments('look at this', [attachment])).toBe(
+      `Attachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\`\n\nlook at this`
     );
   });
 
   it('keeps slash commands first', () => {
-    expect(buildPromptWithAttachments('/review', [uploadRef])).toBe(
-      `/review\n\nAttached staged files (read with agor_upload_materialize; handles expire):\n- ${uploadRef}`
+    expect(buildPromptWithAttachments('/review', [attachment])).toBe(
+      `/review\n\nAttachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\``
     );
   });
 
   it('returns only the attachment block when the text is empty', () => {
-    expect(buildPromptWithAttachments('', [uploadRef])).toBe(
-      `Attached staged files (read with agor_upload_materialize; handles expire):\n- ${uploadRef}`
+    expect(buildPromptWithAttachments('', [attachment])).toBe(
+      `Attachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\``
     );
   });
 });

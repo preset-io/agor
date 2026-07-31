@@ -1037,7 +1037,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
-      const attachmentPaths = uploadedFiles.map((file) => file.ref);
+      const promptAttachments = uploadedFiles;
       const composerStillOwnsSend =
         composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
         composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
@@ -1054,7 +1054,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             sendStartValue: value,
           })
         : value;
-      const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
+      const promptToSend = buildPromptWithAttachments(latestValue, promptAttachments);
       if (!promptToSend.trim()) return;
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
