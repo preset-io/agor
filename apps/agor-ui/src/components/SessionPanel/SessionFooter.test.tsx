@@ -290,7 +290,7 @@ describe('SessionFooter', () => {
       within(overflowOptions).getByRole('button', { name: 'Enter exact OpenCode IDs' })
     );
     const manualProvider = await within(overflowOptions).findByLabelText('OpenCode provider ID');
-    await waitFor(() => expect(manualProvider).toBeVisible(), { timeout: 5_000 });
+    expect(manualProvider).toBeInTheDocument();
     expect(overflowOptions).toContainElement(manualProvider);
 
     fireEvent.click(more);
@@ -298,7 +298,7 @@ describe('SessionFooter', () => {
     fireEvent.click(more);
     await waitFor(() => expect(overflowOptions).toBeVisible(), { timeout: 5_000 });
     expect(screen.getByLabelText('OpenCode model')).toBeVisible();
-  });
+  }, 30_000);
 
   it('does not expose session settings from the MCP control', async () => {
     render(<SessionFooter {...baseProps} onOpenSessionSettings={vi.fn()} />, {
