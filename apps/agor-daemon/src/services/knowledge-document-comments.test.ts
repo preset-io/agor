@@ -5,6 +5,7 @@
  * RBAC, so the read/write boundary is the part worth pinning down.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import {
   type Database,
   generateId,
@@ -192,6 +193,76 @@ describe('KnowledgeDocumentCommentsService', () => {
       paramsFor(teammate)
     );
     expect(unreacted.reactions).toEqual([]);
+  });
+
+  dbTest('gates get() on the comment’s own document', async ({ db }) => {
+    const service = new KnowledgeDocumentCommentsService(db);
+    const document = await seedPrivateDocument(db, 'get-gate');
+    const writer = await seedUser(db, 'writer');
+    const outsider = await seedUser(db, 'outsider');
+    await grant(db, document, writer, 'write');
+    const comment = await service.create(
+      { document_id: document.document_id, content: 'private note' },
+      paramsFor(writer)
+    );
+
+    await expect(service.get(comment.comment_id, paramsFor(outsider))).rejects.toThrow(
+      /permission/i
+    );
+    expect((await service.get(comment.comment_id, paramsFor(writer))).content).toBe('private note');
+  });
+
+  // A reply must inherit its parent's document, never a caller-supplied one.
+  dbTest('ignores a document_id sent alongside parent_comment_id', async ({ db }) => {
+    const service = new KnowledgeDocumentCommentsService(db);
+    const admin = await seedUser(db, 'admin', 'admin');
+    const document = await seedPrivateDocument(db, 'reply-scope');
+    const elsewhere = await seedPrivateDocument(db, 'reply-elsewhere');
+    const root = await service.create(
+      { document_id: document.document_id, content: 'root' },
+      paramsFor(admin)
+    );
+
+    const reply = await service.create(
+      {
+        parent_comment_id: root.comment_id,
+        document_id: elsewhere.document_id,
+        content: 'reply',
+      },
+      paramsFor(admin)
+    );
+
+    expect(reply.document_id).toBe(document.document_id);
+  });
+
+  dbTest('rejects empty content and out-of-range pagination', async ({ db }) => {
+    const service = new KnowledgeDocumentCommentsService(db);
+    const admin = await seedUser(db, 'admin', 'admin');
+    const document = await seedPrivateDocument(db, 'validation');
+    await service.create({ document_id: document.document_id, content: 'real' }, paramsFor(admin));
+
+    await expect(
+      service.create({ document_id: document.document_id, content: '   ' }, paramsFor(admin))
+    ).rejects.toThrow(/content is required/i);
+
+    const listed = await service.find(
+      paramsFor(admin, { document_id: document.document_id, $limit: 10_000_000, $skip: -5 })
+    );
+    expect(listed.limit).toBe(PAGINATION.MAX_LIMIT);
+    expect(listed.skip).toBe(0);
+    expect(listed.data).toHaveLength(1);
+  });
+
+  dbTest('lists by short document id', async ({ db }) => {
+    const service = new KnowledgeDocumentCommentsService(db);
+    const admin = await seedUser(db, 'admin', 'admin');
+    const document = await seedPrivateDocument(db, 'short-id');
+    await service.create({ document_id: document.document_id, content: 'found' }, paramsFor(admin));
+
+    const listed = await service.find(
+      paramsFor(admin, { document_id: document.document_id.slice(0, 8) })
+    );
+    expect(listed.data.map((c) => c.content)).toEqual(['found']);
   });
 
   dbTest('refuses to comment on an archived document', async ({ db }) => {

@@ -21,6 +21,8 @@ export interface KnowledgeDocumentComment extends ThreadedComment {
 
   /** Heading text captured at comment time, shown when the anchor is gone */
   anchor_label: string | null;
+
+  // Text-range anchoring extends here, plus a rung in resolveKnowledgeCommentAnchor.
 }
 
 /**

@@ -46,6 +46,22 @@ type KnowledgeDocumentCommentWriteData = Partial<KnowledgeDocumentComment> & {
   parent_comment_id?: string;
 };
 
+function clampLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return PAGINATION.DEFAULT_LIMIT;
+  return Math.min(Math.max(Math.trunc(value), 1), PAGINATION.MAX_LIMIT);
+}
+
+function clampSkip(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(Math.trunc(value), 0);
+}
+
+function assertUsableContent(content: unknown): asserts content is string {
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new BadRequest('content is required to create a knowledge document comment');
+  }
+}
+
 export class KnowledgeDocumentCommentsService extends DrizzleService<
   KnowledgeDocumentComment,
   Partial<KnowledgeDocumentComment>,
@@ -122,15 +138,16 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
     if (!documentId) {
       throw new BadRequest('document_id is required to list knowledge document comments');
     }
-    await this.assertCanRead(documentId, params?.user as User | undefined);
+    const document = await this.assertCanRead(documentId, params?.user as User | undefined);
 
+    // Filter on the resolved id: `document_id` may have arrived as a short id.
     const filters = {
-      document_id: documentId,
+      document_id: document.document_id,
       resolved: query.resolved,
       created_by: query.created_by,
     };
-    const $limit = query.$limit ?? PAGINATION.DEFAULT_LIMIT;
-    const $skip = query.$skip ?? 0;
+    const $limit = clampLimit(query.$limit);
+    const $skip = clampSkip(query.$skip);
     const [total, data] = await Promise.all([
       this.comments.count(filters),
       this.comments.findAll(filters, { limit: $limit, offset: $skip }),
@@ -153,17 +170,19 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
     if (!user?.user_id) {
       throw new Forbidden('You must be signed in to comment');
     }
+    assertUsableContent(data.content);
 
     if (data.parent_comment_id) {
       const parent = await this.loadComment(data.parent_comment_id);
+      if (parent.parent_comment_id) {
+        throw new BadRequest('Replies can only be added to thread roots');
+      }
       await this.assertCanComment(parent.document_id, user);
-      const reply = await this.comments.createReply(parent.comment_id, {
+      return this.comments.createReply(parent.comment_id, {
         created_by: user.user_id as UserID,
         content: data.content,
         mentions: data.mentions,
       });
-      this.emitCommentEvent('created', reply, params);
-      return reply;
     }
 
     if (!data.document_id) {
@@ -171,7 +190,7 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
     }
     const document = await this.assertCanComment(data.document_id, user);
 
-    const created = await this.comments.create({
+    return this.comments.create({
       document_id: document.document_id,
       created_by: user.user_id as UserID,
       content: data.content,
@@ -179,8 +198,6 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
       anchor_label: data.anchor_label ?? null,
       mentions: data.mentions,
     });
-    this.emitCommentEvent('created', created, params);
-    return created;
   }
 
   /**
@@ -199,15 +216,17 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
     const comment = await this.loadComment(id);
     await this.assertCanComment(comment.document_id, user);
     if (data.content !== undefined) {
+      assertUsableContent(data.content);
       this.assertIsAuthor(comment, user);
     }
+    if (data.resolved !== undefined && comment.parent_comment_id) {
+      throw new BadRequest('Only thread roots can be resolved');
+    }
 
-    const patched = await this.comments.update(comment.comment_id, {
+    return this.comments.update(comment.comment_id, {
       ...(data.content !== undefined ? { content: data.content } : {}),
       ...(data.resolved !== undefined ? { resolved: data.resolved } : {}),
     });
-    this.emitCommentEvent('patched', patched, params);
-    return patched;
   }
 
   async update(): Promise<never> {
@@ -227,7 +246,6 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
     this.assertIsAuthor(comment, user);
 
     await this.comments.delete(comment.comment_id);
-    this.emitCommentEvent('removed', comment, params);
     return comment;
   }
 
@@ -252,12 +270,14 @@ export class KnowledgeDocumentCommentsService extends DrizzleService<
       user.user_id,
       data.emoji
     );
+    // Custom methods have no Feathers event mapping, so this one is emitted by
+    // hand; find/create/patch/remove are emitted by Feathers' own eventHook.
     this.emitCommentEvent('patched', updated, params);
     return updated;
   }
 
   private emitCommentEvent(
-    event: 'created' | 'patched' | 'removed',
+    event: 'patched',
     comment: KnowledgeDocumentComment,
     params?: KnowledgeDocumentCommentParams
   ): void {

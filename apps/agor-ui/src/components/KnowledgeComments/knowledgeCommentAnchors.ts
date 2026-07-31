@@ -48,7 +48,10 @@ export function useMeasuredHeadings(
       setHeadings((prev) =>
         prev.length === next.length &&
         prev.every(
-          (heading, index) => heading.slug === next[index].slug && heading.top === next[index].top
+          (heading, index) =>
+            heading.slug === next[index].slug &&
+            heading.top === next[index].top &&
+            heading.text === next[index].text
         )
           ? prev
           : next

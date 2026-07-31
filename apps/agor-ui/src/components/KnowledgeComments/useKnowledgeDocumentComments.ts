@@ -3,20 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const SERVICE_PATH = 'kb/document-comments';
 
+// `toggleReaction` is wired onto the client proxy by `createAgorClient`.
 type CommentsClientService = ReturnType<AgorClient['service']> & {
   toggleReaction(data: { comment_id: string; emoji: string }): Promise<KnowledgeDocumentComment>;
-  methods?: (...names: string[]) => unknown;
-  __knowledgeCommentMethodsRegistered?: boolean;
 };
-
-function getCommentsService(client: AgorClient): CommentsClientService {
-  const service = client.service(SERVICE_PATH) as unknown as CommentsClientService;
-  if (!service.__knowledgeCommentMethodsRegistered) {
-    service.methods?.('toggleReaction');
-    service.__knowledgeCommentMethodsRegistered = true;
-  }
-  return service;
-}
 
 export interface KnowledgeCommentAnchorInput {
   anchor_slug: string | null;
@@ -149,7 +139,8 @@ export function useKnowledgeDocumentComments(
   const toggleReaction = useCallback(
     async (commentId: string, emoji: string) => {
       if (!client) return;
-      await getCommentsService(client).toggleReaction({ comment_id: commentId, emoji });
+      const service = client.service(SERVICE_PATH) as unknown as CommentsClientService;
+      await service.toggleReaction({ comment_id: commentId, emoji });
     },
     [client]
   );
