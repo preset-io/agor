@@ -15,15 +15,19 @@ import type {
   BranchRepository,
   ScheduleRepository,
   SessionRepository,
+  UsersRepository,
 } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
+import { isValidUUID, shortId } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  BaseService,
   Branch,
   BranchID,
   BranchPermissionLevel,
   HookContext,
+  RBACParams,
   Session,
   UUID,
 } from '@agor/core/types';
@@ -68,16 +72,28 @@ interface RequestScopedRbacCache {
   >;
 }
 
-type PrefetchParams = AuthenticatedParams & {
-  branch?: Branch;
-  session?: Session;
+interface PrefetchParams extends RBACParams {
   _agorRbacCache?: RequestScopedRbacCache;
   _agorPrefetchedRecord?: {
     id: string;
     idField: string;
     record: unknown;
   };
-};
+}
+
+function readField(value: unknown, field: string): unknown {
+  return typeof value === 'object' && value !== null ? Reflect.get(value, field) : undefined;
+}
+
+function readStringField(value: unknown, field: string): string | undefined {
+  const fieldValue = readField(value, field);
+  return typeof fieldValue === 'string' ? fieldValue : undefined;
+}
+
+function readUuidField(value: unknown, field: string): UUID | undefined {
+  const fieldValue = readStringField(value, field);
+  return fieldValue && isValidUUID(fieldValue) ? fieldValue : undefined;
+}
 
 function getRequestRbacCache(params: AuthenticatedParams): RequestScopedRbacCache {
   const prefetchParams = params as PrefetchParams;
@@ -130,11 +146,10 @@ function rememberPrefetchedRecord(
 
 async function loadCachedSession(
   params: AuthenticatedParams,
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any,
+  sessionService: Pick<BaseService<Session>, 'get'>,
   sessionId: string
 ): Promise<Session> {
-  const cachedParamSession = (params as PrefetchParams).session as Session | undefined;
+  const cachedParamSession = (params as PrefetchParams).session;
   if (cachedParamSession?.session_id === sessionId) {
     return cachedParamSession;
   }
@@ -143,7 +158,7 @@ async function loadCachedSession(
   const cached = cache.sessions.get(sessionId);
   if (cached) return cached;
 
-  const session = (await sessionService.get(sessionId, { provider: undefined })) as Session | null;
+  const session = await sessionService.get(sessionId, { provider: undefined });
   if (!session) {
     throw new Forbidden(`Session not found: ${sessionId}`);
   }
@@ -378,13 +393,11 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
     // Extract branch_id from data or query
     let branchId: string | undefined;
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const data = context.data as any;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const query = context.params.query as any;
+    const data = context.data;
+    const query = context.params.query;
 
-    if (context.method === 'create' && data?.[branchIdField]) {
-      branchId = data[branchIdField];
+    if (context.method === 'create' && readStringField(data, branchIdField)) {
+      branchId = readStringField(data, branchIdField);
     } else if (context.id) {
       // For get/patch/remove, branch_id might be the ID itself (for branches service)
       // or we need to load the parent resource (for sessions/tasks/messages)
@@ -392,10 +405,10 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
         branchId = context.id as string;
       } else {
         // For nested resources, branch_id should be in data/query
-        branchId = data?.[branchIdField] || query?.[branchIdField];
+        branchId = readStringField(data, branchIdField) ?? readStringField(query, branchIdField);
       }
-    } else if (query?.[branchIdField]) {
-      branchId = query[branchIdField];
+    } else if (readStringField(query, branchIdField)) {
+      branchId = readStringField(query, branchIdField);
     }
 
     if (!branchId) {
@@ -591,10 +604,7 @@ export function paginateClientSide<T>(
   let filtered = rows;
   for (const [key, value] of Object.entries(q)) {
     if (key.startsWith('$') || skipFilterKeys.has(key)) continue;
-    filtered = filtered.filter(
-      // biome-ignore lint/suspicious/noExplicitAny: dynamic property access for generic query filtering
-      (item: any) => item[key] === value
-    );
+    filtered = filtered.filter((item) => readField(item, key) === value);
   }
 
   // 2. $sort with null-safe comparison.
@@ -807,8 +817,7 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
  * @returns Feathers hook
  */
 export function loadSessionBranch(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any, // Type as FeathersService if available
+  sessionService: Pick<BaseService<Session>, 'get'>,
   branchRepo: BranchRepository
 ) {
   return async (context: HookContext) => {
@@ -820,13 +829,11 @@ export function loadSessionBranch(
     // Extract session_id from data, query, or id
     let sessionId: string | undefined;
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const data = context.data as any;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const query = context.params.query as any;
+    const data = context.data;
+    const query = context.params.query;
 
-    if (context.method === 'create' && data?.session_id) {
-      sessionId = data.session_id;
+    if (context.method === 'create' && readStringField(data, 'session_id')) {
+      sessionId = readStringField(data, 'session_id');
     } else if (context.id) {
       // For get/patch/remove on sessions
       if (context.path === 'sessions') {
@@ -838,11 +845,10 @@ export function loadSessionBranch(
         // task/message that actually belongs to a different session.
         if (context.method === 'get' || context.method === 'patch' || context.method === 'remove') {
           try {
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-            const existingRecord = await (context.service as any).get(context.id, {
+            const existingRecord: unknown = await context.service.get(context.id, {
               provider: undefined, // Bypass provider to avoid recursion
             });
-            sessionId = existingRecord?.session_id;
+            sessionId = readStringField(existingRecord, 'session_id');
             const idField = inferIdFieldForPath(context.path);
             if (existingRecord && idField) {
               rememberPrefetchedRecord(context, existingRecord, idField, String(context.id));
@@ -855,11 +861,11 @@ export function loadSessionBranch(
           }
         } else {
           // For create/find on nested resources, session_id should be in data/query.
-          sessionId = data?.session_id || query?.session_id;
+          sessionId = readStringField(data, 'session_id') ?? readStringField(query, 'session_id');
         }
       }
-    } else if (query?.session_id) {
-      sessionId = query.session_id;
+    } else if (readStringField(query, 'session_id')) {
+      sessionId = readStringField(query, 'session_id');
     }
 
     if (!sessionId) {
@@ -901,15 +907,13 @@ export function resolveSessionContext() {
 
     let sessionId: string | undefined;
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const data = context.data as any;
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const query = context.params.query as any;
+    const data = context.data;
+    const query = context.params.query;
 
     // Sessions service - session_id IS the record ID
     if (context.path === 'sessions') {
       if (context.method === 'create') {
-        sessionId = data?.session_id;
+        sessionId = readStringField(data, 'session_id');
       } else if (context.id) {
         sessionId = context.id as string;
       }
@@ -917,7 +921,7 @@ export function resolveSessionContext() {
     // Tasks/Messages services - session_id is a foreign key
     else if (context.path === 'tasks' || context.path === 'messages') {
       if (context.method === 'create') {
-        sessionId = data?.session_id;
+        sessionId = readStringField(data, 'session_id');
       } else if (
         context.method === 'get' ||
         context.method === 'patch' ||
@@ -929,11 +933,10 @@ export function resolveSessionContext() {
         // this safety read does not add a second primary-key read later.
         if (context.id) {
           try {
-            // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
-            const existing = await (context.service as any).get(context.id, {
+            const existing: unknown = await context.service.get(context.id, {
               provider: undefined,
             });
-            sessionId = existing?.session_id;
+            sessionId = readStringField(existing, 'session_id');
             const idField = inferIdFieldForPath(context.path);
             if (existing && idField) {
               rememberPrefetchedRecord(context, existing, idField, String(context.id));
@@ -943,7 +946,7 @@ export function resolveSessionContext() {
           }
         }
       } else if (context.method === 'find') {
-        sessionId = query?.session_id;
+        sessionId = readStringField(query, 'session_id');
       }
     }
 
@@ -970,10 +973,7 @@ export function resolveSessionContext() {
  *
  * @param sessionService - FeathersJS sessions service
  */
-export function loadSession(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
-  sessionService: any
-) {
+export function loadSession(sessionService: Pick<BaseService<Session>, 'get'>) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -1051,18 +1051,17 @@ export function ensureSessionImmutability() {
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context extension
-    const data = context.data as any;
+    const data = context.data;
 
     // Check if created_by is being changed
-    if (data?.created_by !== undefined) {
+    if (readField(data, 'created_by') !== undefined) {
       throw new Forbidden(
         'session.created_by is immutable - it determines execution context (Unix user, credentials, SDK state)'
       );
     }
 
     // Check if unix_username is being changed
-    if (data?.unix_username !== undefined) {
+    if (readField(data, 'unix_username') !== undefined) {
       throw new Forbidden(
         'session.unix_username is immutable - it determines SDK session storage location and execution user'
       );
@@ -1121,8 +1120,7 @@ export function resolveChildUnixUsername(
  * @returns The user's current `unix_username`, or `null` if they don't have one set
  */
 export async function loadUnixUsernameForUser(
-  // biome-ignore lint/suspicious/noExplicitAny: UsersRepository type lives in @agor/core/db but both callers pass compatible instances
-  userRepo: any,
+  userRepo: Pick<UsersRepository, 'findById'>,
   userId: string
 ): Promise<string | null> {
   const user = await userRepo.findById(userId);
@@ -1153,8 +1151,7 @@ export async function loadUnixUsernameForUser(
  *   instead of failing later at prompt time.
  */
 export function setSessionUnixUsername(
-  // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
-  userRepo: any,
+  userRepo: Pick<UsersRepository, 'findById'>,
   unixUserMode?: UnixUserMode
 ) {
   return async (context: HookContext) => {
@@ -1168,8 +1165,6 @@ export function setSessionUnixUsername(
       return context;
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers context data is dynamic
-    const data = context.data as any;
     const userId = context.params.user?.user_id;
 
     if (!userId) {
@@ -1178,9 +1173,13 @@ export function setSessionUnixUsername(
 
     // Stamp session with creator's current unix_username.
     // IMMUTABLE - even if user's unix_username changes later, session keeps this value.
-    data.unix_username = await loadUnixUsernameForUser(userRepo, userId);
+    const unixUsername = await loadUnixUsernameForUser(userRepo, userId);
+    if (typeof context.data !== 'object' || context.data === null) {
+      throw new Error('Session create data is required');
+    }
+    Reflect.set(context.data, 'unix_username', unixUsername);
     if (unixUserMode) {
-      assertUnixUsernameSatisfiesMode(data.unix_username, unixUserMode);
+      assertUnixUsernameSatisfiesMode(unixUsername, unixUserMode);
     }
 
     return context;
@@ -1202,10 +1201,7 @@ export function setSessionUnixUsername(
  *
  * @param userRepo - UserRepository instance
  */
-export function validateSessionUnixUsername(
-  // biome-ignore lint/suspicious/noExplicitAny: UserRepository type
-  userRepo: any
-) {
+export function validateSessionUnixUsername(userRepo: Pick<UsersRepository, 'findById'>) {
   return async (context: HookContext) => {
     // Only validate for operations that will execute code (create tasks/messages)
     if (context.method !== 'create') return context;
@@ -1271,8 +1267,7 @@ export function validateSessionUnixUsername(
 export async function ensureCanPromptTargetSession(
   sessionId: string,
   userId: string,
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS app type
-  app: { service(name: string): any },
+  app: Application,
   branchRepo: BranchRepository
 ): Promise<Session> {
   // Load target session
@@ -1520,8 +1515,7 @@ function intersectFindQuery(
   field: string,
   accessibleIds: Set<string>
 ): HookContext {
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers query shape is dynamic
-  const query = (context.params.query ?? {}) as any;
+  const query: Record<string, unknown> = context.params.query ?? {};
   const existing = query[field];
 
   if (typeof existing === 'string') {
@@ -1529,8 +1523,11 @@ function intersectFindQuery(
     return context;
   }
 
-  if (existing && typeof existing === 'object' && Array.isArray(existing.$in)) {
-    const intersect = (existing.$in as string[]).filter((id) => accessibleIds.has(id));
+  const existingIn = readField(existing, '$in');
+  if (Array.isArray(existingIn)) {
+    const intersect = existingIn.filter(
+      (id): id is string => typeof id === 'string' && accessibleIds.has(id)
+    );
     if (intersect.length === 0) return emptyFindResult(context);
     query[field] = { $in: intersect };
     context.params.query = query;
@@ -1909,17 +1906,21 @@ export function scopeScheduleQuery(
     // Lift query filters that the repository understands (pushed into
     // the SQL JOIN for efficiency); the rest go through the generic
     // client-side filter pass below.
-    // biome-ignore lint/suspicious/noExplicitAny: Feathers query is loosely-typed
-    const q = (context.params.query ?? {}) as any;
+    const q: Record<string, unknown> = context.params.query ?? {};
+    const branchId = readUuidField(q, 'branch_id');
+    const createdBy = readUuidField(q, 'created_by');
+    if ((q.branch_id !== undefined && !branchId) || (q.created_by !== undefined && !createdBy)) {
+      return emptyFindResult(context);
+    }
     const filter = {
-      branch_id: q.branch_id,
+      branch_id: branchId,
       enabled:
         q.enabled === true || q.enabled === 'true'
           ? true
           : q.enabled === false || q.enabled === 'false'
             ? false
             : undefined,
-      created_by: q.created_by,
+      created_by: createdBy,
     };
 
     const allSchedules = isSuperAdmin(userRole, allowSuperadmin)
@@ -1930,7 +1931,7 @@ export function scopeScheduleQuery(
     // pass the rest of the query through the shared paginate+sort helper.
     context.result = paginateClientSide(
       allSchedules,
-      q as Record<string, unknown>,
+      q,
       new Set(['branch_id', 'enabled', 'created_by'])
     );
     return context;

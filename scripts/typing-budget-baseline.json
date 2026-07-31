@@ -11,12 +11,12 @@
       "typingBiomeIgnore": 3
     },
     "apps/agor-daemon": {
-      "explicitAny": 142,
-      "asAny": 52,
+      "explicitAny": 122,
+      "asAny": 40,
       "doubleAssertion": 155,
       "nonNullAssertion": 79,
       "tsExpectError": 3,
-      "typingBiomeIgnore": 113
+      "typingBiomeIgnore": 93
     },
     "apps/agor-docs": {
       "explicitAny": 0,
