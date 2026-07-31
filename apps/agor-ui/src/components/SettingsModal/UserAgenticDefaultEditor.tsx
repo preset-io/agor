@@ -1,8 +1,12 @@
-import type { AgenticToolName, AgenticToolPreset, AgorClient } from '@agor-live/client';
-import { Alert, Form, Select, Typography } from 'antd';
-import { useEffect, useState } from 'react';
-import { useAgorStore } from '../../store/agorStore';
+import {
+  agenticToolRequiresModelSelection,
+  getAgenticToolIntegration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
+import type { AgenticToolName, AgorClient } from '@agor-live/client';
+import { Alert, Button, Form, Select, Typography } from 'antd';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { useAgenticConfigurationSources } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 
 interface Props {
   tool: AgenticToolName;
@@ -14,30 +18,44 @@ interface Props {
 export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmin }) => {
   const form = Form.useFormInstance();
   const source = Form.useWatch('defaultSelectionSource', form) ?? 'workspace_default';
-  const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
-  const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(tool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false;
-
-  useEffect(() => {
-    if (!client) return;
-    let active = true;
-    void client
-      .service('agentic-tool-presets')
-      .find({ query: { tool } })
-      .then((result) => {
-        if (active) setPresets(Array.isArray(result) ? result : result.data);
-      });
-    return () => {
-      active = false;
-    };
-  }, [client, tool]);
+  const { presets, inlineAllowed, loaded, loadError, loading, retry } =
+    useAgenticConfigurationSources({ tool, client });
 
   const workspaceDefault = presets.find((preset) => preset.is_default);
+  const requiresModelSelection = agenticToolRequiresModelSelection(tool);
+  const missingSelectionError = getAgenticToolIntegration(tool).configuration.missingSelectionError;
+  const hasCompleteModel = (presetId?: string) => {
+    const preset = presets.find((candidate) => candidate.preset_id === presetId);
+    return Boolean(
+      preset && isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig)
+    );
+  };
+  const workspaceDefaultUsable = Boolean(
+    workspaceDefault &&
+      (!requiresModelSelection ||
+        isAgenticToolModelSelectionComplete(tool, workspaceDefault.configuration.modelConfig))
+  );
 
   return (
     <>
-      <Form.Item name="defaultSelectionSource" label="Default for new configurations">
+      <Form.Item
+        name="defaultSelectionSource"
+        label="Default for new configurations"
+        rules={[
+          {
+            validator: (_, nextSource) =>
+              loaded &&
+              !loadError &&
+              nextSource === 'workspace_default' &&
+              requiresModelSelection &&
+              !workspaceDefaultUsable
+                ? Promise.reject(new Error(missingSelectionError))
+                : Promise.resolve(),
+          },
+        ]}
+      >
         <Select
+          loading={loading}
           options={[
             {
               value: 'workspace_default',
@@ -55,11 +73,29 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
         />
       </Form.Item>
 
-      {source === 'workspace_default' && !workspaceDefault && (
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          title="Unable to load configuration presets"
+          action={
+            <Button size="small" onClick={retry}>
+              Retry
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      {source === 'workspace_default' && loaded && !workspaceDefaultUsable && (
         <Alert
           type="warning"
           showIcon
-          title="No workspace default is configured"
+          title={
+            workspaceDefault
+              ? 'The workspace default is incomplete for this tool'
+              : 'No workspace default is configured'
+          }
           description={
             isAdmin
               ? 'Create a preset and mark it as the default in Workspace Settings → Agentic Tools.'
@@ -73,7 +109,19 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
         <Form.Item
           name="defaultPresetId"
           label="Preset"
-          rules={[{ required: true, message: 'Choose a preset' }]}
+          rules={[
+            { required: true, message: 'Choose a preset' },
+            {
+              validator: (_, presetId) =>
+                loaded &&
+                !loadError &&
+                requiresModelSelection &&
+                presetId &&
+                !hasCompleteModel(presetId)
+                  ? Promise.reject(new Error(missingSelectionError))
+                  : Promise.resolve(),
+            },
+          ]}
         >
           <Select
             options={presets.map((preset) => ({ value: preset.preset_id, label: preset.name }))}

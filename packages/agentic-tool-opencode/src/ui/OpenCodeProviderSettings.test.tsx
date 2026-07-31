@@ -105,6 +105,49 @@ function singleProviderSettings(
 }
 
 describe('OpenCodeProviderSettings', () => {
+  it('keeps the selected provider credential draft isolated from visible runtime providers', async () => {
+    const providers: Settings = {
+      ...initial,
+      providers: [
+        {
+          id: 'opencode',
+          name: 'OpenCode Zen',
+          runtimeAvailable: true,
+          credentialPresence: 'unknown',
+          authMethods: [],
+        },
+        {
+          id: 'kimi-for-coding',
+          name: 'Kimi for Coding',
+          runtimeAvailable: false,
+          credentialPresence: 'absent',
+          authMethods: [],
+        },
+      ],
+    };
+    const service = createAuthService({ find: vi.fn().mockResolvedValue(providers) });
+    renderSettings(service);
+
+    expect(await screen.findByText('OpenCode Zen')).toBeInTheDocument();
+    expect(screen.queryByLabelText('OpenCode Zen API key')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.click(await screen.findByText('Kimi for Coding'));
+    const kimiKey = await screen.findByLabelText('Kimi for Coding API key');
+    expect(screen.queryByLabelText('OpenCode Zen API key')).not.toBeInTheDocument();
+
+    fireEvent.change(kimiKey, { target: { value: 'synthetic-kimi-key' } });
+    expect(kimiKey).toHaveValue('synthetic-kimi-key');
+    expect(screen.queryByDisplayValue('synthetic-kimi-key')).toBe(kimiKey);
+
+    fireEvent.mouseDown(screen.getByLabelText('Provider to connect'));
+    fireEvent.click((await screen.findAllByText('OpenCode Zen')).at(-1)!);
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Kimi for Coding API key')).not.toBeInTheDocument()
+    );
+    expect(await screen.findByLabelText('OpenCode Zen API key')).toHaveValue('');
+  });
+
   it('keeps a native-scale catalog progressive and renders only configured plus selected providers', async () => {
     const nativeScale: Settings = {
       ...initial,
@@ -615,7 +658,7 @@ describe('OpenCodeProviderSettings', () => {
     await waitFor(() => expect(service.remove).toHaveBeenCalledWith('zhipuai'));
   });
 
-  it('shows Zen as runtime-available without offering removal when no saved credential is known', async () => {
+  it('keeps Zen runtime availability distinct from its optional saved credential', async () => {
     const zen = {
       ...initial,
       providers: [
@@ -632,8 +675,8 @@ describe('OpenCodeProviderSettings', () => {
     renderSettings(service);
 
     expect(await screen.findByText(/available in the OpenCode runtime/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText('OpenCode Zen API key')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('OpenCode Zen API key')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(service.remove).not.toHaveBeenCalled();
   });

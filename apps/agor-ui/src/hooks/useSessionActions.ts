@@ -21,7 +21,7 @@ import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 
 interface UseSessionActionsResult {
-  createSession: (config: NewSessionConfig) => Promise<Session | null>;
+  createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
   archiveSession: (sessionId: SessionID) => Promise<Session | null>;
@@ -46,10 +46,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const createSession = async (config: NewSessionConfig): Promise<Session | null> => {
+  const createSession = async (config: NewSessionConfig): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
 
     try {
@@ -135,7 +135,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to create session';
       setError(message);
       console.error('Failed to create session:', err);
-      return null;
+      throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
     }

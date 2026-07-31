@@ -78,12 +78,14 @@ export interface NewSessionConfig {
 export interface NewSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (config: NewSessionConfig) => void;
+  onCreate: (config: NewSessionConfig) => undefined | boolean | Promise<boolean | undefined>;
   availableAgents: AgenticToolOption[];
   branchId: string; // Required - the branch to create the session in
   branch?: Branch; // Optional - branch details for display
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
+  /** Tool chosen by a quick-start tile that requires explicit configuration. */
+  initialAgent?: AgenticToolName;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -95,6 +97,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   branch,
   currentUser,
   client,
+  initialAgent,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -139,14 +142,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    setSelectedAgent('claude-code');
+    const startingTool = initialAgent ?? 'claude-code';
+    setSelectedAgent(startingTool);
     setIsCreating(false); // Reset creating state when modal opens
     setEnvVarNames([]);
     clearAttachments();
 
     // Get default config for the selected agent
-    const agentDefaults = getUserAgenticToolDefault(currentUser, 'claude-code').configuration;
-    const baseValues = getFormValuesFromConfig('claude-code', agentDefaults);
+    const agentDefaults = getUserAgenticToolDefault(currentUser, startingTool).configuration;
+    const baseValues = getFormValuesFromConfig(startingTool, agentDefaults);
 
     // MCP inheritance: branch config > user defaults
     const branchMcpIds = branch?.mcp_server_ids;
@@ -155,7 +159,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, 'claude-code'),
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, startingTool),
       // Never carry a checked save-as-default across opens — it could silently
       // overwrite the user's default on a later create.
       saveAsDefault: false,
@@ -165,7 +169,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           ? branchMcpIds
           : currentUser?.default_mcp_server_ids,
     });
-  }, [open, form]);
+  }, [open, initialAgent, form]);
 
   // Update permission mode and other defaults when agent changes
   useEffect(() => {
@@ -285,8 +289,17 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           codexDefaults.networkAccess;
       }
 
-      onCreate(config);
-      // Note: isCreating will be reset when modal reopens via useEffect
+      void Promise.resolve(onCreate(config))
+        .then((created) => {
+          if (created === false) setIsCreating(false);
+        })
+        .catch((error) => {
+          setIsCreating(false);
+          showError(
+            `Failed to create session: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
+      // Successful creation closes the modal; failures release the button for retry.
     });
   };
 

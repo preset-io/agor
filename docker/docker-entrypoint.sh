@@ -8,8 +8,8 @@ echo "🚀 Starting Agor development environment..."
 echo "✅ Using pre-built dependencies from Docker image"
 
 # pnpm runs a workspace-wide deps-status check (runDepsStatusCheck) before every
-# `pnpm run` / `pnpm --filter … <script>`. This image bakes in deps for only 8 of the
-# 10 workspace packages (apps/agor-docs and packages/agor-live are neither installed
+# `pnpm run` / `pnpm --filter … <script>`. This image bakes in deps for 10 of the
+# 12 workspace projects (apps/agor-docs and packages/agor-live are neither installed
 # nor shadowed by an anonymous node_modules volume), so that check always decides
 # node_modules is out of sync and kicks off a full `pnpm install`. That install then
 # wants to purge and reinstall node_modules "from scratch" and asks to confirm — a
@@ -48,7 +48,7 @@ echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
-DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
+DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/agentic-tool-opencode/dist /app/packages/agentic-tools/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
   # Clean and recreate dist directories with correct ownership.
   # Use the explicit workspace list instead of /app/packages/*/dist globs:
@@ -62,6 +62,8 @@ if sudo -n true 2>/dev/null; then
     /app/packages/executor/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/client/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/core/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tool-opencode/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tools/node_modules/.tmp/tsconfig.tsbuildinfo \
     2>/dev/null || true
   sudo -n mkdir -p $DIST_DIRS
 
@@ -75,7 +77,7 @@ if sudo -n true 2>/dev/null; then
   # incremental cache survives from an earlier container, `tsc` can incorrectly
   # decide there is nothing to emit, leaving dist empty and making the startup
   # wait loop time out. Remove stale build info alongside dist.
-  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
+  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
   sudo -n rm -rf $BUILD_INFO_DIRS 2>/dev/null || true
   sudo -n mkdir -p $BUILD_INFO_DIRS
   sudo -n chown -R agor:agor $BUILD_INFO_DIRS
@@ -84,8 +86,8 @@ if sudo -n true 2>/dev/null; then
 else
   # Fallback: try without sudo (might work depending on host permissions)
   rm -rf $DIST_DIRS 2>/dev/null || true
-  rm -rf /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
-  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  rm -rf /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
   mkdir -p $DIST_DIRS 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
@@ -126,6 +128,14 @@ while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages
   WAITED=$((WAITED + 1))
 done
 echo "✅ @agor/core initial build complete (including type definitions)"
+
+echo "🔨 Building @agor/agentic-tool-opencode (initial build)..."
+pnpm --filter @agor/agentic-tool-opencode build
+echo "✅ @agor/agentic-tool-opencode initial build complete"
+
+echo "🔨 Building @agor/agentic-tools (initial build)..."
+pnpm --filter @agor/agentic-tools build
+echo "✅ @agor/agentic-tools initial build complete"
 
 echo "🔨 Building @agor/executor (initial build)..."
 pnpm --filter @agor/executor build
@@ -181,13 +191,19 @@ GIT_PID=$!
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
+pnpm --filter @agor/agentic-tool-opencode dev &
+OPENCODE_PID=$!
+
+pnpm --filter @agor/agentic-tools dev &
+AGENTIC_TOOLS_PID=$!
+
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
 pnpm --filter @agor-live/client dev &
 CLIENT_PID=$!
 
-echo "✅ Watch modes started (git, core, executor, and client will rebuild on file changes)"
+echo "✅ Watch modes started (git, core, agentic tools, executor, and client will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
@@ -347,9 +363,11 @@ sleep 3
 echo "🎨 Starting UI on port ${UI_PORT:-5173}..."
 VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
 
-# If UI exits, kill daemon, executor watch, and core watch
+# If UI exits, stop the daemon and every package watcher started above.
 kill $DAEMON_PID 2>/dev/null || true
 kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
+kill $AGENTIC_TOOLS_PID 2>/dev/null || true
+kill $OPENCODE_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
 kill $GIT_PID 2>/dev/null || true

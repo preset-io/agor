@@ -29,8 +29,19 @@ else
   exit 1
 fi
 
-# Test 3: Build prod image
-echo "Test 3: Building prod image..."
+# Test 3: Verify development runtime dependency closure
+echo "Test 3: Verifying development runtime dependencies..."
+if docker compose run --rm --no-deps --entrypoint node agor-dev \
+  --eval "require('fs').realpathSync('/app/packages/agentic-tool-opencode/node_modules/@opencode-ai/sdk')" \
+  > /dev/null 2>&1; then
+  echo -e "${GREEN}✓${NC} Development runtime dependencies resolved"
+else
+  echo -e "${RED}✗${NC} Development runtime dependencies are incomplete"
+  exit 1
+fi
+
+# Test 4: Build prod image
+echo "Test 4: Building prod image..."
 if docker compose -f docker-compose.prod.yml build agor-prod > /dev/null 2>&1; then
   echo -e "${GREEN}✓${NC} Prod image built successfully"
 else
@@ -38,7 +49,7 @@ else
   exit 1
 fi
 
-# Test 4: Check image sizes
+# Check image sizes
 echo ""
 echo "Image Sizes:"
 docker images | grep -E "agor-base|agor-dev|agor-prod" | awk '{print "  " $1 ":" $2 " - " $7 $8}'

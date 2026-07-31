@@ -662,6 +662,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return next;
       });
 
+      if (activeTab === tool) {
+        await agenticForm.validateFields();
+      }
       await saveAgenticConfigs(toolsToSave);
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);

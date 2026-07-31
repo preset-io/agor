@@ -8,6 +8,7 @@ import { Form } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from './AgenticToolConfigurationPicker';
 
@@ -17,6 +18,7 @@ vi.mock('../../store/agorStore', () => ({
     selector({
       agenticToolSettingsByName: new Map([
         ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+        ['opencode', { inline_configuration_allowed: storeSettings.inlineAllowed }],
       ]),
     }),
 }));
@@ -40,6 +42,16 @@ const makeClient = (presets: unknown[] = []) =>
       off: () => {},
     }),
   }) as unknown as AgorClient;
+
+const failingClient = {
+  service: () => ({
+    find: async () => {
+      throw new Error('temporarily unavailable');
+    },
+    on: () => {},
+    off: () => {},
+  }),
+} as unknown as AgorClient;
 
 const userWithConfigDefault = {
   user_id: 'u1',
@@ -161,6 +173,46 @@ describe('AgenticToolConfigurationPicker', () => {
     );
   });
 
+  it('does not treat an unavailable OpenCode workspace selection as a usable personal default', async () => {
+    const user = {
+      user_id: 'u-open-empty',
+      default_agentic_config: {},
+      default_agentic_selection: { opencode: { source: 'workspace_default' } },
+    } as unknown as User;
+
+    renderPicker(user, 'opencode');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(INLINE_AGENTIC_CONFIGURATION)
+    );
+    expect(screen.queryByText(/^My default/)).not.toBeInTheDocument();
+  });
+
+  it('prefers a complete tool-specific OpenCode workspace default', async () => {
+    const workspacePreset = {
+      preset_id: 'opencode-workspace',
+      tool: 'opencode',
+      name: 'Workspace OpenCode',
+      is_default: true,
+      configuration: {
+        modelConfig: {
+          mode: 'exact',
+          provider: 'kimi-for-coding',
+          model: 'k3',
+        },
+      },
+    };
+
+    renderPicker(userWithoutDefault, 'opencode', [workspacePreset]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(
+        WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+      )
+    );
+    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+  });
+
   it('selects an available preset when inline configuration is disabled without a workspace default', async () => {
     storeSettings.inlineAllowed = false;
 
@@ -182,6 +234,27 @@ describe('AgenticToolConfigurationPicker', () => {
 
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('selected-source')).toHaveTextContent('p1'));
+  });
+
+  it('preserves an existing source while preset loading is temporarily unavailable', async () => {
+    render(
+      <Form initialValues={{ agenticToolPresetId: 'saved-preset' }}>
+        <AgenticToolConfigurationPicker
+          tool="opencode"
+          client={failingClient}
+          mcpServerById={new Map()}
+          currentUser={userWithoutDefault}
+        />
+        <Form.Item shouldUpdate noStyle>
+          {({ getFieldValue }) => (
+            <output data-testid="selected-source">{getFieldValue('agenticToolPresetId')}</output>
+          )}
+        </Form.Item>
+      </Form>
+    );
+
+    expect(await screen.findByText('Unable to load configuration presets')).toBeInTheDocument();
+    expect(screen.getByTestId('selected-source')).toHaveTextContent('saved-preset');
   });
 });
 

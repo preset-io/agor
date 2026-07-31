@@ -162,11 +162,13 @@ async function discoverModels(
     dataHome,
     [],
     async (client) => {
-      const [providersResponse, configResponse, runtimeProvidersResponse] = await Promise.all([
-        client.config.providers({ directory }),
-        client.config.get({ directory }),
-        client.provider.list({ directory }),
-      ]);
+      const [providersResponse, configResponse, runtimeProvidersResponse, credentialProviderIds] =
+        await Promise.all([
+          client.config.providers({ directory }),
+          client.config.get({ directory }),
+          client.provider.list({ directory }),
+          savedCredentialProviderIds(dataHome),
+        ]);
       if (
         providersResponse.error ||
         !providersResponse.data ||
@@ -196,9 +198,25 @@ async function discoverModels(
         }))
         .sort((left, right) => left.id.localeCompare(right.id));
       const projectConfigured = configuredPair(configResponse.data.model);
+      const credentialedProviders = credentialProviderIds
+        ? providers.filter(
+            (provider) => provider.runtimeAvailable && credentialProviderIds.has(provider.id)
+          )
+        : [];
+      const suggestedProvider =
+        credentialedProviders.length === 1 ? credentialedProviders[0] : undefined;
+      const suggestedModel = suggestedProvider?.suggestedModel;
+      const suggestedSelection =
+        suggestedModel &&
+        suggestedProvider.models.some(
+          (candidate) => candidate.id === suggestedModel && candidate.status === 'active'
+        )
+          ? { providerId: suggestedProvider.id, modelId: suggestedModel }
+          : undefined;
       return {
         runtimeVersion: OPENCODE_VERSION,
         ...(projectConfigured ? { projectConfigured } : {}),
+        ...(suggestedSelection ? { suggestedSelection } : {}),
         providers,
       };
     },

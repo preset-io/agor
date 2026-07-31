@@ -1,3 +1,7 @@
+import {
+  agenticToolRequiresModelSelection,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgenticToolPreset,
@@ -74,12 +78,25 @@ interface AgenticConfigurationSourceOption {
 }
 
 function preferredConfigurationSource(
+  tool: AgenticToolName,
   hasUserDefault: boolean,
   inlineAllowed: boolean,
   workspacePreset: AgenticToolPreset | undefined,
   presets: AgenticToolPreset[]
 ): string | undefined {
   if (hasUserDefault) return USER_DEFAULT_AGENTIC_CONFIGURATION;
+  if (agenticToolRequiresModelSelection(tool)) {
+    if (
+      workspacePreset &&
+      isAgenticToolModelSelectionComplete(tool, workspacePreset.configuration.modelConfig)
+    ) {
+      return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+    }
+    if (inlineAllowed) return INLINE_AGENTIC_CONFIGURATION;
+    return presets.find((preset) =>
+      isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig)
+    )?.preset_id;
+  }
   if (inlineAllowed) return INLINE_AGENTIC_CONFIGURATION;
   if (workspacePreset) return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
   return presets[0]?.preset_id;
@@ -141,15 +158,15 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
 
     retryRef.current = onPresetChange;
     void refresh();
-    service.on('created', onPresetChange);
-    service.on('patched', onPresetChange);
-    service.on('removed', onPresetChange);
+    service.on?.('created', onPresetChange);
+    service.on?.('patched', onPresetChange);
+    service.on?.('removed', onPresetChange);
     return () => {
       active = false;
       retryRef.current = () => {};
-      service.off('created', onPresetChange);
-      service.off('patched', onPresetChange);
-      service.off('removed', onPresetChange);
+      service.off?.('created', onPresetChange);
+      service.off?.('patched', onPresetChange);
+      service.off?.('removed', onPresetChange);
     };
   }, [canonicalTool, client]);
 
@@ -166,6 +183,15 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
       userSelection?.source !== 'preset' &&
       userSelection?.source !== 'workspace_default'
   );
+  const userDefaultConfiguration =
+    userSelection?.source === 'preset'
+      ? presets.find((preset) => preset.preset_id === userSelection.preset_id)?.configuration
+      : userSelection?.source === 'workspace_default'
+        ? workspacePreset?.configuration
+        : userConfigBlob;
+  const userDefaultModelComplete =
+    !agenticToolRequiresModelSelection(tool) ||
+    isAgenticToolModelSelectionComplete(tool, userDefaultConfiguration?.modelConfig);
   const isSourceAllowedByPolicy = useCallback(
     (source: string | undefined) =>
       inlineAllowed ||
@@ -176,17 +202,32 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
   const hasUserDefault =
     hasConfiguredUserDefault &&
     isSourceAllowedByPolicy(USER_DEFAULT_AGENTIC_CONFIGURATION) &&
+    userDefaultModelComplete &&
     (userSelection?.source === 'preset'
       ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
       : userSelection?.source === 'workspace_default'
         ? inlineAllowed || Boolean(workspacePreset)
         : true);
 
+  const withExecutionOwnerModelFallback = useCallback(
+    (configuration: DefaultAgenticToolConfig) => {
+      if (
+        !agenticToolRequiresModelSelection(tool) ||
+        isAgenticToolModelSelectionComplete(tool, configuration.modelConfig) ||
+        !isAgenticToolModelSelectionComplete(tool, userConfigBlob?.modelConfig)
+      ) {
+        return configuration;
+      }
+      return { ...configuration, modelConfig: userConfigBlob?.modelConfig };
+    },
+    [tool, userConfigBlob]
+  );
+
   const resolveConfiguration = useCallback(
     (source: string | undefined, inlineConfig: DefaultAgenticToolConfig = {}) => {
       if (source === INLINE_AGENTIC_CONFIGURATION) return inlineConfig;
       if (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
-        return workspacePreset?.configuration ?? {};
+        return withExecutionOwnerModelFallback(workspacePreset?.configuration ?? {});
       if (source === USER_DEFAULT_AGENTIC_CONFIGURATION) {
         if (userSelection?.source === 'preset') {
           return (
@@ -198,9 +239,11 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
           return workspacePreset?.configuration ?? {};
         return userConfigBlob ?? {};
       }
-      return presets.find((preset) => preset.preset_id === source)?.configuration ?? {};
+      return withExecutionOwnerModelFallback(
+        presets.find((preset) => preset.preset_id === source)?.configuration ?? {}
+      );
     },
-    [presets, userConfigBlob, userSelection, workspacePreset]
+    [presets, userConfigBlob, userSelection, withExecutionOwnerModelFallback, workspacePreset]
   );
 
   const myDefaultSummary = useMemo(() => {
@@ -228,6 +271,7 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
   );
 
   const preferredSource = preferredConfigurationSource(
+    tool,
     hasUserDefault,
     inlineAllowed,
     workspacePreset,

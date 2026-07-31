@@ -1,3 +1,7 @@
+import {
+  agenticToolRequiresModelSelection,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -72,7 +76,10 @@ import {
   buildTeammateOnboardingSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import {
+  getUserAgenticToolDefault,
+  getUserDefaultConfigurationSource,
+} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -254,6 +261,19 @@ const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
+interface NewSessionRequest {
+  branchId: string;
+  initialAgent?: AgenticToolName;
+  replacingSessionId?: string;
+}
+
+function canCreateDirectlyFromUserDefault(user: User | null | undefined, tool: AgenticToolName) {
+  if (!agenticToolRequiresModelSelection(tool)) return true;
+  const { selection, configuration } = getUserAgenticToolDefault(user, tool);
+  const usesInline = selection?.source === 'inline' || (!selection && Boolean(configuration));
+  return usesInline && isAgenticToolModelSelectionComplete(tool, configuration?.modelConfig);
+}
+
 // 320px keeps the three left-panel tabs (Teammate / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
@@ -372,7 +392,7 @@ export const App: React.FC<AppProps> = ({
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
-  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
+  const [newSessionRequest, setNewSessionRequest] = useState<NewSessionRequest | null>(null);
   // Set instead of creating a session immediately when quick-start can't
   // resolve a tool (no preference, no prior session for this user). Opens
   // the drawer straight away in a "pick a tool" empty state rather than the
@@ -846,20 +866,38 @@ export const App: React.FC<AppProps> = ({
     setTerminalBranchId(undefined);
   };
 
-  const handleCreateSession = async (config: NewSessionConfig) => {
-    const sessionId = await onCreateSession?.(config, currentBoardId);
-    setNewSessionBranchId(null);
-
-    // Select synchronously, then let the URL catch up. The create seam inserts
-    // the session into the store before returning, so `selectedSessionExists`
-    // is already true and the cleanup effect won't clear this — selecting
-    // directly no longer races. This keeps the drawer's SessionPanel mounted
-    // across the transition instead of blanking for the render it took
-    // `useUrlState` to derive selection from the new URL.
-    if (sessionId) {
+  const finishSessionCreation = useCallback(
+    async (sessionId: string, replacingSessionId?: string) => {
+      // Select before deleting a replaced empty session so the drawer never
+      // renders a frame without either the old or new session.
+      setPendingToolChoiceBranchId(null);
       setSelectedSessionId(sessionId);
       navigation.goToSession(sessionId);
-    }
+
+      if (replacingSessionId && client) {
+        try {
+          await client
+            .service('sessions')
+            .remove(replacingSessionId, { query: { _swapReplace: true } });
+        } catch (error) {
+          console.error(`Failed to remove replaced session ${replacingSessionId}:`, error);
+          showError(
+            "Switched tools, but couldn't clean up the previous session — it may still be visible on this branch."
+          );
+        }
+      }
+    },
+    [client, navigation, showError]
+  );
+
+  const handleCreateSession = async (config: NewSessionConfig): Promise<boolean> => {
+    const sessionId = await onCreateSession?.(config, currentBoardId);
+    if (!sessionId) return false;
+    const replacingSessionId = newSessionRequest?.replacingSessionId;
+    setNewSessionRequest(null);
+
+    await finishSessionCreation(sessionId, replacingSessionId);
+    return true;
   };
 
   // Single mechanism behind both "pick a tool" entry points: the quick-start
@@ -874,6 +912,12 @@ export const App: React.FC<AppProps> = ({
   // `handleQuickStartSession` reads.
   const chooseAgenticTool = useCallback(
     async (branchId: string, tool: AgenticToolName, replacingSessionId?: string) => {
+      if (!canCreateDirectlyFromUserDefault(user, tool)) {
+        setNewSessionRequest({ branchId, initialAgent: tool, replacingSessionId });
+        setPendingToolChoiceBranchId(null);
+        return null;
+      }
+
       // Read the branch at call time instead of subscribing — `branchById` gets
       // a new identity on every branch event (env heartbeats, git-state), which
       // would otherwise churn this callback's identity and re-render every
@@ -888,43 +932,11 @@ export const App: React.FC<AppProps> = ({
       );
       if (!sessionId) return null;
 
-      // Select the new session synchronously, in the same render that clears
-      // the picker, so the drawer never has a frame with neither target set.
-      // Routing selection through the URL alone leaves a one-render gap:
-      // `useUrlState` sets `selectedSessionId` a render after `goToSession`, so
-      // `effectiveSelectedSessionId` would be null while pending is already
-      // cleared → the drawer unmounts and fades back in. Safe because the
-      // create seam already inserted the session, so `selectedSessionExists` is
-      // true and the cleanup effect won't clear this. `goToSession` then just
-      // catches the URL up; its later `onSessionChange` re-sets the same id.
-      // Set selection BEFORE removing the replaced session (switch-tool path)
-      // so the new session already wins the ternary when the old one goes.
-      setPendingToolChoiceBranchId(null);
-      setSelectedSessionId(sessionId);
-      navigation.goToSession(sessionId);
-
-      if (replacingSessionId && client) {
-        try {
-          // `_swapReplace` tells the daemon this is a switch-tool swap, not a
-          // user-intentional delete — it refuses the removal (Conflict) if a
-          // task has landed on `replacingSessionId` since the swap was
-          // initiated (e.g. a collaborator or another tab prompted it in the
-          // TOCTOU window between opening the picker and clicking a tile),
-          // instead of silently cascade-deleting in-flight work.
-          await client
-            .service('sessions')
-            .remove(replacingSessionId, { query: { _swapReplace: true } });
-        } catch (error) {
-          console.error(`Failed to remove replaced session ${replacingSessionId}:`, error);
-          showError(
-            "Switched tools, but couldn't clean up the previous session — it may still be visible on this branch."
-          );
-        }
-      }
+      await finishSessionCreation(sessionId, replacingSessionId);
 
       return sessionId;
     },
-    [user, onCreateSession, currentBoardId, client, navigation, showError]
+    [user, onCreateSession, currentBoardId, finishSessionCreation]
   );
 
   // Default "Add session" entry point. Always opens the tool-choice empty
@@ -1233,8 +1245,12 @@ export const App: React.FC<AppProps> = ({
 
   // Find branch for NewSessionModal
   const newSessionBranch =
-    useAgorStore(useMemo(() => makeBranchSelector(newSessionBranchId), [newSessionBranchId])) ??
-    null;
+    useAgorStore(
+      useMemo(
+        () => makeBranchSelector(newSessionRequest?.branchId ?? null),
+        [newSessionRequest?.branchId]
+      )
+    ) ?? null;
 
   // Branch for the environment-logs modal (open only while the id is set).
   const logsModalBranch = useAgorStore(
@@ -1694,7 +1710,7 @@ export const App: React.FC<AppProps> = ({
                           }}
                           onClose={handleCloseSessionPanel}
                           onAdvancedSetup={() => {
-                            setNewSessionBranchId(pendingToolChoiceBranchId);
+                            setNewSessionRequest({ branchId: pendingToolChoiceBranchId });
                             setPendingToolChoiceBranchId(null);
                           }}
                         />
@@ -1722,16 +1738,17 @@ export const App: React.FC<AppProps> = ({
               registered even after the SessionPanel (which contains FileUpload)
               unmounts. Without this, antd GC's the Upload CSS on panel close. */}
         <Upload style={{ display: 'none' }} openFileDialogOnClick={false} showUploadList={false} />
-        {newSessionBranchId && (
+        {newSessionRequest && (
           <NewSessionModal
             open={true}
-            onClose={() => setNewSessionBranchId(null)}
+            onClose={() => setNewSessionRequest(null)}
             onCreate={handleCreateSession}
             availableAgents={availableAgents}
-            branchId={newSessionBranchId}
+            branchId={newSessionRequest.branchId}
             branch={newSessionBranch || undefined}
             currentUser={user}
             client={client}
+            initialAgent={newSessionRequest.initialAgent}
           />
         )}
         <SettingsModal

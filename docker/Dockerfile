@@ -127,6 +127,8 @@ COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
 COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
+COPY packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencode/
+COPY packages/agentic-tools/package.json ./packages/agentic-tools/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
 COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch

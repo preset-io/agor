@@ -118,6 +118,21 @@ explicit input -> branch override -> user default -> integration fallback
 OpenCode owns the rule that provider and model form one exact, atomic
 selection. The generic resolver must not know that rule.
 
+User and workspace defaults are tool-scoped. Selecting OpenCode never consults
+another tool's workspace default. A personal default reference is valid only
+when its selected inline, preset, or workspace source can materialize a
+runnable OpenCode pair on its own; the user write boundary validates that
+invariant before persistence. A session may still select a named preset that
+inherits from its execution owner's configuration through the ordinary host
+precedence rules.
+
+Catalog discovery may return an advisory empty-state selection only when one
+runtime-available provider has confirmed saved credentials and its active
+native default is present in the catalog. The browser may apply that suggestion
+only to an empty form. It never overwrites stored, manually entered, stale, or
+project-configured pairs, and the daemon never selects it during execution.
+Every created Session persists the exact pair it will run.
+
 ### Runtime
 
 The runtime adapter reports a normalized outcome and cooperative cleanup
@@ -271,6 +286,11 @@ The packaged distribution copies and links both the installed registry and the
 OpenCode package as internal `@agor/*` packages. They are not public npm
 dependencies and no `workspace:*` reference is allowed to escape the release
 artifact.
+
+Development containers are also explicit composition roots. Their dependency
+install, package-level `node_modules` mounts, and initial build/watch order must
+include every installed agentic-tool package; a clean container smoke check must
+resolve the runtime adapter without borrowing host dependencies or build output.
 
 ## Deferred legacy seams
 

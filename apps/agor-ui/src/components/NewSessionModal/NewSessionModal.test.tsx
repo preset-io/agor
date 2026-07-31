@@ -59,8 +59,15 @@ vi.mock('../AutocompleteTextarea', () => ({
 
 // Heavy children that need a live client/store are irrelevant to this test.
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
-  AgentSelectionGrid: ({ onSelect }: { onSelect: (id: string) => void }) => (
+  AgentSelectionGrid: ({
+    onSelect,
+    selectedAgentId,
+  }: {
+    onSelect: (id: string) => void;
+    selectedAgentId?: string;
+  }) => (
     <div data-testid="agent-grid">
+      <output data-testid="selected-agent">{selectedAgentId}</output>
       <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
         codex
       </button>
@@ -225,6 +232,27 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     expect(screen.getByRole('button', { name: 'Create Session' })).toBeEnabled();
     const label = screen.getByText('Coding Agent').closest('label') as HTMLElement;
     expect(label.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/Coding Agent\s*\*$/);
+  });
+
+  it('opens on the tool selected by quick-start and allows retry after a failed create', async () => {
+    const onCreate = vi.fn().mockResolvedValue(false);
+    render(
+      <NewSessionModal
+        open
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        availableAgents={[]}
+        branchId="branch-1"
+        client={null}
+        initialAgent="opencode"
+      />
+    );
+
+    expect(screen.getByTestId('selected-agent')).toHaveTextContent('opencode');
+    const create = screen.getByRole('button', { name: 'Create Session' });
+    fireEvent.click(create);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(create).toBeEnabled());
   });
 
   it('disables Create with a reason when the configuration cannot resolve', async () => {

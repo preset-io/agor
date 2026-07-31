@@ -56,6 +56,27 @@ describe('useSessionActions archive helpers', () => {
 });
 
 describe('useSessionActions OpenCode model config', () => {
+  it('preserves the daemon error for the caller instead of collapsing it to null', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('Select an exact OpenCode provider and model in Agor before running this session')
+      );
+    const client = makeClient({ sessions: { create } });
+    const { result } = renderHook(() => useSessionActions(client));
+
+    await act(async () => {
+      await expect(
+        result.current.createSession({
+          branch_id: 'branch-1',
+          agent: 'opencode',
+          agenticToolPresetId: '__user_default__',
+        })
+      ).rejects.toThrow(/select an exact opencode provider and model/i);
+    });
+    expect(result.current.error).toMatch(/select an exact opencode provider and model/i);
+  });
+
   it('serializes a live reference without inline model or permission fields', async () => {
     const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
     const client = makeClient({ sessions: { create } });

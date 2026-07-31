@@ -77,6 +77,41 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
   });
 
+  it('applies a safe catalog suggestion only while the selection is empty', async () => {
+    const onChange = vi.fn();
+    const { client } = clientWithCatalog({
+      ...catalog,
+      suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
+    });
+    const { rerender } = render(
+      <OpenCodeModelSelector client={client as never} onChange={onChange} />
+    );
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5' })
+    );
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <OpenCodeModelSelector
+        value={{ provider: 'manual', model: 'stored' }}
+        client={client as never}
+        onChange={onChange}
+      />
+    );
+    await Promise.resolve();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat project configuration as an automatic selection', async () => {
+    const onChange = vi.fn();
+    const { client } = clientWithCatalog(catalog);
+    render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
+
+    expect(await screen.findByText(/project configuration currently names/i)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('distinguishes and disables catalog-only providers in normal selection', async () => {
     const onChange = vi.fn();
     const { client } = clientWithCatalog({

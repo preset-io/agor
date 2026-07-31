@@ -9,7 +9,7 @@ export default defineConfig({
   },
   format: ['cjs', 'esm'],
   dts: false,
-  clean: true,
+  clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,
   shims: true,
   external: [

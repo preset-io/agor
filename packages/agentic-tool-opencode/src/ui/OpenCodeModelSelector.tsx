@@ -18,7 +18,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
 
 const { Text } = Typography;
@@ -212,6 +212,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [model, setModel] = useState(value?.model ?? '');
   const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
   const [compactManualOpen, setCompactManualOpen] = useState(false);
+  const appliedSuggestionRef = useRef<string | null>(null);
   const { catalog, loading, refreshFailed, refresh } = useOpenCodeModelCatalog({
     client,
     branchId,
@@ -248,6 +249,19 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     setCompactManualOpen(false);
     onChange?.({ provider: nextProvider, model: nextModel });
   };
+
+  useEffect(() => {
+    if (value || !catalog?.suggestedSelection) return;
+    const { providerId, modelId } = catalog.suggestedSelection;
+    const suggestionKey = `${branchId ?? ''}\0${providerId}\0${modelId}`;
+    if (appliedSuggestionRef.current === suggestionKey) return;
+    appliedSuggestionRef.current = suggestionKey;
+    setProvider(providerId);
+    setModel(modelId);
+    setManualOpen(false);
+    setCompactManualOpen(false);
+    onChange?.({ provider: providerId, model: modelId });
+  }, [branchId, catalog?.suggestedSelection, onChange, value]);
 
   const selectedCatalogProvider = catalog?.providers.find((entry) => entry.id === provider);
   const providerOptions =

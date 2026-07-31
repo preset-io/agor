@@ -7,6 +7,7 @@
  * shaped bytes cannot persist in the database.
  */
 
+import { AgenticToolPresetRepository } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -133,7 +134,7 @@ describe('UsersService — avatar source metadata', () => {
   );
 });
 
-describe('UsersService — inline OpenCode defaults', () => {
+describe('UsersService — OpenCode defaults', () => {
   dbTest(
     'rejects an absent provider/model pair before personal-default persistence',
     async ({ db }) => {
@@ -178,6 +179,64 @@ describe('UsersService — inline OpenCode defaults', () => {
     expect(updated.default_agentic_config?.opencode?.modelConfig).toMatchObject({
       provider: 'personal-provider',
       model: 'personal-model',
+    });
+  });
+
+  dbTest('rejects unresolved workspace and preset personal defaults', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    await expect(
+      service.patch(id, {
+        default_agentic_selection: { opencode: { source: 'workspace_default' } },
+      })
+    ).rejects.toThrow(/select.*provider.*model/i);
+
+    const preset = await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'opencode',
+        name: 'Permissions only',
+        configuration: { permissionMode: 'yolo' },
+      },
+      id
+    );
+    await expect(
+      service.patch(id, {
+        default_agentic_selection: {
+          opencode: { source: 'preset', preset_id: preset.preset_id },
+        },
+      })
+    ).rejects.toThrow(/select.*provider.*model/i);
+
+    const persisted = await service.get(id);
+    expect(persisted.default_agentic_selection?.opencode).toBeUndefined();
+  });
+
+  dbTest('persists a complete OpenCode workspace default selection', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+    await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'opencode',
+        name: 'Workspace OpenCode',
+        is_default: true,
+        configuration: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'workspace-provider',
+            model: 'workspace-model',
+          },
+        },
+      },
+      id
+    );
+
+    const updated = await service.patch(id, {
+      default_agentic_selection: { opencode: { source: 'workspace_default' } },
+    });
+
+    expect(updated.default_agentic_selection?.opencode).toEqual({
+      source: 'workspace_default',
     });
   });
 });

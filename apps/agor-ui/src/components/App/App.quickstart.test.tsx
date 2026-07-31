@@ -29,9 +29,14 @@ vi.mock('../SessionCanvas', () => ({
 // tests can drive the create flow.
 vi.mock('../SessionPanel/PendingToolChoicePanel', () => ({
   PendingToolChoicePanel: ({ onChoose }: { onChoose: (tool: string) => void }) => (
-    <button type="button" data-testid="tool-picker" onClick={() => onChoose('claude-code')}>
-      tool picker
-    </button>
+    <>
+      <button type="button" data-testid="tool-picker" onClick={() => onChoose('claude-code')}>
+        tool picker
+      </button>
+      <button type="button" data-testid="opencode-picker" onClick={() => onChoose('opencode')}>
+        OpenCode
+      </button>
+    </>
   ),
 }));
 
@@ -61,6 +66,13 @@ vi.mock('../SessionPanel', async () => {
           >
             switch tool
           </button>
+          <button
+            type="button"
+            data-testid="switch-opencode"
+            onClick={() => onChooseAgenticTool?.('wt-1', 'opencode', session?.session_id)}
+          >
+            switch to OpenCode
+          </button>
           <button type="button" data-testid="session-close" onClick={onClose}>
             close
           </button>
@@ -75,7 +87,33 @@ vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({ SettingsModal: () => null, UserSettingsModal: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
-vi.mock('../NewSessionModal', () => ({ NewSessionModal: () => null }));
+vi.mock('../NewSessionModal', () => ({
+  NewSessionModal: ({
+    initialAgent,
+    branchId,
+    onCreate,
+    onClose,
+  }: {
+    initialAgent?: string;
+    branchId: string;
+    onCreate: (config: unknown) => void;
+    onClose: () => void;
+  }) => (
+    <div data-testid="new-session-modal">
+      <output data-testid="modal-initial-agent">{initialAgent}</output>
+      <button
+        type="button"
+        data-testid="modal-create"
+        onClick={() => onCreate({ branch_id: branchId, agent: initialAgent })}
+      >
+        create configured session
+      </button>
+      <button type="button" data-testid="modal-cancel" onClick={onClose}>
+        cancel configured session
+      </button>
+    </div>
+  ),
+}));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({ TerminalModal: () => null, WEB_TERMINAL_MIN_ROLE: 'member' }));
 vi.mock('../ThemeEditorModal', () => ({ ThemeEditorModal: () => null }));
@@ -125,6 +163,7 @@ const branch = {
 const AVAILABLE_AGENTS = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: '' },
   { id: 'codex', name: 'Codex', icon: '💻', description: '' },
+  { id: 'opencode', name: 'OpenCode', icon: '⌨️', description: '' },
 ] as never[];
 
 const USER = {
@@ -321,6 +360,56 @@ describe('App quick-start — always shows the tool picker', () => {
     );
   });
 
+  it('opens OpenCode configuration instead of using another tool workspace default', async () => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    const userWithClaudeWorkspaceDefault = {
+      ...USER,
+      default_agentic_selection: {
+        'claude-code': { source: 'workspace_default' },
+      },
+    } as unknown as User;
+    renderShell(userWithClaudeWorkspaceDefault, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    fireEvent.click(await screen.findByTestId('opencode-picker'));
+
+    expect(await screen.findByTestId('new-session-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('modal-initial-agent')).toHaveTextContent('opencode');
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('creates OpenCode directly from a complete personal inline default', async () => {
+    const onCreateSession = optimisticCreate(SESSION_A);
+    const userWithOpenCodeDefault = {
+      ...USER,
+      default_agentic_selection: { opencode: { source: 'inline' } },
+      default_agentic_config: {
+        opencode: {
+          modelConfig: {
+            mode: 'exact',
+            provider: 'kimi-for-coding',
+            model: 'k3',
+          },
+        },
+      },
+    } as unknown as User;
+    renderShell(userWithOpenCodeDefault, onCreateSession);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('opencode-picker'));
+    });
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'opencode',
+        agenticToolPresetId: '__user_default__',
+      }),
+      BOARD_ID
+    );
+  });
+
   it('does not resurrect the picker on Back after the session is shown', async () => {
     const onCreateSession = optimisticCreate(SESSION_A);
     renderShell(USER, onCreateSession);
@@ -379,6 +468,50 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_B);
     // The drawer Panel stayed mounted across pick→A and switch A→B — no flash.
     expect(drawerPanel.unmounts).toBe(0);
+  });
+
+  it('keeps the existing session when OpenCode switch configuration is cancelled', async () => {
+    const remove = vi.fn();
+    const client = { service: () => ({ remove }) };
+    const onCreateSession = optimisticCreate(SESSION_A);
+    renderShell(USER, onCreateSession, client);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A));
+
+    fireEvent.click(screen.getByTestId('switch-opencode'));
+    expect(await screen.findByTestId('new-session-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('modal-initial-agent')).toHaveTextContent('opencode');
+    fireEvent.click(screen.getByTestId('modal-cancel'));
+
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing session when configured OpenCode creation fails', async () => {
+    const remove = vi.fn();
+    const client = { service: () => ({ remove }) };
+    const onCreateSession = optimisticCreate(SESSION_A);
+    renderShell(USER, onCreateSession, client);
+
+    fireEvent.click(await screen.findByTestId('quick-start'));
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('tool-picker'));
+    });
+    await waitFor(() => expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A));
+
+    onCreateSession.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('switch-opencode'));
+    fireEvent.click(await screen.findByTestId('modal-create'));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('new-session-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('shows the picker when Add session is used while a session is open', async () => {

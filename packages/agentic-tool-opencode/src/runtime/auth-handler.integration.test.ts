@@ -200,6 +200,104 @@ describe('opencode.auth executor command', () => {
     expect(runtime.close).toHaveBeenCalledOnce();
   });
 
+  it('suggests the active native default for the only credentialed available provider', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ 'kimi-for-coding': { type: 'api', key: 'must-not-cross' } })
+    );
+    const discoveryClient = {
+      provider: {
+        list: vi.fn(async () => providerList(['kimi-for-coding', 'opencode'])),
+      },
+      config: {
+        providers: vi.fn(async () => ({
+          data: {
+            providers: [
+              {
+                id: 'kimi-for-coding',
+                name: 'Kimi for Coding',
+                models: {
+                  k3: { id: 'k3', name: 'Kimi K3', status: 'active' },
+                },
+              },
+              {
+                id: 'opencode',
+                name: 'OpenCode Zen',
+                models: {
+                  zen: { id: 'zen', name: 'Zen', status: 'active' },
+                },
+              },
+            ],
+            default: { 'kimi-for-coding': 'k3', opencode: 'zen' },
+          },
+        })),
+        get: vi.fn(async () => ({ data: {} })),
+      },
+      instance: { dispose: vi.fn(async () => ({ data: true })) },
+    };
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover-models' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        suggestedSelection: { providerId: 'kimi-for-coding', modelId: 'k3' },
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
+  it('does not suggest a provider when multiple available providers have saved credentials', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({
+        'kimi-for-coding': { type: 'api', key: 'must-not-cross' },
+        opencode: { type: 'api', key: 'must-not-cross-either' },
+      })
+    );
+    const discoveryClient = {
+      provider: {
+        list: vi.fn(async () => providerList(['kimi-for-coding', 'opencode'])),
+      },
+      config: {
+        providers: vi.fn(async () => ({
+          data: {
+            providers: [
+              {
+                id: 'kimi-for-coding',
+                name: 'Kimi for Coding',
+                models: { k3: { id: 'k3', name: 'Kimi K3', status: 'active' } },
+              },
+              {
+                id: 'opencode',
+                name: 'OpenCode Zen',
+                models: { zen: { id: 'zen', name: 'Zen', status: 'active' } },
+              },
+            ],
+            default: { 'kimi-for-coding': 'k3', opencode: 'zen' },
+          },
+        })),
+        get: vi.fn(async () => ({ data: {} })),
+      },
+      instance: { dispose: vi.fn(async () => ({ data: true })) },
+    };
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover-models' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.not.objectContaining({ suggestedSelection: expect.anything() }),
+    });
+  });
+
   it('cleans up failed model discovery and returns no secret or path detail', async () => {
     const discoveryClient = modelCatalogClient();
     discoveryClient.config.providers.mockRejectedValue(

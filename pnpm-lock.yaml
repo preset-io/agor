@@ -552,6 +552,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.3
         version: 6.0.3(vite@8.1.4(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.6.1)(tsx@4.23.0)(yaml@2.9.0))
+      concurrently:
+        specifier: ^9.2.1
+        version: 9.2.1
       jsdom:
         specifier: ^27.1.0
         version: 27.1.0
@@ -589,6 +592,9 @@ importers:
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
+      concurrently:
+        specifier: ^9.2.1
+        version: 9.2.1
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(supports-color@8.1.1)(tsx@4.23.0)(typescript@6.0.3)(yaml@2.9.0)

@@ -8,12 +8,11 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { generateId } from '@agor/core';
 import {
-  assertInlineAgenticConfigurationAllowed,
+  AgenticConfigurationResolutionError,
   assertV05Scope,
   getEnvVarBlockReason,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
-  resolveAgenticToolPreset,
   resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
@@ -36,6 +35,7 @@ import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor
 import { isLikelyGitToken } from '@agor/core/git/pure';
 import { InvalidModelConfigError } from '@agor/core/models';
 import type {
+  AgenticToolConfigurationSource,
   AgenticToolName,
   AgenticToolsConfig,
   AgenticToolsUpdate,
@@ -60,6 +60,7 @@ import {
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 
@@ -460,17 +461,6 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.default_agentic_selection) {
-      for (const [tool, selection] of Object.entries(data.default_agentic_selection)) {
-        if (!selection) continue;
-        if (selection.source === 'preset') {
-          await resolveAgenticToolPreset(this.db, tool as AgenticToolName, selection.preset_id);
-        } else if (selection.source === 'inline') {
-          await assertInlineAgenticConfigurationAllowed(this.db, tool as AgenticToolName);
-        }
-      }
-    }
-
     if (
       data.avatar_url !== undefined ||
       data.avatar !== undefined ||
@@ -517,17 +507,24 @@ export class UsersService {
       for (const tool of changedDefaultTools) {
         const selection = nextDefaultAgenticSelection?.[tool];
         const configuration = nextDefaultAgenticConfig?.[tool];
-        const usesInlineDefault =
-          selection?.source === 'inline' ||
-          (selection === undefined && configuration !== undefined);
-        if (!usesInlineDefault) continue;
+        const source: AgenticToolConfigurationSource =
+          selection?.source === 'preset'
+            ? { reference: selection.preset_id }
+            : selection?.source === 'workspace_default'
+              ? { reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION }
+              : { configuration: configuration ?? {} };
         try {
           await materializeAgenticToolConfiguration(this.db, {
             tool,
-            source: { configuration: configuration ?? {} },
+            source,
           });
         } catch (error) {
-          if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+          if (
+            error instanceof InvalidModelConfigError ||
+            error instanceof AgenticConfigurationResolutionError
+          ) {
+            throw new BadRequest(error.message);
+          }
           throw error;
         }
       }

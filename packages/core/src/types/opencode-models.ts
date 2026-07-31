@@ -26,5 +26,11 @@ export interface OpenCodeCatalogProvider {
 export interface OpenCodeModelCatalog {
   runtimeVersion: string;
   projectConfigured?: OpenCodeModelPair;
+  /**
+   * Safe empty-state suggestion. Present only when one runtime-available
+   * provider has confirmed saved credentials and its active native default is
+   * in this catalog. It is advisory; execution still requires a stored pair.
+   */
+  suggestedSelection?: OpenCodeModelPair;
   providers: OpenCodeCatalogProvider[];
 }

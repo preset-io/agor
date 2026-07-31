@@ -104,9 +104,7 @@ export function OpenCodeProviderListItem({
       ? selectedMethodIndex
       : preferredOAuthMethodIndex(provider.authMethods);
   const method = provider.authMethods[methodIndex];
-  const apiKeyAvailable =
-    method?.type === 'api' ||
-    (!method && (!provider.runtimeAvailable || provider.credentialPresence !== 'absent'));
+  const apiKeyAvailable = method?.type === 'api' || !method;
   const values = selected ? promptValues : {};
   const prompts = visibleAuthPrompts(method?.prompts, values);
   const promptsComplete = prompts.every((prompt) => values[prompt.key]?.trim());
@@ -124,7 +122,7 @@ export function OpenCodeProviderListItem({
           Remove
         </Button>
       </Popconfirm>
-    ) : apiKeyAvailable ? (
+    ) : selected && apiKeyAvailable ? (
       <Button
         key="connect"
         type="primary"
@@ -135,7 +133,7 @@ export function OpenCodeProviderListItem({
         Connect
       </Button>
     ) : null,
-    provider.credentialPresence !== 'present' && oauthMethod && !oauthActive ? (
+    provider.credentialPresence !== 'present' && selected && oauthMethod && !oauthActive ? (
       <Button
         key="oauth-connect"
         loading={busy}
@@ -145,7 +143,7 @@ export function OpenCodeProviderListItem({
         Connect with {oauthMethod.label}
       </Button>
     ) : null,
-    provider.credentialPresence !== 'present' && oauthActive ? (
+    provider.credentialPresence !== 'present' && selected && oauthActive ? (
       <Button key="oauth-cancel" danger loading={busy} onClick={onCancelOAuth}>
         Cancel authorization
       </Button>
@@ -183,7 +181,7 @@ export function OpenCodeProviderListItem({
                   may be built in and does not imply removable credentials.
                 </Typography.Text>
               ) : null}
-              {oauthActive && oauthAttempt?.authorization && (
+              {selected && oauthActive && oauthAttempt?.authorization && (
                 <Alert
                   type="info"
                   showIcon
@@ -222,20 +220,22 @@ export function OpenCodeProviderListItem({
                   }
                 />
               )}
-              {oauthAttempt && ['failed', 'expired', 'cancelled'].includes(oauthAttempt.phase) && (
-                <Alert
-                  type={oauthAttempt.phase === 'cancelled' ? 'info' : 'error'}
-                  showIcon
-                  title={
-                    oauthAttempt.phase === 'expired'
-                      ? 'Authorization expired.'
-                      : oauthAttempt.phase === 'cancelled'
-                        ? 'Authorization cancelled.'
-                        : 'Authorization failed.'
-                  }
-                />
-              )}
-              {provider.authMethods.length > 1 && !oauthActive && (
+              {selected &&
+                oauthAttempt &&
+                ['failed', 'expired', 'cancelled'].includes(oauthAttempt.phase) && (
+                  <Alert
+                    type={oauthAttempt.phase === 'cancelled' ? 'info' : 'error'}
+                    showIcon
+                    title={
+                      oauthAttempt.phase === 'expired'
+                        ? 'Authorization expired.'
+                        : oauthAttempt.phase === 'cancelled'
+                          ? 'Authorization cancelled.'
+                          : 'Authorization failed.'
+                    }
+                  />
+                )}
+              {selected && provider.authMethods.length > 1 && !oauthActive && (
                 <Select
                   aria-label={`${provider.name} authentication method`}
                   value={methodIndex}
@@ -247,10 +247,10 @@ export function OpenCodeProviderListItem({
                   style={{ width: '100%' }}
                 />
               )}
-              {!oauthActive && (
+              {selected && !oauthActive && (
                 <AuthPromptFields prompts={prompts} values={values} onChange={onPromptChange} />
               )}
-              {apiKeyAvailable && !oauthActive && (
+              {selected && apiKeyAvailable && !oauthActive && (
                 <Input.Password
                   aria-label={`${provider.name} API key`}
                   autoComplete="new-password"
