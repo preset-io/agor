@@ -1299,6 +1299,29 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Find a single branch by ID only when it is visible to the user.
+   *
+   * Same predicate as findAccessibleBranches, scoped to one id. Mirrors the
+   * accessiblePrimaryTeammateExists check used to resolve boards'
+   * primary_teammate_id across board boundaries. Returns null when the branch
+   * is missing or the user has no access.
+   */
+  async findAccessibleById(branchId: string, userId: UUID): Promise<Branch | null> {
+    const rows = await select(this.db, getTableColumns(branches))
+      .from(branches)
+      .leftJoin(
+        branchOwners,
+        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+      )
+      .where(and(eq(branches.branch_id, branchId), visibleBranchAccessCondition(this.db, userId)))
+      .all();
+
+    if (rows.length === 0) return null;
+    const baseUrl = await getBaseUrl();
+    return this.rowToBranch(rows[0] as BranchRow, baseUrl);
+  }
+
+  /**
    * Find branch IDs pinned to a specific board zone.
    *
    * Zone membership lives on board_objects.data.zone_id, not on the branches
