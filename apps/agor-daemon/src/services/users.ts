@@ -19,6 +19,7 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  BranchRepository,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -28,6 +29,7 @@ import {
   insert,
   select,
   type TenantScopeAwareDatabase,
+  UserPrimaryTeammateRepository,
   update,
   users,
 } from '@agor/core/db';
@@ -38,6 +40,8 @@ import type {
   AgenticToolsConfig,
   AgenticToolsUpdate,
   AuthenticatedParams,
+  Branch,
+  BranchID,
   EnvVarMetadata,
   EnvVarScope,
   InternalUser,
@@ -137,6 +141,14 @@ function isAdmin(params: Params | undefined): boolean {
 function isSelfEmailLookup(params: Params | undefined, email: string): boolean {
   const requesterEmail = (params as AuthenticatedParams | undefined)?.user?.email;
   return !!requesterEmail && requesterEmail.toLowerCase() === email.toLowerCase();
+}
+
+function requireCallerId(params: Params | undefined): UserID {
+  const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+  if (!userId) {
+    throw new NotAuthenticated('Authentication required');
+  }
+  return userId;
 }
 
 function ensureCanExactEmailLookup(params: Params | undefined, email: string): void {
@@ -822,6 +834,40 @@ export class UsersService {
 
   async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
     return this.requireAvatarSync().refreshUserFromSettings(userId);
+  }
+
+  /**
+   * Resolve the calling user's primary teammate branch, or null when unset or
+   * no longer accessible (the "needs picking" signal for the settings picker).
+   */
+  async getPrimaryTeammate(_data: unknown, params?: Params): Promise<Branch | null> {
+    const userId = requireCallerId(params);
+    return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId);
+  }
+
+  /**
+   * Set the calling user's primary teammate to a branch they can access. The
+   * pick is a manual user action, so it is recorded with `source: 'explicit'`.
+   * Rejects branches the caller cannot access to avoid persisting a pointer
+   * that would immediately resolve back to null.
+   */
+  async setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null> {
+    const userId = requireCallerId(params);
+    const branchId = data?.branchId as BranchID | undefined;
+    if (!branchId) {
+      throw new Forbidden('A branchId is required to set a primary teammate');
+    }
+
+    const branch = await new BranchRepository(this.db).findAccessibleById(branchId, userId);
+    if (!branch) {
+      throw new Forbidden('Cannot set a primary teammate you do not have access to');
+    }
+
+    await new UserPrimaryTeammateRepository(this.db).setPrimaryTeammate(userId, branchId, {
+      source: 'explicit',
+      updatedBy: userId,
+    });
+    return branch;
   }
 
   /**

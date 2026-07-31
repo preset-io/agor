@@ -15,6 +15,7 @@ import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from 
 import {
   ApiOutlined,
   CloseOutlined,
+  RobotOutlined,
   SettingOutlined,
   SoundOutlined,
   TeamOutlined,
@@ -61,6 +62,7 @@ import { ToolIcon } from '../ToolIcon';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
@@ -115,6 +117,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // The primary-assistant RPCs are caller-scoped, so the picker is only
+  // meaningful when editing your own profile — not when an admin edits another.
+  const isSelf = !!user?.user_id && user.user_id === currentUser?.user_id;
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
@@ -712,6 +717,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label: 'General',
           icon: <SettingOutlined />,
         },
+        ...(isSelf
+          ? [
+              {
+                key: 'primary-teammate',
+                label: 'Primary Assistant',
+                icon: <RobotOutlined />,
+              },
+            ]
+          : []),
         {
           key: 'env-vars',
           label: 'Env Vars',
@@ -993,6 +1007,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             </Form>
           </>
         );
+      case 'primary-teammate':
+        return <PrimaryTeammatePicker client={client} />;
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
       case 'claude-code':
