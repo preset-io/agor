@@ -584,12 +584,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
-  const stampTenantData = (data: unknown, tenantId: string): unknown => {
-    if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));
-    if (!data || typeof data !== 'object') return data;
-    return { ...(data as Record<string, unknown>), tenant_id: tenantId };
-  };
-
   const stripTenantData = (data: unknown): unknown => {
     if (Array.isArray(data)) return data.map(stripTenantData);
     if (!data || typeof data !== 'object') return data;
@@ -637,9 +631,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
 
-    if (context.method === 'create') {
-      context.data = stampTenantData(context.data, tenantId) as typeof context.data;
-    } else if (context.method === 'update' || context.method === 'patch') {
+    if (context.method === 'update' || context.method === 'patch') {
       context.data = stripTenantData(context.data) as typeof context.data;
     }
 

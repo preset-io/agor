@@ -265,12 +265,14 @@
 }
 
 .footerEtymology {
+  display: block;
   margin: 6px 0 0;
   color: var(--landing-muted);
   font-family: var(--font-display-stack);
   font-size: 0.85rem;
   font-weight: 500;
   letter-spacing: 0.02em;
+  text-decoration: none;
 }
 
 .footerEtymology span {

@@ -18,7 +18,7 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
-import { TaskStatus } from '@agor/core/types';
+import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
@@ -27,6 +27,8 @@ import {
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectServerManagedTaskWrites,
+  type RegisterHooksContext,
+  registerHooks,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -217,6 +219,93 @@ describe('protectServerManagedTaskWrites', () => {
 });
 
 describe('tenant-owned service registration', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'all' | 'create', RegisteredHook[]>>;
+  };
+
+  const captureScheduleRegistrations = (): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'schedules') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      branchRbacEnabled: false,
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    });
+
+    return registrations;
+  };
+
+  const runRegisteredScheduleCreateBeforeHooks = async (
+    registrations: RegisteredHooks[]
+  ): Promise<HookContext> => {
+    const context = {
+      path: 'schedules',
+      method: 'create',
+      data: {
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        name: 'Nightly',
+        cron_expression: '0 0 * * *',
+        timezone_mode: 'utc',
+        prompt: 'Run',
+        agentic_tool_config: { agentic_tool: 'codex' },
+      },
+      params: {
+        provider: 'rest',
+        user: { user_id: 'registration-test-user', role: 'member' },
+      },
+    } as HookContext;
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.all ?? []) {
+        await hook(context);
+      }
+    }
+
+    for (const registration of registrations) {
+      for (const hook of registration.before?.create ?? []) {
+        await hook(context);
+      }
+    }
+
+    return context;
+  };
+
+  it('keeps schedule create DTOs valid through the registered tenant hook', async () => {
+    const context = await runRegisteredScheduleCreateBeforeHooks(captureScheduleRegistrations());
+
+    expect(context.params.tenant?.tenant_id).toBe('registration-test');
+    expect(context.data).toMatchObject({
+      created_by: 'registration-test-user',
+      next_run_at: expect.any(Number),
+    });
+    expect(context.data).not.toHaveProperty('tenant_id');
+  });
+
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
   });
