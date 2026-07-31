@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { getAuthHeaders } from '../../utils/authHeaders';
 import { useThemedMessage } from '../../utils/message';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface UploadRow {
   ref: string;
@@ -150,32 +151,41 @@ export function UploadsTab() {
             title: '',
             key: 'actions',
             render: (_, row) => (
-              <Space size={4}>
-                <Button
-                  size="small"
-                  aria-label={`Preview ${row.displayName}`}
-                  icon={<EyeOutlined />}
-                  onClick={() => void openBlob(row, false)}
-                />
-                <Button
-                  size="small"
-                  aria-label={`Download ${row.displayName}`}
-                  icon={<DownloadOutlined />}
-                  onClick={() => void openBlob(row, true)}
-                />
+              <SettingsActionGroup>
+                <Tooltip title="Preview upload">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={`Preview ${row.displayName}`}
+                    icon={<EyeOutlined />}
+                    onClick={() => void openBlob(row, false)}
+                  />
+                </Tooltip>
+                <Tooltip title="Download upload">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={`Download ${row.displayName}`}
+                    icon={<DownloadOutlined />}
+                    onClick={() => void openBlob(row, true)}
+                  />
+                </Tooltip>
                 <Popconfirm
                   title="Delete this upload?"
                   description="Conversation history will show it as unavailable."
                   onConfirm={() => void remove(row)}
                 >
-                  <Button
-                    danger
-                    size="small"
-                    aria-label={`Delete ${row.displayName}`}
-                    icon={<DeleteOutlined />}
-                  />
+                  <Tooltip title="Delete upload">
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      aria-label={`Delete ${row.displayName}`}
+                      icon={<DeleteOutlined />}
+                    />
+                  </Tooltip>
                 </Popconfirm>
-              </Space>
+              </SettingsActionGroup>
             ),
           },
         ]}
