@@ -212,7 +212,7 @@ export function buildPromptWithAttachments(text: string, attachments: PromptAtta
     'Attachments — use `agor_upload_materialize` to access:',
     ...attachments.map(
       (attachment) =>
-        `- \`${attachment.filename}\` (${attachment.mimeType}, ${formatBytes(attachment.size)}): \`${attachment.ref}\``
+        `- [${attachment.filename}](https://agor.live/_uploads/${attachment.ref}) (${attachment.mimeType}, ${formatBytes(attachment.size)})`
     ),
   ].join('\n');
   if (trimmedText.startsWith('/')) {

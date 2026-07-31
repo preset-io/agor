@@ -11,11 +11,15 @@
  * Typography wrapper provides consistent Ant Design styling.
  */
 
-import { Typography, theme } from 'antd';
+import { DownloadOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import { defaultRehypePlugins, type LinkSafetyConfig, Streamdown } from 'streamdown';
+import { getDaemonUrl } from '../../config/daemon';
+import { getAuthHeaders } from '../../utils/authHeaders';
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
+import { useThemedMessage } from '../../utils/message';
 import { isDarkTheme } from '../../utils/theme';
 import {
   streamdownRemarkPlugins,
@@ -103,6 +107,13 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
 
   // Pre-process text to highlight @ mentions
   text = highlightMentionsInMarkdown(text);
+  // Convert Agor's authenticated virtual upload links into a closed custom
+  // element before Streamdown's external-link hardener runs.
+  text = text.replace(
+    INTERNAL_UPLOAD_MARKDOWN_LINK,
+    (_, filename: string, uploadRef: string) =>
+      `<agor-upload upload_ref="${uploadRef}" filename="${filename}"></agor-upload>`
+  );
 
   // Detect dark mode from Ant Design token system
   const isDarkMode = isDarkTheme(token);
@@ -141,9 +152,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   const components = useMemo(
     () => ({
       blockquote: MarkdownBlockquote,
-      ...(headingAnchors ? { a: MarkdownAnchor } : {}),
+      a: MarkdownAnchor,
+      'agor-upload': UploadAttachmentTag,
     }),
-    [headingAnchors]
+    []
   );
 
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
@@ -164,6 +176,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
           mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
           plugins={plugins}
           components={components}
+          allowedTags={{ 'agor-upload': ['upload_ref', 'filename'] }}
           linkSafety={LINK_SAFETY}
           rehypePlugins={rehypePlugins}
           remarkPlugins={streamdownRemarkPlugins}
@@ -258,6 +271,75 @@ function reactText(value: React.ReactNode): string {
       return '';
     })
     .join('');
+}
+
+const UPLOAD_REF_PATTERN =
+  'upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const INTERNAL_UPLOAD_MARKDOWN_LINK = new RegExp(
+  `\\[([A-Za-z0-9._ -]{1,200})\\]\\(https://agor\\.live/_uploads/(${UPLOAD_REF_PATTERN})\\)`,
+  'g'
+);
+
+function UploadAttachmentLink({
+  uploadRef,
+  children,
+}: {
+  uploadRef: string;
+  children: React.ReactNode;
+}) {
+  const { showError } = useThemedMessage();
+  const filename = reactText(children).trim() || 'upload';
+
+  const openUpload = async (download: boolean) => {
+    try {
+      const response = await fetch(
+        `${getDaemonUrl().replace(/\/$/, '')}/uploads/${encodeURIComponent(uploadRef)}/content`,
+        { headers: getAuthHeaders() }
+      );
+      if (!response.ok) throw new Error('Upload is unavailable');
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      if (download) anchor.download = filename;
+      else anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Upload is unavailable');
+    }
+  };
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+      <Button
+        type="link"
+        size="small"
+        icon={<PaperClipOutlined />}
+        aria-label={filename}
+        onClick={() => void openUpload(false)}
+        style={{ height: 'auto', paddingInline: 0 }}
+      >
+        {children}
+      </Button>
+      <Tooltip title={`Download ${filename}`}>
+        <Button
+          type="text"
+          size="small"
+          aria-label={`Download ${filename}`}
+          icon={<DownloadOutlined />}
+          onClick={() => void openUpload(true)}
+        />
+      </Tooltip>
+    </span>
+  );
+}
+
+function UploadAttachmentTag(props: Record<string, unknown>) {
+  const uploadRef = typeof props.upload_ref === 'string' ? props.upload_ref : '';
+  const filename = typeof props.filename === 'string' ? props.filename : 'upload';
+  if (!new RegExp(`^${UPLOAD_REF_PATTERN}$`).test(uploadRef)) return null;
+  return <UploadAttachmentLink uploadRef={uploadRef}>{filename}</UploadAttachmentLink>;
 }
 
 function MarkdownAnchor({ children, className, href, node: _node, ...props }: MarkdownAnchorProps) {

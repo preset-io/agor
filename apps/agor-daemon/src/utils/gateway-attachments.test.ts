@@ -93,19 +93,19 @@ describe('buildPromptWithAttachments', () => {
 
   it('prepends useful attachment metadata to regular prompts', () => {
     expect(buildPromptWithAttachments('look at this', [attachment])).toBe(
-      `Attachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\`\n\nlook at this`
+      `Attachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)\n\nlook at this`
     );
   });
 
   it('keeps slash commands first', () => {
     expect(buildPromptWithAttachments('/review', [attachment])).toBe(
-      `/review\n\nAttachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\``
+      `/review\n\nAttachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)`
     );
   });
 
   it('returns only the attachment block when the text is empty', () => {
     expect(buildPromptWithAttachments('', [attachment])).toBe(
-      `Attachments — use \`agor_upload_materialize\` to access:\n- \`error.log\` (text/plain, 1.0 KiB): \`${uploadRef}\``
+      `Attachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)`
     );
   });
 });

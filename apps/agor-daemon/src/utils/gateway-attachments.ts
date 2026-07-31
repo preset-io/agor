@@ -97,7 +97,7 @@ export function buildPromptWithAttachments(text: string, attachments: UploadMeta
     'Attachments — use `agor_upload_materialize` to access:',
     ...attachments.map(
       (attachment) =>
-        `- \`${attachment.name}\` (${attachment.mimeType}, ${formatUploadBytes(attachment.size)}): \`${attachment.ref}\``
+        `- [${attachment.name}](https://agor.live/_uploads/${attachment.ref}) (${attachment.mimeType}, ${formatUploadBytes(attachment.size)})`
     ),
   ].join('\n');
   if (trimmedText.startsWith('/')) {

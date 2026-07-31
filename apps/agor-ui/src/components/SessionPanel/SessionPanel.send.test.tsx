@@ -162,7 +162,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`\n\nCompare this chart and mention the anomaly',
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)\n\nCompare this chart and mention the anomaly',
       expect.any(String)
     );
   });
@@ -215,7 +215,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attachments — use `agor_upload_materialize` to access:\n- `old-session-chart.png` (image/png, 9 B): `upl_00000000-0000-4000-8000-000000000002`\n\nOld session prompt snapshot',
+      'Attachments — use `agor_upload_materialize` to access:\n- [old-session-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000002) (image/png, 9 B)\n\nOld session prompt snapshot',
       expect.any(String)
     );
     expect(onSendPrompt).not.toHaveBeenCalledWith(
@@ -278,7 +278,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attachments — use `agor_upload_materialize` to access:\n- `rapid-chart.png` (image/png, 11 B): `upl_00000000-0000-4000-8000-000000000003`\n\nSummarize this rapid chart',
+      'Attachments — use `agor_upload_materialize` to access:\n- [rapid-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000003) (image/png, 11 B)\n\nSummarize this rapid chart',
       expect.any(String)
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
@@ -369,7 +369,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attachments — use `agor_upload_materialize` to access:\n- `preserve-chart.png` (image/png, 12 B): `upl_00000000-0000-4000-8000-000000000005`\n\nKeep this prompt if submit fails',
+      'Attachments — use `agor_upload_materialize` to access:\n- [preserve-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000005) (image/png, 12 B)\n\nKeep this prompt if submit fails',
       expect.any(String)
     );
     expect(textarea).toHaveValue('Keep this prompt if submit fails');

@@ -25,19 +25,19 @@ describe('composerAttachments', () => {
       size: 1024 * 1024,
     };
     expect(buildPromptWithAttachments('Compare these charts', [chart, data])).toBe(
-      'Attachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`\n- `data.csv` (text/csv, 1 MB): `upl_00000000-0000-4000-8000-000000000002`\n\nCompare these charts'
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)\n- [data.csv](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000002) (text/csv, 1 MB)\n\nCompare these charts'
     );
   });
 
   it('preserves slash commands at the start of the sent prompt', () => {
     expect(buildPromptWithAttachments('/compact focus on this chart', [chart])).toBe(
-      '/compact focus on this chart\n\nAttachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`'
+      '/compact focus on this chart\n\nAttachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)'
     );
   });
 
   it('supports attachment-only prompts', () => {
     expect(buildPromptWithAttachments('   ', [chart])).toBe(
-      'Attachments — use `agor_upload_materialize` to access:\n- `chart.png` (image/png, 5 B): `upl_00000000-0000-4000-8000-000000000001`'
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)'
     );
   });
 
