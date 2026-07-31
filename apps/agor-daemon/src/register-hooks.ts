@@ -451,6 +451,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'session-env-selections',
   'kb/namespaces',
   'kb/documents',
+  'kb/document-comments',
   'kb/document-edits',
   'kb/versions',
   'kb/search',
@@ -1498,6 +1499,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge documents')],
     },
   });
+
+  safeService('kb/document-comments')?.hooks({
+    before: {
+      all: [requireAuth],
+      create: [requireMinimumRole(ROLES.MEMBER, 'comment on knowledge documents')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge document comments')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete knowledge document comments')],
+      toggleReaction: [requireMinimumRole(ROLES.MEMBER, 'react to knowledge document comments')],
+    },
+  } as never);
 
   safeService('kb/document-edits')?.hooks({
     before: {
