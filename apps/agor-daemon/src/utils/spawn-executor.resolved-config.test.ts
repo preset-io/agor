@@ -86,7 +86,7 @@ describe('buildResolvedConfigSlice', () => {
           operation_absolute_timeout_ms: 14_400_000,
           abort_grace_ms: 15_000,
           claude_idle_timeout_ms: 3_600_000,
-          codex_idle_timeout_ms: null,
+          codex_idle_timeout_ms: 3_600_000,
         },
       },
     });
@@ -187,7 +187,7 @@ describe('buildResolvedConfigSlice', () => {
       },
     };
     const parsed = ResolvedConfigSliceSchema.parse(fromOlderDaemon);
-    expect(parsed.execution?.sdk_watchdog?.codex_idle_timeout_ms).toBeNull();
+    expect(parsed.execution?.sdk_watchdog?.codex_idle_timeout_ms).toBe(3_600_000);
     expect(parsed.execution?.sdk_watchdog?.operation_absolute_timeout_ms).toBe(14_400_000);
   });
 });

@@ -63,6 +63,72 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.sdk_version).toBe('@opencode-ai/sdk@1.14.33');
   });
 
+  it('enforces the Codex post-progress quiet deadline', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'progress' });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'progress_stalled', watchdog_action: 'enforced' }),
+    ]);
+  });
+
+  it('lets meaningful Codex progress extend the quiet deadline', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(80);
+    watchdog.record({ type: 'progress' });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'progress_stalled' })]);
+  });
+
+  it('pauses the Codex post-progress deadline during a known wait', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(80);
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 200,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    watchdog.record({ type: 'waiting_finished', id: 'permission-1' });
+
+    await vi.advanceTimersByTimeAsync(19);
+    expect(decisions).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'progress_stalled' })]);
+  });
+
+  it('keeps explicit null as the Codex post-progress opt-out', async () => {
+    const { watchdog, decisions } = setup({ codex_idle_timeout_ms: null });
+    watchdog.record({ type: 'progress' });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(decisions).toEqual([]);
+  });
+
+  it('records rather than enforces the Codex deadline in observe mode', async () => {
+    const { watchdog, decisions } = setup({ mode: 'observe' });
+    watchdog.record({ type: 'progress' });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'progress_stalled', watchdog_action: 'would_fire' }),
+    ]);
+  });
+
   it('tracks parallel operations independently by ID', async () => {
     const { watchdog, decisions } = setup();
     watchdog.record({

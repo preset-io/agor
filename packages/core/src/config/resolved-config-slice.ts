@@ -22,6 +22,7 @@
  */
 
 import { z } from 'zod';
+import { SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS } from './executor-heartbeat.js';
 
 // Intentionally NOT `.strict()` at any level. The producer (daemon) and
 // consumer (executor) may end up running from different image versions in
@@ -51,7 +52,12 @@ export const ResolvedConfigSliceSchema = z.object({
           abort_grace_ms: z.number().int().positive(),
           operation_absolute_timeout_ms: z.number().int().positive().default(14_400_000),
           claude_idle_timeout_ms: z.number().int().positive().nullable(),
-          codex_idle_timeout_ms: z.number().int().positive().nullable().default(null),
+          codex_idle_timeout_ms: z
+            .number()
+            .int()
+            .positive()
+            .nullable()
+            .default(SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS),
         })
         .optional(),
     })

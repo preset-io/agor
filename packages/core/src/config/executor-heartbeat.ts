@@ -4,6 +4,7 @@ export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
 export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
 export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
+export const SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS = 60 * 60_000;
 export type ResolvedSdkWatchdogConfig = Required<
   NonNullable<AgorExecutionSettings['sdk_watchdog']>
 >;
@@ -101,15 +102,15 @@ export function resolveSdkWatchdogConfig(
         ? null
         : positiveSafeInteger(
             raw?.claude_idle_timeout_ms,
-            3_600_000,
+            SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS,
             'execution.sdk_watchdog.claude_idle_timeout_ms'
           ),
     codex_idle_timeout_ms:
-      raw?.codex_idle_timeout_ms == null
+      raw?.codex_idle_timeout_ms === null
         ? null
         : positiveSafeInteger(
-            raw.codex_idle_timeout_ms,
-            3_600_000,
+            raw?.codex_idle_timeout_ms,
+            SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS,
             'execution.sdk_watchdog.codex_idle_timeout_ms'
           ),
   };

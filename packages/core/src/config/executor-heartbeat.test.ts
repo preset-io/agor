@@ -57,7 +57,7 @@ describe('resolveSdkWatchdogConfig', () => {
       operation_absolute_timeout_ms: 14_400_000,
       abort_grace_ms: 15_000,
       claude_idle_timeout_ms: 3_600_000,
-      codex_idle_timeout_ms: null,
+      codex_idle_timeout_ms: 3_600_000,
     });
   });
 
@@ -72,7 +72,14 @@ describe('resolveSdkWatchdogConfig', () => {
     ).toBeNull();
   });
 
-  it('supports opt-in Codex post-progress supervision', () => {
+  it('supports disabling Codex idle without disabling first progress', () => {
+    expect(
+      resolveSdkWatchdogConfig({ sdk_watchdog: { codex_idle_timeout_ms: null } })
+        .codex_idle_timeout_ms
+    ).toBeNull();
+  });
+
+  it('supports a custom Codex post-progress deadline', () => {
     expect(
       resolveSdkWatchdogConfig({ sdk_watchdog: { codex_idle_timeout_ms: 7_200_000 } })
         .codex_idle_timeout_ms
