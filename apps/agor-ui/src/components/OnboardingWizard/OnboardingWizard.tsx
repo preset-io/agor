@@ -987,6 +987,8 @@ export function OnboardingWizard({
           const board = await client.service('boards').create({
             name: teammateName.trim(),
             icon: teammateEmoji,
+            // Personal onboarding board — private by default, unlike team/topic boards.
+            access_mode: 'private',
           });
           const newBoardId = board?.board_id ?? null;
           if (!newBoardId) {
@@ -1650,6 +1652,9 @@ export function OnboardingWizard({
               />
             </div>
           </div>
+          <Text style={{ fontSize: 12, color: TEXT_MUTED, display: 'block', lineHeight: 1.5 }}>
+            This is your primary assistant, on a private board. Change both anytime in Settings.
+          </Text>
           {(() => {
             const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
             return (

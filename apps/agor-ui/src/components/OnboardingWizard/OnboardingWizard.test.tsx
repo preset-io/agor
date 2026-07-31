@@ -334,13 +334,19 @@ describe('OnboardingWizard', () => {
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
     expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    // Tells the user this teammate becomes their primary assistant on a private board.
+    expect(screen.getByText(/primary assistant, on a private board/i)).toBeInTheDocument();
     // The teammate name is empty by default — the user names their teammate.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
     clickButton(/^continue →/i);
 
     await waitFor(() => {
-      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
+      expect(boardsService.create).toHaveBeenCalledWith({
+        name: 'Rusty',
+        icon: '🤖',
+        access_mode: 'private',
+      });
     });
     await waitFor(() => {
       expect(onUpdateUser).toHaveBeenCalledWith(
