@@ -1,8 +1,9 @@
 import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const requestExecutorTermination = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const claimExecutorTermination = vi.hoisted(() => vi.fn());
 const deferred = vi.hoisted(
   () =>
     ({ work: undefined as (() => Promise<void>) | undefined, schedule: vi.fn() }) as {
@@ -11,7 +12,7 @@ const deferred = vi.hoisted(
     }
 );
 vi.mock('../termination-coordinator.js', () => ({
-  beginExecutorTermination: vi.fn(),
+  claimExecutorTermination,
   requestExecutorTermination,
 }));
 vi.mock('../utils/tenant-db-scope.js', () => ({
@@ -28,6 +29,13 @@ vi.mock('../utils/tenant-db-scope.js', () => ({
 import { TasksService } from './tasks';
 
 describe('TasksService executor termination report', () => {
+  beforeEach(() => {
+    claimExecutorTermination.mockReset();
+    requestExecutorTermination.mockReset().mockResolvedValue({});
+    deferred.work = undefined;
+    deferred.schedule.mockReset();
+  });
+
   it('persists and publishes quiescence before coordinating after the service transaction', async () => {
     const requestedAt = '2026-07-23T12:00:00.000Z';
     const task = {
@@ -73,6 +81,52 @@ describe('TasksService executor termination report', () => {
       expect.objectContaining({
         taskId: task.task_id,
         cause: 'user_stop',
+        params: expect.objectContaining({ provider: undefined }),
+      })
+    );
+  });
+
+  it('claims cleanup failure before deferring containment outside the service transaction', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'runtime_cleanup_failed',
+        requested_at: '2026-07-23T12:00:00.000Z',
+        error_message: 'Runtime cleanup failed.',
+      },
+    } as Task;
+    claimExecutorTermination.mockResolvedValue({ outcome: 'claimed', task });
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'app', {});
+
+    await expect(
+      service.reportExecutorSettlement(
+        {
+          task_id: task.task_id,
+          kind: 'containment_required',
+          error_message: 'Runtime cleanup failed.',
+        },
+        { tenant: { tenant_id: 'tenant-a' } } as never
+      )
+    ).resolves.toBe(task);
+
+    expect(claimExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.task_id,
+        cause: 'runtime_cleanup_failed',
+        errorMessage: 'Runtime cleanup failed.',
+      })
+    );
+    expect(requestExecutorTermination).not.toHaveBeenCalled();
+
+    await deferred.work?.();
+
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.task_id,
+        cause: 'runtime_cleanup_failed',
         params: expect.objectContaining({ provider: undefined }),
       })
     );

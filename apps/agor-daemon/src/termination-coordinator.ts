@@ -1,5 +1,5 @@
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
-import { generateId, shortId } from '@agor/core/db';
+import { generateId, shortId, type TerminationClaimResult } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
   Params,
@@ -262,7 +262,7 @@ async function runContainment(
       {
         taskId: current.task_id,
         outcome: 'verified_absent',
-        errorMessage: input.errorMessage,
+        errorMessage: current.termination_request?.error_message ?? input.errorMessage,
         coordinationToken,
       },
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
@@ -333,7 +333,7 @@ export async function requestExecutorTermination(
   input: TerminationInput
 ): Promise<TerminationResult> {
   const tool = await loadAgenticTool(input);
-  const claim = await claimRequest(input);
+  const claim = await claimExecutorTermination(input);
   if (claim.outcome === 'terminal' && input.absenceVerified) {
     untrackExecutorProcess(claim.task.session_id, claim.task.task_id, input.app);
     return { status: 'terminal', task: claim.task };
@@ -374,27 +374,9 @@ function startContainment(
   return operation;
 }
 
-/** Persist ownership before returning, then contain asynchronously. */
-export async function beginExecutorTermination(input: TerminationInput): Promise<Task> {
-  const tool = await loadAgenticTool(input);
-  const claim = await claimRequest(input);
-  if (claim.outcome === 'terminal' && input.absenceVerified) {
-    untrackExecutorProcess(claim.task.session_id, claim.task.task_id, input.app);
-    return claim.task;
-  }
-  if (claim.outcome === 'condition_changed') return claim.task;
-  const operations = operationsFor(input.app);
-  if (operations.has(claim.task.task_id)) return claim.task;
-  if (claim.outcome === 'terminal') {
-    startContainment(input, claim.task, tool);
-    return claim.task;
-  }
-  const coordination = await claimContainmentCoordination(input, claim.task);
-  if (coordination.outcome === 'claimed') {
-    startContainment(input, coordination.task, tool, coordination.token);
-    return coordination.task;
-  }
-  return coordination.task;
+/** Persist termination ownership without starting long-running containment work. */
+export function claimExecutorTermination(input: TerminationInput): Promise<TerminationClaimResult> {
+  return claimRequest(input);
 }
 
 export async function forceFailUnverifiedTask(input: {

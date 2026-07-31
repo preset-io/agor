@@ -63,8 +63,9 @@ import {
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
-  beginExecutorTermination,
+  claimExecutorTermination,
   requestExecutorTermination,
+  type TerminationInput,
 } from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
@@ -118,6 +119,8 @@ export type TaskParams = QueryParams<{
 interface CompletionCallbackDispatchResult {
   callbackTask?: Task;
 }
+
+type DeferredTerminationInput = Omit<TerminationInput, 'app' | 'params'>;
 
 /**
  * Extended tasks service with custom methods
@@ -1425,6 +1428,36 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return connection.task;
   }
 
+  private deferExecutorTermination(input: DeferredTerminationInput, params?: TaskParams): void {
+    const coordinatorParams = { ...(params ?? {}), provider: undefined };
+    deferWithTenantContext(
+      params,
+      () =>
+        requestExecutorTermination({
+          ...input,
+          app: this.app,
+          params: coordinatorParams,
+        }).then(() => undefined),
+      (error) =>
+        console.error(`[termination] Failed to coordinate Task ${shortId(input.taskId)}:`, error)
+    );
+  }
+
+  private async claimAndDeferExecutorTermination(
+    input: DeferredTerminationInput,
+    params?: TaskParams
+  ): Promise<Task> {
+    const claim = await claimExecutorTermination({
+      ...input,
+      app: this.app,
+      params,
+    });
+    if (claim.outcome !== 'condition_changed') {
+      this.deferExecutorTermination(input, params);
+    }
+    return claim.task;
+  }
+
   async reportTerminationComplete(
     data: ExecutorTerminationCompleteInput,
     params?: TaskParams
@@ -1450,22 +1483,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // group only after the wrapper exits. Start recovery after this service
     // transaction commits and outside its ALS database scope; the durable
     // quiescence timestamp makes the deferred recovery restart/retry safe.
-    const coordinatorParams = { ...(params ?? {}), provider: undefined };
-    deferWithTenantContext(
-      params,
-      () =>
-        requestExecutorTermination({
-          app: this.app,
-          taskId: task.task_id,
-          cause: terminationRequest.cause,
-          errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
-          params: coordinatorParams,
-        }).then(() => undefined),
-      (error) =>
-        console.error(
-          `[termination] Failed to settle executor report for Task ${shortId(task.task_id)}:`,
-          error
-        )
+    this.deferExecutorTermination(
+      {
+        taskId: task.task_id,
+        cause: terminationRequest.cause,
+        errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
+      },
+      params
     );
 
     return task;
@@ -1476,13 +1500,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<Task> {
     if (data.kind === 'containment_required') {
-      return beginExecutorTermination({
-        app: this.app,
-        taskId: data.task_id,
-        cause: 'runtime_cleanup_failed',
-        errorMessage: data.error_message,
-        params,
-      });
+      return this.claimAndDeferExecutorTermination(
+        {
+          taskId: data.task_id,
+          cause: 'runtime_cleanup_failed',
+          errorMessage: data.error_message,
+        },
+        params
+      );
     }
 
     const result = await this.taskRepo.settleExecutorOutcome({
@@ -1652,15 +1677,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       return observed;
     }
 
-    const stopping = await beginExecutorTermination({
-      app: this.app,
-      taskId: current.task_id,
-      cause: 'sdk_health_failure',
-      errorMessage: `SDK activity stalled (${data.reason}).`,
-      params,
-      signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
-      sdkFailure: failure,
-    });
+    const stopping = await this.claimAndDeferExecutorTermination(
+      {
+        taskId: current.task_id,
+        cause: 'sdk_health_failure',
+        errorMessage: `SDK activity stalled (${data.reason}).`,
+        signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
+        sdkFailure: failure,
+      },
+      params
+    );
     await this.updateGatewayRuntimeProjectionAfterCommit(stopping, params);
     return stopping;
   }

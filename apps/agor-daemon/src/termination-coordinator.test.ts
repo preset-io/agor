@@ -13,7 +13,7 @@ vi.mock('./executor-tracking.js', () => ({
 }));
 
 import {
-  beginExecutorTermination,
+  claimExecutorTermination,
   forceFailUnverifiedTask,
   requestExecutorTermination,
 } from './termination-coordinator.js';
@@ -303,23 +303,23 @@ describe('termination coordinator', () => {
     expect(containExecutorProcess).not.toHaveBeenCalled();
   });
 
-  it('persists ownership before background containment completes', async () => {
-    const release = deferContainment();
+  it('can persist ownership without starting containment in the service transaction', async () => {
     const state = appDouble();
     state.claim(stopping('sdk_health_failure'));
-    state.settle(task(TaskStatus.FAILED));
 
-    const requested = await beginExecutorTermination({
+    const claim = await claimExecutorTermination({
       app: state.app,
       taskId,
       cause: 'sdk_health_failure',
       errorMessage: 'SDK stalled',
     });
 
-    expect(requested.status).toBe(TaskStatus.STOPPING);
+    expect(claim).toMatchObject({
+      outcome: 'claimed',
+      task: { status: TaskStatus.STOPPING },
+    });
+    expect(containExecutorProcess).not.toHaveBeenCalled();
     expect(state.settleTermination).not.toHaveBeenCalled();
-    release();
-    await vi.waitFor(() => expect(state.settleTermination).toHaveBeenCalledOnce());
   });
 
   it('extends the coordination lease beyond configurable cooperative and signal grace', async () => {
@@ -357,26 +357,6 @@ describe('termination coordinator', () => {
     expect(state.settleTermination).not.toHaveBeenCalled();
   });
 
-  it('contains a terminal SDK-health race in the background', async () => {
-    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
-    const state = appDouble('opencode');
-    state.claim(task(TaskStatus.COMPLETED), 'terminal');
-
-    const result = await beginExecutorTermination({
-      app: state.app,
-      taskId,
-      cause: 'sdk_health_failure',
-      errorMessage: 'SDK stalled',
-    });
-
-    expect(result.status).toBe(TaskStatus.COMPLETED);
-    await vi.waitFor(() =>
-      expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, {}, state.app)
-    );
-    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
-    expect(state.settleTermination).not.toHaveBeenCalled();
-  });
-
   it('deduplicates containment while persisted cause precedence changes', async () => {
     const release = deferContainment();
     const state = appDouble();
@@ -384,38 +364,59 @@ describe('termination coordinator', () => {
     state.claim(stopping('user_stop'));
     state.settle(task(TaskStatus.STOPPED));
 
-    await beginExecutorTermination({
-      app: state.app,
-      taskId,
-      cause: 'sdk_health_failure',
-      errorMessage: 'SDK stalled',
-    });
+    const sdkFailure = request(state.app, 'sdk_health_failure');
     const stop = request(state.app, 'user_stop');
     await vi.waitFor(() => expect(state.claimTermination).toHaveBeenCalledTimes(2));
     release();
 
+    await expect(sdkFailure).resolves.toMatchObject({ status: 'terminal' });
     await expect(stop).resolves.toMatchObject({ status: 'terminal' });
     expect(containExecutorProcess).toHaveBeenCalledOnce();
     expect(state.settleTermination).toHaveBeenCalledOnce();
   });
 
-  it.each(['codex', 'opencode'])(
-    'keeps %s work blocked when absence is unverified',
-    async (tool) => {
-      containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
-      const state = appDouble(tool);
-      state.claim(stopping('heartbeat_lost'));
-      state.settle(
-        task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
-        'unverified'
-      );
+  it('settles with the durable termination owner error when a later cause retries containment', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble();
+    state.claim(
+      task(TaskStatus.STOPPING, {
+        termination_request: {
+          cause: 'sdk_health_failure',
+          requested_at: '2026-01-01T00:00:01.000Z',
+          error_message: 'SDK activity stalled (operation_stalled).',
+        },
+      }),
+      'unchanged'
+    );
+    state.settle(task(TaskStatus.FAILED));
 
-      await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
-        status: 'unverified',
-        task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
-      });
-    }
-  );
+    await request(state.app, 'heartbeat_lost');
+
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorMessage: 'SDK activity stalled (operation_stalled).',
+      }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    'codex',
+    'opencode',
+  ])('keeps %s work blocked when absence is unverified', async (tool) => {
+    containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
+    const state = appDouble(tool);
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(
+      task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
+      'unverified'
+    );
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'unverified',
+      task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
+    });
+  });
 
   it('keeps tracking when unverified containment races with terminal settlement', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });

@@ -1,8 +1,29 @@
 import { type SdkFailure, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const beginExecutorTermination = vi.hoisted(() => vi.fn());
-vi.mock('../termination-coordinator.js', () => ({ beginExecutorTermination }));
+const claimExecutorTermination = vi.hoisted(() => vi.fn());
+const requestExecutorTermination = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const deferred = vi.hoisted(
+  () =>
+    ({ work: undefined as (() => Promise<void>) | undefined, schedule: vi.fn() }) as {
+      work: (() => Promise<void>) | undefined;
+      schedule: ReturnType<typeof vi.fn>;
+    }
+);
+vi.mock('../termination-coordinator.js', () => ({
+  claimExecutorTermination,
+  requestExecutorTermination,
+}));
+vi.mock('../utils/tenant-db-scope.js', () => ({
+  deferWithTenantContext: (
+    params: unknown,
+    work: () => Promise<void>,
+    onError?: (error: unknown) => void
+  ) => {
+    deferred.work = work;
+    deferred.schedule(params, onError);
+  },
+}));
 
 import { TasksService } from './tasks.js';
 
@@ -41,7 +62,12 @@ function serviceFor(current = task, observationAccepted = true) {
 }
 
 describe('TasksService SDK health reports', () => {
-  beforeEach(() => beginExecutorTermination.mockReset());
+  beforeEach(() => {
+    claimExecutorTermination.mockReset();
+    requestExecutorTermination.mockReset().mockResolvedValue({});
+    deferred.work = undefined;
+    deferred.schedule.mockReset();
+  });
 
   it('persists observe-only evidence without lifecycle side effects', async () => {
     const service = serviceFor();
@@ -63,7 +89,7 @@ describe('TasksService SDK health reports', () => {
         termination: 'not_requested',
       },
     });
-    expect(beginExecutorTermination).not.toHaveBeenCalled();
+    expect(claimExecutorTermination).not.toHaveBeenCalled();
   });
 
   it('does not attach observe-only evidence after normal completion wins', async () => {
@@ -74,7 +100,7 @@ describe('TasksService SDK health reports', () => {
         watchdog_action: 'would_fire',
       })
     ).rejects.toThrow('no longer active');
-    expect(beginExecutorTermination).not.toHaveBeenCalled();
+    expect(claimExecutorTermination).not.toHaveBeenCalled();
   });
 
   it('rejects non-watchdog failure reasons at the runtime boundary', async () => {
@@ -98,23 +124,45 @@ describe('TasksService SDK health reports', () => {
     ).rejects.toThrow('pulse_sequence_at_detection must be a non-negative safe integer');
   });
 
-  it('hands enforced decisions to the shared coordinator with the configured grace', async () => {
+  it('claims enforced decisions before deferring containment outside the service transaction', async () => {
     const current = { ...task, sdk_watchdog_mode: 'enforce' as const };
     const service = serviceFor(current);
-    beginExecutorTermination.mockResolvedValue({ ...current, status: TaskStatus.STOPPING });
+    const stopping = { ...current, status: TaskStatus.STOPPING };
+    claimExecutorTermination.mockResolvedValue({ outcome: 'claimed', task: stopping });
 
-    await service.reportSdkHealthFailure({
-      task_id: task.task_id,
-      reason: 'no_first_progress',
-      watchdog_action: 'enforced',
-    });
+    await expect(
+      service.reportSdkHealthFailure(
+        {
+          task_id: task.task_id,
+          reason: 'no_first_progress',
+          watchdog_action: 'enforced',
+        },
+        { tenant: { tenant_id: 'tenant-a' } } as never
+      )
+    ).resolves.toBe(stopping);
 
-    expect(beginExecutorTermination).toHaveBeenCalledWith(
+    expect(claimExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: task.task_id,
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
         sdkFailure: expect.objectContaining({ termination: 'requested' }),
+      })
+    );
+    expect(deferred.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({ tenant: { tenant_id: 'tenant-a' } }),
+      expect.any(Function)
+    );
+    expect(requestExecutorTermination).not.toHaveBeenCalled();
+
+    await deferred.work?.();
+
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.task_id,
+        cause: 'sdk_health_failure',
+        signalDelayMs: 25,
+        params: expect.objectContaining({ provider: undefined }),
       })
     );
   });

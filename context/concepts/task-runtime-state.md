@@ -260,6 +260,10 @@ The termination coordinator is the single owner for executor-backed:
 
 It first atomically claims `stopping` with a durable `termination_request`.
 The request timestamp fences late or duplicate executor quiescence reports.
+Service RPCs persist that claim inside their request transaction, then defer
+containment until after commit with tenant identity but without carrying the
+request's database transaction. Long coordination uses fresh, short service
+database units instead of reusing a committed PostgreSQL scope.
 The task-scoped executor receives the committed request over its authenticated
 socket, aborts the agentic-tool runtime, runs its cleanup, and reports
 quiescence. The durable task patch/read covers reconnect and delivery races.
