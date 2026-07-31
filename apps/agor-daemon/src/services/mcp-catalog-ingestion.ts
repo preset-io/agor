@@ -70,6 +70,23 @@ export function resolveMCPCatalogOptions(
   return options;
 }
 
+/**
+ * Assumes one daemon per database.
+ *
+ * `running` below is an in-process boolean, so it stops this worker overlapping
+ * itself and nothing more. Two daemons against one Postgres both wake on their
+ * own six-hour interval and both read-modify-write the same rows: the `data`
+ * blob merges are read-then-write with no row lock, so a concurrent pair is
+ * last-writer-wins, and two INSERTs of the same new `name` race the unique index
+ * into a violation that surfaces as `entryFailures`. The previous run-long
+ * transaction serialized this by accident; per-row units do not.
+ *
+ * The damage is bounded — the mirror is reconstructable from the registry and
+ * `curated.yaml`, and the next run corrects it — so this is a correctness
+ * limitation, not a data-loss risk. Serializing properly wants a
+ * `pg_advisory_lock` around the run, which is tracked separately rather than
+ * bolted on here.
+ */
 export class MCPCatalogIngestionWorker {
   private intervalHandle?: ReturnType<typeof setInterval>;
   private initialHandle?: ReturnType<typeof setTimeout>;
@@ -143,7 +160,7 @@ export class MCPCatalogIngestionWorker {
       this.lastResult = result;
       this.lastError = null;
       console.log(
-        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, withdrawn: ${result.withdrawn}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated})`
+        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, withdrawn: ${result.withdrawn}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated}) — failures: entry=${result.entryFailures}, retirement=${result.retirementFailures}, probe=${result.probeFailures}, page=${result.pageFailures}`
       );
       return result;
     } catch (error) {
@@ -169,8 +186,16 @@ export class MCPCatalogIngestionWorker {
    */
   private withSystemScope(reason: string): WithCatalogRepository {
     return <T>(work: (repository: MCPCatalogRepository) => Promise<T>): Promise<T> =>
-      // Timers inherit AsyncLocalStorage. Detach any ambient tenant identity and
-      // transaction before entering system scope, which refuses to open from one.
+      // These two exits are load-bearing and cannot be removed. Deleting them
+      // leaves every test passing, because tests call `runOnce` from no scope at
+      // all. In production `app.set('mcpCatalogIngestion', ...)` hands the
+      // worker to anything holding a request scope, and
+      // `runWithSystemDatabaseScope` REUSES an existing system scope instead of
+      // opening a second transaction — so a caller inside one would get a single
+      // transaction spanning the whole run, silently reinstating the defect the
+      // per-row factory exists to prevent. (From a tenant scope it throws
+      // instead, which is loud but still a broken run.) Exiting first is what
+      // makes "one unit per row" true rather than merely intended.
       runWithoutTenantContext(() =>
         runWithoutTenantDatabaseScope(() =>
           runWithSystemDatabaseScope(

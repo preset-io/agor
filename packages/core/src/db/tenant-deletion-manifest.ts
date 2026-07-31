@@ -35,6 +35,7 @@
 
 import { is } from 'drizzle-orm';
 import { getTableConfig, type PgColumn, PgTable } from 'drizzle-orm/pg-core';
+import type { mcpCatalogEntries } from './schema.postgres';
 import * as postgresSchema from './schema.postgres';
 
 /** Name of the column that scopes a row to a tenant. */
@@ -73,26 +74,47 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
 export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_entries']);
 
 /**
- * Where each column of each global table gets its value.
+ * Where a column of a global table gets its value.
  *
- * `registry` — mirrored from the public MCP registry.
- * `repo` — supplied by a file checked into this repository.
- * `derived` — computed by Agor from the two above (row identity, timestamps),
- *   never from tenant activity.
- * `probe` — discovered by Agor probing a public endpoint the registry named.
+ * The vocabulary is deliberately narrow. The invariant a global table has to
+ * hold is "no column derives from tenant activity", and a broad label like
+ * `derived` cannot express that — it reads as "Agor computed it", which is
+ * exactly what a usage counter is, so the next person adding one finds a label
+ * that appears to fit and the guard passes. Naming what each value is computed
+ * *from* leaves no label a counter can honestly take:
  *
- * There is deliberately no value meaning "derived from tenant activity". A
- * column that would need one does not belong on a global table, and the
- * exhaustiveness test fails until every column is classified, so adding one
- * forces the decision into review rather than letting it land as a default.
+ * - `registry` — mirrored verbatim from the public MCP registry.
+ * - `repo` — supplied by `curated.yaml`, checked into this repository.
+ * - `computed-from-registry` — Agor computed it, from registry data alone.
+ * - `computed-from-repo` — Agor computed it, from repository data alone.
+ * - `row-identity` — this row's own identity and write timestamps.
+ * - `probe` — discovered by probing a public endpoint the registry named.
+ *
+ * A column fed by user behaviour fits none of these. It belongs in its own
+ * tenant-scoped table, and the absence of a label is the prompt to build one.
  */
-export const GLOBAL_TABLE_COLUMN_SOURCES: Readonly<
-  Record<string, Readonly<Record<string, 'registry' | 'repo' | 'derived' | 'probe'>>>
-> = {
+export type GlobalColumnSource =
+  | 'registry'
+  | 'repo'
+  | 'computed-from-registry'
+  | 'computed-from-repo'
+  | 'row-identity'
+  | 'probe';
+
+/**
+ * Every column of every global table, classified.
+ *
+ * `satisfies` against the compiled Drizzle table is what makes this binding:
+ * adding a column to the schema without classifying it is a type error in the
+ * editor and in `tsc`, not a test failure someone sees after pushing.
+ */
+type ColumnsOf<T extends PgTable> = keyof T['_']['columns'] & string;
+
+export const GLOBAL_TABLE_COLUMN_SOURCES = {
   mcp_catalog_entries: {
-    catalog_entry_id: 'derived',
-    created_at: 'derived',
-    updated_at: 'derived',
+    catalog_entry_id: 'row-identity',
+    created_at: 'row-identity',
+    updated_at: 'row-identity',
     name: 'registry',
     version: 'registry',
     registry_updated_at: 'registry',
@@ -102,9 +124,9 @@ export const GLOBAL_TABLE_COLUMN_SOURCES: Readonly<
     repository_url: 'registry',
     transport: 'registry',
     remote_url: 'registry',
-    has_remote: 'derived',
-    has_package: 'derived',
-    curated: 'derived',
+    has_remote: 'computed-from-registry',
+    has_package: 'computed-from-registry',
+    curated: 'computed-from-repo',
     category: 'repo',
     capability_tags: 'repo',
     benefit: 'repo',
@@ -116,8 +138,12 @@ export const GLOBAL_TABLE_COLUMN_SOURCES: Readonly<
     probed_auth_type: 'probe',
     probed_at: 'probe',
     auth_server_origin: 'probe',
-    data: 'derived',
+    data: 'computed-from-registry',
   },
+  // One key per table in GLOBAL_TABLES, spelled out rather than `Record<string,
+  // ...>` so each table is checked against its own columns.
+} satisfies {
+  mcp_catalog_entries: Record<ColumnsOf<typeof mcpCatalogEntries>, GlobalColumnSource>;
 };
 
 /** Full classification of a table, including non-tenant tables. */

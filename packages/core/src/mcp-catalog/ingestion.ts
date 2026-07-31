@@ -51,10 +51,24 @@ export interface IngestionResult {
   created: number;
   updated: number;
   unchanged: number;
-  /** Registry records that could not be normalized onto a catalog row. */
+  /**
+   * Registry records the client could not normalize onto a catalog row.
+   *
+   * This moves during normal operation — the registry carries records with no
+   * usable name — so it must not absorb write failures. Those are
+   * `entryFailures`, which should be zero.
+   */
   skipped: number;
+  /** Rows the database rejected. Non-zero means data is being lost. */
+  entryFailures: number;
   /** Rows removed or retired because the registry withdrew the server. */
   withdrawn: number;
+  /**
+   * Withdrawals that could not be applied. Non-zero means servers the registry
+   * has withdrawn are still being offered, which `withdrawn: 0` alone cannot
+   * distinguish from "nothing was withdrawn".
+   */
+  retirementFailures: number;
   pagesFetched: number;
   pageFailures: number;
   probed: number;
@@ -106,7 +120,9 @@ export async function runCatalogIngestion(
     updated: 0,
     unchanged: 0,
     skipped: 0,
+    entryFailures: 0,
     withdrawn: 0,
+    retirementFailures: 0,
     pagesFetched: 0,
     pageFailures: 0,
     probed: 0,
@@ -173,9 +189,11 @@ export async function runCatalogIngestion(
         const outcome = await withRepository((repository) => repository.upsertRegistryEntry(entry));
         result[outcome] += 1;
       } catch (error) {
-        result.skipped += 1;
+        // Not `skipped`: that counter moves during healthy runs, so folding
+        // rejected writes into it hides them.
+        result.entryFailures += 1;
         log(
-          `Skipped registry entry ${entry.name}: ${
+          `Failed to write registry entry ${entry.name}: ${
             error instanceof Error ? error.message : String(error)
           }`
         );
@@ -195,6 +213,7 @@ export async function runCatalogIngestion(
           }
         }
       } catch (error) {
+        result.retirementFailures += 1;
         log(
           `Failed to retire withdrawn entry ${name}: ${
             error instanceof Error ? error.message : String(error)

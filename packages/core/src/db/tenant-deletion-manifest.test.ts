@@ -68,11 +68,14 @@ describe('tenant deletion manifest classification', () => {
     expect(planned.has('mcp_catalog_entries')).toBe(false);
   });
 
-  it('classifies the source of every column on every global table', () => {
-    // A global table is only justified while every column comes from outside
-    // every tenant. A column derived from tenant activity aggregates across
-    // tenants on read and has no legal writer, so it belongs in its own
-    // tenant-scoped table. Failing here is the prompt to make that call.
+  it('keeps GLOBAL_TABLES and the column-source map describing the same tables', () => {
+    // Column-level exhaustiveness is a `satisfies` constraint on the compiled
+    // Drizzle table, so an unclassified column is a `tsc` error rather than a
+    // test failure. What types cannot express is the correspondence between this
+    // map's keys and the GLOBAL_TABLES set, which is what this checks.
+    const sources = GLOBAL_TABLE_COLUMN_SOURCES as Record<string, Record<string, string>>;
+    expect(Object.keys(sources).sort()).toEqual([...GLOBAL_TABLES].sort());
+
     for (const tableName of GLOBAL_TABLES) {
       const table = Object.values(postgresSchema).find(
         (value) => is(value, PgTable) && getTableConfig(value).name === tableName
@@ -85,7 +88,7 @@ describe('tenant deletion manifest classification', () => {
       const columns = getTableConfig(table as PgTable)
         .columns.map((column) => column.name)
         .sort();
-      const classified = Object.keys(GLOBAL_TABLE_COLUMN_SOURCES[tableName] ?? {}).sort();
+      const classified = Object.keys(sources[tableName] ?? {}).sort();
 
       expect(classified, `GLOBAL_TABLE_COLUMN_SOURCES is out of sync with ${tableName}`).toEqual(
         columns

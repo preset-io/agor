@@ -5,9 +5,17 @@ import type { CuratedCatalogEntry } from './curated-loader';
 import { seedCuratedCatalog } from './seed';
 
 /**
- * The production callers open a fresh database unit per page and per probe.
- * Tests exercise the same signature with a pass-through, so a regression that
- * reintroduced a run-long transaction would still be a type error here.
+ * A pass-through, so these tests exercise the production signature without a
+ * real scope.
+ *
+ * It proves nothing about scoping, and the type cannot: `WithCatalogRepository`
+ * is `<T>(work) => Promise<T>`, which a caller satisfies just as well by
+ * holding one scope open for the entire run. `runWithSystemDatabaseScope`
+ * reuses an existing scope rather than opening a second transaction, so that
+ * caller silently reinstates the run-long transaction this signature exists to
+ * prevent. What actually enforces it is the worker calling
+ * `runWithoutTenantDatabaseScope` before each unit; see
+ * `mcp-catalog-ingestion.ts`.
  */
 function withRepository(repository: MCPCatalogRepository) {
   return <T>(work: (repo: MCPCatalogRepository) => Promise<T>): Promise<T> => work(repository);

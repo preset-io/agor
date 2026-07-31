@@ -10,9 +10,17 @@ import {
 } from './registry-client';
 
 /**
- * The production callers open a fresh database unit per page and per probe.
- * Tests exercise the same signature with a pass-through, so a regression that
- * reintroduced a run-long transaction would still be a type error here.
+ * A pass-through, so these tests exercise the production signature without a
+ * real scope.
+ *
+ * It proves nothing about scoping, and the type cannot: `WithCatalogRepository`
+ * is `<T>(work) => Promise<T>`, which a caller satisfies just as well by
+ * holding one scope open for the entire run. `runWithSystemDatabaseScope`
+ * reuses an existing scope rather than opening a second transaction, so that
+ * caller silently reinstates the run-long transaction this signature exists to
+ * prevent. What actually enforces it is the worker calling
+ * `runWithoutTenantDatabaseScope` before each unit; see
+ * `mcp-catalog-ingestion.ts`.
  */
 function withRepository(repository: MCPCatalogRepository) {
   return <T>(work: (repo: MCPCatalogRepository) => Promise<T>): Promise<T> => work(repository);
@@ -611,7 +619,56 @@ describe('runCatalogIngestion', () => {
       log: silent,
     });
 
-    expect(result).toMatchObject({ created: 2, skipped: 1 });
+    // `skipped` counts parse misses and moves during healthy runs, so a rejected
+    // write reported there would be invisible.
+    expect(result).toMatchObject({ created: 2, entryFailures: 1, skipped: 0 });
+  });
+
+  dbTest('counts a failed retirement instead of reporting a clean run', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'a.example/one',
+      remote_url: 'https://a.example.com/mcp',
+    });
+    vi.spyOn(repository, 'retireWithdrawnEntry').mockRejectedValue(new Error('write rejected'));
+
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([{ records: [withdrawnRecord('a.example/one', 'deleted')] }]),
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    // Without the counter this run is indistinguishable from one where nothing
+    // was withdrawn — while the row stays connectable.
+    expect(result).toMatchObject({ withdrawn: 0, retirementFailures: 1 });
+    expect(await repository.findByName('a.example/one')).not.toBeNull();
+  });
+
+  dbTest('keeps parse skips and write failures in separate counters', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const original = repository.upsertRegistryEntry.bind(repository);
+    vi.spyOn(repository, 'upsertRegistryEntry').mockImplementation(async (entry) => {
+      if (entry.name === 'poison.example/one') throw new Error('constraint violation');
+      return original(entry);
+    });
+
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([
+        {
+          records: [
+            { server: { description: 'no name' } },
+            registryRecord('poison.example/one'),
+            registryRecord('good.example/two'),
+          ],
+        },
+      ]),
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    expect(result).toMatchObject({ created: 1, skipped: 1, entryFailures: 1 });
   });
 
   dbTest('stops paginating at the page cap and reports truncation', async ({ db }) => {
