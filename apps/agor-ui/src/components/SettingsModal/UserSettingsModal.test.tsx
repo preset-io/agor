@@ -151,6 +151,40 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('closes without rewriting OpenCode defaults when provider settings are unchanged', async () => {
+    const user = makeUser({
+      default_agentic_config: {
+        opencode: {
+          permissionMode: 'yolo',
+          modelConfig: { mode: 'exact', provider: 'kimi-for-coding', model: 'k3' },
+        },
+      },
+      default_agentic_selection: {
+        opencode: { source: 'inline' },
+      },
+    });
+    const onUpdate = vi.fn();
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        initialTab="opencode"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'OpenCode' });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), ASYNC);
+  });
+
   it('offers the three Codex authentication methods, defaulting to the sign-in view for a subscription', async () => {
     const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
     renderWithApp(

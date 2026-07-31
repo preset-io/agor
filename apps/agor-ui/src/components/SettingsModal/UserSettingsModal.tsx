@@ -395,12 +395,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     setUserGroupIds(nextGroupIds);
   };
 
-  const getAgenticConfigToolsToSave = (activeTool?: AgenticToolName): AgenticToolName[] => [
-    ...new Set([
-      ...dirtyAgenticConfigTools,
-      ...(activeTool ? [activeTool] : []),
-    ] satisfies AgenticToolName[]),
-  ];
+  const getAgenticConfigToolsToSave = (): AgenticToolName[] => [...dirtyAgenticConfigTools];
 
   const saveAgenticConfigs = async (tools: AgenticToolName[]) => {
     if (!user || tools.length === 0) return;
@@ -653,7 +648,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
-    const toolsToSave = getAgenticConfigToolsToSave(tool);
+    const toolsToSave = getAgenticConfigToolsToSave();
+    if (toolsToSave.length === 0) return;
 
     try {
       setSavingAgenticConfig((prev) => {
@@ -662,7 +658,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return next;
       });
 
-      if (activeTab === tool) {
+      if (toolsToSave.includes(tool)) {
         await agenticForm.validateFields();
       }
       await saveAgenticConfigs(toolsToSave);

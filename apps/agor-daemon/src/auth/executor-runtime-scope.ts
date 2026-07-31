@@ -242,6 +242,16 @@ export function executorRuntimeScopeGuard() {
         if (scope.branchId)
           expectMatch(scope.branchId, data.branch_id ?? query.branch_id, 'branch');
       }
+    } else if (path === 'tasks/:id/complete') {
+      if (context.method !== 'create') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
+      }
+      const taskId = expectClaim(scope.taskId, 'task');
+      const requestedTaskId = routeId(context);
+      expectMatch(taskId, requestedTaskId, 'task');
+      if (!requestedTaskId) {
+        throw new Forbidden('Executor token task scope is required for this request');
+      }
     } else if (path === 'tasks') {
       const taskId = expectClaim(scope.taskId, 'task');
       if (context.method === 'find') {
