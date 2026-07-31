@@ -1802,11 +1802,26 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       closeIcon={<CloseOutlined />}
       width="min(1050px, calc(100vw - 32px))"
       styles={{
+        // Zero the card's default 20px 24px frame and clip to the rounded
+        // corners so the inner Layout fills the card edge-to-edge — the Sider
+        // sits flush against the modal's rounded left/top/bottom edges instead
+        // of floating inside a colorBgElevated padding frame (AntD v6: the card
+        // slot — rendered `.ant-modal-container` — is the `container` key).
+        container: { padding: 0, overflow: 'hidden' },
         header: { display: 'none' },
         body: {
           padding: 0,
           height: 'calc(100vh - 280px)',
+          minHeight: 450,
           maxHeight: 650,
+        },
+        // With the card frame gone, the footer supplies its own padding and a
+        // top divider so it reads as one bar across the bottom of the card.
+        footer: {
+          margin: 0,
+          padding: '12px 24px',
+          background: token.colorBgContainer,
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
         },
       }}
     >
