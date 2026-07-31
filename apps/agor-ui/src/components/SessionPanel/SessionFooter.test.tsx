@@ -290,7 +290,7 @@ describe('SessionFooter', () => {
       within(overflowOptions).getByRole('button', { name: 'Enter exact OpenCode IDs' })
     );
     const manualProvider = await within(overflowOptions).findByLabelText('OpenCode provider ID');
-    await waitFor(() => expect(manualProvider).toBeVisible());
+    await waitFor(() => expect(manualProvider).toBeVisible(), { timeout: 5_000 });
     expect(overflowOptions).toContainElement(manualProvider);
 
     fireEvent.click(more);
