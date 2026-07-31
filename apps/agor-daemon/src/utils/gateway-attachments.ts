@@ -23,9 +23,10 @@ import type {
   UploadStagingStore,
   UserID,
 } from '@agor/core/types';
+import { buildUploadAttachmentPrompt } from '@agor/core/types';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
-  MAX_UPLOAD_FILE_SIZE,
+  getUploadLimits,
   MAX_UPLOAD_FILES_PER_REQUEST,
 } from './upload.js';
 import { getUploadStagingStore } from './upload-staging.js';
@@ -75,35 +76,11 @@ export function isIngestableFile(file: InboundFile): boolean {
   return isAllowedIngestMime(file.mimetype);
 }
 
-/**
- * Fold stored attachment paths into a prompt.
- *
- * Server-side copy of the session composer's `buildPromptWithAttachments`
- * (`apps/agor-ui/src/components/SessionPanel/composerAttachments.ts`) — the
- * daemon must not import agor-ui. Keep the two in sync.
- */
-function formatUploadBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  const mb = bytes / (1024 * 1024);
-  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
-}
-
 export function buildPromptWithAttachments(text: string, attachments: UploadMetadata[]): string {
-  const trimmedText = text.trim();
-  if (attachments.length === 0) return trimmedText;
-
-  const attachmentBlock = [
-    'Attachments — use `agor_upload_materialize` to access:',
-    ...attachments.map(
-      (attachment) =>
-        `- [${attachment.name}](https://agor.live/_uploads/${attachment.ref}) (${attachment.mimeType}, ${formatUploadBytes(attachment.size)})`
-    ),
-  ].join('\n');
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
+  return buildUploadAttachmentPrompt(
+    text,
+    attachments.map(({ ref, name, mimeType, size }) => ({ ref, filename: name, mimeType, size }))
+  );
 }
 
 /**
@@ -174,10 +151,11 @@ export async function ingestInboundAttachments(args: {
       );
       continue;
     }
-    if (file.size > MAX_UPLOAD_FILE_SIZE) {
+    const maxFileBytes = getUploadLimits().maxFileBytes;
+    if (file.size > maxFileBytes) {
       failed++;
       console.warn(
-        `[gateway] Skipping attachment "${file.name}": ${file.size} bytes exceeds per-file limit ${MAX_UPLOAD_FILE_SIZE}`
+        `[gateway] Skipping attachment "${file.name}": ${file.size} bytes exceeds per-file limit ${maxFileBytes}`
       );
       continue;
     }
@@ -207,7 +185,7 @@ export async function ingestInboundAttachments(args: {
         );
       }
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
+      if (Number.isFinite(declaredLength) && declaredLength > maxFileBytes) {
         throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
       }
       if (!response.body) throw new Error('download response has no body');

@@ -55,6 +55,34 @@ export const MAX_UPLOAD_FILES_PER_REQUEST = 10;
 /** Max combined size of all files in a single request (bytes). */
 export const MAX_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024; // 100 MB
 
+export interface UploadLimits {
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  maxFiles: number;
+}
+
+let uploadLimits: UploadLimits = {
+  maxFileBytes: MAX_UPLOAD_FILE_SIZE,
+  maxTotalBytes: MAX_UPLOAD_TOTAL_SIZE,
+  maxFiles: MAX_UPLOAD_FILES_PER_REQUEST,
+};
+
+/** Process-wide ingress policy, configured once alongside the staging store. */
+export function configureUploadLimits(maxFileBytes: number): void {
+  if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes <= 0) {
+    throw new Error('uploads.max_file_size_mb must resolve to a positive byte limit');
+  }
+  uploadLimits = {
+    maxFileBytes,
+    maxTotalBytes: maxFileBytes * 2,
+    maxFiles: MAX_UPLOAD_FILES_PER_REQUEST,
+  };
+}
+
+export function getUploadLimits(): Readonly<UploadLimits> {
+  return uploadLimits;
+}
+
 // Debug logging only in development
 const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
@@ -107,7 +135,10 @@ type UploadRequest = Request & {
 /**
  * Create multer storage configuration
  */
-export function createUploadStorage(store: UploadStagingStore): multer.StorageEngine {
+export function createUploadStorage(
+  store: UploadStagingStore,
+  limits: Readonly<UploadLimits> = getUploadLimits()
+): multer.StorageEngine {
   return {
     _handleFile(req: UploadRequest, file, callback) {
       const owner = req._uploadOwner;
@@ -118,10 +149,10 @@ export function createUploadStorage(store: UploadStagingStore): multer.StorageEn
       const aggregateLimiter = new Transform({
         transform(chunk: Buffer, _encoding, done) {
           req._stagedUploadBytes = (req._stagedUploadBytes ?? 0) + chunk.byteLength;
-          if (req._stagedUploadBytes > MAX_UPLOAD_TOTAL_SIZE) {
+          if (req._stagedUploadBytes > limits.maxTotalBytes) {
             done(
               Object.assign(
-                new Error(`Combined upload size exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`),
+                new Error(`Combined upload size exceeds ceiling ${limits.maxTotalBytes}`),
                 { status: 413, code: 'LIMIT_TOTAL_FILE_SIZE' }
               )
             );
@@ -173,16 +204,17 @@ export function createUploadStorage(store: UploadStagingStore): multer.StorageEn
  * Create configured multer instance
  */
 export function createUploadMiddleware(store: UploadStagingStore) {
-  const storage = createUploadStorage(store);
+  const limits = getUploadLimits();
+  const storage = createUploadStorage(store, limits);
 
   return multer({
     storage,
     limits: {
       // Per-file ceiling. Multer aborts the upload with `LIMIT_FILE_SIZE`
       // if any single file exceeds this.
-      fileSize: MAX_UPLOAD_FILE_SIZE,
+      fileSize: limits.maxFileBytes,
       // Hard ceiling on number of files per request.
-      files: MAX_UPLOAD_FILES_PER_REQUEST,
+      files: limits.maxFiles,
       // Aggregate bytes are counted by the streaming storage engine.
     },
     fileFilter: (_req, file, cb) => {
@@ -217,11 +249,12 @@ export function createUploadMiddleware(store: UploadStagingStore) {
  */
 export function enforceTotalUploadSize() {
   return (req: Request, res: Response, next: NextFunction): void => {
+    const { maxTotalBytes } = getUploadLimits();
     const declared = Number.parseInt(req.headers['content-length'] ?? '', 10);
-    if (Number.isFinite(declared) && declared > MAX_UPLOAD_TOTAL_SIZE) {
+    if (Number.isFinite(declared) && declared > maxTotalBytes) {
       res.status(413).json({
         error: 'Upload too large',
-        details: `Combined upload size ${declared} exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`,
+        details: `Combined upload size ${declared} exceeds ceiling ${maxTotalBytes}`,
         code: 'PAYLOAD_TOO_LARGE',
       });
       return;

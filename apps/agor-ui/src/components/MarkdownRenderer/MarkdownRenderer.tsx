@@ -11,6 +11,7 @@
  * Typography wrapper provides consistent Ant Design styling.
  */
 
+import { UPLOAD_VIRTUAL_URL_PREFIX } from '@agor/core/types';
 import { DownloadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
@@ -275,8 +276,12 @@ function reactText(value: React.ReactNode): string {
 
 const UPLOAD_REF_PATTERN =
   'upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const ESCAPED_UPLOAD_VIRTUAL_URL_PREFIX = UPLOAD_VIRTUAL_URL_PREFIX.replace(
+  /[.*+?^${}()|[\]\\]/g,
+  '\\$&'
+);
 const INTERNAL_UPLOAD_MARKDOWN_LINK = new RegExp(
-  `\\[([A-Za-z0-9._ -]{1,200})\\]\\(https://agor\\.live/_uploads/(${UPLOAD_REF_PATTERN})\\)`,
+  `\\[([A-Za-z0-9._ -]{1,200})\\]\\(${ESCAPED_UPLOAD_VIRTUAL_URL_PREFIX}(${UPLOAD_REF_PATTERN})\\)`,
   'g'
 );
 

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { type AgorConfig, expandHomePath } from '@agor/core/config';
 import type { UploadStagingStore } from '@agor/core/types';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
-import { getUploadDirectory } from './upload.js';
+import { configureUploadLimits, getUploadDirectory } from './upload.js';
 import { LocalUploadStagingStore } from './upload-staging-store.js';
 
 export type UploadStagingStoreFactory = () => UploadStagingStore;
@@ -30,6 +30,7 @@ export function configureUploadStagingStoreFromConfig(
 ): void {
   const location = config.uploads?.location ?? '~/.agor/uploads';
   const maxBytes = (config.uploads?.max_file_size_mb ?? 50) * 1024 * 1024;
+  configureUploadLimits(maxBytes);
   const ttlMs = (config.uploads?.max_age_days ?? 30) * 24 * 60 * 60 * 1000;
   if (location.startsWith('s3://')) {
     if (!s3Factory) {
@@ -62,6 +63,7 @@ export function getUploadStagingStore(): UploadStagingStore {
 }
 
 export function resetUploadStagingStoreForTests(): void {
+  configureUploadLimits(50 * 1024 * 1024);
   factory = () => new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
   instance = undefined;
 }

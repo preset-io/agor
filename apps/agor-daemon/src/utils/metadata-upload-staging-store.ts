@@ -95,13 +95,16 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     );
     let removed = 0;
     for (const upload of expired) {
-      await this.delete({
+      const deleted = await this.delete({
         tenantId: upload.tenantId,
         sessionId: upload.sessionId,
         branchId: upload.branchId,
         ref: upload.ref,
-      }).catch(() => undefined);
-      removed++;
+      }).then(
+        () => true,
+        () => false
+      );
+      if (deleted) removed++;
     }
     // Also reconcile adapter-owned partial/orphan records.
     await this.bytes.cleanupExpired(owner, now);

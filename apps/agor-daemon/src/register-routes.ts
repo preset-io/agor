@@ -155,7 +155,7 @@ import {
 import {
   createUploadMiddleware,
   enforceTotalUploadSize,
-  MAX_UPLOAD_FILE_SIZE,
+  getUploadLimits,
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
@@ -1820,7 +1820,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         claims.executor_slack_channel_id !== channel ||
         !Number.isSafeInteger(size) ||
         size < 0 ||
-        size > MAX_UPLOAD_FILE_SIZE
+        size > getUploadLimits().maxFileBytes
       ) {
         return res.status(403).json({ error: 'Slack upload capability denied' });
       }
@@ -1842,7 +1842,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const limiter = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           received += chunk.byteLength;
-          if (received > size || received > MAX_UPLOAD_FILE_SIZE) {
+          if (received > size || received > getUploadLimits().maxFileBytes) {
             callback(new Error('Slack upload stream exceeds its authorized size'));
             return;
           }

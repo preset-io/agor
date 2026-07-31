@@ -26,7 +26,7 @@ import {
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
+import { getUploadLimits } from '../utils/upload.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export class GatewayChannelsService extends DrizzleService<
@@ -173,8 +173,9 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Slack channel is not an allowed write target');
     }
 
-    if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > MAX_UPLOAD_FILE_SIZE) {
-      throw new BadRequest(`File exceeds the ${MAX_UPLOAD_FILE_SIZE}-byte upload limit`);
+    const maxFileBytes = getUploadLimits().maxFileBytes;
+    if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > maxFileBytes) {
+      throw new BadRequest(`File exceeds the ${maxFileBytes}-byte upload limit`);
     }
 
     const connector = getConnector('slack', gatewayChannel.config);

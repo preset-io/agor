@@ -1,3 +1,4 @@
+import { buildUploadAttachmentPrompt, formatUploadBytes } from '@agor/core/types';
 import type { UploadedFile } from '../FileUpload';
 
 export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
@@ -100,13 +101,6 @@ export function isSupportedComposerUploadFile(file: File): boolean {
   return COMPOSER_UPLOAD_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  const mb = bytes / (1024 * 1024);
-  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
-}
-
 export function validateComposerFileIntake(
   files: File[],
   currentAttachments: ComposerAttachment[] = []
@@ -130,7 +124,7 @@ export function validateComposerFileIntake(
     if (file.size > MAX_COMPOSER_UPLOAD_FILE_SIZE) {
       rejections.push({
         file,
-        reason: `File is larger than ${formatBytes(MAX_COMPOSER_UPLOAD_FILE_SIZE)}`,
+        reason: `File is larger than ${formatUploadBytes(MAX_COMPOSER_UPLOAD_FILE_SIZE)}`,
       });
       continue;
     }
@@ -153,7 +147,7 @@ export function validateComposerFileIntake(
     if (totalSize + file.size > MAX_COMPOSER_UPLOAD_TOTAL_SIZE) {
       rejections.push({
         file,
-        reason: `Selected files exceed ${formatBytes(MAX_COMPOSER_UPLOAD_TOTAL_SIZE)} total`,
+        reason: `Selected files exceed ${formatUploadBytes(MAX_COMPOSER_UPLOAD_TOTAL_SIZE)} total`,
       });
       continue;
     }
@@ -205,18 +199,5 @@ export interface PromptAttachment {
 }
 
 export function buildPromptWithAttachments(text: string, attachments: PromptAttachment[]): string {
-  const trimmedText = text.trim();
-  if (attachments.length === 0) return trimmedText;
-
-  const attachmentBlock = [
-    'Attachments — use `agor_upload_materialize` to access:',
-    ...attachments.map(
-      (attachment) =>
-        `- [${attachment.filename}](https://agor.live/_uploads/${attachment.ref}) (${attachment.mimeType}, ${formatBytes(attachment.size)})`
-    ),
-  ].join('\n');
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
+  return buildUploadAttachmentPrompt(text, attachments);
 }

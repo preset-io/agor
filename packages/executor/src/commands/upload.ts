@@ -16,6 +16,14 @@ function safeFilename(value: string): string {
   );
 }
 
+export function uploadMaterializationRelativePath(params: {
+  sessionId: string;
+  uploadRef: string;
+  filename: string;
+}): string {
+  return `.agor/session-staging/${params.sessionId}/${params.uploadRef}/${safeFilename(params.filename)}`;
+}
+
 export async function handleBranchUploadMaterialize(
   payload: BranchUploadMaterializePayload,
   options: CommandOptions
@@ -30,7 +38,7 @@ export async function handleBranchUploadMaterialize(
       payload.sessionToken
     );
     const branch = await resolveExecutorBranch(client, payload.params.branchId);
-    const relative = `.agor/session-staging/${payload.params.sessionId}/${safeFilename(payload.params.filename)}`;
+    const relative = uploadMaterializationRelativePath(payload.params);
     const resolved = await resolvePathInsideBranch(branch.path, relative);
     destination = resolved.absolute;
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
@@ -45,6 +53,9 @@ export async function handleBranchUploadMaterialize(
     if (!response.ok || !response.body) {
       throw new Error(`Upload transfer failed with HTTP ${response.status}`);
     }
+    // The ref-scoped destination is deterministic. A retry replaces only the
+    // same upload's prior materialization, never another upload with the same name.
+    await rm(destination, { force: true });
     const handle = await open(destination, 'wx', 0o600);
     createdDestination = true;
     try {

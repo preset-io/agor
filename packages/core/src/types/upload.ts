@@ -24,6 +24,40 @@ export interface UploadMetadata {
   provenance: UploadProvenance;
 }
 
+/** Runtime-neutral shape used to describe staged uploads in agent prompts. */
+export interface UploadPromptAttachment {
+  ref: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
+export const UPLOAD_VIRTUAL_URL_PREFIX = 'https://agor.live/_uploads/';
+
+export function formatUploadBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  const mb = bytes / (1024 * 1024);
+  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
+}
+
+export function buildUploadAttachmentPrompt(
+  text: string,
+  attachments: readonly UploadPromptAttachment[]
+): string {
+  const trimmedText = text.trim();
+  if (attachments.length === 0) return trimmedText;
+  const attachmentBlock = [
+    'Attachments — use `agor_upload_materialize` to access:',
+    ...attachments.map(
+      ({ ref, filename, mimeType, size }) =>
+        `- [${filename}](${UPLOAD_VIRTUAL_URL_PREFIX}${ref}) (${mimeType}, ${formatUploadBytes(size)})`
+    ),
+  ].join('\n');
+  if (trimmedText.startsWith('/')) return `${trimmedText}\n\n${attachmentBlock}`;
+  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
+}
+
 /** Persisted logical upload metadata. Storage keys are deliberately excluded. */
 export interface Upload {
   ref: UploadRef;

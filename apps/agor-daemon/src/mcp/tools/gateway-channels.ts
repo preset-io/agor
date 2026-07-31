@@ -52,7 +52,7 @@ import {
   getDaemonUrl,
   runExecutorCommand,
 } from '../../utils/spawn-executor.js';
-import { MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
+import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
 import {
   mcpLimit,
@@ -1718,7 +1718,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               threadTs: args.threadTs,
               filename: args.filename,
               comment: args.comment,
-              maxBytes: MAX_UPLOAD_FILE_SIZE,
+              maxBytes: getUploadLimits().maxFileBytes,
             },
           },
           {
@@ -1835,9 +1835,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           `Slack file "${file.name}" has type ${file.mimetype}, which the gateway does not download. Only image and text-like files (png/jpeg/gif/webp, plain text, markdown, CSV, JSON) are supported.`
         );
       }
-      if (file.size > MAX_UPLOAD_FILE_SIZE) {
+      const maxFileBytes = getUploadLimits().maxFileBytes;
+      if (file.size > maxFileBytes) {
         throw new Error(
-          `Slack file "${file.name}" is ${file.size} bytes, exceeding the ${MAX_UPLOAD_FILE_SIZE}-byte download limit.`
+          `Slack file "${file.name}" is ${file.size} bytes, exceeding the ${maxFileBytes}-byte download limit.`
         );
       }
       const botToken = target.channel.config?.bot_token;
