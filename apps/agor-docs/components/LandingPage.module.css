@@ -205,6 +205,7 @@
 }
 
 .heroCopy h1,
+.heroCopy h2,
 .sectionHeader h2,
 .workspaceCopy h2,
 .controlSection h2,
@@ -225,6 +226,15 @@
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
+}
+
+/* Hero A/B variant sub-headline — only rendered when a heroVariant prop is
+ * passed (see heroVariants.tsx); the default "/" hero has no h2. Same
+ * hairline-heading family as h1, one size down. */
+.heroCopy h2 {
+  max-width: 44ch;
+  margin: 14px auto 0;
+  font-size: clamp(1.7rem, 3.2vw, 2.5rem);
 }
 
 /* Gradient accent phrase inside headings (mockup treatment, mint → sky).

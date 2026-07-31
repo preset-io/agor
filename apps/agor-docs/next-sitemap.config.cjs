@@ -13,8 +13,20 @@ module.exports = {
   priority: 0.7,
   sitemapSize: 5000,
   // /guide/assistants is a meta-refresh redirect stub to /guide/teammates —
-  // redirect pages don't belong in the sitemap.
-  exclude: ['/404', '/_app', '/_document', '/guide/assistants'],
+  // redirect pages don't belong in the sitemap. The hero A/B variants are
+  // noindex, paid-campaign-only landing pages (see content/*.mdx
+  // heroVariant pages) — excluded so they never surface via organic search.
+  exclude: [
+    '/404',
+    '/_app',
+    '/_document',
+    '/guide/assistants',
+    '/build-together',
+    '/company-wide-ai',
+    '/every-team',
+    '/open-source',
+    '/hand-off-the-work',
+  ],
 
   // Include static LLM-related files
   additionalPaths: async () => [
