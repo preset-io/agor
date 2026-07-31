@@ -124,6 +124,43 @@ describe('KnowledgeCommentsPanel', () => {
     expect(screen.queryByText('Removed sections')).not.toBeInTheDocument();
   });
 
+  // One visual language for "came unmoored", regardless of why the anchor
+  // failed to resolve — not a separate treatment per failure mode.
+  it('collapses every orphan reason into the one Removed sections group', () => {
+    renderPanel({
+      headings: [
+        { slug: 'overview', text: 'Overview', level: 2 },
+        { slug: 'setup', text: 'Setup', level: 2 },
+        { slug: 'setup-1', text: 'Setup', level: 3 },
+      ],
+      comments: [
+        makeComment({
+          comment_id: 'c-gone' as CommentID,
+          content: 'Section was deleted',
+          anchor_slug: 'deprecated',
+          anchor_label: 'Deprecated API',
+        }),
+        makeComment({
+          comment_id: 'c-ambiguous' as CommentID,
+          content: 'Label matches two sections',
+          anchor_slug: 'old-setup-slug',
+          anchor_label: 'Setup',
+        }),
+        makeComment({
+          comment_id: 'c-deduped' as CommentID,
+          content: 'Deduped anchor lost its twin',
+          anchor_slug: 'setup-2',
+          anchor_label: 'Setup',
+        }),
+      ],
+    });
+
+    expect(screen.getAllByText('Removed sections')).toHaveLength(1);
+    expect(screen.getByText('Section was deleted')).toBeInTheDocument();
+    expect(screen.getByText('Label matches two sections')).toBeInTheDocument();
+    expect(screen.getByText('Deduped anchor lost its twin')).toBeInTheDocument();
+  });
+
   it('keeps a thread visible when its section is gone', () => {
     renderPanel({
       comments: [

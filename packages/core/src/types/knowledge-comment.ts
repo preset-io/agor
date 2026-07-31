@@ -48,12 +48,18 @@ export interface KnowledgeDocumentHeading {
   level: number;
 }
 
+/**
+ * Deliberately three states. Every way an anchor can fail to resolve — section
+ * deleted, label ambiguous, whatever a later rung adds — collapses into
+ * `orphaned` so the UI has one visual language for "came unmoored" rather than
+ * one per failure mode. Add a rung to the ladder, not a state here.
+ */
 export type KnowledgeCommentAnchorState =
   /** Thread applies to the whole document */
   | 'document'
   /** Thread's heading section is present in the current content */
   | 'anchored'
-  /** Thread was anchored to a section that no longer exists */
+  /** Thread's section could not be identified in the current content */
   | 'orphaned';
 
 export interface ResolvedKnowledgeCommentAnchor {

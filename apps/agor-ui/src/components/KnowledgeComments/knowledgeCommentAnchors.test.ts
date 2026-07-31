@@ -62,14 +62,21 @@ describe('summarizeKnowledgeAnchors', () => {
     expect(summary.unresolvedTotal).toBe(1);
   });
 
+  // Every orphan reason behaves the same in the gutter too: counted in the
+  // header total, badged against no section.
   it('counts document-level and orphaned threads in the total but against no section', () => {
+    const duplicateHeadings = [...HEADINGS, { slug: 'setup-1', text: 'Setup', level: 3 }];
     const summary = summarizeKnowledgeAnchors(
-      [makeComment(), makeComment({ anchor_slug: 'deprecated', anchor_label: 'Deprecated API' })],
-      HEADINGS
+      [
+        makeComment(),
+        makeComment({ anchor_slug: 'deprecated', anchor_label: 'Deprecated API' }),
+        makeComment({ anchor_slug: 'old-setup-slug', anchor_label: 'Setup' }),
+      ],
+      duplicateHeadings
     );
 
     expect(summary.totalBySlug.size).toBe(0);
-    expect(summary.unresolvedTotal).toBe(2);
+    expect(summary.unresolvedTotal).toBe(3);
   });
 
   it('follows a section whose slug changed but whose heading text survived', () => {
