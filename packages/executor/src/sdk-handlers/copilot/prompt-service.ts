@@ -309,6 +309,7 @@ export class CopilotPromptService {
               permissionLocks: this.permissionLocks,
               mcpServerRepo: this.mcpServerRepo,
               sessionMCPRepo: this.sessionMCPServerRepo,
+              abortController: abortController ?? new AbortController(),
             }
           : undefined;
 

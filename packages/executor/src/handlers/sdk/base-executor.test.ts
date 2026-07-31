@@ -90,10 +90,9 @@ describe('resolveApiKeyForTask', () => {
 });
 
 describe('executeToolTask credential preflight', () => {
-  it('persists an explicit missing-credential failure before invoking the tool', async () => {
-    const order: string[] = [];
-    const taskPatch = vi.fn(async () => order.push('task'));
-    const messageCreate = vi.fn(async () => order.push('message'));
+  it('returns an explicit missing-credential outcome before invoking the tool', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
     const client = {
       service(name: string) {
         if (name === 'config/resolve-api-key') {
@@ -124,21 +123,28 @@ describe('executeToolTask credential preflight', () => {
     } as never;
     const createTool = vi.fn();
 
-    await expect(
-      executeToolTask({
-        client,
-        sessionId: 'session-1' as never,
-        taskId: 'task-1' as never,
-        prompt: 'hello',
-        abortController: new AbortController(),
-        apiKeyEnvVar: 'GEMINI_API_KEY',
-        toolName: 'gemini',
-        createTool,
-      })
-    ).rejects.toThrow('No scoped gemini credential');
+    const outcome = await executeToolTask({
+      client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'GEMINI_API_KEY',
+      toolName: 'gemini',
+      createTool,
+    });
 
     expect(createTool).not.toHaveBeenCalled();
-    expect(taskPatch).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));
+    expect(taskPatch).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      taskPatch: {
+        error_message: expect.stringContaining('No scoped gemini credential'),
+      },
+      error: expect.objectContaining({
+        message: expect.stringContaining('No scoped gemini credential'),
+      }),
+    });
     expect(messageCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: {
@@ -196,6 +202,53 @@ describe('executeToolTask credential preflight', () => {
     expect(createTool).toHaveBeenCalledOnce();
     expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
     expect(executePromptWithStreaming).not.toHaveBeenCalled();
+  });
+
+  it('returns completion data without writing terminal task state', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const executePromptWithStreaming = vi.fn().mockResolvedValue({
+      userMessageId: 'user-message',
+      assistantMessageIds: ['assistant-message'],
+      wasStopped: false,
+      hadError: false,
+      model: 'test-model',
+    });
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
+        }
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages' || name === '/tasks/streaming') return {};
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const outcome = await executeToolTask({
+      client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'GEMINI_API_KEY',
+      toolName: 'gemini',
+      createTool: () => ({ executePromptWithStreaming }),
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'completed',
+      taskPatch: { model: 'test-model' },
+    });
+    expect(taskPatch).not.toHaveBeenCalled();
   });
 });
 

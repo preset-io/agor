@@ -21,7 +21,6 @@ import type {
   MessageSource,
   PermissionMode,
   SessionID,
-  Task,
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
@@ -35,6 +34,8 @@ import {
   reportWithheldMcpServers,
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import type { AgenticToolOutcome, AgenticToolTaskPatch } from '../../terminal-task.js';
+import { isDaemonOwnedAbort } from '../../termination-state.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
@@ -453,7 +454,7 @@ export async function executeCursorTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
-}): Promise<void> {
+}): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
@@ -465,10 +466,11 @@ export async function executeCursorTask(params: {
 
   const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
   let currentRun: Run | undefined;
+  let abortCompletion: Promise<void> | undefined;
   const abortHandler = () => {
     if (!currentRun) return;
     console.log(`[cursor] Abort signal received; cancelling Cursor run ${currentRun.id}`);
-    currentRun.cancel().catch((error) => {
+    abortCompletion ??= currentRun.cancel().catch((error) => {
       console.warn('[cursor] Failed to cancel Cursor run:', error);
     });
   };
@@ -555,13 +557,15 @@ export async function executeCursorTask(params: {
       });
 
       if (params.abortController.signal.aborted) {
-        await currentRun.cancel();
+        abortHandler();
+        await abortCompletion;
       }
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
         if (params.abortController.signal.aborted) {
-          await currentRun.cancel();
+          abortHandler();
+          await abortCompletion;
           break;
         }
         await handleCursorEvent({
@@ -624,9 +628,7 @@ export async function executeCursorTask(params: {
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
       const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
-      const taskPatch: Partial<Task> = {
-        status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
-        completed_at: new Date().toISOString(),
+      const taskPatch: AgenticToolTaskPatch = {
         ...(recordedModel ? { model: recordedModel } : {}),
         raw_sdk_response: {
           run: runResult,
@@ -642,17 +644,20 @@ export async function executeCursorTask(params: {
           sha_at_end: gitStateAtEnd.sha,
         };
       }
-      await client.service('tasks').patch(taskId, taskPatch);
+      if (isDaemonOwnedAbort(params.abortController)) return;
+      return {
+        status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
+        taskPatch,
+      };
     } finally {
       agent.close();
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] Execution failed:', err);
+    if (isDaemonOwnedAbort(params.abortController)) return;
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
-    const taskPatch: Partial<Task> = {
-      status: 'failed',
-      completed_at: new Date().toISOString(),
+    const taskPatch: AgenticToolTaskPatch = {
       error_message: err.message,
     };
     if (gitStateAtEnd) {
@@ -662,11 +667,15 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
-    throw err;
+    return {
+      status: params.abortController.signal.aborted ? 'stopped' : 'failed',
+      taskPatch,
+      ...(params.abortController.signal.aborted ? {} : { error: err }),
+    };
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);
+    await abortCompletion;
   }
 }
 

@@ -19,7 +19,6 @@ import type {
   PermissionMode,
   SessionID,
   StreamingEventType,
-  Task,
   TaskID,
 } from '@agor/core/types';
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
@@ -28,7 +27,8 @@ import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { isDaemonOwnedAbort } from '../../termination-state.js';
+import type { AgenticToolOutcome, AgenticToolTaskPatch } from '../../terminal-task.js';
+import { getInteractionAbortOutcome, isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -44,11 +44,12 @@ class MissingCredentialError extends Error {
   override readonly name = 'MissingCredentialError';
 }
 
-async function appendTaskFailureMessage(
+export async function appendTaskFailureMessage(
   client: AgorClient,
   sessionId: SessionID,
   taskId: TaskID,
-  failure: Error
+  failure: Error,
+  message = failure.message
 ): Promise<void> {
   try {
     const existingMessages = await client.service('messages').find({
@@ -69,8 +70,8 @@ async function appendTaskFailureMessage(
       role: MessageRole.SYSTEM,
       index: messageCount,
       timestamp: new Date().toISOString(),
-      content: failure.message,
-      content_preview: failure.message.substring(0, 200),
+      content: message,
+      content_preview: message.substring(0, 200),
       metadata: {
         is_task_failure: true,
         ...(failure instanceof MissingCredentialError
@@ -81,19 +82,6 @@ async function appendTaskFailureMessage(
   } catch (error) {
     console.error('[executor] Failed to create task failure message:', error);
   }
-}
-
-export async function settleTaskFailure(
-  client: AgorClient,
-  sessionId: SessionID,
-  taskId: TaskID,
-  failure: Error,
-  patch: Partial<Task>
-): Promise<void> {
-  // Terminal task hooks may drain the next queued turn, so reserve the current
-  // transcript index before publishing terminality. Message failure stays best-effort.
-  await appendTaskFailureMessage(client, sessionId, taskId, failure);
-  await client.service('tasks').patch(taskId, patch);
 }
 
 /**
@@ -456,7 +444,7 @@ export async function executeToolTask(params: {
     apiKey: string,
     useNativeAuth: boolean
   ) => BaseTool;
-}): Promise<void> {
+}): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
   const daemonOwnsTerminality = () => isDaemonOwnedAbort(params.abortController);
@@ -574,7 +562,10 @@ export async function executeToolTask(params: {
     // Determine task status based on SDK result
     // - wasStopped: user explicitly stopped the task
     // - hadError: SDK returned an error subtype (e.g., error_during_execution)
-    const taskStatus = result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed';
+    const interactionOutcome = getInteractionAbortOutcome(params.abortController);
+    const taskStatus =
+      interactionOutcome?.status ??
+      (result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed');
 
     if (result.hadError) {
       console.error(
@@ -583,9 +574,8 @@ export async function executeToolTask(params: {
     }
 
     // Build patch data
-    const patchData: Partial<Task> = {
-      status: taskStatus,
-      completed_at: new Date().toISOString(),
+    const patchData: AgenticToolTaskPatch = {
+      ...(interactionOutcome ? { error_message: interactionOutcome.errorMessage } : {}),
     };
 
     // Add git_state if we captured a SHA
@@ -661,25 +651,22 @@ export async function executeToolTask(params: {
       }
     }
 
-    // Update task status to completed/stopped with git SHA and SDK responses
-    // Note: The stop endpoint may have already patched task to STOPPED via process kill.
-    // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
-    await client.service('tasks').patch(taskId, patchData);
+    return { status: taskStatus, taskPatch: patchData };
   } catch (error) {
     if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error(`[${toolName}] Execution failed:`, err);
+    const interactionOutcome = getInteractionAbortOutcome(params.abortController);
+    const failureMessage = interactionOutcome?.errorMessage ?? (err.message || String(err));
+    console.error(`[${toolName}] Execution failed:`, interactionOutcome ? failureMessage : err);
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
 
     // Build patch data
-    const patchData: Partial<Task> = {
-      status: 'failed',
-      completed_at: new Date().toISOString(),
+    const patchData: AgenticToolTaskPatch = {
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
-      error_message: err.message || String(err),
+      error_message: failureMessage,
     };
 
     // Add git_state if we captured a SHA
@@ -692,9 +679,13 @@ export async function executeToolTask(params: {
       };
     }
 
-    await settleTaskFailure(client, sessionId, taskId, err, patchData);
+    await appendTaskFailureMessage(client, sessionId, taskId, err, failureMessage);
 
-    throw err;
+    return {
+      status: interactionOutcome?.status ?? 'failed',
+      taskPatch: patchData,
+      ...(interactionOutcome ? {} : { error: err }),
+    };
   } finally {
     // Clean up abort listener
     if (abortHandler) {

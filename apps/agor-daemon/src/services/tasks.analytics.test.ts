@@ -143,7 +143,14 @@ describe('TasksService analytics lifecycle events', () => {
       }),
       { userId: runningTask.created_by }
     );
-    expect(sessionsService.patch).not.toHaveBeenCalled();
+    expect(sessionsService.patch).toHaveBeenCalledWith(
+      runningTask.session_id,
+      {
+        status: 'timed_out',
+        ready_for_prompt: true,
+      },
+      undefined
+    );
 
     track.mockClear();
     service.repository.findById = vi
@@ -153,5 +160,6 @@ describe('TasksService analytics lifecycle events', () => {
     await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT });
 
     expect(track).not.toHaveBeenCalledWith('task.completed', expect.anything(), expect.anything());
+    expect(sessionsService.patch).toHaveBeenCalledTimes(1);
   });
 });

@@ -160,6 +160,7 @@ describe('a denied MCP tool never reaches the server', () => {
           listServers: vi.fn().mockResolvedValue([{ name: SERVER_NAME }]),
         } as never,
         mcpToolPermissions: index,
+        abortController: new AbortController(),
       });
 
       // Applies the gates in the SDK's documented order, then dispatches over

@@ -38,7 +38,9 @@ import {
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
+import type { AgenticToolOutcome } from '../../terminal-task.js';
+import { isDaemonOwnedAbort } from '../../termination-state.js';
+import { appendTaskFailureMessage, createStreamingCallbacks } from './base-executor.js';
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -51,7 +53,7 @@ export async function executeOpenCodeTask(params: {
   agenticToolContext?: Record<string, unknown>;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
-}): Promise<void> {
+}): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId, taskId, prompt } = params;
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
@@ -119,6 +121,7 @@ export async function executeOpenCodeTask(params: {
           // Gated servers never reach this handler, so nothing here can be
           // configured; the admission gate above already withheld them.
           mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
+          abortController: params.abortController,
         }),
       cancelPendingPermissions: (targetSessionId) =>
         permissionService.cancelPendingRequests(targetSessionId),
@@ -151,7 +154,8 @@ export async function executeOpenCodeTask(params: {
       createStreamingCallbacks(client, 'opencode', sessionId, params.onPulse)
     );
 
-    if (params.abortController.signal.aborted) return;
+    if (isDaemonOwnedAbort(params.abortController)) return;
+    if (params.abortController.signal.aborted) return { status: 'stopped' };
 
     const finalIndex = (await repos.messages.findBySessionId(sessionId)).length;
     await repos.messagesService.create({
@@ -167,11 +171,12 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
-    await client.service('tasks').patch(taskId, {
+    return {
       status: 'completed',
-      completed_at: new Date().toISOString(),
-      model: `${session.model_config.provider}/${session.model_config.model}`,
-    });
+      taskPatch: {
+        model: `${session.model_config.provider}/${session.model_config.model}`,
+      },
+    };
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     console.error('[opencode] Execution failed:', failure);
@@ -181,14 +186,14 @@ export async function executeOpenCodeTask(params: {
       // making it terminal here would release the session before absence is proven.
       return;
     }
-    if (!params.abortController.signal.aborted) {
-      await settleTaskFailure(client, sessionId, taskId, failure, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-        error_message: failure.message,
-      });
-    }
-    throw failure;
+    if (isDaemonOwnedAbort(params.abortController)) return;
+    if (params.abortController.signal.aborted) return { status: 'stopped' };
+    await appendTaskFailureMessage(client, sessionId, taskId, failure);
+    return {
+      status: 'failed',
+      taskPatch: { error_message: failure.message },
+      error: failure,
+    };
   } finally {
     globalPermissionManager.unregister(sessionId);
   }

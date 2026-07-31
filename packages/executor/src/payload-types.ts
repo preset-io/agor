@@ -75,6 +75,9 @@ const GitUrlSchema = z.string().refine(isGitUrl, {
 export const ToolTypeSchema = z.enum(AGENTIC_TOOL_NAMES);
 export type ToolType = AgenticToolName;
 
+export const InteractionModeSchema = z.enum(['interactive', 'unattended']);
+export type InteractionMode = z.infer<typeof InteractionModeSchema>;
+
 /**
  * Permission modes for agent execution
  *
@@ -155,6 +158,11 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
+    /**
+     * Whether this launch surface can return a decision to an active
+     * permission request. Optional for legacy payload compatibility.
+     */
+    interactionMode: InteractionModeSchema.optional(),
   }),
 });
 

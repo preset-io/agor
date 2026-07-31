@@ -12,11 +12,12 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import type { AgenticToolOutcome } from '../../terminal-task.js';
 
 /**
  * Execute Claude Code task (Feathers/WebSocket architecture)
@@ -33,7 +34,8 @@ export async function executeClaudeCodeTask(params: {
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
-}): Promise<void> {
+  interactionMode?: InteractionMode;
+}): Promise<AgenticToolOutcome | undefined> {
   const { client, sessionId } = params;
 
   // Import base executor helper
@@ -43,19 +45,23 @@ export async function executeClaudeCodeTask(params: {
   const permissionTimeoutMs = params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000;
 
   // Create PermissionService that emits via Feathers WebSocket
-  const permissionService = new PermissionService(async (event, data) => {
-    if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
-    if (event === 'permission:timeout') params.onPulse?.('sdk_started', 'permission.timeout');
-    // Emit permission events directly via Feathers
-    client.service('sessions').emit(event, data);
-  }, permissionTimeoutMs);
+  const permissionService = new PermissionService(
+    async (event, data) => {
+      if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
+      if (event === 'permission:timeout') params.onPulse?.('sdk_started', 'permission.timeout');
+      // Emit permission events directly via Feathers
+      client.service('sessions').emit(event, data);
+    },
+    permissionTimeoutMs,
+    params.interactionMode ?? 'interactive'
+  );
 
   // Register with global manager
   globalPermissionManager.register(sessionId, permissionService);
 
   try {
     // Execute using base helper with Claude-specific factory
-    await executeToolTask({
+    return await executeToolTask({
       ...params,
       apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
       toolName: 'claude-code',

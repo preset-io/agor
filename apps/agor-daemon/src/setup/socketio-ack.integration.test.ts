@@ -8,6 +8,7 @@ import {
   executeToolTask,
 } from '../../../../packages/executor/src/handlers/sdk/base-executor.js';
 import { createExecutorClient } from '../../../../packages/executor/src/services/feathers-client.js';
+import { finalizeTask } from '../../../../packages/executor/src/terminal-task.js';
 import { TasksService } from '../services/tasks.js';
 
 const TASK_ID = '018f0000-0000-7000-8000-000000000001';
@@ -221,38 +222,34 @@ describe('executor acknowledgement failure convergence', () => {
       },
     });
 
-    let rejection: unknown;
     const startedAt = Date.now();
-    try {
-      await executeToolTask({
-        client,
-        sessionId: SESSION_ID as never,
-        taskId: TASK_ID as never,
-        prompt: 'Exercise a stranded acknowledgement',
-        abortController: new AbortController(),
-        apiKeyEnvVar: 'OPENAI_API_KEY',
-        toolName: 'codex',
-        createTool: () =>
-          ({
-            async executePromptWithStreaming() {
-              await (
-                client as AgorClient & {
-                  service(path: 'lost-ack'): {
-                    create(data: { value: string }): Promise<unknown>;
-                  };
-                }
-              )
-                .service('lost-ack')
-                .create({ value: 'sub-limit' });
-              throw new Error('Unreachable after the stranded acknowledgement');
-            },
-          }) satisfies BaseTool,
-      });
-    } catch (error) {
-      rejection = error;
-    }
+    const outcome = await executeToolTask({
+      client,
+      sessionId: SESSION_ID as never,
+      taskId: TASK_ID as never,
+      prompt: 'Exercise a stranded acknowledgement',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      toolName: 'codex',
+      createTool: () =>
+        ({
+          async executePromptWithStreaming() {
+            await (
+              client as AgorClient & {
+                service(path: 'lost-ack'): {
+                  create(data: { value: string }): Promise<unknown>;
+                };
+              }
+            )
+              .service('lost-ack')
+              .create({ value: 'sub-limit' });
+            throw new Error('Unreachable after the stranded acknowledgement');
+          },
+        }) satisfies BaseTool,
+    });
 
-    expect(rejection).toBeInstanceOf(Error);
+    expect(outcome?.error).toBeInstanceOf(Error);
+    await finalizeTask(client, TASK_ID, outcome!);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     await reauthenticated;
     expect(mutationCount).toBe(1);
@@ -263,7 +260,7 @@ describe('executor acknowledgement failure convergence', () => {
       status: TaskStatus.FAILED,
       error_message: expect.any(String),
     });
-    expect(task.error_message).toBe((rejection as Error).message);
+    expect(task.error_message).toBe(outcome?.error?.message);
     expect(task.error_message).toMatch(/disconnected|timed out/i);
     expect(session).toMatchObject({ status: SessionStatus.FAILED, ready_for_prompt: true });
   });

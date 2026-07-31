@@ -1,24 +1,26 @@
-/**
- * Terminal-status helpers for the executor's fail-safe paths.
- *
- * The executor has four fail-safe paths that try to mark a task terminal —
- * the top-level catch in `AgorExecutor.start()`, the SIGTERM/SIGINT
- * shutdown handler, the `uncaughtException` handler, and the
- * `unhandledRejection` handler. The SDK handler (`base-executor`) is
- * the authoritative writer for terminal state and stamps a richer payload
- * (timing, `git_state.sha_at_end`, normalized SDK responses). If that
- * inner path already ran, the fail-safe paths must NOT redundantly emit a
- * second `'patched'` event — that's the bug the UI saw as
- * "chime plays twice".
- *
- * Lives outside `index.ts` so the helper and its constant don't pollute
- * the package's public surface, and so the unit tests don't have to
- * import from the file that bootstraps the executor.
- */
+/** Executor-owned task finalization. */
 import { shortId } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
+
+export type AgenticToolTerminalStatus = Extract<
+  Task['status'],
+  'completed' | 'failed' | 'stopped' | 'timed_out'
+>;
+
+export type AgenticToolTaskPatch = Omit<Partial<Task>, 'status' | 'completed_at'>;
+
+/**
+ * Normalized result returned by an agentic-tool adapter after its runtime has
+ * settled. Only the executor finalizer may add terminal lifecycle fields.
+ */
+export interface AgenticToolOutcome {
+  status: AgenticToolTerminalStatus;
+  taskPatch?: AgenticToolTaskPatch;
+  /** Re-thrown after terminal persistence so fatal executor exits stay non-zero. */
+  error?: Error;
+}
 
 /**
  * Statuses past which any subsequent terminal-write is a no-op.
@@ -34,31 +36,43 @@ export const TERMINAL_STATUSES: ReadonlySet<Task['status']> = new Set<Task['stat
 ]);
 
 /**
- * Patch a task to a terminal status, but ONLY if the task is not already
- * terminal. Reads the task first and bails on terminal — the inner SDK
- * patch is authoritative; this is a fallback for cases where it never
- * ran (SDK init crash, etc.).
+ * Persist the one normalized outcome produced after an agentic-tool runtime
+ * has settled. Already-terminal tasks are left untouched so daemon-owned
+ * termination and process fail-safes remain idempotent.
  */
-export async function tryMarkTaskTerminal(
+export async function finalizeTask(
   client: AgorClient,
   taskId: string,
-  status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
-  errorMessage?: string
-): Promise<void> {
+  outcome: AgenticToolOutcome
+): Promise<boolean> {
+  const current = (await client.service('tasks').get(taskId)) as Task;
+  if (TERMINAL_STATUSES.has(current.status)) {
+    console.log(
+      `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${outcome.status} finalization`
+    );
+    return false;
+  }
+  await client.service('tasks').patch(taskId, {
+    ...(outcome.taskPatch ?? {}),
+    status: outcome.status,
+    completed_at: new Date().toISOString(),
+  });
+  return true;
+}
+
+/**
+ * Best-effort wrapper for process fail-safe paths that must still exit when
+ * the daemon connection is already unavailable.
+ */
+export async function tryFinalizeTask(
+  client: AgorClient,
+  taskId: string,
+  outcome: AgenticToolOutcome
+): Promise<boolean> {
   try {
-    const current = (await client.service('tasks').get(taskId)) as Task;
-    if (TERMINAL_STATUSES.has(current.status)) {
-      console.log(
-        `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${status} patch`
-      );
-      return;
-    }
-    await client.service('tasks').patch(taskId, {
-      status,
-      completed_at: new Date().toISOString(),
-      ...(errorMessage ? { error_message: errorMessage } : {}),
-    });
+    return await finalizeTask(client, taskId, outcome);
   } catch (patchError) {
     console.error('[executor] Failed to update task status:', patchError);
+    return false;
   }
 }

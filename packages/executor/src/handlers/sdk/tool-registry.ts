@@ -13,8 +13,13 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
+import type {
+  ExecutorResult,
+  InteractionMode,
+  ResolvedConfigSlice,
+} from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import type { AgenticToolOutcome } from '../../terminal-task.js';
 
 /**
  * Tool identifier
@@ -36,7 +41,8 @@ export type ToolRunner = (params: {
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
-}) => Promise<void>;
+  interactionMode?: InteractionMode;
+}) => Promise<AgenticToolOutcome | undefined>;
 
 /**
  * Tool configuration
@@ -138,8 +144,9 @@ export class ToolRegistry {
       agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+      interactionMode?: InteractionMode;
     }
-  ): Promise<void> {
+  ): Promise<AgenticToolOutcome | undefined> {
     const config = ToolRegistry.get(tool);
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);

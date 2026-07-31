@@ -1,22 +1,7 @@
-/**
- * Idempotence guard around the executor's fail-safe terminal patches.
- *
- * Background: the executor has four fail-safe paths that try to mark a
- * task terminal — the top-level catch in `start()`, the SIGTERM/SIGINT
- * shutdown handler, the `uncaughtException` handler, and the
- * `unhandledRejection` handler. The SDK handler (`base-executor`) is the
- * authoritative writer for terminal state and stamps a richer payload
- * (timing, `git_state.sha_at_end`, normalized SDK responses). The
- * fail-safe paths should NOT redundantly emit a second `'patched'`
- * event for the same task.
- *
- * These tests pin the idempotence guard at the source rather than the
- * UI hook that consumes the events.
- */
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgorClient } from './services/feathers-client.js';
-import { TERMINAL_STATUSES, tryMarkTaskTerminal } from './terminal-task.js';
+import { finalizeTask, TERMINAL_STATUSES, tryFinalizeTask } from './terminal-task.js';
 
 type TaskShape = { task_id: string; status: TaskStatus };
 
@@ -64,7 +49,7 @@ describe('TERMINAL_STATUSES', () => {
   });
 });
 
-describe('tryMarkTaskTerminal', () => {
+describe('finalizeTask', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -72,7 +57,10 @@ describe('tryMarkTaskTerminal', () => {
   it('patches the task when it is still in-flight', async () => {
     const { client, tasks } = makeClient(TaskStatus.RUNNING);
 
-    await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
+    await finalizeTask(client, 't1', {
+      status: TaskStatus.FAILED,
+      taskPatch: { error_message: 'boom', model: 'test-model' },
+    });
 
     expect(tasks.get).toHaveBeenCalledWith('t1');
     expect(tasks.patch).toHaveBeenCalledTimes(1);
@@ -81,6 +69,7 @@ describe('tryMarkTaskTerminal', () => {
     expect(data).toMatchObject({
       status: TaskStatus.FAILED,
       error_message: 'boom',
+      model: 'test-model',
       completed_at: expect.any(String),
     });
   });
@@ -91,7 +80,10 @@ describe('tryMarkTaskTerminal', () => {
       const { client, tasks } = makeClient(current);
       vi.spyOn(console, 'log').mockImplementation(() => {});
 
-      await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
+      await finalizeTask(client, 't1', {
+        status: TaskStatus.FAILED,
+        taskPatch: { error_message: 'boom' },
+      });
 
       expect(tasks.get).toHaveBeenCalledWith('t1');
       expect(tasks.patch).not.toHaveBeenCalled();
@@ -101,7 +93,7 @@ describe('tryMarkTaskTerminal', () => {
   it('omits error_message when no message is supplied (e.g. SIGTERM stop)', async () => {
     const { client, tasks } = makeClient(TaskStatus.RUNNING);
 
-    await tryMarkTaskTerminal(client, 't1', TaskStatus.STOPPED);
+    await finalizeTask(client, 't1', { status: TaskStatus.STOPPED });
 
     expect(tasks.patch).toHaveBeenCalledTimes(1);
     const [, data] = tasks.patch.mock.calls[0];
@@ -112,7 +104,26 @@ describe('tryMarkTaskTerminal', () => {
     });
   });
 
-  it('swallows network/service errors so the process can still exit', async () => {
+  it('surfaces persistence errors on the cooperative completion path', async () => {
+    const tasks = {
+      get: vi.fn().mockRejectedValue(new Error('socket closed')),
+      patch: vi.fn(),
+    };
+    const client = {
+      service: () => tasks,
+    } as unknown as AgorClient;
+    await expect(
+      finalizeTask(client, 't1', {
+        status: TaskStatus.FAILED,
+        taskPatch: { error_message: 'boom' },
+      })
+    ).rejects.toThrow('socket closed');
+    expect(tasks.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe('tryFinalizeTask', () => {
+  it('swallows persistence errors in process fail-safe paths', async () => {
     const tasks = {
       get: vi.fn().mockRejectedValue(new Error('socket closed')),
       patch: vi.fn(),
@@ -123,8 +134,11 @@ describe('tryMarkTaskTerminal', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(
-      tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom')
-    ).resolves.toBeUndefined();
+      tryFinalizeTask(client, 't1', {
+        status: TaskStatus.FAILED,
+        taskPatch: { error_message: 'boom' },
+      })
+    ).resolves.toBe(false);
     expect(tasks.patch).not.toHaveBeenCalled();
   });
 });

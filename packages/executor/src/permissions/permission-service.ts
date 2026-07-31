@@ -25,6 +25,7 @@
 import { shortId } from '@agor/core/db';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
+import type { InteractionMode } from '../payload-types.js';
 
 export interface PermissionRequest {
   requestId: string;
@@ -45,6 +46,7 @@ export interface PermissionDecision {
   scope: PermissionScope;
   decidedBy: string; // userId
   timedOut?: boolean; // true when the decision was an automatic timeout (not an explicit deny)
+  unavailable?: boolean; // true when the launch surface has no response path
 }
 
 // Re-export for convenience
@@ -73,7 +75,8 @@ export class PermissionService {
    */
   constructor(
     private emitEvent: (event: string, data: unknown) => Promise<void>,
-    private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS
+    private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
+    private interactionMode: InteractionMode = 'interactive'
   ) {}
 
   /**
@@ -97,6 +100,31 @@ export class PermissionService {
     sessionId: SessionID,
     signal: AbortSignal
   ): Promise<PermissionDecision> {
+    if (signal.aborted) {
+      return Promise.resolve({
+        requestId,
+        taskId,
+        allow: false,
+        reason: 'Cancelled',
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'system',
+      });
+    }
+
+    if (this.interactionMode === 'unattended') {
+      return Promise.resolve({
+        requestId,
+        taskId,
+        allow: false,
+        reason: 'This execution surface cannot answer permission requests',
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'system',
+        unavailable: true,
+      });
+    }
+
     return new Promise((resolve) => {
       // Handle cancellation
       signal.addEventListener('abort', () => {

@@ -600,6 +600,7 @@ export async function setupQuery(
       mcpServerRepo: deps.mcpServerRepo,
       sessionMCPRepo: deps.sessionMCPRepo,
       mcpToolPermissions,
+      abortController: abortController ?? new AbortController(),
     });
   }
 

@@ -94,6 +94,54 @@ describe('AgorExecutor watchdog handoff', () => {
     );
   });
 
+  it('persists one normalized outcome after adapter cleanup and before stopping liveness', async () => {
+    const tasks = {
+      get: vi.fn().mockResolvedValue({ task_id: 'task-1', status: 'running' }),
+      patch: vi.fn().mockResolvedValue({ task_id: 'task-1', status: 'completed' }),
+    };
+    let settleAdapter!: (value: { status: 'completed'; taskPatch: { model: string } }) => void;
+    runtime.execute.mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleAdapter = resolve;
+      })
+    );
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: { service: () => typeof tasks };
+      executeTask(): Promise<void>;
+    };
+    executor.client = { service: () => tasks };
+
+    const execution = executor.executeTask();
+    await vi.waitFor(() => expect(runtime.execute).toHaveBeenCalledOnce());
+    expect(tasks.patch).not.toHaveBeenCalled();
+
+    settleAdapter({
+      status: 'completed',
+      taskPatch: { model: 'openai/test-model' },
+    });
+    await execution;
+
+    expect(runtime.stopHeartbeat).toHaveBeenCalledOnce();
+    expect(tasks.patch).toHaveBeenCalledWith('task-1', {
+      model: 'openai/test-model',
+      status: 'completed',
+      completed_at: expect.any(String),
+    });
+    expect(runtime.execute.mock.invocationCallOrder[0]).toBeLessThan(
+      tasks.patch.mock.invocationCallOrder[0]!
+    );
+    expect(tasks.patch.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.stopHeartbeat.mock.invocationCallOrder[0]!
+    );
+  });
+
   it('stops liveness and exits for containment when the daemon does not acknowledge', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

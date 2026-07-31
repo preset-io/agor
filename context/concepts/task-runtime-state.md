@@ -8,7 +8,9 @@
 
 `Task.status` is the durable execution lifecycle. Heartbeats report whether the
 executor wrapper can still communicate. Pulses report bounded SDK activity.
-Watchdogs interpret those signals. The daemon's termination coordinator owns
+Watchdogs interpret those signals. Agentic-tool adapters return a normalized
+outcome after their runtime path settles, and the top-level executor commits
+cooperative terminal state. The daemon's termination coordinator owns forced
 safe release.
 
 ```text
@@ -35,16 +37,19 @@ Prompt
               |                      |
               +----------+-----------+
                          |
-                  failure or Stop
-                         v
-                      STOPPING
-                         |
-              containment verified?
-                 +-------+--------+
-                yes               no
-                 |                |
-        STOPPED or FAILED    remain STOPPING
-                              and non-promptable
+             +-----------+-----------+
+             |                       |
+      adapter outcome        supervised failure
+             |                    or Stop
+             v                       v
+   executor finalizer             STOPPING
+             |                       |
+             v             containment verified?
+ COMPLETED / FAILED /         +------+------+
+ STOPPED / TIMED_OUT         yes            no
+                              |             |
+                     STOPPED or FAILED  remain STOPPING
+                                        and non-promptable
 ```
 
 These are deliberately separate signals. A fresh heartbeat proves wrapper
@@ -53,19 +58,19 @@ ownership. Neither replaces `Task.status`.
 
 ## Durable task lifecycle
 
-| State                 | Meaning                                                                | Normal owner of the next transition                               |
-| --------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `queued`              | The prompt is durable and waiting behind another turn.                 | Daemon queue processor                                            |
-| `created`             | The task exists but launch intent has not been persisted.              | Daemon launch path                                                |
-| `dispatching`         | Launch intent is durable; no executor has claimed the task.            | Authenticated task-scoped executor                                |
-| `running`             | The executor connected and owns the active turn.                       | Executor result path, permission flow, or termination coordinator |
-| `awaiting_permission` | SDK execution is paused for a permission decision.                     | Executor permission flow                                          |
-| `awaiting_input`      | Legacy historical state; new tasks do not enter it.                    | Legacy executor flow                                              |
-| `stopping`            | Termination is durably claimed; containment is not yet settled.        | Daemon termination coordinator                                    |
-| `completed`           | The SDK turn completed successfully.                                   | Terminal                                                          |
-| `failed`              | The turn or supervised containment failed.                             | Terminal                                                          |
-| `stopped`             | A user-requested stop settled, or restart recovery released an orphan. | Terminal                                                          |
-| `timed_out`           | A permission/input wait expired.                                       | Terminal                                                          |
+| State                 | Meaning                                                                | Normal owner of the next transition                             |
+| --------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `queued`              | The prompt is durable and waiting behind another turn.                 | Daemon queue processor                                          |
+| `created`             | The task exists but launch intent has not been persisted.              | Daemon launch path                                              |
+| `dispatching`         | Launch intent is durable; no executor has claimed the task.            | Authenticated task-scoped executor                              |
+| `running`             | The executor connected and owns the active turn.                       | Executor finalizer, permission flow, or termination coordinator |
+| `awaiting_permission` | SDK execution is paused for a permission decision.                     | Executor permission flow                                        |
+| `awaiting_input`      | Legacy historical state; new tasks do not enter it.                    | Legacy executor flow                                            |
+| `stopping`            | Termination is durably claimed; containment is not yet settled.        | Daemon termination coordinator                                  |
+| `completed`           | The SDK turn completed successfully.                                   | Terminal                                                        |
+| `failed`              | The turn or supervised containment failed.                             | Terminal                                                        |
+| `stopped`             | A user-requested stop settled, or restart recovery released an orphan. | Terminal                                                        |
+| `timed_out`           | A permission/input wait expired.                                       | Terminal                                                        |
 
 The important transitions are:
 
@@ -90,10 +95,12 @@ QUEUED -----> DISPATCHING <----- CREATED
 
 Terminal task state is immutable at the row-locked repository boundary. A late
 executor claim, result, or permission resume cannot revive or overwrite it.
-`dispatching`, `running`, `stopping`, and permission/input waits are
-executor-owned states. `created` and `queued` are excluded from that set; queued
-work does not block prompt reconciliation, while a created launch handoff can
-still block admission until it is dispatched or settled.
+`dispatching`, `running`, `stopping`, and permission/input waits all block
+admission. `stopping` is daemon-coordinator-owned; the others represent an
+executor handoff or active executor turn. `created` and `queued` are excluded
+from that set; queued work does not block prompt reconciliation, while a
+created launch handoff can still block admission until it is dispatched or
+settled.
 
 Queue materialization and draining are documented separately in
 [task-queueing.md](task-queueing.md).
@@ -126,10 +133,10 @@ The shared pulse vocabulary is:
 - `unknown_activity` — an unrecognized event that is retained as diagnostic
   evidence and fails open.
 
-Provider adapters own the translation from SDK-specific events into this
-vocabulary. The common task contract must not depend on raw provider event
-names. The SDK version manifest beside the mapping makes dependency upgrades
-an explicit mapping-review point.
+Agentic-tool runtime adapters own the translation from SDK-specific events into
+this vocabulary. The common task contract must not depend on raw agentic-tool
+event names. The SDK version manifest beside the mapping makes dependency
+upgrades an explicit mapping-review point.
 
 ## Two supervisors, two failure classes
 
@@ -192,6 +199,35 @@ yet wired into the SDK watchdog. Disabling executor heartbeat disables
 persisted pulse telemetry and the stale-wrapper backstop, but the executor-local
 watchdog can still make and report a direct health decision.
 
+## Cooperative completion and interaction waits
+
+Agentic-tool adapters return one normalized outcome containing the terminal
+status and non-lifecycle task data such as model, SDK response, context usage,
+error detail, and final git state. They do not patch terminal task state. The
+top-level executor accepts that outcome only after the adapter's SDK call and
+cooperative cleanup have settled, writes one guarded terminal patch, then stops
+its watchdog and heartbeat and exits. Process-level failure handlers use the
+same writer as a best-effort fallback.
+
+The shared SDK adapter waits for its asynchronous provider stop hook before it
+returns. Cursor waits for the active run and closes the agent; OpenCode waits
+for its stop request. If the abort belongs to daemon containment, adapters
+return no cooperative terminal outcome and the termination coordinator remains
+authoritative.
+
+Claude and Copilot permission decisions use the executor's outer abort
+controller. A denial, timeout, unavailable responder, or permission-flow error
+first aborts the agentic-tool query. Only after that query settles does the
+executor finalizer commit `failed` or `timed_out`. A `timed_out` task retains
+the historical lightweight Session projection without running normal
+completion callbacks or queue continuation.
+
+Executor launch payloads also declare whether the surface is `interactive` or
+`unattended`. Direct agent sessions are interactive. Scheduled and gateway
+sessions are unattended while those surfaces lack a matching permission
+response path, so permission requests fail immediately rather than waiting for
+a responder that cannot answer.
+
 ## Termination and safe release
 
 The termination coordinator is the single owner for executor-backed:
@@ -204,8 +240,8 @@ The termination coordinator is the single owner for executor-backed:
 It first atomically claims `stopping` with a durable `termination_request`.
 The request timestamp fences late or duplicate executor quiescence reports.
 The task-scoped executor receives the committed request over its authenticated
-socket, aborts the provider SDK, runs provider cleanup, and reports quiescence.
-The durable task patch/read covers reconnect and delivery races.
+socket, aborts the agentic-tool runtime, runs its cleanup, and reports
+quiescence. The durable task patch/read covers reconnect and delivery races.
 
 Containment coordination is durable but deliberately Task-specific. Daemon
 instance/boot identity is diagnostic only; the opaque claim token is the
@@ -280,7 +316,7 @@ Preserve these invariants:
 1. Heartbeat liveness and SDK progress remain separate.
 2. `Task.status` remains the durable lifecycle; pulses do not become a second
    state machine.
-3. Provider-specific event names stay inside provider adapters.
+3. Agentic-tool-specific event names stay inside agentic-tool runtime adapters.
 4. Terminal state remains immutable.
 5. `stopping` is released only through the termination coordinator.
 6. A session is not made promptable before required containment is verified.
@@ -294,22 +330,30 @@ Preserve these invariants:
     external effects.
 11. Daemon startup is non-destructive in shared PostgreSQL policy; queues and
     Session projection change only from authoritative Task outcomes.
+12. Agentic-tool adapters return normalized outcomes and do not write terminal
+    task state.
+13. Permission timeout commits terminal state only after the outer
+    agentic-tool query settles.
+14. An unattended launch cannot block on an interactive permission response.
 
 ## Code map
 
-| Responsibility                                         | Primary code                                                                                   |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Canonical types and status sets                        | `packages/core/src/types/task.ts`, `packages/core/src/types/session.ts`                        |
-| Task persistence and guarded transitions               | `packages/core/src/db/repositories/tasks.ts`                                                   |
-| Queue admission and launch                             | `apps/agor-daemon/src/register-routes.ts`                                                      |
-| Task service methods and projections                   | `apps/agor-daemon/src/services/tasks.ts`                                                       |
-| Executor claim, heartbeat, watchdog, and abort handoff | `packages/executor/src/index.ts`                                                               |
-| Heartbeat transport                                    | `packages/executor/src/executor-heartbeat.ts`                                                  |
-| SDK activity mapping and watchdog policy               | `packages/executor/src/sdk-watchdog.ts`, `packages/executor/src/sdk-handlers/`                 |
-| Runtime discovery and recovery                         | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                     |
-| Termination claims and containment settlement          | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts` |
-| Startup orphan reconciliation                          | `apps/agor-daemon/src/startup.ts`                                                              |
-| Full HA kill-point audit                               | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                   |
+| Responsibility                                                        | Primary code                                                                                           |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Canonical types and status sets                                       | `packages/core/src/types/task.ts`, `packages/core/src/types/session.ts`                                |
+| Task persistence and guarded transitions                              | `packages/core/src/db/repositories/tasks.ts`                                                           |
+| Queue admission and launch                                            | `apps/agor-daemon/src/register-routes.ts`                                                              |
+| Task service methods and projections                                  | `apps/agor-daemon/src/services/tasks.ts`                                                               |
+| Executor claim, cooperative finalization, watchdog, and abort handoff | `packages/executor/src/index.ts`, `packages/executor/src/terminal-task.ts`                             |
+| Heartbeat transport                                                   | `packages/executor/src/executor-heartbeat.ts`                                                          |
+| SDK activity mapping and watchdog policy                              | `packages/executor/src/sdk-watchdog.ts`, `packages/executor/src/sdk-handlers/`                         |
+| Agentic-tool outcome normalization                                    | `packages/executor/src/handlers/sdk/`                                                                  |
+| Interaction capability and permission waits                           | `packages/executor/src/permissions/permission-service.ts`, `apps/agor-daemon/src/register-services.ts` |
+| Runtime discovery and recovery                                        | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                             |
+| Stale-wrapper and dispatch supervision                                | `apps/agor-daemon/src/services/executor-heartbeat-supervisor.ts`                                       |
+| Termination claims and containment settlement                         | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts`         |
+| Startup orphan reconciliation                                         | `apps/agor-daemon/src/startup.ts`                                                                      |
+| Full HA kill-point audit                                              | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                           |
 
 ## Why the architecture has this shape
 

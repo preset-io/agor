@@ -27,11 +27,15 @@ import type {
 import { TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
-import type { ResolvedConfigSlice } from './payload-types.js';
+import type { InteractionMode, ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
-import { tryMarkTaskTerminal } from './terminal-task.js';
+import {
+  type AgenticToolOutcome,
+  finalizeTask as persistTaskOutcome,
+  tryFinalizeTask as tryPersistTaskOutcome,
+} from './terminal-task.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
@@ -56,6 +60,7 @@ export interface ExecutorConfig {
   messageSource?: MessageSource;
   /** Opaque, daemon-authorized context interpreted by the selected integration. */
   agenticToolContext?: Record<string, unknown>;
+  interactionMode?: InteractionMode;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
 }
@@ -74,16 +79,14 @@ export class AgorExecutor {
   }
 
   /**
-   * Bound wrapper around the standalone `tryMarkTaskTerminal` helper for
-   * the four fail-safe paths inside this class. Guards against a missing
-   * client (e.g. when the daemon connection never came up).
+   * Cooperative outcomes and process fail-safes converge on one writer.
+   * Normal callers reach it only after runtime quiescence; daemon-owned
+   * termination and enforced watchdog aborts deliberately bypass it.
    */
-  private async tryMarkTaskTerminal(
-    status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
-    errorMessage?: string
-  ): Promise<void> {
+  private async finalizeTask(outcome: AgenticToolOutcome, bestEffort = false): Promise<void> {
     if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
-    await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
+    const persist = bestEffort ? tryPersistTaskOutcome : persistTaskOutcome;
+    await persist(this.client, this.config.taskId, outcome);
   }
 
   /**
@@ -131,9 +134,14 @@ export class AgorExecutor {
         return;
       }
       console.error('[executor] Fatal error:', error);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        error instanceof Error ? error.message : String(error)
+      await this.finalizeTask(
+        {
+          status: TaskStatus.FAILED,
+          taskPatch: {
+            error_message: error instanceof Error ? error.message : String(error),
+          },
+        },
+        true
       );
       process.exit(1);
     }
@@ -283,6 +291,7 @@ export class AgorExecutor {
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
+    let outcome: AgenticToolOutcome | undefined;
     try {
       // Import and initialize tool registry
       const { ToolRegistry, initializeToolRegistry } = await import(
@@ -291,7 +300,7 @@ export class AgorExecutor {
       await initializeToolRegistry();
 
       // Execute using registry
-      await ToolRegistry.execute(this.config.tool, {
+      outcome = await ToolRegistry.execute(this.config.tool, {
         client: this.client,
         sessionId: this.config.sessionId as SessionID,
         taskId: this.config.taskId as TaskID,
@@ -302,7 +311,12 @@ export class AgorExecutor {
         agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
+        interactionMode: this.config.interactionMode,
       });
+
+      if (!outcome || isDaemonOwnedAbort(this.abortController)) return;
+      await this.finalizeTask(outcome);
+      if (outcome.error) throw outcome.error;
     } finally {
       this.watchdog?.stop();
       this.watchdog = null;
@@ -383,7 +397,7 @@ export class AgorExecutor {
 
       // The daemon's termination coordinator owns STOPPING → terminal. This
       // fallback only fires for an out-of-band signal while the task is active.
-      await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
+      await this.finalizeTask({ status: TaskStatus.STOPPED }, true);
 
       process.exit(0);
     };
@@ -393,18 +407,28 @@ export class AgorExecutor {
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
+      await this.finalizeTask(
+        {
+          status: TaskStatus.FAILED,
+          taskPatch: {
+            error_message: `uncaughtException: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        },
+        true
       );
       process.exit(1);
     });
 
     process.on('unhandledRejection', async (reason) => {
       console.error('[executor] Unhandled rejection:', reason);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`
+      await this.finalizeTask(
+        {
+          status: TaskStatus.FAILED,
+          taskPatch: {
+            error_message: `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`,
+          },
+        },
+        true
       );
       process.exit(1);
     });

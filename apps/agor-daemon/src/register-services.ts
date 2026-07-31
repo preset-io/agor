@@ -61,7 +61,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
+import { getSessionType, hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
@@ -1076,6 +1076,7 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        interactionMode: getSessionType(session) === 'agent' ? 'interactive' : 'unattended',
       },
     };
 

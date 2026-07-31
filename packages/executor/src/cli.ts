@@ -244,6 +244,7 @@ async function handlePromptPayload(
     daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
     agenticToolContext: payload.agenticToolContext,
+    interactionMode: payload.params.interactionMode,
     resolvedConfig: payload.resolvedConfig,
   });
 

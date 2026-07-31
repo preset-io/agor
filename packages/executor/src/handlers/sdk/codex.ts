@@ -8,6 +8,7 @@ import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { CodexTool } from '../../sdk-handlers/codex/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import type { AgenticToolOutcome } from '../../terminal-task.js';
 
 /**
  * Execute Codex task (Feathers/WebSocket architecture)
@@ -22,12 +23,12 @@ export async function executeCodexTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
-}): Promise<void> {
+}): Promise<AgenticToolOutcome | undefined> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
 
   // Execute using base helper with Codex-specific factory
-  await executeToolTask({
+  return executeToolTask({
     ...params,
     apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
     toolName: 'codex',

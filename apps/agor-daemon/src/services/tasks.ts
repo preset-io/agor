@@ -716,6 +716,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const isCompletionSideEffectTransition =
       isCompletionSideEffectTaskStatus(nextStatus) &&
       !isCompletionSideEffectTaskStatus(currentTask?.status);
+    const isTimeoutTransition =
+      nextStatus === TaskStatus.TIMED_OUT && currentTask?.status !== TaskStatus.TIMED_OUT;
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
@@ -732,6 +734,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (isAnalyticsTerminalTransition) {
       const task = result as Task;
       this.trackTaskCompleted(task);
+    }
+
+    // Permission timeouts now become terminal only after the executor has
+    // quiesced. Keep their existing lightweight Session projection here while
+    // deliberately preserving the historical no-callback/no-queue behavior.
+    if (isTimeoutTransition && !Array.isArray(result)) {
+      await this.app.service('sessions').patch(
+        (result as Task).session_id,
+        {
+          status: SessionStatus.TIMED_OUT,
+          ready_for_prompt: true,
+        },
+        params
+      );
     }
 
     // Run completion side effects only for statuses that historically completed
