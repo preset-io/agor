@@ -530,6 +530,16 @@ export interface UsersService extends AgorService<User> {
     params?: Params
   ): Promise<UserAvatarSettings>;
   syncAvatars(data?: UserAvatarSyncRequest, params?: Params): Promise<UserAvatarSyncResult>;
+  /**
+   * Resolve the calling user's primary teammate branch, or null when unset or
+   * no longer accessible.
+   */
+  getPrimaryTeammate(data?: unknown, params?: Params): Promise<Branch | null>;
+  /**
+   * Set the calling user's primary teammate to an accessible branch,
+   * recorded as an explicit user pick.
+   */
+  setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null>;
 }
 
 /**
@@ -893,7 +903,9 @@ function extendUsersService(client: AgorClient): void {
       'getGitEnvironment',
       'getAvatarSettings',
       'updateAvatarSettings',
-      'syncAvatars'
+      'syncAvatars',
+      'getPrimaryTeammate',
+      'setPrimaryTeammate'
     );
   }
   usersService[USERS_SERVICE_EXTENDED] = true;

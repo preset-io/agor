@@ -26,6 +26,7 @@ import {
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
+  RobotOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
   ThunderboltOutlined,
@@ -78,6 +79,7 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
 import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
@@ -176,6 +178,11 @@ const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keyword
     keywords: 'audio sound interface chime',
   },
   security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
+  'primary-teammate': {
+    title: 'Primary Assistant',
+    icon: <RobotOutlined />,
+    keywords: 'primary assistant teammate default agent',
+  },
   tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
   uploads: {
     title: 'Uploads',
@@ -281,7 +288,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ? rawActiveKey
         : 'profile';
     }
-    if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
+    if (
+      (rawActiveKey === 'tokens' ||
+        rawActiveKey === 'uploads' ||
+        rawActiveKey === 'primary-teammate') &&
+      isEditingOther
+    )
       return 'profile';
     if (rawActiveKey === 'access' && !isAdmin) return 'profile';
     return rawActiveKey;
@@ -976,12 +988,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           { key: 'profile', ...PANEL_META.profile },
           { key: 'preferences', ...PANEL_META.preferences },
           { key: 'security', ...PANEL_META.security },
-          // Personal API tokens and uploads are scoped to the signed-in caller,
-          // so they are meaningless (and misleading) when an admin edits another
-          // user.
+          // Primary Assistant, personal API tokens, and uploads are scoped to
+          // the signed-in caller, so they are meaningless (and misleading) when
+          // an admin edits another user.
           ...(isEditingOther
             ? []
             : [
+                { key: 'primary-teammate', ...PANEL_META['primary-teammate'] },
                 { key: 'tokens', ...PANEL_META.tokens },
                 { key: 'uploads', ...PANEL_META.uploads },
               ]),
@@ -1829,6 +1842,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return renderSecurityPanel();
       case 'preferences':
         return renderPreferencesPanel();
+      case 'primary-teammate':
+        return (
+          <>
+            <PanelHeader title={PANEL_META['primary-teammate'].title} />
+            <PrimaryTeammatePicker client={client} />
+          </>
+        );
       case 'env-vars':
         return renderEnvVarsPanel();
       case 'tokens':

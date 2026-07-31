@@ -736,6 +736,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'getAvatarSettings',
       'updateAvatarSettings',
       'syncAvatars',
+      'getPrimaryTeammate',
+      'setPrimaryTeammate',
     ],
   });
 
