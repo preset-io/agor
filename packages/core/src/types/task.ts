@@ -354,3 +354,9 @@ export interface Task {
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }
+
+/** Facts supplied when an executor successfully settles a task. */
+export interface TaskCompletionInput {
+  report?: Task['report'];
+  model?: string;
+}

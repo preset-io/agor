@@ -33,6 +33,7 @@ import type {
   Session,
   SessionUpdate,
   Task,
+  TaskCompletionInput,
 } from '@agor/core/types';
 import type {
   ExecuteTaskData,
@@ -154,15 +155,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
-  complete(
-    id: string,
-    data: {
-      report?: Task['report'];
-      model?: string;
-      git_state?: { sha_at_end?: string; commit_message?: string };
-    },
-    params?: FeathersParams
-  ): Promise<Task>;
+  complete(id: string, data: TaskCompletionInput, params?: FeathersParams): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;

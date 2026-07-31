@@ -51,6 +51,7 @@ import type {
   Session,
   SessionUpdate,
   Task,
+  TaskCompletionInput,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
@@ -172,6 +173,9 @@ export interface TasksClientHelpers {
    * and queues the task atomically).
    */
   run(taskId: string, options?: TaskRunOptions): Promise<Task>;
+
+  /** Settle a successfully cleaned-up executor task through the authenticated route. */
+  complete(taskId: string, data: TaskCompletionInput, params?: Params): Promise<Task>;
 }
 
 /**
@@ -398,16 +402,6 @@ export interface TasksService extends AgorService<Task> {
    * Returns array of created tasks with IDs
    */
   createMany(data: Partial<Task>[]): Promise<Task[]>;
-
-  /**
-   * Mark a task as completed
-   */
-  complete(id: string, data: { report?: unknown; model?: string }, params?: Params): Promise<Task>;
-
-  /**
-   * Mark a task as failed
-   */
-  fail(id: string, data: { error: string }, params?: Params): Promise<Task>;
 }
 
 /**
@@ -1049,6 +1043,10 @@ function extendTasksHelpers(client: AgorClient): void {
       const response = await client
         .service(`tasks/${taskId}/run`)
         .create(requestOptions as TaskRunRequest, params);
+      return response as Task;
+    },
+    complete: async (taskId: string, data: TaskCompletionInput, params?: Params) => {
+      const response = await client.service(`tasks/${taskId}/complete`).create(data, params);
       return response as Task;
     },
   };

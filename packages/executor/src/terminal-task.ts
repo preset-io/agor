@@ -15,16 +15,16 @@
  * import from the file that bootstraps the executor.
  */
 import { shortId } from '@agor/core/db';
-import type { Task } from '@agor/core/types';
+import type { Task, TaskCompletionInput } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 export async function completeTaskAfterRuntimeCleanup(
   client: AgorClient,
   taskId: string,
-  data: { model?: string }
+  data: TaskCompletionInput
 ): Promise<void> {
-  await client.service('tasks').complete(taskId, data);
+  await client.tasks.complete(taskId, data);
 }
 
 /**

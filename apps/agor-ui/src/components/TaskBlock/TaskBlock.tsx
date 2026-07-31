@@ -150,11 +150,9 @@ function isAgentChainMessage(message: Message): boolean {
       return false; // Show as regular message bubble
     }
 
-    // If it has tools BUT ALSO has text, treat as mixed message
-    // We'll split it: tools go to AgentChain, text goes to MessageBlock
-    if (hasTools && hasText) {
-      return false; // Let MessageBlock handle the splitting
-    }
+    // User-facing text wins over thinking/tool activity. MessageBlock already
+    // separates the visible response from its supporting activity.
+    if (hasText) return false;
 
     // Only tools/thinking, no text = pure agent chain
     if (hasTools || hasThinking) return true;

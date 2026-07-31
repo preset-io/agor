@@ -734,6 +734,20 @@ describe('createClient', () => {
 
       expect(createMock).toHaveBeenCalledWith({}, undefined);
     });
+
+    it('should expose tasks.complete through the authenticated completion route', async () => {
+      const client = createClient();
+      const routeService = client.service('tasks/task-456/complete');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+      const completion = { model: 'kimi-for-coding/k3' };
+
+      createMock.mockResolvedValue({ task_id: 'task-456', status: 'completed' });
+
+      const result = await client.tasks.complete('task-456', completion);
+
+      expect(createMock).toHaveBeenCalledWith(completion, undefined);
+      expect(result).toEqual({ task_id: 'task-456', status: 'completed' });
+    });
   });
 });
 

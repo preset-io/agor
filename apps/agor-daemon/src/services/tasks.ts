@@ -38,6 +38,7 @@ import type {
   Session,
   SessionID,
   Task,
+  TaskCompletionInput,
   TaskID,
   UUID,
 } from '@agor/core/types';
@@ -1402,11 +1403,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   /**
    * Custom method: Complete a task
    */
-  async complete(
-    id: string,
-    data: { report?: Task['report']; model?: string },
-    params?: TaskParams
-  ): Promise<Task> {
+  async complete(id: string, data: TaskCompletionInput, params?: TaskParams): Promise<Task> {
     // Terminal timing is computed atomically by TaskRepository.update().
     const completedTask = (await this.patch(
       id,
