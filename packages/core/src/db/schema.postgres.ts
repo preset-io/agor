@@ -1726,6 +1726,39 @@ export const boardComments = pgTable(
 );
 
 /**
+ * Upload metadata control plane. Bytes live in the configured storage adapter.
+ */
+export const uploads = pgTable(
+  'uploads',
+  {
+    upload_ref: text('upload_ref').primaryKey(),
+    tenant_id: text('tenant_id').notNull().default('default'),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
+    session_id: varchar('session_id', { length: 36 }).notNull(),
+    branch_id: varchar('branch_id', { length: 36 }).notNull(),
+    storage_key: text('storage_key').notNull(),
+    original_name: text('original_name').notNull(),
+    display_name: text('display_name').notNull(),
+    content_type: text('content_type').notNull(),
+    size_bytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    checksum: text('checksum'),
+    status: text('status', { enum: ['pending', 'active', 'deleting'] })
+      .notNull()
+      .default('active'),
+    provenance: text('provenance', {
+      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+    }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at'),
+  },
+  (table) => ({
+    tenantOwnerIdx: index('uploads_tenant_owner_idx').on(table.tenant_id, table.created_by),
+    tenantSessionIdx: index('uploads_tenant_session_idx').on(table.tenant_id, table.session_id),
+    expiryIdx: index('uploads_expiry_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Gateway Channels table - Registered messaging platform integrations
  *
  * Users create channels to connect messaging platforms (Slack, Discord, etc.)
@@ -2418,6 +2451,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
+export type UploadRow = typeof uploads.$inferSelect;
+export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
 export type KBNamespaceInsert = typeof kbNamespaces.$inferInsert;
 export type KBNamespaceAclRow = typeof kbNamespaceAcl.$inferSelect;

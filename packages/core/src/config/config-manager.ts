@@ -280,6 +280,7 @@ function validateConfig(config: AgorConfig): void {
     'telemetry',
     'onboarding',
     'multi_tenancy',
+    'uploads',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -321,6 +322,7 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
+  only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',
@@ -343,6 +345,30 @@ function validateConfig(config: AgorConfig): void {
     'trusted_host_header',
     'return_host_param',
   ]);
+  if (config.uploads !== undefined) {
+    if (
+      typeof config.uploads.location !== 'undefined' &&
+      (typeof config.uploads.location !== 'string' || config.uploads.location.trim() === '')
+    ) {
+      throw new Error("Config error: 'uploads.location' must be a non-empty path or s3:// URI");
+    }
+    if (
+      typeof config.uploads.max_age_days !== 'undefined' &&
+      (!Number.isSafeInteger(config.uploads.max_age_days) ||
+        config.uploads.max_age_days < 0 ||
+        !Number.isSafeInteger(config.uploads.max_age_days * 24 * 60 * 60 * 1000))
+    ) {
+      throw new Error("Config error: 'uploads.max_age_days' must be a non-negative integer");
+    }
+    if (
+      typeof config.uploads.max_file_size_mb !== 'undefined' &&
+      (!Number.isSafeInteger(config.uploads.max_file_size_mb) ||
+        config.uploads.max_file_size_mb <= 0 ||
+        !Number.isSafeInteger(config.uploads.max_file_size_mb * 1024 * 1024))
+    ) {
+      throw new Error("Config error: 'uploads.max_file_size_mb' must be a positive integer");
+    }
+  }
   only(config.database, 'database', ['dialect', 'sqlite', 'postgresql']);
   only(config.database?.sqlite, 'database.sqlite', ['path', 'walMode', 'busyTimeout']);
   only(config.database?.postgresql, 'database.postgresql', [
@@ -711,6 +737,11 @@ export function getDefaultConfig(): AgorConfig {
       mode: 'static',
       static_tenant_id: 'default',
     },
+    uploads: {
+      location: '~/.agor/uploads',
+      max_age_days: 30,
+      max_file_size_mb: 50,
+    },
   };
 }
 
@@ -783,6 +814,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },
     telemetry: { ...defaults.telemetry, ...config.telemetry },
+    uploads: { ...defaults.uploads, ...config.uploads },
   };
 
   const parts = key.split('.');

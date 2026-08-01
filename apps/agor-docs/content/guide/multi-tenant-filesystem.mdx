@@ -17,6 +17,11 @@ multi_tenancy:
   auth_claim: tenant_id
   filesystem_isolation_enabled: true
   tenants_base_folder: ~/.agor/tenants
+
+uploads:
+  location: ~/.agor/uploads
+  max_age_days: 30
+  max_file_size_mb: 50
 ```
 
 `filesystem_isolation_enabled` defaults to `false`, preserving the existing
@@ -36,14 +41,19 @@ With filesystem isolation enabled, Agor creates directories lazily:
     <tenant-id>/
       repos/
       worktrees/
-      uploads/
+  uploads/
+    <tenant-id>/
   agor.db
   config.yaml
 ```
 
-Repository clones, branch directories, direct uploads, and gateway attachment
-uploads are tenant-scoped. `agor.db` and `config.yaml` remain shared daemon
-state under `~/.agor`.
+Repository clones and branch directories use the tenant data root. Direct
+uploads and gateway attachments use the configured upload store and are
+partitioned by tenant. `max_age_days: 0` disables automatic expiry.
+
+`uploads.location` may also be an `s3://bucket/prefix` URI when the deployment
+provides the Cloud object-store adapter. Storage credentials come from the
+deployment credential chain or secret management, not from the URI.
 
 In the default single-tenant mode, paths remain unchanged:
 
@@ -64,8 +74,10 @@ an executor provisioning responsibility. A deployment may mount a stable home
 for the Agor user together with only the authorized branch paths, using
 read-only or read-write mounts according to its RBAC policy.
 
-Tenant filesystem isolation determines where daemon-managed data lives; it
-does not require mounting the entire tenant root into every executor.
+The daemon upload root is not mounted into executors. When an agent needs an
+upload, Agor streams an authorized copy into the executor-owned
+`.agor/session-staging/<session-id>/` directory inside the existing branch
+workspace mount.
 
 ## Migration
 
@@ -74,4 +86,3 @@ worktrees, or uploads. Configure it for a new multi-tenant deployment, or move
 existing tenant data into the target topology while the daemon is stopped.
 Database rows containing filesystem paths must agree with the resulting
 locations.
-

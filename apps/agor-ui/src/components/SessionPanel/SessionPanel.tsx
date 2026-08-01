@@ -1037,7 +1037,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
-      const attachmentPaths = uploadedFiles.map((file) => file.path);
+      const attachmentPaths = uploadedFiles.map((file) => file.ref);
       const composerStillOwnsSend =
         composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
         composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;

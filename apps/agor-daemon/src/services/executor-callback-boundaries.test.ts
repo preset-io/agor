@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { ArtifactsService } from './artifacts.js';
 import { GatewayChannelsService } from './gateway-channels.js';
@@ -67,13 +68,14 @@ describe('executor callback boundaries', () => {
     const service = new GatewayChannelsService(null as never);
 
     await expect(
-      service.uploadFileFromExecutor(
+      service.uploadFileStreamFromExecutor(
         {
           gatewayChannelId: '019fa073-fbd5-74a4-ad28-b37a6bf037ce',
           channel: 'C123',
-          fileBase64: 'aGVsbG8=',
           filename: 'hello.txt',
+          size: 5,
         },
+        Readable.from('hello'),
         {
           provider: 'rest',
           user: {
@@ -95,13 +97,14 @@ describe('executor callback boundaries', () => {
     vi.spyOn(service, 'get').mockResolvedValue({ ...gatewayChannel, ...patch } as never);
 
     await expect(
-      service.uploadFileFromExecutor(
+      service.uploadFileStreamFromExecutor(
         {
           gatewayChannelId: gatewayChannel.id,
           channel: 'C123',
-          fileBase64: 'aGk=',
           filename: 'hello.txt',
+          size: 2,
         },
+        Readable.from('hi'),
         executorParams
       )
     ).rejects.toThrow(message);
@@ -112,13 +115,14 @@ describe('executor callback boundaries', () => {
     vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
 
     await expect(
-      service.uploadFileFromExecutor(
+      service.uploadFileStreamFromExecutor(
         {
           gatewayChannelId: gatewayChannel.id,
           channel: 'C123',
-          fileBase64: Buffer.from('12345').toString('base64'),
           filename: 'large.txt',
+          size: 5,
         },
+        Readable.from('12345'),
         executorParams
       )
     ).rejects.toThrow('4-byte upload limit');
@@ -134,13 +138,14 @@ describe('executor callback boundaries', () => {
     vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
 
     await expect(
-      service.uploadFileFromExecutor(
+      service.uploadFileStreamFromExecutor(
         {
           gatewayChannelId: gatewayChannel.id,
           channel: 'C123',
-          fileBase64: 'aGk=',
           filename: 'hello.txt',
+          size: 2,
         },
+        Readable.from('hi'),
         {
           ...executorParams,
           authentication: {
@@ -149,23 +154,6 @@ describe('executor callback boundaries', () => {
         }
       )
     ).rejects.toThrow(/not scoped|branch does not match/);
-  });
-
-  it('rejects whitespace-bearing non-canonical Base64', async () => {
-    const service = new GatewayChannelsService(null as never);
-    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
-
-    await expect(
-      service.uploadFileFromExecutor(
-        {
-          gatewayChannelId: gatewayChannel.id,
-          channel: 'C123',
-          fileBase64: 'a Gk=',
-          filename: 'hello.txt',
-        },
-        executorParams
-      )
-    ).rejects.toThrow('valid Base64');
   });
 
   it('rejects artifact callbacks with the wrong scoped action', async () => {

@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { Transform } from 'node:stream';
 import {
   type AgorConfig,
   isTenantAgenticToolEnabled,
@@ -30,6 +31,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  UploadRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -64,7 +66,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
@@ -152,9 +154,11 @@ import {
 } from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
-  enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
+  MAX_UPLOAD_FILE_SIZE,
+  type StagedMulterFile,
 } from './utils/upload.js';
+import { getUploadStagingStore } from './utils/upload-staging.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 const DEBUG_AUTH_EVENTS =
@@ -1734,7 +1738,147 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const branchRepo = new BranchRepository(db);
-  const uploadMiddleware = createUploadMiddleware();
+  const uploadRepo = new UploadRepository(db);
+  const uploadMiddleware = createUploadMiddleware(getUploadStagingStore());
+
+  // Executor-only data plane for staged upload materialization. The scoped
+  // service token stays in the Authorization header (never URL/query/logs) and
+  // binds exactly one tenant + session + upload handle.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).get('/executor/uploads/:uploadRef/content', async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const result = await app.service('authentication').create({
+        strategy: 'jwt',
+        accessToken: authHeader.slice(7),
+      });
+      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const uploadRef = req.params.uploadRef;
+      if (
+        claims?.type !== 'service' ||
+        claims.executor_action !== 'upload.materialize' ||
+        claims.executor_upload_ref !== uploadRef ||
+        typeof claims.executor_session_id !== 'string' ||
+        typeof claims.executor_branch_id !== 'string' ||
+        typeof claims.tenant_id !== 'string'
+      ) {
+        return res.status(403).json({ error: 'Upload transfer capability denied' });
+      }
+      const store = getUploadStagingStore();
+      const owner = {
+        tenantId: claims.tenant_id as import('@agor/core/types').TenantID,
+        sessionId: claims.executor_session_id as SessionID,
+        branchId: claims.executor_branch_id as import('@agor/core/types').BranchID,
+        ref: uploadRef as import('@agor/core/types').UploadRef,
+      };
+      const metadata = await store.inspect(owner);
+      const stream = await store.read(owner);
+      res.status(200);
+      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Length', String(metadata.size));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      stream.once('error', (error) => {
+        if (!res.headersSent) res.status(500);
+        res.destroy(error as Error);
+      });
+      res.once('close', () =>
+        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+      );
+      stream.pipe(res);
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 404;
+      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
+      else res.destroy();
+    }
+  });
+
+  // Raw streaming executor -> daemon Slack upload data plane. Metadata is
+  // bounded in headers; file bytes never enter Feathers/JSON/base64.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).post('/executor/gateway/slack-file-upload', async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const result = await app.service('authentication').create({
+        strategy: 'jwt',
+        accessToken: authHeader.slice(7),
+      });
+      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const gatewayChannelId = String(req.headers['x-agor-gateway-channel-id'] ?? '');
+      const channel = String(req.headers['x-agor-slack-channel-id'] ?? '');
+      const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+      if (
+        claims?.type !== 'service' ||
+        claims.executor_action !== 'gateway.slack-file-upload' ||
+        claims.executor_gateway_channel_id !== gatewayChannelId ||
+        claims.executor_slack_channel_id !== channel ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > MAX_UPLOAD_FILE_SIZE
+      ) {
+        return res.status(403).json({ error: 'Slack upload capability denied' });
+      }
+      const authParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      const params = {
+        ...authParams,
+        tenant: resolveTenantContext(multiTenancy, {
+          params: authParams,
+          authPayload: result.authentication?.payload,
+          headers: req.headers,
+        }),
+      } as AuthenticatedParams;
+      let received = 0;
+      const limiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.byteLength;
+          if (received > size || received > MAX_UPLOAD_FILE_SIZE) {
+            callback(new Error('Slack upload stream exceeds its authorized size'));
+            return;
+          }
+          callback(null, chunk);
+        },
+        flush(callback) {
+          callback(received === size ? undefined : new Error('Slack upload stream size mismatch'));
+        },
+      });
+      req.pipe(limiter);
+      const uploaded = await (
+        app.service(
+          'gateway-channels'
+        ) as unknown as import('./services/gateway-channels.js').GatewayChannelsService
+      ).uploadFileStreamFromExecutor(
+        {
+          gatewayChannelId,
+          channel,
+          size,
+          filename: decodeURIComponent(String(req.headers['x-agor-filename'] ?? 'upload')),
+          ...(req.headers['x-agor-thread-ts']
+            ? { threadTs: String(req.headers['x-agor-thread-ts']) }
+            : {}),
+          ...(req.headers['x-agor-comment']
+            ? { comment: decodeURIComponent(String(req.headers['x-agor-comment'])) }
+            : {}),
+        },
+        limiter,
+        params
+      );
+      res.json({ uploaded });
+    } catch (error) {
+      const status = (error as { code?: number }).code ?? 400;
+      res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
+    }
+  });
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
@@ -1793,6 +1937,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
       }
 
+      if (!params.tenant?.tenant_id || !params.user?.user_id || !session.branch_id) {
+        return res.status(403).json({ error: 'Upload ownership context unavailable' });
+      }
+      req._uploadOwner = {
+        tenantId: params.tenant.tenant_id,
+        sessionId: session.session_id,
+        branchId: session.branch_id,
+        createdBy: params.user.user_id,
+      };
       next();
     } catch (error) {
       next(error);
@@ -1813,7 +1966,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const { sessionId } = req.params;
       const { notifyAgent, message } = req.body;
-      const files = req.files as Express.Multer.File[];
+      const files = req.files as StagedMulterFile[];
 
       if (DEBUG_UPLOAD) {
         console.log(
@@ -1837,11 +1990,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      const uploadedFiles = files.map((f) => ({
-        filename: f.filename,
-        path: f.path,
-        size: f.size,
-        mimeType: f.mimetype,
+      const uploadedFiles = files.map((staged) => ({
+        ref: staged.ref,
+        filename: staged.name,
+        size: staged.size,
+        mimeType: staged.mimeType,
+        createdAt: staged.createdAt,
+        expiresAt: staged.expiresAt,
       }));
 
       if (DEBUG_UPLOAD) {
@@ -1854,8 +2009,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
         try {
-          const filePaths = uploadedFiles.map((f) => f.path).join(', ');
-          const promptText = message.replace(/\{filepath\}/g, filePaths);
+          const handles = uploadedFiles.map((f) => f.ref).join(', ');
+          const promptText = message.replace(/\{filepath\}/g, handles);
 
           if (DEBUG_UPLOAD) {
             console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
@@ -1984,10 +2139,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authorizeUpload,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
-    // Defence-in-depth aggregate-size check using the actual file sizes that
-    // multer wrote — catches Content-Length-spoofing clients.
-    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    enforceParsedTotalUploadSize() as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
       if (DEBUG_UPLOAD) {
@@ -2008,6 +2159,192 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
+  );
+
+  type UploadHttpRequest = Request & {
+    feathers?: AuthenticatedParams;
+    params: { uploadRef: string };
+  };
+  const loadAuthorizedUpload = async (req: UploadHttpRequest) => {
+    const params = req.feathers as AuthenticatedParams;
+    const tenantId = params.tenant?.tenant_id;
+    const userId = params.user?.user_id as UUID | undefined;
+    if (!tenantId || !userId) throw new NotAuthenticated('Authentication required');
+    const ref = req.params.uploadRef as import('@agor/core/types').UploadRef;
+    const upload = await runWithTenantDatabaseScope(db, tenantId, () =>
+      uploadRepo.findOwned(tenantId, ref)
+    );
+    if (upload?.status !== 'active') throw new NotFound('Upload unavailable');
+    if (upload.expiresAt && Date.parse(upload.expiresAt) <= Date.now()) {
+      throw new NotFound('Upload unavailable');
+    }
+    if (upload.createdBy === userId) return upload;
+    if (!branchRbacEnabled) return upload;
+    const allowed = await runWithTenantDatabaseScope(db, tenantId, async () => {
+      const branch = await branchRepo.findById(upload.branchId);
+      if (!branch) return false;
+      if (await branchRepo.isOwner(branch.branch_id, userId)) return true;
+      return (await branchRepo.resolveUserPermission(branch, userId)) !== 'none';
+    });
+    if (
+      !allowed &&
+      !(superadminOpts.allowSuperadmin && hasMinimumRole(params.user?.role, ROLES.SUPERADMIN))
+    ) {
+      throw new NotFound('Upload unavailable');
+    }
+    return upload;
+  };
+
+  // User Settings: owner-scoped logical upload inventory.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).get(
+    '/uploads',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const params = req.feathers as AuthenticatedParams;
+        if (!params.tenant?.tenant_id || !params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required');
+        }
+        const tenantId = params.tenant.tenant_id;
+        const userId = params.user.user_id as UUID;
+        const uploads = await runWithTenantDatabaseScope(db, tenantId, () =>
+          uploadRepo.listByUploader(tenantId, userId)
+        );
+        res.json({ uploads });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).get(
+    '/uploads/:uploadRef/content',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const store = getUploadStagingStore();
+        const readOwner = {
+          tenantId: upload.tenantId,
+          sessionId: upload.sessionId,
+          branchId: upload.branchId,
+          ref: upload.ref,
+        };
+        let offset = 0;
+        let length: number | undefined;
+        const range = req.headers.range;
+        if (typeof range === 'string') {
+          const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+          if (!match) return res.status(416).end();
+          offset = Number(match[1]);
+          const end = match[2] ? Number(match[2]) : upload.size - 1;
+          if (
+            !Number.isSafeInteger(offset) ||
+            !Number.isSafeInteger(end) ||
+            end < offset ||
+            offset >= upload.size
+          ) {
+            return res.status(416).end();
+          }
+          length = Math.min(end, upload.size - 1) - offset + 1;
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${offset}-${offset + length - 1}/${upload.size}`);
+        }
+        const stream = await store.read({ ...readOwner, offset, ...(length ? { length } : {}) });
+        res.setHeader('Content-Type', upload.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Length', String(length ?? upload.size));
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        const safeInline = new Set([
+          'image/png',
+          'image/jpeg',
+          'image/gif',
+          'image/webp',
+          'application/pdf',
+        ]);
+        res.setHeader(
+          'Content-Disposition',
+          `${safeInline.has(upload.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`
+        );
+        stream.once('error', (error) => res.destroy(error as Error));
+        res.once('close', () =>
+          (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+        );
+        stream.pipe(res);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).delete(
+    '/uploads/:uploadRef',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const params = req.feathers as AuthenticatedParams;
+        if (
+          upload.createdBy !== params.user?.user_id &&
+          !hasMinimumRole(params.user?.role, ROLES.ADMIN)
+        ) {
+          throw new NotFound('Upload unavailable');
+        }
+        await getUploadStagingStore().delete({
+          tenantId: upload.tenantId,
+          sessionId: upload.sessionId,
+          branchId: upload.branchId,
+          ref: upload.ref,
+        });
+        await runWithTenantDatabaseScope(db, upload.tenantId, () =>
+          uploadRepo.remove(upload.tenantId, upload.ref)
+        );
+        res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on Feathers Application
+  (app as any).patch(
+    '/uploads/:uploadRef',
+    uploadAuthMiddleware,
+    async (req: UploadHttpRequest, res: Response, next: NextFunction) => {
+      try {
+        const upload = await loadAuthorizedUpload(req);
+        const params = req.feathers as AuthenticatedParams;
+        if (
+          upload.createdBy !== params.user?.user_id &&
+          !hasMinimumRole(params.user?.role, ROLES.ADMIN)
+        ) {
+          throw new NotFound('Upload unavailable');
+        }
+        const displayName =
+          typeof req.body?.displayName === 'string'
+            ? req.body.displayName
+                .split('')
+                .filter((character: string) => {
+                  const code = character.charCodeAt(0);
+                  return code >= 32 && code !== 127;
+                })
+                .join('')
+                .trim()
+                .slice(0, 200)
+            : '';
+        if (!displayName) throw new BadRequest('displayName is required');
+        const updated = await runWithTenantDatabaseScope(db, upload.tenantId, () =>
+          uploadRepo.rename(upload.tenantId, upload.ref, displayName)
+        );
+        res.json({ upload: updated });
+      } catch (error) {
+        next(error);
+      }
+    }
   );
 
   // ============================================================================

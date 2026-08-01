@@ -255,7 +255,7 @@ See **[Security](/security)** for the trust boundary on per-user secrets.
 
 ## 📎 File Uploads
 
-**Drop files into the agent's context with one click.** Uploads are stored under `~/.agor/uploads/`, and the agent receives that file path. A checked-by-default toggle auto-prompts the agent with a templated message referencing the path; the agent can copy or move the file into a branch if needed.
+**Drop files into the agent's context with one click.** Uploads enter temporary, session-scoped staging and the agent receives an expiring opaque handle. The agent can materialize the handle into its executor-owned session workspace when it needs a normal file path.
 
 Useful for handing screenshots, designs, error logs, or test fixtures to the agent without leaving the chat.
 

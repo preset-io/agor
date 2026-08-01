@@ -470,6 +470,13 @@
       "when": 1785200000000,
       "tag": "0067_drop_serialized_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1785452400000,
+      "tag": "0068_uploads",
+      "breakpoints": true
     }
   ]
 }

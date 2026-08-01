@@ -82,7 +82,6 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
                 : `${Date.now()}-${file.name}`,
             file,
             previewUrl: supported ? URL.createObjectURL(file) : undefined,
-            destination: 'branch' as const,
             status: 'pending' as const,
           };
         }),

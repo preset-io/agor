@@ -33,12 +33,14 @@ function migrationTenantTables(): string[] {
   const presetsMigration = readRepoFile(
     'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
   );
+  const uploadsMigration = readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql');
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
       [
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -50,6 +52,7 @@ function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

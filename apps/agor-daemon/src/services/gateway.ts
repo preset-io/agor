@@ -2429,7 +2429,7 @@ export class GatewayService {
       }
 
       // Download Slack image and text attachments server-side and fold their
-      // stored paths into the prompt so the agent can Read them. Gated on the
+      // opaque handles into the prompt for executor-owned materialization. Gated on the
       // channel's ingest_files flag — channels without the files:read scope
       // never attempt downloads. Any failure degrades to a short note; the
       // prompt is always delivered.
@@ -2443,16 +2443,21 @@ export class GatewayService {
           typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
         let failedAttachments = 0;
         if (botToken) {
-          const { paths, failed } = await ingestInboundAttachments({
+          const ingestion = await ingestInboundAttachments({
             files: data.files,
             botToken,
-            tenantId: getCurrentTenantId(),
+            tenantId: requireCurrentTenantId() as TenantID,
+            sessionId,
+            branchId: channel.target_branch_id,
+            createdBy: channel.agor_user_id,
           });
+          const uploadRefs = ingestion.uploads.map((upload) => upload.ref);
+          const { failed } = ingestion;
           failedAttachments = failed;
-          if (paths.length > 0) {
-            promptText = buildPromptWithAttachments(promptText, paths);
+          if (uploadRefs.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, uploadRefs);
             console.log(
-              `[gateway] Ingested ${paths.length} Slack attachment(s) for session ${shortId(sessionId)}`
+              `[gateway] Ingested ${uploadRefs.length} Slack attachment(s) for session ${shortId(sessionId)}`
             );
           }
         } else {

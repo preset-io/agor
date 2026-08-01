@@ -1,4 +1,4 @@
-import type { UploadDestination, UploadedFile } from '../FileUpload';
+import type { UploadedFile } from '../FileUpload';
 
 export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -52,7 +52,6 @@ export interface ComposerAttachment {
   id: string;
   file: File;
   previewUrl?: string;
-  destination: UploadDestination;
   status: ComposerAttachmentStatus;
   uploadedFile?: UploadedFile;
   error?: string;
@@ -108,12 +107,11 @@ function formatBytes(bytes: number): string {
 
 export function validateComposerFileIntake(
   files: File[],
-  currentAttachments: ComposerAttachment[] = [],
-  destination: UploadDestination = 'branch'
+  currentAttachments: ComposerAttachment[] = []
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
   const rejections: ComposerFileRejection[] = [];
   const currentUploadBatch = currentAttachments.filter(
-    (attachment) => attachment.destination === destination && attachment.status !== 'uploaded'
+    (attachment) => attachment.status !== 'uploaded'
   );
   let totalSize = currentUploadBatch.reduce((sum, attachment) => sum + attachment.file.size, 0);
   const candidates: File[] = [];
@@ -201,9 +199,10 @@ export function buildPromptWithAttachments(text: string, attachmentPaths: string
   const trimmedText = text.trim();
   if (attachmentPaths.length === 0) return trimmedText;
 
-  const attachmentBlock = ['Attached files:', ...attachmentPaths.map((path) => `- ${path}`)].join(
-    '\n'
-  );
+  const attachmentBlock = [
+    'Attached staged files (read with agor_upload_materialize; handles expire):',
+    ...attachmentPaths.map((uploadRef) => `- ${uploadRef}`),
+  ].join('\n');
   if (trimmedText.startsWith('/')) {
     return `${trimmedText}\n\n${attachmentBlock}`;
   }

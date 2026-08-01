@@ -1013,7 +1013,7 @@ function AppContent() {
             });
             const finalPrompt = buildPromptWithAttachments(
               config.initialPrompt ?? '',
-              uploaded.files.map((file) => file.path)
+              uploaded.files.map((file) => file.ref)
             );
             if (finalPrompt.trim()) {
               await handleSendPrompt(session.session_id, finalPrompt, config.permissionMode);

@@ -1,12 +1,19 @@
 /**
  * Upload middleware using multer for file upload handling
  *
- * Stores daemon-side uploads under ~/.agor/uploads/.
+ * Streams multipart ingress into the configured tenant/session staging store.
  */
 
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import { Transform } from 'node:stream';
 import { getTenantDataRoot } from '@agor/core/config';
+import type {
+  SessionID,
+  TenantID,
+  UploadMetadata,
+  UploadRef,
+  UploadStagingStore,
+} from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -73,7 +80,7 @@ export function validateUploadDestinationQuery(destination: unknown): void {
   if (LEGACY_IGNORED_UPLOAD_DESTINATIONS.has(value)) return;
   throw Object.assign(
     new Error(
-      `Upload destination '${value}' is no longer supported; uploads are stored in ~/.agor/uploads/`
+      `Upload destination '${value}' is no longer supported; uploads use session-scoped staging`
     ),
     { status: 400 }
   );
@@ -83,79 +90,90 @@ export function validateUploadDestinationQuery(destination: unknown): void {
  * Sanitize an original filename (path traversal, unsafe chars) and suffix it
  * with a timestamp so concurrent uploads of the same name never overwrite.
  */
-export function buildUploadFilename(originalname: string): string {
-  const basename = path.basename(originalname);
+export type StagedMulterFile = Express.Multer.File &
+  UploadMetadata & {
+    tenantId: TenantID;
+    sessionId: SessionID;
+    branchId: import('@agor/core/types').BranchID;
+  };
 
-  const sanitized = basename
-    .replace(/\.\./g, '_') // Remove path traversal attempts
-    .replace(/[/\\:*?"<>|]/g, '_') // Remove filesystem-unsafe chars (Windows + Unix)
-    .replace(/\.+$/g, '') // Remove trailing dots (Windows issue)
-    .substring(0, 200); // Limit length (leave room for timestamp)
-
-  const timestamp = Date.now();
-  const ext = path.extname(sanitized);
-  const nameWithoutExt = sanitized.slice(0, -ext.length || undefined);
-  return `${nameWithoutExt}_${timestamp}${ext}`;
-}
+type UploadRequest = Request & {
+  feathers?: { tenant?: { tenant_id?: TenantID } };
+  params: { sessionId?: SessionID };
+  _stagedUploadBytes?: number;
+  _uploadOwner?: import('@agor/core/types').UploadOwner;
+};
 
 /**
  * Create multer storage configuration
  */
-export function createUploadStorage() {
-  const storage = multer.diskStorage({
-    destination: async (req: Request, _file, cb) => {
-      try {
-        const { sessionId } = req.params;
-        // NOTE: req.body is NOT available yet during multer's destination callback
-        // because multer hasn't parsed the body fields yet. Legacy clients may
-        // still send destination as a query param; only the old no-op values are
-        // tolerated, and all uploads are written to ~/.agor/uploads/.
-        validateUploadDestinationQuery(req.query.destination);
-
-        if (DEBUG_UPLOAD) {
-          console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId || 'unknown'}`
-          );
-        }
-
-        const tenantId = (req as Request & { feathers?: { tenant?: { tenant_id?: string } } })
-          .feathers?.tenant?.tenant_id;
-        const dest = getUploadDirectory(tenantId);
-
-        if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
-
-        // Ensure directory exists
-        await fs.mkdir(dest, { recursive: true });
-        if (DEBUG_UPLOAD) console.log(`✅ [Upload Storage] Directory created/verified: ${dest}`);
-
-        cb(null, dest);
-      } catch (error) {
-        console.error('❌ [Upload Storage] Error:', error);
-        cb(error instanceof Error ? error : new Error(String(error)), '');
+export function createUploadStorage(store: UploadStagingStore): multer.StorageEngine {
+  return {
+    _handleFile(req: UploadRequest, file, callback) {
+      const owner = req._uploadOwner;
+      if (!owner) {
+        callback(new Error('Upload staging requires tenant and session context'));
+        return;
       }
+      const aggregateLimiter = new Transform({
+        transform(chunk: Buffer, _encoding, done) {
+          req._stagedUploadBytes = (req._stagedUploadBytes ?? 0) + chunk.byteLength;
+          if (req._stagedUploadBytes > MAX_UPLOAD_TOTAL_SIZE) {
+            done(
+              Object.assign(
+                new Error(`Combined upload size exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`),
+                { status: 413, code: 'LIMIT_TOTAL_FILE_SIZE' }
+              )
+            );
+            return;
+          }
+          done(null, chunk);
+        },
+      });
+      file.stream.pipe(aggregateLimiter);
+      void store
+        .stage({
+          owner,
+          name: file.originalname,
+          mimeType: file.mimetype,
+          provenance: 'browser',
+          body: aggregateLimiter,
+        })
+        .then((metadata: UploadMetadata) =>
+          callback(null, {
+            ...metadata,
+            tenantId: owner.tenantId,
+            sessionId: owner.sessionId,
+            branchId: owner.branchId,
+            filename: metadata.name,
+            size: metadata.size,
+          } as StagedMulterFile)
+        )
+        .catch(callback);
     },
-
-    filename: (_req, file, cb) => {
-      const uniqueFilename = buildUploadFilename(file.originalname);
-
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📝 [Upload Storage] Sanitized filename: ${file.originalname} → ${uniqueFilename}`
-        );
+    _removeFile(_req: UploadRequest, file: Partial<StagedMulterFile>, callback) {
+      if (!file.ref || !file.tenantId || !file.sessionId || !file.branchId) {
+        callback(null);
+        return;
       }
-
-      cb(null, uniqueFilename);
+      void store
+        .delete({
+          ref: file.ref as UploadRef,
+          tenantId: file.tenantId,
+          sessionId: file.sessionId,
+          branchId: file.branchId,
+        })
+        .then(() => callback(null))
+        .catch(callback);
     },
-  });
-
-  return storage;
+  };
 }
 
 /**
  * Create configured multer instance
  */
-export function createUploadMiddleware() {
-  const storage = createUploadStorage();
+export function createUploadMiddleware(store: UploadStagingStore) {
+  const storage = createUploadStorage(store);
 
   return multer({
     storage,
@@ -165,12 +183,7 @@ export function createUploadMiddleware() {
       fileSize: MAX_UPLOAD_FILE_SIZE,
       // Hard ceiling on number of files per request.
       files: MAX_UPLOAD_FILES_PER_REQUEST,
-      // NOTE: aggregate file-size enforcement is NOT a multer option —
-      // `fieldSize` only governs non-file form-field VALUES, not file payload.
-      // The cap on combined file size is enforced separately via
-      // `enforceTotalUploadSize()` (pre-multer Content-Length check) and
-      // `enforceParsedTotalUploadSize()` (post-multer `req.files` sum), both
-      // exported below.
+      // Aggregate bytes are counted by the streaming storage engine.
     },
     fileFilter: (_req, file, cb) => {
       // Match on the bare MIME (drop any `; charset=...` parameters).
@@ -197,8 +210,8 @@ export function createUploadMiddleware() {
 /**
  * Pre-multer middleware: reject any request whose declared `Content-Length`
  * exceeds {@link MAX_UPLOAD_TOTAL_SIZE} before we spend time streaming bytes
- * to disk. This is a cheap content-length check — clients can lie about it,
- * so it is paired with {@link enforceParsedTotalUploadSize} after multer runs.
+ * to staging. This cheap check is only an early-out; the streaming storage
+ * engine independently counts actual aggregate file bytes.
  *
  * Returns a 413 (Payload Too Large) and short-circuits the chain.
  */
@@ -214,36 +227,5 @@ export function enforceTotalUploadSize() {
       return;
     }
     next();
-  };
-}
-
-/**
- * Post-multer middleware: sum the actual sizes of files multer wrote to disk
- * and reject if the aggregate exceeds {@link MAX_UPLOAD_TOTAL_SIZE}. Cleans
- * up the on-disk files before responding so we don't leak bytes when a
- * Content-Length-spoofing client slipped past the pre-check.
- *
- * Returns a 413 (Payload Too Large).
- */
-export function enforceParsedTotalUploadSize() {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const files = (req as Request & { files?: Express.Multer.File[] }).files;
-    if (!Array.isArray(files) || files.length === 0) {
-      next();
-      return;
-    }
-    const total = files.reduce((sum, f) => sum + (f.size || 0), 0);
-    if (total <= MAX_UPLOAD_TOTAL_SIZE) {
-      next();
-      return;
-    }
-    // Best-effort cleanup of the rejected files. We don't await individual
-    // failures; an orphaned file is much less bad than a hung response.
-    await Promise.allSettled(files.map((f) => fs.unlink(f.path)));
-    res.status(413).json({
-      error: 'Upload too large',
-      details: `Combined file size ${total} exceeds ceiling ${MAX_UPLOAD_TOTAL_SIZE}`,
-      code: 'PAYLOAD_TOO_LARGE',
-    });
   };
 }

@@ -13,26 +13,28 @@ describe('composerAttachments', () => {
   it('builds a hidden file-path preamble without modifying visible text', () => {
     expect(
       buildPromptWithAttachments('Compare these charts', [
-        '.agor/uploads/chart-a.png',
-        '.agor/uploads/chart-b.png',
+        'upl_00000000-0000-4000-8000-000000000001',
+        'upl_00000000-0000-4000-8000-000000000002',
       ])
     ).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png\n- .agor/uploads/chart-b.png\n\nCompare these charts'
+      'Attached staged files (read with agor_upload_materialize; handles expire):\n- upl_00000000-0000-4000-8000-000000000001\n- upl_00000000-0000-4000-8000-000000000002\n\nCompare these charts'
     );
   });
 
   it('preserves slash commands at the start of the sent prompt', () => {
     expect(
-      buildPromptWithAttachments('/compact focus on this chart', ['.agor/uploads/chart.png'])
+      buildPromptWithAttachments('/compact focus on this chart', [
+        'upl_00000000-0000-4000-8000-000000000003',
+      ])
     ).toBe(`/compact focus on this chart
 
-Attached files:
-- .agor/uploads/chart.png`);
+Attached staged files (read with agor_upload_materialize; handles expire):
+- upl_00000000-0000-4000-8000-000000000003`);
   });
 
   it('supports attachment-only prompts', () => {
-    expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png'
+    expect(buildPromptWithAttachments('   ', ['upl_00000000-0000-4000-8000-000000000001'])).toBe(
+      'Attached staged files (read with agor_upload_materialize; handles expire):\n- upl_00000000-0000-4000-8000-000000000001'
     );
   });
 
@@ -169,7 +171,6 @@ Attached files:
     const currentAttachments = Array.from({ length: 9 }, (_, index) => ({
       id: `current-${index}`,
       file: new File(['x'], `current-${index}.txt`, { type: 'text/plain' }),
-      destination: 'branch' as const,
       status: 'pending' as const,
     }));
     const incomingFiles = [
@@ -205,7 +206,6 @@ Attached files:
         id: 'pending-png',
         file: png,
         previewUrl: 'blob:png',
-        destination: 'branch',
         status: 'pending',
       })
     ).toBe(false);
@@ -215,7 +215,6 @@ Attached files:
         id: 'failed-png',
         file: png,
         previewUrl: 'blob:png',
-        destination: 'branch',
         status: 'failed',
         error: 'Upload failed',
       })
@@ -225,7 +224,6 @@ Attached files:
       isBlockingComposerAttachment({
         id: 'pending-text',
         file: text,
-        destination: 'branch',
         status: 'pending',
       })
     ).toBe(false);

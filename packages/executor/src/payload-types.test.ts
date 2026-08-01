@@ -559,6 +559,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.knowledge.write');
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
+    expect(commands).toContain('branch.upload.materialize');
     expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
