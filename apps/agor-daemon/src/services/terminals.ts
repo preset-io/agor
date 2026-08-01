@@ -94,15 +94,6 @@ export function buildBranchShellTabName(branch: Pick<Branch, 'branch_id' | 'name
   return `${branch.name} · ${shortId(branch.branch_id)}`;
 }
 
-export function resolveBranchShellCwd(
-  branch: Pick<Branch, 'name' | 'path'>,
-  _finalUnixUser: string | null
-): string {
-  // Path existence/canonicalisation belongs to the executor identity. Passing
-  // the tenant-derived branch path also avoids name-keyed convenience symlinks.
-  return branch.path;
-}
-
 /**
  * Terminals service - manages Zellij sessions via executor
  *
@@ -466,7 +457,6 @@ export class TerminalsService {
               userId,
               action: 'create',
               tabName: branchTabName,
-              cwd: branch.path,
             });
             this.dispatchTabFocus(userId, {
               focusTabName: data.focusTabName,
@@ -561,8 +551,7 @@ export class TerminalsService {
         throw err;
       }
 
-      // Determine cwd and branch info
-      let cwd: string | undefined;
+      // Branch info for the tab; the shell always opens in the user's home.
       let branchName: string | undefined;
       let branchTabName: string | undefined;
 
@@ -580,7 +569,6 @@ export class TerminalsService {
       if (branch) {
         branchName = branch.name;
         branchTabName = buildBranchShellTabName(branch);
-        cwd = resolveBranchShellCwd(branch, finalUnixUser);
       }
 
       // Build Zellij session name
@@ -614,7 +602,6 @@ export class TerminalsService {
           params: {
             userId,
             sessionName,
-            ...(cwd ? { cwd } : {}),
             tabName: branchTabName,
             cols: data.cols || 160,
             rows: data.rows || 40,

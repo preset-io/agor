@@ -780,7 +780,7 @@ async function handleTabAction(action: string, tabName: string, cwd?: string): P
   }
 
   const actionArgs = ['new-tab', '--name', tabName];
-  if (cwd) actionArgs.push('--cwd', cwd);
+  actionArgs.push('--cwd', cwd || resolveEffectiveUserInfo().homedir);
   const result = await runZellij(sessionName, actionArgs);
   if (result.code !== 0) {
     throw new Error(`zellij new-tab failed with code ${result.code}: ${result.stderr}`);
