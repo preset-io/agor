@@ -54,7 +54,8 @@ described below. `max_age_days: 0` disables automatic expiry.
 `uploads.location` may also be an `s3://bucket/prefix` URI. The daemon uses the
 AWS SDK credential and region provider chains, so configure credentials through
 the workload identity (recommended), environment, or shared AWS configuration;
-never embed credentials in the URI.
+never embed credentials in the URI. Set the region through workload/shared
+configuration or `AWS_REGION`.
 
 S3 objects use the same logical tenant partition on every deployment:
 
@@ -70,7 +71,9 @@ tenant cleanup.
 
 The daemon needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the
 configured object prefix, plus `s3:ListBucket`, `s3:ListBucketMultipartUploads`,
-and `s3:AbortMultipartUpload` scoped to the bucket/prefix for cleanup.
+and `s3:AbortMultipartUpload` scoped to the bucket/prefix for cleanup. Where the
+policy language supports it, constrain bucket-level list permissions with an
+`s3:prefix` condition matching the configured prefix.
 
 In the default single-tenant mode, paths remain unchanged:
 

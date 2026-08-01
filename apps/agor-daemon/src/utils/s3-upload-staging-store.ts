@@ -26,6 +26,18 @@ import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_TTL_MS } from './upload-stagin
 const HANDLE_PATTERN = /^upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type S3Metadata = Record<string, string | undefined>;
+const PROVENANCE = new Set(['browser', 'gateway-slack', 'mcp-slack']);
+
+interface ParsedS3Metadata {
+  tenantId: string;
+  sessionId: string;
+  branchId: string;
+  name: string;
+  mimeType: string;
+  createdAt: string;
+  expiresAt: string | null;
+  provenance: UploadMetadata['provenance'];
+}
 
 function forbidden(message = 'Upload not found'): Error {
   return Object.assign(new Error(message), { status: 404 });
@@ -53,6 +65,45 @@ function isNotFound(error: unknown): boolean {
   const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
   const name = (error as { name?: string }).name;
   return status === 404 || name === 'NotFound' || name === 'NoSuchKey';
+}
+
+function parseStoredMetadata(metadata: S3Metadata): ParsedS3Metadata {
+  const createdAt = metadata['created-at'];
+  const expiresAt = metadata['expires-at'] || null;
+  if (
+    !metadata['tenant-id'] ||
+    !metadata['session-id'] ||
+    !metadata['branch-id'] ||
+    !metadata.name ||
+    !metadata['mime-type'] ||
+    !createdAt ||
+    !metadata.provenance ||
+    !PROVENANCE.has(metadata.provenance) ||
+    !Number.isFinite(Date.parse(createdAt)) ||
+    (expiresAt !== null && !Number.isFinite(Date.parse(expiresAt)))
+  ) {
+    throw forbidden();
+  }
+  return {
+    tenantId: metadata['tenant-id'],
+    sessionId: metadata['session-id'],
+    branchId: metadata['branch-id'],
+    name: metadata.name,
+    mimeType: metadata['mime-type'],
+    createdAt,
+    expiresAt,
+    provenance: metadata.provenance as UploadMetadata['provenance'],
+  };
+}
+
+function disposeBody(body: unknown): void {
+  const destroy = (body as { destroy?: () => void })?.destroy;
+  if (typeof destroy === 'function') {
+    destroy.call(body);
+    return;
+  }
+  const cancel = (body as { cancel?: () => Promise<void> })?.cancel;
+  if (typeof cancel === 'function') void cancel.call(body).catch(() => undefined);
 }
 
 export interface S3UploadLocation {
@@ -112,53 +163,42 @@ export class S3UploadStagingStore implements UploadStagingStore {
   }
 
   private logical(metadata: S3Metadata, size: number, ref: UploadRef): UploadMetadata {
-    if (
-      !metadata.name ||
-      !metadata['mime-type'] ||
-      !metadata['created-at'] ||
-      !metadata.provenance ||
-      !['browser', 'gateway-slack', 'mcp-slack'].includes(metadata.provenance) ||
-      !Number.isFinite(Date.parse(metadata['created-at']))
-    ) {
-      throw forbidden();
-    }
+    const parsed = parseStoredMetadata(metadata);
     return {
       ref,
-      name: metadata.name,
-      mimeType: metadata['mime-type'],
+      name: parsed.name,
+      mimeType: parsed.mimeType,
       size,
-      createdAt: metadata['created-at'],
-      expiresAt: metadata['expires-at'] || null,
-      provenance: metadata.provenance as UploadMetadata['provenance'],
+      createdAt: parsed.createdAt,
+      expiresAt: parsed.expiresAt,
+      provenance: parsed.provenance,
     };
   }
 
-  private authorize(input: UploadReadInput, metadata: S3Metadata): void {
+  private authorize(input: UploadReadInput, metadata: S3Metadata, allowExpired = false): void {
+    const parsed = parseStoredMetadata(metadata);
     if (
-      metadata['tenant-id'] !== input.tenantId ||
-      metadata['session-id'] !== input.sessionId ||
-      metadata['branch-id'] !== input.branchId
+      parsed.tenantId !== input.tenantId ||
+      parsed.sessionId !== input.sessionId ||
+      parsed.branchId !== input.branchId
     ) {
       throw forbidden();
     }
-    const expiresAt = metadata['expires-at'];
-    if (expiresAt) {
-      const expiry = Date.parse(expiresAt);
-      if (!Number.isFinite(expiry)) throw forbidden();
-      if (expiry <= Date.now()) {
+    if (!allowExpired && parsed.expiresAt) {
+      if (Date.parse(parsed.expiresAt) <= Date.now()) {
         throw Object.assign(new Error('Upload has expired'), { status: 410 });
       }
     }
   }
 
-  private async head(input: UploadReadInput) {
+  private async head(input: UploadReadInput, allowExpired = false) {
     const Key = this.key(input.tenantId, input.ref);
     try {
       const result = await this.client.send(
         new HeadObjectCommand({ Bucket: this.location.bucket, Key })
       );
       const metadata = result.Metadata ?? {};
-      this.authorize(input, metadata);
+      this.authorize(input, metadata, allowExpired);
       return { Key, metadata, size: result.ContentLength ?? 0 };
     } catch (error) {
       if (isNotFound(error)) throw forbidden();
@@ -255,7 +295,12 @@ export class S3UploadStagingStore implements UploadStagingStore {
       if (isNotFound(error)) throw forbidden();
       throw error;
     }
-    this.authorize(input, result.Metadata ?? {});
+    try {
+      this.authorize(input, result.Metadata ?? {});
+    } catch (error) {
+      disposeBody(result.Body);
+      throw error;
+    }
     if (!result.Body) throw forbidden();
     if (result.Body instanceof Readable) return result.Body;
     return Readable.fromWeb(result.Body.transformToWebStream() as never);
@@ -268,7 +313,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
   async delete(input: UploadReadInput): Promise<void> {
     let Key: string;
     try {
-      ({ Key } = await this.head(input));
+      ({ Key } = await this.head(input, true));
     } catch (error) {
       if ((error as { status?: number }).status === 404) return;
       throw error;
@@ -294,15 +339,17 @@ export class S3UploadStagingStore implements UploadStagingStore {
           const head = await this.client.send(
             new HeadObjectCommand({ Bucket: this.location.bucket, Key: object.Key })
           );
-          const metadata = head.Metadata ?? {};
-          const expiresAt = metadata['expires-at'];
-          const expiry = expiresAt ? Date.parse(expiresAt) : undefined;
+          let parsed: ParsedS3Metadata | undefined;
+          try {
+            parsed = parseStoredMetadata(head.Metadata ?? {});
+          } catch {
+            // Delete unreadable objects only after the stale threshold.
+          }
           const expired =
-            expiry !== undefined && Number.isFinite(expiry) && expiry <= now.getTime();
-          const corrupt =
-            metadata['tenant-id'] !== owner.tenantId ||
-            !metadata['session-id'] ||
-            (expiry !== undefined && !Number.isFinite(expiry));
+            parsed?.expiresAt !== null &&
+            parsed?.expiresAt !== undefined &&
+            Date.parse(parsed.expiresAt) <= now.getTime();
+          const corrupt = !parsed || parsed.tenantId !== owner.tenantId;
           const staleCorrupt =
             corrupt &&
             now.getTime() - (object.LastModified?.getTime() ?? now.getTime()) >=
