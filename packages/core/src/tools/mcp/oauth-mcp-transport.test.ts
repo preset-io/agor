@@ -18,6 +18,7 @@ import {
   discoverResourceMetadataUrl,
   getAuthCodeTokenCacheStats,
   isOAuthRequired,
+  parseTokenResponseBody,
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
@@ -664,5 +665,53 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     ).rejects.toThrow(/cacheKey is required/);
 
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseTokenResponseBody — token endpoints that don't return JSON
+// ---------------------------------------------------------------------------
+
+describe('parseTokenResponseBody', () => {
+  it('parses a standard RFC 6749 JSON response', () => {
+    const parsed = parseTokenResponseBody(
+      'application/json; charset=utf-8',
+      '{"access_token":"tok","token_type":"bearer","expires_in":3600}'
+    );
+    expect(parsed.access_token).toBe('tok');
+    expect(parsed.expires_in).toBe(3600);
+  });
+
+  it("parses GitHub's form-encoded token response", () => {
+    // GitHub /login/oauth/access_token replies form-encoded unless the request
+    // sends Accept: application/json. JSON.parse dies on the leading 'a'.
+    const parsed = parseTokenResponseBody(
+      'application/x-www-form-urlencoded; charset=utf-8',
+      'access_token=gho_exampletoken&scope=repo%2Cread%3Aorg&token_type=bearer'
+    );
+    expect(parsed.access_token).toBe('gho_exampletoken');
+    expect(parsed.token_type).toBe('bearer');
+    // URL-decoded, not left as %2C
+    expect(parsed.scope).toBe('repo,read:org');
+  });
+
+  it('falls back to form parsing when Content-Type is missing or wrong', () => {
+    const parsed = parseTokenResponseBody(null, 'access_token=tok&token_type=bearer');
+    expect(parsed.access_token).toBe('tok');
+  });
+
+  it('keeps a form-encoded expires_in as a coercible string', () => {
+    // OAuthRawTokenResponse declares number | string; the caller does Number().
+    const parsed = parseTokenResponseBody(
+      'application/x-www-form-urlencoded',
+      'access_token=tok&expires_in=28800'
+    );
+    expect(Number(parsed.expires_in)).toBe(28800);
+  });
+
+  it('throws a descriptive error for a genuinely unparseable body', () => {
+    expect(() =>
+      parseTokenResponseBody('text/html', '<html><body>502 Bad Gateway</body></html>')
+    ).toThrow(/unparseable response \(content-type: text\/html\)/);
   });
 });

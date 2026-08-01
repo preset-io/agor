@@ -630,6 +630,54 @@ async function openBrowser(url: string): Promise<void> {
   }
 }
 
+/** Trim a provider body for safe inclusion in an error message. */
+function truncateBody(body: string, max = 200): string {
+  const collapsed = body.replace(/\s+/g, ' ').trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
+}
+
+/**
+ * Parse an OAuth token-endpoint response body.
+ *
+ * RFC 6749 §5.1 mandates JSON, and we ask for it with `Accept: application/json`,
+ * but not every provider honors that — GitHub's classic token endpoint returns
+ * `application/x-www-form-urlencoded` by default. Parsing by Content-Type keeps
+ * the flow working against providers that ignore the header, and turns an opaque
+ * `Unexpected token 'a'` into an error that names the endpoint's actual shape.
+ *
+ * Form-encoded values arrive as strings; that is fine — OAuthRawTokenResponse
+ * already declares `expires_in?: number | string` and the caller coerces it.
+ */
+export function parseTokenResponseBody(
+  contentType: string | null | undefined,
+  body: string
+): OAuthRawTokenResponse {
+  const isFormEncoded = (contentType ?? '')
+    .toLowerCase()
+    .includes('application/x-www-form-urlencoded');
+
+  if (!isFormEncoded) {
+    try {
+      return JSON.parse(body) as OAuthRawTokenResponse;
+    } catch {
+      // Some providers send a form-encoded body under a wrong or missing
+      // Content-Type. Only surface the JSON failure if it isn't that.
+      if (!body.includes('=')) {
+        throw new Error(
+          `Token endpoint returned an unparseable response ` +
+            `(content-type: ${contentType || 'none'}): ${truncateBody(body)}`
+        );
+      }
+    }
+  }
+
+  const parsed: Record<string, string> = {};
+  for (const [key, value] of new URLSearchParams(body)) {
+    parsed[key] = value;
+  }
+  return parsed as OAuthRawTokenResponse;
+}
+
 /**
  * Exchange authorization code for access token
  */
@@ -652,6 +700,14 @@ async function exchangeCodeForToken(
   // fall back to body params for public clients or providers that don't support Basic auth.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
+    // RFC 6749 §5.1 mandates a JSON token response, but GitHub's
+    // /login/oauth/access_token returns application/x-www-form-urlencoded
+    // (`access_token=gho_...&scope=...`) unless the request asks for JSON.
+    // Without this header the parse below dies on the leading 'a' with
+    // `Unexpected token 'a', "access_tok"... is not valid JSON`.
+    // Registration (registerDynamicClient) and refresh (oauth-refresh.ts)
+    // already send this; the token exchange was the only path that didn't.
+    Accept: 'application/json',
   };
 
   if (clientSecret) {
@@ -683,7 +739,7 @@ async function exchangeCodeForToken(
     throw new Error(`Token exchange failed (${response.status}): ${errorText}`);
   }
 
-  const json = (await response.json()) as OAuthRawTokenResponse;
+  const json = parseTokenResponseBody(response.headers.get('content-type'), await response.text());
   console.log(
     '[MCP OAuth] Token response keys:',
     Object.keys(json),
