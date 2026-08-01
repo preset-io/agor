@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { shouldRegisterLocalHostOperations } from '../cell/availability.js';
-import type { CellHostOperations } from '../cell/host-operations.js';
+import { shouldRegisterLocalHostOperations } from '../host/availability.js';
+import type { DaemonHostOperations } from '../host/operations.js';
 import { createLocalActionsService } from './local-actions.js';
 
-function host(): CellHostOperations {
+function host(): DaemonHostOperations {
   const result = async () => ({ logs: ['ok'] });
   return {
     identity: {
@@ -23,7 +23,7 @@ function host(): CellHostOperations {
   };
 }
 
-describe('local Cell host operations service', () => {
+describe('local daemon host operations service', () => {
   it('validates and delegates identity operations with dry-run options', async () => {
     const operations = host();
     const service = createLocalActionsService(operations);

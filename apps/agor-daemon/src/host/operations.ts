@@ -4,7 +4,7 @@ export interface HostOperationOptions {
   dryRun: boolean;
   verbose: boolean;
 }
-export interface CellHostIdentityOperations {
+export interface DaemonHostIdentityOperations {
   createBranchGroup(input: HostOperationOptions & { branchId: string }): Promise<LocalActionResult>;
   deleteBranchGroup(input: HostOperationOptions & { group: string }): Promise<LocalActionResult>;
   addUserToGroup(
@@ -20,7 +20,7 @@ export interface CellHostIdentityOperations {
     input: HostOperationOptions & { username: string; deleteHome: boolean }
   ): Promise<LocalActionResult>;
 }
-export interface CellHostMaintenanceOperations {
+export interface DaemonHostMaintenanceOperations {
   createHomeSymlink(
     input: HostOperationOptions & {
       username: string;
@@ -39,7 +39,7 @@ export interface CellHostMaintenanceOperations {
     input: HostOperationOptions & { write: boolean }
   ): Promise<LocalActionResult>;
 }
-export interface CellHostOperations {
-  identity: CellHostIdentityOperations;
-  maintenance: CellHostMaintenanceOperations;
+export interface DaemonHostOperations {
+  identity: DaemonHostIdentityOperations;
+  maintenance: DaemonHostMaintenanceOperations;
 }

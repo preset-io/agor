@@ -11,7 +11,7 @@ import {
   removeFromBranchGroupAction,
   scrubGitRemotesAction,
 } from '@agor/core/local-actions';
-import type { CellHostOperations, HostOperationOptions } from '../host-operations.js';
+import type { DaemonHostOperations, HostOperationOptions } from '../operations.js';
 
 function invoke<T extends HostOperationOptions>(
   action: (input: T & { reporter: ReturnType<typeof createBufferedReporter> }) => Promise<void>,
@@ -20,7 +20,7 @@ function invoke<T extends HostOperationOptions>(
   const reporter = createBufferedReporter();
   return action({ ...input, reporter }).then(() => ({ logs: reporter.logs }));
 }
-export function createLocalCellHostOperations(): CellHostOperations {
+export function createLocalDaemonHostOperations(): DaemonHostOperations {
   return {
     identity: {
       createBranchGroup: (input) => invoke(createBranchGroupAction, input),

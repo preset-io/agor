@@ -33,7 +33,7 @@ const base = {
   symbol: 'readFileSync',
   local: 'read',
   operation: 'call:read@load#1',
-  owner: 'Cell operator',
+  owner: 'daemon host operator',
   boundary: 'local config',
   rationale: 'Reads operator configuration.',
   reviewTarget: null,
@@ -73,10 +73,10 @@ test('follows a workspace package and barrel into shared filesystem code', () =>
 });
 test('adapter placement is not trusted and path.posix remains pure', () => {
   const errors = run({
-    'apps/agor-daemon/src/index.ts': `import './cell/local/config.js'; import path from 'node:path'; path.posix.join('a','b');`,
-    'apps/agor-daemon/src/cell/local/config.ts': `import {readFileSync as read} from 'node:fs'; export function load(){return read('x')}`,
+    'apps/agor-daemon/src/index.ts': `import './host/local/config.js'; import path from 'node:path'; path.posix.join('a','b');`,
+    'apps/agor-daemon/src/host/local/config.ts': `import {readFileSync as read} from 'node:fs'; export function load(){return read('x')}`,
   });
-  assert.match(errors.join('\n'), /cell\/local\/config\.ts/);
+  assert.match(errors.join('\n'), /host\/local\/config\.ts/);
   assert.doesNotMatch(errors.join('\n'), /node:path/);
 });
 test('one exact declaration does not permit a second call', () => {
