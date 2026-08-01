@@ -41,19 +41,36 @@ With filesystem isolation enabled, Agor creates directories lazily:
     <tenant-id>/
       repos/
       worktrees/
-  uploads/
-    <tenant-id>/
+      uploads/
   agor.db
   config.yaml
 ```
 
-Repository clones and branch directories use the tenant data root. Direct
-uploads and gateway attachments use the configured upload store and are
-partitioned by tenant. `max_age_days: 0` disables automatic expiry.
+Repository clones, branch directories, and default local uploads use the same
+tenant data root. A custom local `uploads.location` uses
+`<location>/tenants/<tenant-id>/`; object storage uses the equivalent prefix
+described below. `max_age_days: 0` disables automatic expiry.
 
-`uploads.location` may also be an `s3://bucket/prefix` URI when the deployment
-provides the Cloud object-store adapter. Storage credentials come from the
-deployment credential chain or secret management, not from the URI.
+`uploads.location` may also be an `s3://bucket/prefix` URI. The daemon uses the
+AWS SDK credential and region provider chains, so configure credentials through
+the workload identity (recommended), environment, or shared AWS configuration;
+never embed credentials in the URI.
+
+S3 objects use the same logical tenant partition on every deployment:
+
+```text
+<prefix>/tenants/<tenant-id>/uploads/objects/<handle-shard>/<upload-ref>
+```
+
+Agor enforces tenant, branch, and session ownership before every read or delete.
+The bucket policy should grant the daemon only the configured prefix. Configure
+an S3 lifecycle rule to abort incomplete multipart uploads as defense in depth;
+Agor also aborts failed transfers and removes stale multipart uploads during
+tenant cleanup.
+
+The daemon needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the
+configured object prefix, plus `s3:ListBucket`, `s3:ListBucketMultipartUploads`,
+and `s3:AbortMultipartUpload` scoped to the bucket/prefix for cleanup.
 
 In the default single-tenant mode, paths remain unchanged:
 

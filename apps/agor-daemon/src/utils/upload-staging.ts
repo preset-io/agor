@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { type AgorConfig, expandHomePath } from '@agor/core/config';
 import type { UploadStagingStore } from '@agor/core/types';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
+import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
 import { configureUploadLimits, getUploadDirectory } from './upload.js';
 import { LocalUploadStagingStore } from './upload-staging-store.js';
 
@@ -32,14 +33,12 @@ export function configureUploadStagingStoreFromConfig(
   const maxBytes = (config.uploads?.max_file_size_mb ?? 50) * 1024 * 1024;
   configureUploadLimits(maxBytes);
   const ttlMs = (config.uploads?.max_age_days ?? 30) * 24 * 60 * 60 * 1000;
-  if (location.startsWith('s3://')) {
-    if (!s3Factory) {
-      throw new Error(
-        'uploads.location uses s3:// but no Cloud UploadStagingStore adapter is configured'
-      );
-    }
+  if (/^s3:/i.test(location)) {
     configureUploadStagingStore(() => {
-      const adapter = s3Factory(new URL(location), config);
+      const url = new URL(location);
+      const adapter = s3Factory
+        ? s3Factory(url, config)
+        : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
       return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
     });
     return;
@@ -50,7 +49,15 @@ export function configureUploadStagingStoreFromConfig(
     config.multi_tenancy?.mode === 'required_from_auth';
   configureUploadStagingStore(() => {
     const adapter = new LocalUploadStagingStore(
-      (tenantId) => (tenantSeparated ? join(expanded, tenantId) : expanded),
+      (tenantId) => {
+        if (!tenantSeparated) return expanded;
+        // The default follows the canonical tenant data root alongside
+        // repos/ and worktrees/. A separately mounted upload root retains the
+        // same root/tenants/<tenant> partition used by object storage.
+        return location === '~/.agor/uploads'
+          ? getUploadDirectory(tenantId)
+          : join(expanded, 'tenants', tenantId);
+      },
       { maxBytes, ttlMs }
     );
     return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
