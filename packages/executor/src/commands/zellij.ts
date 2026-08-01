@@ -212,7 +212,8 @@ export async function handleZellijAttach(
   payload: ZellijAttachPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { userId, sessionName, tabName, cols, rows } = payload.params;
+  const { userId, sessionName, tabName, cols, rows, shell } = payload.params;
+  const useZellij = shell !== 'bash';
   const effectiveUser = resolveEffectiveUserInfo();
   const cwd = payload.params.cwd || effectiveUser.homedir;
 
@@ -322,25 +323,23 @@ export async function handleZellijAttach(
     // paths here rather than asking the daemon to inspect another user's home.
     const actualHome = effectiveUser.homedir;
     const userShell = effectiveUser.shell;
-    console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
+    console.log(`[terminal.attach] User home: ${actualHome}, shell: ${userShell}`);
 
-    // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
-    // Zellij needs this for plugin data, session info, and session serialization
-    const zellijCacheDir = `${actualHome}/.cache/zellij`;
-    if (!fs.existsSync(zellijCacheDir)) {
-      console.log(`[zellij.attach] Creating Zellij cache directory: ${zellijCacheDir}`);
-      fs.mkdirSync(zellijCacheDir, { recursive: true });
+    // useradd -m creates home but not .cache/zellij, which zellij needs for
+    // plugin data, session info, and session serialization.
+    if (useZellij) {
+      const zellijCacheDir = `${actualHome}/.cache/zellij`;
+      if (!fs.existsSync(zellijCacheDir)) {
+        fs.mkdirSync(zellijCacheDir, { recursive: true });
+      }
     }
 
-    // Zellij will use ~/.config/zellij/config.kdl by default
-    // The docker entrypoint copies Agor's default config there on user creation
-    // Users can customize their config as needed
+    const spawnCmd = useZellij ? 'zellij' : userShell;
+    const spawnArgs = useZellij ? zellijArgs : ['-l'];
+    console.log(`[terminal.attach] Spawning PTY: ${spawnCmd} ${spawnArgs.join(' ')}`);
+    console.log(`[terminal.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
 
-    console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
-    console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
-
-    // Spawn PTY with zellij
-    const pty = nodePty.spawn('zellij', zellijArgs, {
+    const pty = nodePty.spawn(spawnCmd, spawnArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
@@ -413,6 +412,7 @@ export async function handleZellijAttach(
 
     // Listen for tab commands from the daemon when the user switches branches.
     socket.on('terminal:tab', async (data: { action: string; tabName: string; cwd?: string }) => {
+      if (!useZellij) return;
       try {
         await handleTabAction(data.action, data.tabName, data.cwd);
       } catch (err) {
@@ -441,6 +441,13 @@ export async function handleZellijAttach(
     // races an un-booted zellij. If it never comes up, surface terminal:error
     // instead of a false ready that would leave the browser hanging.
     void (async () => {
+      // A plain shell is usable the moment the PTY spawns — no multiplexer to
+      // boot and no tabs to create.
+      if (!useZellij) {
+        zellijAttached = true;
+        emitTerminalReady(socket, userId);
+        return;
+      }
       const attached = await waitForZellijReady(sessionName);
       if (!attached) {
         console.error('[zellij.attach] zellij session did not become ready');
