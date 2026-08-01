@@ -105,6 +105,34 @@ describe('SDKMessageProcessor system event suppression', () => {
     expect(event.sdkType).toBe('system');
     expect(event.sdkSubtype).toBe('mirror_error');
   });
+
+  it('handles permission_denied explicitly as a first-class error event (Issue #2063)', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'permission_denied',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_123',
+        agent_id: 'subagent_456',
+        decision_reason_type: 'rule',
+        decision_reason: 'auto-denied by security policy',
+        message: 'Command rm -rf / refused',
+        session_id: 's',
+        uuid: 'u-denied',
+      })
+    );
+
+    const denialEvents = events.filter((e) => e.type === 'permission_denied');
+    expect(denialEvents).toHaveLength(1);
+    const denialEvent = denialEvents[0] as Extract<ProcessedEvent, { type: 'permission_denied' }>;
+    expect(denialEvent.toolName).toBe('Bash');
+    expect(denialEvent.toolUseId).toBe('toolu_123');
+    expect(denialEvent.agentId).toBe('subagent_456');
+    expect(denialEvent.decisionReason).toBe('auto-denied by security policy');
+    expect(denialEvent.message).toBe('Command rm -rf / refused');
+    expect(denialEvent.is_error).toBe(true);
+    expect(denialEvent.summary).toContain("Permission denied for tool 'Bash'");
+  });
 });
 
 describe('SDKMessageProcessor rate_limit_event handling', () => {

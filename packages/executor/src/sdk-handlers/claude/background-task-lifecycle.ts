@@ -15,11 +15,16 @@ export interface ClaudeQueryLifecycleTransition {
  */
 export class ClaudeBackgroundTaskLifecycle {
   private readonly activeTaskIds = new Set<string>();
+  private readonly taskToolUseIds = new Map<string, string>();
 
   observe(message: SDKMessage): ClaudeQueryLifecycleTransition {
     if (message.type === 'system' && message.subtype === 'task_started') {
       const wasActive = this.activeTaskIds.has(message.task_id);
       this.activeTaskIds.add(message.task_id);
+      const toolUseId = (message as { task_id: string; tool_use_id?: string }).tool_use_id;
+      if (toolUseId) {
+        this.taskToolUseIds.set(message.task_id, toolUseId);
+      }
       return {
         resultDisposition: 'not-result',
         taskTransition: wasActive ? undefined : 'started',
@@ -46,6 +51,15 @@ export class ClaudeBackgroundTaskLifecycle {
       return this.settleTask(message.task_id);
     }
 
+    // A permission_denied event on a subagent or tool settles the corresponding
+    // active background task immediately.
+    if (message.type === 'system' && message.subtype === 'permission_denied') {
+      if (message.agent_id) {
+        return this.settleTask(message.agent_id);
+      }
+      return { resultDisposition: 'not-result' };
+    }
+
     if (message.type !== 'result') return { resultDisposition: 'not-result' };
 
     // Error results cannot reliably produce later settlement notifications.
@@ -59,6 +73,10 @@ export class ClaudeBackgroundTaskLifecycle {
 
   get activeTaskCount(): number {
     return this.activeTaskIds.size;
+  }
+
+  getParentToolUseId(taskId: string): string | undefined {
+    return this.taskToolUseIds.get(taskId);
   }
 
   clearActiveTasks(): number {

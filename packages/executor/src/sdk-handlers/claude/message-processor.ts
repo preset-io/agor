@@ -21,6 +21,7 @@ import type {
   SDKCompactBoundaryMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
+  SDKPermissionDeniedMessage,
   SDKResultMessage,
   SDKSystemMessage,
   SDKUserMessage,
@@ -148,12 +149,27 @@ export type ProcessedEvent =
       agentSessionId?: string;
     }
   | {
+      type: 'permission_denied';
+      toolName: string;
+      toolUseId: string;
+      message: string;
+      decisionReason?: string;
+      decisionReasonType?: string;
+      agentId?: string;
+      parentToolUseId?: string;
+      agentSessionId?: string;
+      summary: string;
+      rawMessage?: Record<string, unknown>;
+      is_error: true;
+    }
+  | {
       type: 'sdk_event';
       sdkType: string;
       sdkSubtype?: string;
       summary: string;
       rawMessage: Record<string, unknown>;
       agentSessionId?: string;
+      is_error?: boolean;
     }
   | {
       type: 'context_usage';
@@ -734,15 +750,45 @@ export class SDKMessageProcessor {
       return events;
     }
 
-    // Blacklist approach: surface unhandled system subtypes by default
     const subtype =
       ('subtype' in msg ? (msg as { subtype?: string }).subtype : undefined) || 'unknown';
 
+    if (subtype === 'permission_denied') {
+      const denialMsg = msg as unknown as SDKPermissionDeniedMessage;
+      const toolName = denialMsg.tool_name || 'unknown';
+      const toolUseId = denialMsg.tool_use_id || '';
+      const message = denialMsg.message || 'Tool call denied';
+      const decisionReason = denialMsg.decision_reason;
+      const decisionReasonType = denialMsg.decision_reason_type;
+      const agentId = denialMsg.agent_id;
+
+      console.warn(
+        `🚫 Permission denied for tool '${toolName}' (reason: ${decisionReason || decisionReasonType || 'unspecified'}): ${message}`
+      );
+
+      return [
+        {
+          type: 'permission_denied',
+          toolName,
+          toolUseId,
+          message,
+          decisionReason,
+          decisionReasonType,
+          agentId,
+          agentSessionId: this.state.capturedAgentSessionId,
+          summary: `Permission denied for tool '${toolName}': ${message}`,
+          rawMessage: msg as Record<string, unknown>,
+          is_error: true,
+        },
+      ];
+    }
+
+    // Blacklist approach: surface unhandled system subtypes by default
     if (shouldSuppressClaudeSystemEvent(msg as { subtype?: string; [key: string]: unknown })) {
       return [];
     }
 
-    console.log(`📡 Surfacing unhandled system subtype: ${subtype}`);
+    console.warn(`⚠️ [unhandled_sdk_system_subtype] subtype=${subtype}`);
     return [
       {
         type: 'sdk_event',
