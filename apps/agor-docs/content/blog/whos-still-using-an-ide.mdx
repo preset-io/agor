@@ -69,25 +69,29 @@ I rarely want to produce code directly anymore. I still want to read and judge i
 
 GitHub remains important for exactly this reason. It is where I read code, review design docs and pull requests, and collaborate with builders, an increasingly broad category that includes product managers and designers who now ship real code. The pull request may turn out to be a remarkably durable human form factor for the agent era: a bounded proposal, an explicit diff, a place for discussion, checks, provenance, and approval.
 
-That is also where the “IDEs are dead” argument gets too cute.
+GitHub may also become the place for the review before the review. I often want to inspect and redirect an agent’s work before asking a coworker to spend attention on it. That can happen in a draft PR, a PR against my own fork, or a temporary review artifact. Some teams will expose that process; others will keep the noisy agent loop private and open the upstream PR only when the work is coherent. GitHub supports either choice while keeping the diff, checks, discussion, and history in one familiar interface.
+
+This raises a more consequential question: am I reviewing the agent’s change, or am I the producer asking another engineer for approval? Increasingly, I think reviewing the agent is part of producing the change. A second human review should depend on risk and the value of shared context, not on a ritual that every diff needs another pair of eyes. Review is already becoming the bottleneck. Agents should not create ten times more code only for us to preserve every review ceremony unchanged.
+
+For consequential architecture, security boundaries, migrations, or unfamiliar parts of the system, another human still serves a different purpose. Review distributes knowledge and responsibility. The point is not to remove it. The point is to make it risk-based rather than ritual-based.
 
 I don’t think code surfaces disappear. I think they collapse toward verification surfaces.
 
 Less workshop, more microscope: something you pull out when the result smells wrong, not the desk you sit at all day. Trust still requires verification; “the agent said the tests pass” is not a verification strategy.
 
-## My Command Center Is Already Receding
+## The Layer Above the Editor
 
-Agor is my command center now: a board full of coding and AI sessions, usually ten to twenty active branches moving through different workflows. It helps me supervise complexity, see what is stuck, manage the maintainer chores nobody has fully automated, and avoid losing a week of work inside twelve terminal tabs named `bash`.
+Agor is my command center now: a board full of coding and AI sessions, usually ten to twenty active branches moving through build, review, verification, and release. Parallel work is not an edge case. It is the assumption.
 
-But even the board is beginning to recede.
+That changes the shape of the interface. I am not navigating files inside one workstream. I am hopping between sessions, checking intent here, progress there, a question on one branch, and a result ready for judgment on another. The primary object is no longer the open file. It is the workstream.
 
-More often, I talk directly with persistent AI teammates. Sometimes I do that in Agor; sometimes through Slack. I ask for an investigation, push back on a decision, or check what needs my attention. The board is still essential, not because I want to operate every agent, but because delegation creates a supervision problem. I need a shared place to see the work that is underway, the context behind it, and the edges where automation still breaks.
+It is also not just me talking to a collection of agents. Agents can investigate, delegate work to other agents, collect the findings, and bring back a recommendation. The coordination does not always terminate at the human. What I need is a place to see what is building, reviewing, blocked, waiting, or ready for me, without manually operating every step.
 
-The destination is probably not a better dashboard covered in more blinking agents. People don’t want a new air-traffic-control job. The destination is assistants with enough purpose, memory, and access to do useful work, plus a surface that gets quiet when things are healthy and becomes legible when human judgment is required.
+And it is multiplayer. Branches, sessions, prompts, decisions, and artifacts are shared team objects, not private editor history trapped on one laptop. What one builder learns can become part of how the team works. Product managers and designers can participate in the same workstreams without pretending to be traditional IDE users.
 
-That surface may include a code editor. It may include a debugger, a graph, a terminal, a diff, a board, or a pull request. But none of those has to remain *home*.
+This does not mean people want a new air-traffic-control job. The workspace should get quiet when things are healthy and become legible when human judgment is needed. Sometimes I supervise from the board. Sometimes I talk to the same persistent teammate through Slack. That is not the workspace receding so much as the workspace escaping its own UI.
 
-Home is increasingly the conversation and the orchestration around it.
+Agor does not replace the IDE by becoming a better editor. It starts where the editor’s model runs out: many branches, persistent teammates, shared context, and work that continues when nobody is looking at a file.
 
 So: who’s still using an IDE!?
 
