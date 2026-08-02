@@ -1,6 +1,6 @@
 ---
-title: 'Who’s Still Using an IDE!?'
-description: 'As agents take over code production, the IDE is collapsing from workshop into verification surface. What, exactly, should remain?'
+title: 'The IDE Is the Wrong Form Factor'
+description: 'The IDE was built around one human manipulating one codebase. Agentic software work now happens across parallel workstreams, conversations, and review surfaces.'
 author: 'Maxime Beauchemin'
 date: 2026-08-01
 image: '/images/blog/whos-still-using-an-ide.png'
@@ -44,12 +44,12 @@ A provocation deserves better than a straw man, so let’s take the IDE apart an
 - **Autocomplete.** It died of success. Finishing the next line mattered when I was the typist. Now the agent types the file.
 - **Refactoring.** The affordance survives; the UI doesn’t. A language-server rename still beats an agent freestyling regexes across forty files. I want the agent to invoke it.
 - **Search and terminals.** I still grep all day; I’m just no longer holding `grep`. The agent operates the shell, reads logs, and follows call sites.
-- **Debugging.** The honest survivor. Interactive stepping, live state, and zero-latency poking still win for some bugs. Agents instrument and bisect, but direct manipulation earns its keep here.
+- **Debugging.** This is where I’m supposed to concede that the IDE still wins. But honestly, I haven’t stepped through a debugger in years. Agents reproduce failures, add instrumentation, inspect state, read logs, and bisect changes. Interactive debugging surely matters in some domains, but it is not evidence that the IDE should remain home for everyone else.
 - **Tests.** Agents write and run them. Humans decide what deserves testing and what “correct” means.
 - **Version control and diffs.** Agents produce the diff. Humans read it, often on GitHub rather than in an editor gutter.
 - **Project context and visualization.** Context now includes code, docs, history, conventions, decisions, credentials, and access. Spatial reasoning moved from “where is this function?” to “where is this workstream?”
 
-Most of these capabilities didn’t get worse. They got absorbed. The agent uses the language server, runs the tests, and holds the grep. What remains for direct manipulation is a much shorter list: visual inspection, precise low-latency intervention, interactive debugging, and verification.
+The capabilities survived. Their old container didn’t. The agent uses the language server, runs the tests, and holds the grep. None of this requires me to live inside an editor organized around files, tabs, and one active checkout.
 
 Even code review is moving. Here’s the provocative version: agents are already better than humans at a lot of coding, and at a surprising amount of code review. They don’t get tired on file 37. They can trace boring consistency problems across a repository. They will actually read the migration and the cleanup path.
 
