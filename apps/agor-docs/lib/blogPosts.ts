@@ -11,7 +11,7 @@ export interface BlogPost {
 export const blogPosts: BlogPost[] = [
   {
     slug: 'whos-still-using-an-ide',
-    title: 'The IDE Is the Wrong Form Factor',
+    title: 'Is the IDE Obsolete?',
     description:
       'The IDE was built around one human manipulating one codebase. Agentic software work now happens across parallel workstreams, conversations, and review surfaces.',
     author: 'Maxime Beauchemin',
