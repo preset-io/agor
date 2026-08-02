@@ -155,7 +155,9 @@ if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-f
   # for this command so the repository's normal development linking is unchanged.
   # Dependencies were already installed (including native modules) when the
   # image was built, so do not rerun lifecycle scripts during this copy step.
-  pnpm --config.inject-workspace-packages=true --filter @agor/executor deploy \
+  PNPM_STORE_DIR="$(pnpm store path)"
+  pnpm --store-dir "$PNPM_STORE_DIR" --config.inject-workspace-packages=true \
+    --filter @agor/executor deploy \
     --prod --offline --ignore-scripts /tmp/agor-executor-runtime
   chmod -R a+rX /tmp/agor-executor-runtime
   export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
