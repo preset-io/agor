@@ -299,6 +299,10 @@ export function renderTemplate(
  *   (for health checks/URLs that must reach the host from inside a container).
  *   Frozen at branch creation time. Empty string if not resolved.
  * - {{custom.*}} - Any custom context from branch.custom_context
+ * - {{env.*}} - Facts reported by a lifecycle command's stdout (AGOR_FACT
+ *   key=value), e.g. `{{env.url}}` for a remote environment whose address only
+ *   exists after it starts. Empty object until the environment has run a
+ *   command that emitted facts. See `BranchEnvironmentInstance.facts`.
  *
  * Backwards-compat: also exposes the same scoped entity under `{{worktree.*}}`
  * so existing `.agor.yml` env-template configurations using the v0.19 names
@@ -315,6 +319,12 @@ export function buildBranchContext(branch: {
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
+  /**
+   * Facts reported by a prior lifecycle command (see
+   * `BranchEnvironmentInstance.facts`). Exposed as `{{env.*}}`. Undefined
+   * before the environment has started or when no facts were emitted.
+   */
+  env_facts?: Record<string, string>;
 }): Record<string, unknown> {
   const branchEntity = {
     unique_id: branch.branch_unique_id,
@@ -335,6 +345,10 @@ export function buildBranchContext(branch: {
     host: {
       ip_address: branch.host_ip_address || '',
     },
+    // Post-start facts reported by a lifecycle command (accessible as
+    // {{env.key}}). Empty object when the environment has not reported any,
+    // so referencing `{{env.url}}` renders to '' rather than throwing.
+    env: branch.env_facts || {},
     // User-defined custom context (accessible as {{custom.key}})
     custom: branch.custom_context || {},
   };

@@ -919,6 +919,9 @@ async function renderEnvironmentTemplates(
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,
+        // {{env.*}} facts (Codespace URL, etc.) when re-rendering a running
+        // environment; undefined at creation so {{env.url}} renders ''.
+        facts: branch.environment_instance?.facts,
       },
       branch.environment_variant
     );

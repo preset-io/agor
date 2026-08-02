@@ -527,6 +527,25 @@ export interface BranchEnvironmentInstance {
     message?: string;
     output?: string;
   };
+
+  /**
+   * Facts reported back by a lifecycle command's stdout.
+   *
+   * A remote environment's address (and other post-start metadata) does not
+   * exist until it starts — a Codespace's hostname, a k8s pod's ingress, a
+   * preview deploy's URL are all invented by the backend at creation time.
+   * The `app`/`stop`/`logs`/`health` templates cannot reference something that
+   * does not yet exist, so a lifecycle command emits `AGOR_FACT <key>=<value>`
+   * lines on stdout and the executor parses them into this map.
+   *
+   * These become available to Handlebars templates as `{{env.<key>}}` (see
+   * `buildBranchContext`). The `url` key is reserved: it populates
+   * `access_urls` after start, which is what surfaces `app: "{{env.url}}"`.
+   *
+   * Persisted (a cache of the last command's report), not authoritative — a
+   * later command may refresh or clear it. Cleared on nuke.
+   */
+  facts?: Record<string, string>;
 }
 
 export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
@@ -535,6 +554,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_error',
   'last_command',
   'logs',
+  'facts',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];

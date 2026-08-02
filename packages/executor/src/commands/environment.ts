@@ -20,6 +20,36 @@ import type { CommandOptions } from './index.js';
 
 const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
 
+/**
+ * Parse `AGOR_FACT <key>=<value>` lines emitted by a lifecycle command.
+ *
+ * A remote environment's address (and other post-start metadata) only exists
+ * after the backend creates it — a Codespace's hostname, a k8s pod's ingress,
+ * a preview deploy's URL. The lifecycle command reports these back by printing
+ * `AGOR_FACT url=https://…` (etc.) on stdout; we collect them into a map that
+ * is persisted onto the environment instance and re-exposed to templates as
+ * `{{env.<key>}}`. See `BranchEnvironmentInstance.facts`.
+ *
+ * - Keys are restricted to [A-Za-z0-9_] so a fact key is always a safe
+ *   Handlebars identifier.
+ * - The value is the remainder of the line, trimmed.
+ * - Later lines override earlier ones (last write wins).
+ *
+ * Parsed from the FULL output, before line-count truncation, so facts printed
+ * ahead of a long build tail are never dropped.
+ */
+export function parseAgorFacts(output: string | undefined): Record<string, string> {
+  const facts: Record<string, string> = {};
+  if (!output) return facts;
+  for (const line of output.split('\n')) {
+    const match = line.match(/^\s*AGOR_FACT\s+([A-Za-z0-9_]+)=(.*)$/);
+    if (match) {
+      facts[match[1]] = match[2].trim();
+    }
+  }
+  return facts;
+}
+
 function truncateOutput(outputChunks: string[]): string | undefined {
   const fullOutput = outputChunks.join('');
   const lines = fullOutput.split('\n');
@@ -88,7 +118,7 @@ async function runShellCommand(options: {
   cwd: string;
   env?: Record<string, string>;
   commandType: 'start' | 'stop' | 'nuke' | 'logs';
-}): Promise<{ pid?: number; output?: string }> {
+}): Promise<{ pid?: number; output?: string; facts: Record<string, string> }> {
   const { command, cwd, env, commandType } = options;
   assertEnvCommandAllowed(command, commandType);
 
@@ -125,7 +155,10 @@ async function runShellCommand(options: {
     });
   });
 
-  return { pid: child.pid, output: truncateOutput(outputChunks) };
+  // Parse facts from the FULL (untruncated) output so an AGOR_FACT printed
+  // before a long build tail is not lost to line-count truncation.
+  const facts = parseAgorFacts(outputChunks.join(''));
+  return { pid: child.pid, output: truncateOutput(outputChunks), facts };
 }
 
 export async function handleEnvironmentLogs(
@@ -239,15 +272,20 @@ export async function handleEnvironmentLifecycle(
         commandType: 'start',
       });
 
+      // `url` is the reserved fact key for the app's reachable address. Prefer
+      // it over the frozen appUrl: when the app template is `{{env.url}}` the
+      // frozen value is '' (the address did not exist at branch-creation render
+      // time), and the real URL only arrives now, via the start command's facts.
+      const appUrl = result.facts.url ?? payload.params.appUrl;
+
       await updateBranchEnvironment(client, branchId, {
         process: {
           ...(branch.environment_instance?.process ?? {}),
           pid: result.pid,
           started_at: startedAt,
         },
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
+        ...(appUrl ? { access_urls: [{ name: 'App', url: appUrl }] } : {}),
+        ...(Object.keys(result.facts).length > 0 ? { facts: result.facts } : {}),
         last_command: {
           action: payload.params.action,
           status: 'succeeded',
@@ -274,6 +312,10 @@ export async function handleEnvironmentLifecycle(
       // This update crosses the Feathers/WebSocket JSON boundary; use null
       // as an explicit clear sentinel because JSON drops undefined values.
       process: null,
+      // Nuke destroys the environment, so any address it reported is now dead —
+      // clear facts. Stop only pauses (a Codespace keeps its name and resumes
+      // to the same URL), so facts are preserved there.
+      ...(payload.params.action === 'nuke' ? { facts: null } : {}),
       last_health_check: {
         timestamp: new Date().toISOString(),
         status: 'unknown',

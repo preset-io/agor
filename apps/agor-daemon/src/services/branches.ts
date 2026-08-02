@@ -2316,18 +2316,44 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Check if we have a health check URL (static field, not template)
     if (!branch.health_check_url) {
-      // No health check configured - stay in 'starting' forever (manual intervention required)
-      // Don't auto-transition to 'running' without health check confirmation
       const managedProcess = this.processes.get(id);
       const isProcessAlive = managedProcess?.process && !managedProcess.process.killed;
+
+      // Remote / managed environments (e.g. a Codespace) have no local health
+      // URL Agor can poll: the reachable address only exists after start and
+      // sits behind the provider's auth. For these, the lifecycle command is
+      // the source of truth — a start that SUCCEEDED and reported facts (an
+      // address) means the environment is up, so transition starting → running
+      // instead of spinning on 'starting' forever. Local envs always render a
+      // health_check_url and never reach this branch, so their behavior (health
+      // must confirm before 'running') is unchanged.
+      const lastCommand = branch.environment_instance?.last_command;
+      const facts = branch.environment_instance?.facts;
+      const startReportedUp =
+        !!facts &&
+        Object.keys(facts).length > 0 &&
+        (lastCommand?.action === 'start' || lastCommand?.action === 'restart') &&
+        lastCommand?.status === 'succeeded';
+      const shouldTransitionToRunning = currentStatus === 'starting' && startReportedUp;
+
+      if (shouldTransitionToRunning) {
+        console.log(
+          `✅ ${branch.name}: start reported success with facts and no health probe configured - transitioning to 'running'`
+        );
+      }
 
       return await this.updateEnvironment(
         id,
         {
+          ...(shouldTransitionToRunning ? { status: 'running' as const } : {}),
           last_health_check: {
             timestamp: new Date().toISOString(),
-            status: isProcessAlive ? 'healthy' : 'unknown',
-            message: isProcessAlive ? 'Process running' : 'No health check configured',
+            status: startReportedUp || isProcessAlive ? 'healthy' : 'unknown',
+            message: startReportedUp
+              ? 'Started (reported by lifecycle command; no health probe configured)'
+              : isProcessAlive
+                ? 'Process running'
+                : 'No health check configured',
           },
         },
         params
@@ -2585,6 +2611,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,
+        // Re-rendering while the environment is running resolves {{env.*}} to
+        // the facts it reported (e.g. a Codespace URL that only exists after
+        // start). Undefined for a never-started branch → {{env.url}} renders ''.
+        facts: branch.environment_instance?.facts,
       },
       requestedVariant
     );
@@ -2607,10 +2637,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           environment_variant: snapshot.variant,
           start_command: snapshot.start || undefined,
           stop_command: snapshot.stop || undefined,
-          nuke_command: snapshot.nuke,
-          logs_command: snapshot.logs,
-          health_check_url: snapshot.health,
-          app_url: snapshot.app,
+          // Coerce absent optional fields to null (not undefined) so switching
+          // to a variant that omits a field CLEARS the previous variant's value.
+          // undefined is dropped by patch and would leave a stale command/URL —
+          // e.g. switching local → codespaces (no health) previously left the
+          // local health_check_url, so the monitor probed a dead local port and
+          // the env never left 'starting'.
+          nuke_command: snapshot.nuke ?? null,
+          logs_command: snapshot.logs ?? null,
+          health_check_url: snapshot.health ?? null,
+          app_url: snapshot.app ?? null,
           updated_at: new Date().toISOString(),
         },
         params

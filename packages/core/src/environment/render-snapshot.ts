@@ -59,6 +59,14 @@ export interface RenderBranchInput {
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
+  /**
+   * Post-start facts reported by a lifecycle command
+   * (`BranchEnvironmentInstance.facts`). Exposed to templates as `{{env.*}}`.
+   * Undefined at branch-creation render time (the environment has not started),
+   * so `{{env.url}}` renders to '' then and to the real value on a re-render
+   * performed while the environment is running.
+   */
+  facts?: Record<string, string>;
 }
 
 /**
@@ -139,20 +147,30 @@ export function renderBranchSnapshot(
     host_ip_address: branch.host_ip_address,
     base_ref: branch.base_ref,
     ref_type: branch.ref_type,
+    env_facts: branch.facts,
   });
 
   // Per §5 of the design: defaults → template_overrides → custom.
   // `buildBranchContext` already places custom under `custom.*`, so we
   // need to merge overrides in BEFORE custom. Easiest way: rebuild with
   // override'd base entities, then reattach `custom`.
-  const { custom, ...nonCustomBase } = baseContext as {
+  //
+  // `env` (post-start facts) is destructured out alongside `custom` so both are
+  // immune to `template_overrides` deep-merge: facts are runtime truth reported
+  // by the environment itself and must not be shadowed by static config.
+  const {
+    custom,
+    env: envFacts,
+    ...nonCustomBase
+  } = baseContext as {
     custom: Record<string, unknown>;
+    env: Record<string, unknown>;
   } & Record<string, unknown>;
   const overridden = deepMergeContext(
     nonCustomBase,
     env.template_overrides as Record<string, unknown> | undefined
   );
-  const context: Record<string, unknown> = { ...overridden, custom };
+  const context: Record<string, unknown> = { ...overridden, custom, env: envFacts };
 
   const snapshot: RenderedEnvironmentSnapshot = {
     variant: chosen,
