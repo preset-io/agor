@@ -155,7 +155,7 @@ if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-f
   # established standalone executor layout without changing workspace linking.
   # Dependencies were already installed (including native modules) when the
   # image was built, so do not rerun lifecycle scripts during this copy step.
-  pnpm --filter @agor/executor deploy --prod --legacy --ignore-scripts /tmp/agor-executor-runtime
+  pnpm --filter @agor/executor deploy --prod --legacy --offline --ignore-scripts /tmp/agor-executor-runtime
   chmod -R a+rX /tmp/agor-executor-runtime
   export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
   echo "✅ Shared executor runtime ready: $AGOR_EXECUTOR_PATH"
