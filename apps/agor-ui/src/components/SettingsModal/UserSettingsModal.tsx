@@ -839,7 +839,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 label="Use zellij terminal multiplexer"
                 name="terminalUseZellij"
                 valuePropName="checked"
-                tooltip="On: zellij with tabs and session restore. Off: a plain bash login shell in your home directory."
+                tooltip="On: zellij with tabs and session restore. Off: a plain bash login shell."
               >
                 <Switch />
               </Form.Item>
