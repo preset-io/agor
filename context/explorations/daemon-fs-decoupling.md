@@ -72,9 +72,9 @@ The daemon process (only `apps/agor-daemon/src/**`) directly touches the FS in t
 
 #### Uploads
 
-| Touchpoint                                                                        | R/W | Frequency  | File:line                 | Decoupling path                                                                                                                                    |
-| --------------------------------------------------------------------------------- | --- | ---------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<branch>/.agor/uploads/`, `/tmp/agor-uploads/`, `~/.agor/uploads/` mkdir + write | W   | per-upload | `utils/upload.ts:118-260` | Either move write into executor, or stage to S3 / object store and have executor pull on demand. Easier for hosted: **object store from day one**. |
+| Touchpoint             | R/W | Frequency  | File:line                  | Decoupling path                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | --- | ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canonical upload bytes | W   | per-upload | `utils/upload-staging*.ts` | **Implemented:** local self-hosted staging is intentional boundary B; hosted deployments may use S3. Branch materialization streams through a scoped capability and is written only by the executor under `.agor/session-staging/`. No daemon branch-path read/write is required. Storage quotas and materialized-copy cleanup remain follow-ups. |
 
 #### Terminals
 

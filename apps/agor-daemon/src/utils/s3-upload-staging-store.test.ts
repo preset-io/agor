@@ -1,12 +1,9 @@
 import { Readable } from 'node:stream';
 import type { BranchID, SessionID, TenantID, UploadOwner, UserID } from '@agor/core/types';
 import {
-  AbortMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
-  ListMultipartUploadsCommand,
-  ListObjectsV2Command,
   type S3Client,
 } from '@aws-sdk/client-s3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,12 +15,9 @@ const awsMocks = vi.hoisted(() => {
     constructor(readonly input: Record<string, unknown>) {}
   }
   return {
-    AbortMultipartUploadCommand: class extends Command {},
     DeleteObjectCommand: class extends Command {},
     GetObjectCommand: class extends Command {},
     HeadObjectCommand: class extends Command {},
-    ListMultipartUploadsCommand: class extends Command {},
-    ListObjectsV2Command: class extends Command {},
     S3Client: class {},
   };
 });
@@ -67,16 +61,12 @@ vi.mock('@aws-sdk/lib-storage', () => ({
 interface StoredObject {
   body: Buffer;
   metadata: Record<string, string>;
-  lastModified: Date;
 }
 
 class FakeS3 {
   readonly objects = new Map<string, StoredObject>();
   ranges: Array<string | undefined> = [];
-  commands: unknown[] = [];
   lastBody?: Readable;
-  objectPages?: any[];
-  multipartPages?: any[];
 
   private id(input: { Bucket?: string; Key?: string }) {
     return `${input.Bucket}/${input.Key}`;
@@ -88,13 +78,11 @@ class FakeS3 {
     this.objects.set(this.id(params), {
       body: Buffer.concat(chunks),
       metadata: params.Metadata as Record<string, string>,
-      lastModified: new Date(),
     });
     return {};
   }
 
   async send(command: unknown): Promise<any> {
-    this.commands.push(command);
     const input = (command as { input: any }).input;
     if (command instanceof HeadObjectCommand) {
       const object = this.objects.get(this.id(input));
@@ -118,25 +106,6 @@ class FakeS3 {
       this.objects.delete(this.id(input));
       return {};
     }
-    if (command instanceof ListObjectsV2Command) {
-      if (this.objectPages) return this.objectPages.shift() ?? { Contents: [], IsTruncated: false };
-      return {
-        Contents: [...this.objects.entries()]
-          .filter(([id]) => id.startsWith(`${input.Bucket}/${input.Prefix}`))
-          .map(([id, object]) => ({
-            Key: id.slice(String(input.Bucket).length + 1),
-            LastModified: object.lastModified,
-          })),
-        IsTruncated: false,
-      };
-    }
-    if (command instanceof ListMultipartUploadsCommand) {
-      if (this.multipartPages) {
-        return this.multipartPages.shift() ?? { Uploads: [], IsTruncated: false };
-      }
-      return { Uploads: [], IsTruncated: false };
-    }
-    if (command instanceof AbortMultipartUploadCommand) return {};
     throw new Error(
       `Unexpected command ${(command as { constructor: { name: string } }).constructor.name}`
     );
@@ -249,7 +218,7 @@ describe('S3UploadStagingStore', () => {
     expect(client.objects.size).toBe(0);
   });
 
-  it('expires, cleans up, and deletes idempotently within one tenant', async () => {
+  it('expires logically without sweeping S3 and still deletes idempotently', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     const client = new FakeS3();
@@ -268,7 +237,9 @@ describe('S3UploadStagingStore', () => {
     await expect(store.inspect({ ...owner, ref: metadata.ref })).rejects.toMatchObject({
       status: 410,
     });
-    expect(await store.cleanupExpired(owner, new Date())).toBe(1);
+    expect(await store.cleanupExpired(owner, new Date())).toBe(0);
+    expect(client.objects.size).toBe(1);
+    await expect(store.delete({ ...owner, ref: metadata.ref })).resolves.toBeUndefined();
     expect(client.objects.size).toBe(0);
     await expect(store.delete({ ...owner, ref: metadata.ref })).resolves.toBeUndefined();
   });
@@ -282,6 +253,7 @@ describe('S3UploadStagingStore', () => {
       { client: client as unknown as S3Client, ttlMs: 1_000 }
     );
     const store = new MetadataUploadStagingStore({} as never, bytes);
+    const adapterCleanup = vi.spyOn(bytes, 'cleanupExpired');
     await store.stage({
       owner,
       name: 'short.txt',
@@ -289,59 +261,11 @@ describe('S3UploadStagingStore', () => {
       provenance: 'browser',
       body: Readable.from('short'),
     });
+    expect(adapterCleanup).not.toHaveBeenCalled();
     expect(repositoryState.rows).toHaveLength(1);
     vi.setSystemTime(new Date('2026-01-01T00:00:02Z'));
     expect(await store.cleanupExpired(owner, new Date())).toBe(1);
     expect(repositoryState.rows).toHaveLength(0);
     expect(client.objects.size).toBe(0);
-  });
-
-  it('paginates object and multipart cleanup within the tenant prefix', async () => {
-    const client = new FakeS3();
-    const stale = new Date('2026-01-01T00:00:00Z');
-    const now = new Date('2026-02-01T00:00:00Z');
-    const prefix = 'root/tenants/tenant-a/uploads/objects/';
-    const corruptKey = `${prefix}aa/upl_00000000-0000-4000-8000-000000000001`;
-    client.objects.set(`uploads/${corruptKey}`, {
-      body: Buffer.from('bad'),
-      metadata: { 'tenant-id': 'tenant-a' },
-      lastModified: stale,
-    });
-    client.objectPages = [
-      { Contents: [], IsTruncated: true, NextContinuationToken: 'next' },
-      { Contents: [{ Key: corruptKey, LastModified: stale }], IsTruncated: false },
-    ];
-    client.multipartPages = [
-      {
-        Uploads: [{ Key: `${prefix}aa/first`, UploadId: 'one', Initiated: stale }],
-        IsTruncated: true,
-        NextKeyMarker: 'key-next',
-        NextUploadIdMarker: 'upload-next',
-      },
-      {
-        Uploads: [{ Key: `${prefix}bb/second`, UploadId: 'two', Initiated: stale }],
-        IsTruncated: false,
-      },
-    ];
-    const store = new S3UploadStagingStore(
-      { bucket: 'uploads', prefix: 'root' },
-      { client: client as unknown as S3Client, ttlMs: 1_000 }
-    );
-    expect(await store.cleanupExpired(owner, now)).toBe(3);
-    const aborts = client.commands.filter(
-      (command) => command instanceof AbortMultipartUploadCommand
-    ) as Array<{ input: { Key: string } }>;
-    expect(aborts.map((command) => command.input.Key)).toEqual([
-      `${prefix}aa/first`,
-      `${prefix}bb/second`,
-    ]);
-    expect(aborts.every((command) => command.input.Key.startsWith(prefix))).toBe(true);
-    const multipartLists = client.commands.filter(
-      (command) => command instanceof ListMultipartUploadsCommand
-    ) as Array<{ input: { KeyMarker?: string; UploadIdMarker?: string } }>;
-    expect(multipartLists[1]?.input).toMatchObject({
-      KeyMarker: 'key-next',
-      UploadIdMarker: 'upload-next',
-    });
   });
 });

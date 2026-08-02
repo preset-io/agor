@@ -139,4 +139,19 @@ describe('LocalUploadStagingStore boundary B', () => {
     expect(await store.cleanupExpired({ tenantId: tenantA })).toBe(3);
     expect(await readdir(bucket)).toEqual([]);
   });
+
+  it('does not scan tenant storage while staging a new upload', async () => {
+    const store = await setup({ ttlMs: 10 });
+    const bucket = join(root, tenantA, 'objects', '00');
+    await mkdir(bucket, { recursive: true });
+    const stale = join(bucket, 'stale.partial');
+    await writeFile(stale, 'x');
+    const old = new Date(Date.now() - 1000);
+    await utimes(stale, old, old);
+
+    await stage(store);
+
+    expect(await readdir(bucket)).toContain('stale.partial');
+    expect(await store.cleanupExpired({ tenantId: tenantA })).toBe(1);
+  });
 });

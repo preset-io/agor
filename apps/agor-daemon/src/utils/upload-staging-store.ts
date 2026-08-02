@@ -82,9 +82,6 @@ export class LocalUploadStagingStore implements UploadStagingStore {
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    // Opportunistic tenant-scoped lifecycle cleanup keeps self-hosted installs
-    // bounded without a global cross-tenant sweeper.
-    await this.cleanupExpired({ tenantId: input.owner.tenantId }).catch(() => 0);
     const maxBytes = this.options.maxBytes ?? DEFAULT_UPLOAD_MAX_BYTES;
     const ttlMs = input.ttlMs ?? this.options.ttlMs ?? DEFAULT_UPLOAD_TTL_MS;
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 0) throw new Error('Invalid upload ttlMs');

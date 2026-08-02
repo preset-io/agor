@@ -66,16 +66,17 @@ the bucket and optional base prefix; Agor manages everything below it:
 ```
 
 Agor enforces tenant, branch, and session ownership before every read or delete.
-The bucket policy should grant the daemon only the configured prefix. Configure
-an S3 lifecycle rule to abort incomplete multipart uploads as defense in depth;
-Agor also aborts failed transfers and removes stale multipart uploads during
-tenant cleanup.
+The bucket policy should grant the daemon only the configured prefix. Agor does
+not list or reconcile the bucket during upload requests. Configure S3 lifecycle
+rules to expire objects after the configured retention and abort incomplete
+multipart uploads. Failed transfers are also aborted directly by the uploader.
+When `max_age_days` is zero, omit object expiration if permanent retention is
+intended.
 
 The daemon needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the
-configured object prefix, plus `s3:ListBucket`, `s3:ListBucketMultipartUploads`,
-and `s3:AbortMultipartUpload` scoped to the bucket/prefix for cleanup. Where the
-policy language supports it, constrain bucket-level list permissions with an
-`s3:prefix` condition matching the configured prefix.
+configured object prefix, plus `s3:AbortMultipartUpload` for failed multipart
+transfers. It does not require bucket-list permissions for normal upload
+operation.
 
 In the default single-tenant mode, paths remain unchanged:
 

@@ -41,7 +41,10 @@ export async function handleBranchUploadMaterialize(
     const relative = uploadMaterializationRelativePath(payload.params);
     const resolved = await resolvePathInsideBranch(branch.path, relative);
     destination = resolved.absolute;
-    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    // Do not impose private modes here. Materialization runs as the requesting
+    // user inside the branch, so the branch's setgid/default ACL and the
+    // executor umask must remain the source of truth for collaborator access.
+    await mkdir(dirname(destination), { recursive: true });
     // Re-resolve after mkdir so a concurrently introduced parent symlink
     // cannot redirect the exclusive destination write.
     const confined = await resolvePathInsideBranch(branch.path, relative);
@@ -56,7 +59,7 @@ export async function handleBranchUploadMaterialize(
     // The ref-scoped destination is deterministic. A retry replaces only the
     // same upload's prior materialization, never another upload with the same name.
     await rm(destination, { force: true });
-    const handle = await open(destination, 'wx', 0o600);
+    const handle = await open(destination, 'wx');
     createdDestination = true;
     try {
       await pipeline(Readable.fromWeb(response.body as never), handle.createWriteStream());
@@ -67,11 +70,20 @@ export async function handleBranchUploadMaterialize(
   } catch (error) {
     if (destination && createdDestination)
       await rm(destination, { force: true }).catch(() => undefined);
+    const permissionDenied =
+      error instanceof Error &&
+      'code' in error &&
+      ((error as NodeJS.ErrnoException).code === 'EACCES' ||
+        (error as NodeJS.ErrnoException).code === 'EPERM');
     return {
       success: false,
       error: {
         code: 'UPLOAD_MATERIALIZE_FAILED',
-        message: error instanceof Error ? error.message : String(error),
+        message: permissionDenied
+          ? 'Branch filesystem permissions denied upload materialization for the requesting user'
+          : error instanceof Error
+            ? error.message
+            : String(error),
       },
     };
   } finally {

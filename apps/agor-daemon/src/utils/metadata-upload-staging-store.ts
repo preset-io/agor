@@ -22,7 +22,6 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    await this.cleanupExpired({ tenantId: input.owner.tenantId }).catch(() => 0);
     const metadata = await this.bytes.stage(input);
     try {
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>

@@ -11,13 +11,10 @@ import type {
   UploadStagingStore,
 } from '@agor/core/types';
 import {
-  AbortMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   type GetObjectCommandOutput,
   HeadObjectCommand,
-  ListMultipartUploadsCommand,
-  ListObjectsV2Command,
   S3Client,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
@@ -321,81 +318,10 @@ export class S3UploadStagingStore implements UploadStagingStore {
   }
 
   async cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now = new Date()): Promise<number> {
-    const Prefix = this.tenantPrefix(owner.tenantId);
-    let removed = 0;
-    let ContinuationToken: string | undefined;
-    do {
-      const page = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.location.bucket,
-          Prefix,
-          ContinuationToken,
-        })
-      );
-      for (const object of page.Contents ?? []) {
-        if (!object.Key) continue;
-        try {
-          const head = await this.client.send(
-            new HeadObjectCommand({ Bucket: this.location.bucket, Key: object.Key })
-          );
-          let parsed: ParsedS3Metadata | undefined;
-          try {
-            parsed = parseStoredMetadata(head.Metadata ?? {});
-          } catch {
-            // Delete unreadable objects only after the stale threshold.
-          }
-          const expired =
-            parsed?.expiresAt !== null &&
-            parsed?.expiresAt !== undefined &&
-            Date.parse(parsed.expiresAt) <= now.getTime();
-          const corrupt = !parsed || parsed.tenantId !== owner.tenantId;
-          const staleCorrupt =
-            corrupt &&
-            now.getTime() - (object.LastModified?.getTime() ?? now.getTime()) >=
-              (this.ttlMs || DEFAULT_UPLOAD_TTL_MS);
-          if (!expired && !staleCorrupt) continue;
-          await this.client.send(
-            new DeleteObjectCommand({ Bucket: this.location.bucket, Key: object.Key })
-          );
-          removed++;
-        } catch (error) {
-          if (!isNotFound(error)) throw error;
-        }
-      }
-      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
-    } while (ContinuationToken);
-
-    let KeyMarker: string | undefined;
-    let UploadIdMarker: string | undefined;
-    do {
-      const page = await this.client.send(
-        new ListMultipartUploadsCommand({
-          Bucket: this.location.bucket,
-          Prefix,
-          KeyMarker,
-          UploadIdMarker,
-        })
-      );
-      for (const pending of page.Uploads ?? []) {
-        if (
-          pending.Key &&
-          pending.UploadId &&
-          now.getTime() - (pending.Initiated?.getTime() ?? now.getTime()) >=
-            (this.ttlMs || DEFAULT_UPLOAD_TTL_MS)
-        ) {
-          await this.client.send(
-            new AbortMultipartUploadCommand({
-              Bucket: this.location.bucket,
-              Key: pending.Key,
-              UploadId: pending.UploadId,
-            })
-          );
-          removed++;
-        }
-      }
-      KeyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
-      UploadIdMarker = page.IsTruncated ? page.NextUploadIdMarker : undefined;
-    } while (KeyMarker || UploadIdMarker);
-    return removed;
+    // S3 expiry and abandoned multipart cleanup belong to bucket lifecycle
+    // policy. Request handling never lists or reconciles a tenant prefix.
+    void owner;
+    void now;
+    return 0;
   }
 }
