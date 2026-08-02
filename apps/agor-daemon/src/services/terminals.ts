@@ -435,6 +435,7 @@ export class TerminalsService {
         if (branch) {
           const branchTabName = buildBranchShellTabName(branch);
           const channel = `user/${userId}/terminal`;
+          const unixUserMode = (await loadConfig()).execution?.unix_user_mode ?? 'simple';
 
           // Gate ALL executor-directed choreography on readiness. For a normal
           // warm reuse (the executor acked ready this daemon session) this
@@ -457,6 +458,7 @@ export class TerminalsService {
               userId,
               action: 'create',
               tabName: branchTabName,
+              ...(unixUserMode === 'simple' ? { cwd: branch.path } : {}),
             });
             this.dispatchTabFocus(userId, {
               focusTabName: data.focusTabName,
@@ -551,7 +553,7 @@ export class TerminalsService {
         throw err;
       }
 
-      // Branch info for the tab; the shell always opens in the user's home.
+      // Branch info for the tab.
       let branchName: string | undefined;
       let branchTabName: string | undefined;
 
@@ -570,6 +572,9 @@ export class TerminalsService {
         branchName = branch.name;
         branchTabName = buildBranchShellTabName(branch);
       }
+      // Simple mode has no per-user home isolation, so keep the shell in the branch
+      // checkout; impersonation modes (delegated/insulated/strict) open $HOME.
+      const cwd = unixUserMode === 'simple' ? (branch?.path ?? undefined) : undefined;
 
       // Build Zellij session name
       const sessionName = buildZellijSessionName(userId);
@@ -603,6 +608,7 @@ export class TerminalsService {
             userId,
             sessionName,
             shell: user?.preferences?.terminalShell === 'bash' ? 'bash' : 'zellij',
+            ...(cwd ? { cwd } : {}),
             tabName: branchTabName,
             cols: data.cols || 160,
             rows: data.rows || 40,
