@@ -78,6 +78,26 @@ configured object prefix, plus `s3:AbortMultipartUpload` for failed multipart
 transfers. It does not require bucket-list permissions for normal upload
 operation.
 
+## Expired upload maintenance
+
+Upload expiry is enforced on access. S3 lifecycle rules are the normal Cloud
+mechanism for physical byte retention. Deployment operators may also remove a
+bounded batch of expired database metadata and its exact storage objects:
+
+```bash
+# Static/single-tenant deployment
+agor local uploads cleanup --limit 500
+
+# One tenant, or an explicit cross-tenant Cloud maintenance job
+agor local uploads cleanup --tenant-id acme --limit 500
+agor local uploads cleanup --all-tenants --limit 500
+```
+
+Use `--dry-run` to count without deleting. This is a deployment-local command:
+it reads the runtime database/configuration and uses local filesystem or AWS
+credentials directly. It is not an authenticated, tenant-bound user API. The
+S3 path performs exact-key operations and never lists or reconciles the bucket.
+
 In the default single-tenant mode, paths remain unchanged:
 
 ```text

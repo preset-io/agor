@@ -9,9 +9,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { and, asc, eq, isNotNull, lt } from 'drizzle-orm';
-import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import type { Database, SystemDatabase } from '../client';
+import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { type UploadRow, uploads } from '../schema';
+import { RepositoryError } from './base';
 
 function logical(row: UploadRow, tenantId: TenantID): Upload {
   return {
@@ -88,11 +89,38 @@ export class UploadRepository {
     await deleteFrom(this.db, uploads).where(eq(uploads.upload_ref, ref)).run();
   }
 
-  async findExpired(tenantId: TenantID, now: Date): Promise<Upload[]> {
-    const rows = await select(this.db)
+  async findExpired(tenantId: TenantID, now: Date, limit?: number): Promise<Upload[]> {
+    let query = select(this.db)
       .from(uploads)
       .where(and(isNotNull(uploads.expires_at), lt(uploads.expires_at, now)))
-      .all();
+      .orderBy(asc(uploads.expires_at));
+    if (limit !== undefined) query = query.limit(limit);
+    const rows = await query.all();
     return rows.map((row: UploadRow) => logical(row, tenantId));
+  }
+}
+
+/** Narrow system-scope discovery for deployment-local upload maintenance. */
+export class UploadMaintenanceDiscoveryRepository {
+  constructor(private readonly db: SystemDatabase) {}
+
+  async findExpiredTenantIds(now: Date, limit: number): Promise<TenantID[]> {
+    const tenantColumn = (uploads as unknown as { tenant_id?: unknown }).tenant_id;
+    if (!isPostgresDatabase(this.db) || !tenantColumn) {
+      throw new RepositoryError('Cross-tenant upload maintenance requires PostgreSQL metadata');
+    }
+    const rows = await select(this.db, { tenant_id: tenantColumn })
+      .from(uploads)
+      .where(and(isNotNull(uploads.expires_at), lt(uploads.expires_at, now)))
+      .groupBy(tenantColumn)
+      .orderBy(tenantColumn)
+      .limit(limit)
+      .all();
+    return (rows as Array<{ tenant_id?: unknown }>).map((row) => {
+      if (typeof row.tenant_id !== 'string' || !row.tenant_id) {
+        throw new RepositoryError('Upload maintenance discovered a row without tenant identity');
+      }
+      return row.tenant_id as TenantID;
+    });
   }
 }

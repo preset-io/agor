@@ -477,6 +477,13 @@
       "when": 1785452400000,
       "tag": "0068_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0069_upload_maintenance",
+      "breakpoints": true
     }
   ]
 }

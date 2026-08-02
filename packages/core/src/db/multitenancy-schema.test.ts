@@ -91,4 +91,14 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("= 'gateway_listener_discovery'");
     expect(migration).not.toContain('WITH CHECK');
   });
+
+  it('limits upload maintenance discovery to expired rows and an explicit capability', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0069_upload_maintenance.sql');
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('"expires_at" IS NOT NULL');
+    expect(migration).toContain('"expires_at" < CURRENT_TIMESTAMP');
+    expect(migration).toContain("= 'upload_maintenance'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
 });

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./uploads-maintenance": {
+      "types": "./dist/uploads-maintenance.d.ts",
+      "import": "./dist/uploads-maintenance.js"
     }
   },
   "scripts": {
