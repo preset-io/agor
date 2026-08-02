@@ -151,7 +151,11 @@ echo "✅ @agor/executor initial build complete (including type definitions)"
 if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
   echo "📦 Preparing shared executor runtime for Unix impersonation..."
   rm -rf /tmp/agor-executor-runtime
-  pnpm --filter @agor/executor deploy --prod /tmp/agor-executor-runtime
+  # pnpm 10+ requires injected workspace packages by default. Keep the
+  # established standalone executor layout without changing workspace linking.
+  # Dependencies were already installed (including native modules) when the
+  # image was built, so do not rerun lifecycle scripts during this copy step.
+  pnpm --filter @agor/executor deploy --prod --legacy --ignore-scripts /tmp/agor-executor-runtime
   chmod -R a+rX /tmp/agor-executor-runtime
   export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
   echo "✅ Shared executor runtime ready: $AGOR_EXECUTOR_PATH"
