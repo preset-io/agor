@@ -334,7 +334,7 @@ export async function handleZellijAttach(
       }
     }
 
-    const spawnCmd = useZellij ? 'zellij' : userShell;
+    const spawnCmd = useZellij ? 'zellij' : 'bash';
     const spawnArgs = useZellij ? zellijArgs : ['-l'];
     console.log(`[terminal.attach] Spawning PTY: ${spawnCmd} ${spawnArgs.join(' ')}`);
     console.log(`[terminal.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
