@@ -738,7 +738,7 @@ export function getDefaultConfig(): AgorConfig {
       static_tenant_id: 'default',
     },
     uploads: {
-      location: '~/.agor/uploads',
+      location: '~/.agor',
       max_age_days: 30,
       max_file_size_mb: 50,
     },

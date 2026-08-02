@@ -982,7 +982,8 @@ export interface AgorMultiTenancySettings {
 /** Canonical upload storage and lifecycle settings. */
 export interface AgorUploadSettings {
   /**
-   * Local directory or S3-compatible URI. Defaults to `~/.agor/uploads`.
+   * Base local directory or S3 URI. Defaults to `~/.agor`.
+   * Agor manages the tenant and feature namespaces below this base.
    * Credentials are resolved out-of-band and must not be embedded in this URI.
    */
   location?: string;

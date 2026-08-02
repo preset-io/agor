@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { type AgorConfig, expandHomePath } from '@agor/core/config';
+import { type AgorConfig, expandHomePath, getManagedStorageSegments } from '@agor/core/config';
 import type { UploadStagingStore } from '@agor/core/types';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
 import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
@@ -8,6 +8,15 @@ import { LocalUploadStagingStore } from './upload-staging-store.js';
 
 export type UploadStagingStoreFactory = () => UploadStagingStore;
 export type S3UploadStagingStoreFactory = (location: URL, config: AgorConfig) => UploadStagingStore;
+
+/** Resolve Agor's managed upload namespace below a local storage base. */
+export function resolveLocalUploadDirectory(
+  baseLocation: string,
+  tenantId: string,
+  tenantSeparated: boolean
+): string {
+  return join(baseLocation, ...getManagedStorageSegments('uploads', { tenantId, tenantSeparated }));
+}
 
 let factory: UploadStagingStoreFactory = () =>
   new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
@@ -29,7 +38,7 @@ export function configureUploadStagingStoreFromConfig(
   s3Factory?: S3UploadStagingStoreFactory,
   db?: ConstructorParameters<typeof MetadataUploadStagingStore>[0]
 ): void {
-  const location = config.uploads?.location ?? '~/.agor/uploads';
+  const location = config.uploads?.location ?? '~/.agor';
   const maxBytes = (config.uploads?.max_file_size_mb ?? 50) * 1024 * 1024;
   configureUploadLimits(maxBytes);
   const ttlMs = (config.uploads?.max_age_days ?? 30) * 24 * 60 * 60 * 1000;
@@ -49,15 +58,7 @@ export function configureUploadStagingStoreFromConfig(
     config.multi_tenancy?.mode === 'required_from_auth';
   configureUploadStagingStore(() => {
     const adapter = new LocalUploadStagingStore(
-      (tenantId) => {
-        if (!tenantSeparated) return expanded;
-        // The default follows the canonical tenant data root alongside
-        // repos/ and worktrees/. A separately mounted upload root retains the
-        // same root/tenants/<tenant> partition used by object storage.
-        return location === '~/.agor/uploads'
-          ? getUploadDirectory(tenantId)
-          : join(expanded, 'tenants', tenantId);
-      },
+      (tenantId) => resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated),
       { maxBytes, ttlMs }
     );
     return db ? new MetadataUploadStagingStore(db, adapter) : adapter;

@@ -19,7 +19,7 @@ multi_tenancy:
   tenants_base_folder: ~/.agor/tenants
 
 uploads:
-  location: ~/.agor/uploads
+  location: ~/.agor
   max_age_days: 30
   max_file_size_mb: 50
 ```
@@ -46,18 +46,20 @@ With filesystem isolation enabled, Agor creates directories lazily:
   config.yaml
 ```
 
-Repository clones, branch directories, and default local uploads use the same
-tenant data root. A custom local `uploads.location` uses
-`<location>/tenants/<tenant-id>/`; object storage uses the equivalent prefix
-described below. `max_age_days: 0` disables automatic expiry.
+`uploads.location` is a **base storage location**, not the final upload folder.
+Agor owns and appends the tenant and `uploads/` namespaces beneath it. Local
+multi-tenant uploads therefore use
+`<location>/tenants/<tenant-id>/uploads/`. In single-tenant mode they use
+`<location>/uploads/`. `max_age_days: 0` disables automatic expiry.
 
-`uploads.location` may also be an `s3://bucket/prefix` URI. The daemon uses the
+The base may also be an `s3://bucket/prefix` URI. The daemon uses the
 AWS SDK credential and region provider chains, so configure credentials through
 the workload identity (recommended), environment, or shared AWS configuration;
 never embed credentials in the URI. Set the region through workload/shared
 configuration or `AWS_REGION`.
 
-S3 objects use the same logical tenant partition on every deployment:
+S3 objects always use the same tenant-first partition. Operators provide only
+the bucket and optional base prefix; Agor manages everything below it:
 
 ```text
 <prefix>/tenants/<tenant-id>/uploads/objects/<handle-shard>/<upload-ref>

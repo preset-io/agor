@@ -8,6 +8,7 @@ import {
   configureUploadStagingStoreFromConfig,
   getUploadStagingStore,
   resetUploadStagingStoreForTests,
+  resolveLocalUploadDirectory,
 } from './upload-staging.js';
 
 afterEach(resetUploadStagingStoreForTests);
@@ -40,5 +41,12 @@ describe('upload staging application composition', () => {
       uploads: { location: 's3://agor-uploads/customer-data' },
     } as AgorConfig);
     expect(getUploadStagingStore()).toBeInstanceOf(S3UploadStagingStore);
+  });
+
+  it('treats local configuration as a base and appends the managed layout', () => {
+    expect(resolveLocalUploadDirectory('/data/agor', 'default', false)).toBe('/data/agor/uploads');
+    expect(resolveLocalUploadDirectory('/data/agor', 'tenant-a', true)).toBe(
+      '/data/agor/tenants/tenant-a/uploads'
+    );
   });
 });

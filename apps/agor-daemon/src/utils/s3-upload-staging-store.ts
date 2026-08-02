@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { getManagedStorageSegments } from '@agor/core/config';
 import type {
   UploadMetadata,
   UploadOwner,
@@ -53,12 +54,6 @@ function safeName(value: string): string {
       .replace(/[. ]+$/g, '')
       .slice(0, 200) || 'upload'
   );
-}
-
-function encodeTenant(tenantId: string): string {
-  const value = tenantId.trim();
-  if (!value) throw new Error('A tenant id is required for S3 upload storage');
-  return encodeURIComponent(value);
 }
 
 function isNotFound(error: unknown): boolean {
@@ -154,7 +149,11 @@ export class S3UploadStagingStore implements UploadStagingStore {
 
   private tenantPrefix(tenantId: string): string {
     const base = this.location.prefix ? `${this.location.prefix}/` : '';
-    return `${base}tenants/${encodeTenant(tenantId)}/uploads/objects/`;
+    const managed = getManagedStorageSegments('uploads', {
+      tenantId,
+      tenantSeparated: true,
+    }).join('/');
+    return `${base}${managed}/objects/`;
   }
 
   private key(tenantId: string, ref: UploadRef): string {

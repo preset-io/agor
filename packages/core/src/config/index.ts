@@ -37,6 +37,7 @@ export {
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
 } from './security-resolver';
+export * from './storage-layout';
 export * from './tenant-agentic-tool-resolver';
 export * from './types';
 export * from './variant-resolver';
