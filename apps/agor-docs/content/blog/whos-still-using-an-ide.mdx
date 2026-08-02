@@ -1,0 +1,100 @@
+---
+title: 'Who’s Still Using an IDE!?'
+description: 'As agents take over code production, the IDE is collapsing from workshop into verification surface. What, exactly, should remain?'
+author: 'Maxime Beauchemin'
+date: 2026-08-01
+image: '/images/blog/whos-still-using-an-ide.png'
+---
+
+I’m trying to remember the last time I wrote a line of code.
+
+Not *caused* a line of code to exist. I do that all day. I mean actually placed my cursor after a semicolon and typed the next thing myself.
+
+I honestly can’t remember.
+
+This is slightly embarrassing because I spent most of my career as a shell/tmux/Vim person. I was never really an IDE person. I liked the terminal’s simplicity and portability, and I had years of muscle memory baked into `Ctrl-R`, `ssh`, `git`, `grep`, and a small kit of regular and custom utilities. I barely customized anything because I wanted it to work everywhere. Even a slightly wrong Vim binding could bug the crap out of me. Too much muscle memory.
+
+Today Vim is mostly where I open `.zshrc` to copy an API key.
+
+Progress.
+
+## The IDE Won. Then the Interface Moved.
+
+I tried IDEs repeatedly. I understood the pitch. Put editing, navigation, autocomplete, refactoring, search, debugging, tests, a terminal, version control, and a project model into one coherent place. Make the machine hold more of the codebase in its head so the human doesn’t have to.
+
+That was enormously valuable. It still is, if the main act of programming is a human manipulating source files.
+
+So this isn’t an IDE guy gloating about his editor winning. My side lost too.
+
+But that is no longer the main act for me.
+
+The primary interface to software work has become conversation: describe the destination, supply context, constrain the route, inspect the result, redirect. Agents make essentially every edit. They search the tree, trace call sites, refactor across files, run tests, stare at logs, and come back with a diff and, on a good day, a coherent explanation.
+
+This is not autocomplete with better branding. Autocomplete assumes I am driving and the machine helps finish the sentence. Agentic work assumes I am setting intent and judging outcomes while the machine operates the tools.
+
+That shift makes a lot of the traditional IDE feel like a very elaborate cockpit for a plane I’m no longer manually flying.
+
+## The Honest Ledger
+
+They didn’t vanish. They moved up a level.
+
+A provocation deserves better than a straw man, so let’s take the IDE apart and ask what still wants to be direct manipulation.
+
+- **Editing and navigation.** Mostly delegation: “Find where branch permissions are enforced and make this invariant impossible to violate.” I inspect code, but rarely travel through it one definition at a time.
+- **Autocomplete.** It died of success. Finishing the next line mattered when I was the typist. Now the agent types the file.
+- **Refactoring.** The affordance survives; the UI doesn’t. A language-server rename still beats an agent freestyling regexes across forty files. I want the agent to invoke it.
+- **Search and terminals.** I still grep all day; I’m just no longer holding `grep`. The agent operates the shell, reads logs, and follows call sites.
+- **Debugging.** The honest survivor. Interactive stepping, live state, and zero-latency poking still win for some bugs. Agents instrument and bisect, but direct manipulation earns its keep here.
+- **Tests.** Agents write and run them. Humans decide what deserves testing and what “correct” means.
+- **Version control and diffs.** Agents produce the diff. Humans read it, often on GitHub rather than in an editor gutter.
+- **Project context and visualization.** Context now includes code, docs, history, conventions, decisions, credentials, and access. Spatial reasoning moved from “where is this function?” to “where is this workstream?”
+
+Most of these capabilities didn’t get worse. They got absorbed. The agent uses the language server, runs the tests, and holds the grep. What remains for direct manipulation is a much shorter list: visual inspection, precise low-latency intervention, interactive debugging, and verification.
+
+Even code review is moving. Here’s the provocative version: agents are already better than humans at a lot of coding, and at a surprising amount of code review. They don’t get tired on file 37. They can trace boring consistency problems across a repository. They will actually read the migration and the cleanup path.
+
+They also get gloriously, confidently lost. They lack context. They repeat the local bad pattern because five nearby files told them it was tradition. They solve the ticket and miss the product. They can be right about the code and wrong about the destination.
+
+Increasingly, supplying agency and context *is* the human job.
+
+Not “write this function,” but: What are we trying to make true? What tradeoff are we willing to accept? Which convention is intentional and which is historical scar tissue? Who gets hurt if this abstraction leaks? What should not be automated yet?
+
+The hard part did not disappear. It relocated.
+
+## Producing Code Is Not Reading Code
+
+This distinction matters.
+
+I rarely want to produce code directly anymore. I still want to read and judge it.
+
+GitHub remains important for exactly this reason. It is where I read code, review design docs and pull requests, and collaborate with builders, an increasingly broad category that includes product managers and designers who now ship real code. The pull request may turn out to be a remarkably durable human form factor for the agent era: a bounded proposal, an explicit diff, a place for discussion, checks, provenance, and approval.
+
+That is also where the “IDEs are dead” argument gets too cute.
+
+I don’t think code surfaces disappear. I think they collapse toward verification surfaces.
+
+Less workshop, more microscope: something you pull out when the result smells wrong, not the desk you sit at all day. Trust still requires verification; “the agent said the tests pass” is not a verification strategy.
+
+## My Command Center Is Already Receding
+
+Agor is my command center now: a board full of coding and AI sessions, usually ten to twenty active branches moving through different workflows. It helps me supervise complexity, see what is stuck, manage the maintainer chores nobody has fully automated, and avoid losing a week of work inside twelve terminal tabs named `bash`.
+
+But even the board is beginning to recede.
+
+More often, I talk directly with persistent AI teammates. Sometimes I do that in Agor; sometimes through Slack. I ask for an investigation, push back on a decision, or check what needs my attention. The board is still essential, not because I want to operate every agent, but because delegation creates a supervision problem. I need a shared place to see the work that is underway, the context behind it, and the edges where automation still breaks.
+
+The destination is probably not a better dashboard covered in more blinking agents. People don’t want a new air-traffic-control job. The destination is assistants with enough purpose, memory, and access to do useful work, plus a surface that gets quiet when things are healthy and becomes legible when human judgment is required.
+
+That surface may include a code editor. It may include a debugger, a graph, a terminal, a diff, a board, or a pull request. But none of those has to remain *home*.
+
+Home is increasingly the conversation and the orchestration around it.
+
+So: who’s still using an IDE!?
+
+I mean that as a provocation, not a victory lap. If you still live in one, why? What genuine affordance does it give you that conversation, delegation, and verification do not? Is it latency? Spatial reasoning? Debugging? Trust? The pleasure of direct craft?
+
+Or is it mostly habit, the inherited workflow of an era when producing software meant placing your hands on every line?
+
+I’m genuinely asking. We should preserve the affordances that matter.
+
+But maybe you’ll open your editor tomorrow and notice that you’re mostly watching someone else type.
