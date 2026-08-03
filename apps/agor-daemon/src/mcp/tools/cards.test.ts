@@ -1,8 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 
+const { findBoardObjectByCardId } = vi.hoisted(() => ({
+  findBoardObjectByCardId: vi.fn(),
+}));
+
 vi.mock('@agor/core/db', () => ({
-  BoardObjectRepository: class BoardObjectRepository {},
+  BoardObjectRepository: class BoardObjectRepository {
+    findByCardId = findBoardObjectByCardId;
+  },
   enqueueAfterTenantDatabaseCommit: () => false,
   getCurrentTenantId: () => undefined,
   runWithTenantDatabaseScope: vi.fn((_db, _tenantId, work) => work()),
@@ -134,6 +140,7 @@ describe('card MCP realtime events', () => {
     };
     const cardsEmit = vi.fn();
     const boardObjectsEmit = vi.fn();
+    const updatePosition = vi.fn(async () => boardObject);
     const createWithPlacement = vi.fn(async () => ({ card, boardObject }));
     const moveToZone = vi.fn(async () => boardObject);
     const archive = vi.fn(async () => ({ ...card, archived: true }));
@@ -145,7 +152,7 @@ describe('card MCP realtime events', () => {
           return { createWithPlacement, moveToZone, archive, get: cardsGet, emit: cardsEmit };
         }
         if (name === 'boards') return { get: boardsGet };
-        if (name === 'board-objects') return { emit: boardObjectsEmit };
+        if (name === 'board-objects') return { emit: boardObjectsEmit, updatePosition };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
@@ -160,10 +167,13 @@ describe('card MCP realtime events', () => {
     await captureHandler('agor_cards_create', ctx)({ boardId: 'board-1', title: 'Card' });
     await captureHandler('agor_cards_move', ctx)({ cardId: 'card-1', zoneId: null });
     await captureHandler('agor_cards_archive', ctx)({ cardId: 'card-1' });
+    findBoardObjectByCardId.mockResolvedValue(boardObject);
+    await captureHandler('agor_cards_set_position', ctx)({ cardId: 'card-1', x: 10, y: 20 });
 
     expect(createWithPlacement).toHaveBeenCalledWith(expect.any(Object), params);
     expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined, params);
     expect(archive).toHaveBeenCalledWith('card-1', params);
+    expect(updatePosition).toHaveBeenCalledWith('object-1', { x: 10, y: 20 }, params);
     expect(cardsEmit).toHaveBeenCalledWith(
       'created',
       card,

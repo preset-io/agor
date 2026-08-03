@@ -68,7 +68,16 @@ export class BoardCommentsService extends DrizzleService<
   ): Promise<BoardComment> {
     const comment = await this.commentsRepo.findById(id);
     if (!comment) throw new Error(`Board comment ${id} not found`);
-    await this.authorization?.requireBoard(params, comment.board_id, mode);
+    const attached = await this.authorization?.requireCommentAttachments(params, {
+      boardId: comment.board_id,
+      branchId: comment.branch_id,
+      sessionId: comment.session_id,
+      taskId: comment.task_id,
+      messageId: comment.message_id,
+    });
+    if (mode === 'mutate' || !attached) {
+      await this.authorization?.requireBoard(params, comment.board_id, mode);
+    }
     return comment;
   }
 
@@ -114,6 +123,13 @@ export class BoardCommentsService extends DrizzleService<
   ): Promise<BoardComment> {
     if (!data.board_id) throw new Error('board_id is required');
     await this.authorization?.requireBoard(params, data.board_id, 'mutate');
+    await this.authorization?.requireCommentAttachments(params, {
+      boardId: data.board_id,
+      branchId: data.branch_id,
+      sessionId: data.session_id,
+      taskId: data.task_id,
+      messageId: data.message_id,
+    });
     const result = await super.create(
       { ...data, created_by: (params?.user?.user_id as UUID | undefined) ?? data.created_by },
       params
@@ -222,6 +238,13 @@ export class BoardCommentsService extends DrizzleService<
     for (const comment of comments) {
       if (!comment.board_id) throw new Error('board_id is required');
       await this.authorization?.requireBoard(params, comment.board_id, 'mutate');
+      await this.authorization?.requireCommentAttachments(params, {
+        boardId: comment.board_id,
+        branchId: comment.branch_id,
+        sessionId: comment.session_id,
+        taskId: comment.task_id,
+        messageId: comment.message_id,
+      });
     }
     return this.commentsRepo.bulkCreate(
       comments.map((comment) => ({

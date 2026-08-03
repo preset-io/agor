@@ -328,10 +328,14 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         const boardObjectsService = ctx.app.service(
           'board-objects'
         ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
-        return boardObjectsService.updatePosition(boardObj.object_id, {
-          x: args.x,
-          y: args.y,
-        });
+        return boardObjectsService.updatePosition(
+          boardObj.object_id,
+          {
+            x: args.x,
+            y: args.y,
+          },
+          ctx.baseServiceParams
+        );
       });
       return textResult(updatedBoardObject);
     }

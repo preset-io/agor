@@ -118,6 +118,7 @@ export class BoardObjectsService {
       throw new Error('board_id is required');
     }
     await this.authorization?.requireBoard(params, data.board_id, 'mutate');
+    await this.authorization?.requireBranchOnBoard(params, data.board_id, data.branch_id);
 
     // Use repository to create
     const boardObject = await this.boardObjectRepo.create({
@@ -168,7 +169,11 @@ export class BoardObjectsService {
     if (!object) {
       throw new Error(`Board object ${id} not found`);
     }
-    await this.authorization?.requireBoard(params, object.board_id, 'view');
+    if (object.branch_id) {
+      await this.authorization?.requireBranchOnBoard(params, object.board_id, object.branch_id);
+    } else {
+      await this.authorization?.requireBoard(params, object.board_id, 'view');
+    }
     return object;
   }
 
@@ -183,6 +188,9 @@ export class BoardObjectsService {
     const current = await this.boardObjectRepo.findByObjectId(id);
     if (!current) throw new Error(`Board object ${id} not found`);
     await this.authorization?.requireBoard(params, current.board_id, 'mutate');
+    if (current.branch_id) {
+      await this.authorization?.requireBranchOnBoard(params, current.board_id, current.branch_id);
+    }
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
       // Update both atomically without emitting intermediate events
@@ -211,6 +219,9 @@ export class BoardObjectsService {
     const object = await this.boardObjectRepo.findByObjectId(id);
     if (!object) throw new Error(`Board object ${id} not found`);
     await this.authorization?.requireBoard(params, object.board_id, 'mutate');
+    if (object.branch_id) {
+      await this.authorization?.requireBranchOnBoard(params, object.board_id, object.branch_id);
+    }
     await this.boardObjectRepo.remove(id);
 
     return object;
@@ -227,6 +238,9 @@ export class BoardObjectsService {
     const current = await this.boardObjectRepo.findByObjectId(objectId);
     if (!current) throw new Error(`Board object ${objectId} not found`);
     await this.authorization?.requireBoard(params, current.board_id, 'mutate');
+    if (current.branch_id) {
+      await this.authorization?.requireBranchOnBoard(params, current.board_id, current.branch_id);
+    }
     const boardObject = await this.boardObjectRepo.updatePosition(objectId, position);
 
     this.emitPatched(boardObject, params);
@@ -245,6 +259,9 @@ export class BoardObjectsService {
     const current = await this.boardObjectRepo.findByObjectId(objectId);
     if (!current) throw new Error(`Board object ${objectId} not found`);
     await this.authorization?.requireBoard(params, current.board_id, 'mutate');
+    if (current.branch_id) {
+      await this.authorization?.requireBranchOnBoard(params, current.board_id, current.branch_id);
+    }
     const boardObject = await this.boardObjectRepo.updateZone(objectId, zoneId);
 
     this.emitPatched(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject, params);

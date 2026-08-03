@@ -1,4 +1,4 @@
-import { BoardRepository } from '@agor/core/db';
+import { BoardRepository, BranchRepository } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,5 +37,20 @@ describe('CollaborationAuthorization', () => {
     );
     expect(canMutate).toHaveBeenCalledTimes(2);
     expect(canMutate).toHaveBeenLastCalledWith('board-a', 'user-a');
+  });
+
+  it('rejects an attachment whose branch belongs to another board', async () => {
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue({
+      branch_id: 'branch-b',
+      board_id: 'board-b',
+    } as never);
+    const authorization = new CollaborationAuthorization({} as never, true);
+
+    await expect(
+      authorization.requireCommentAttachments(
+        { provider: 'mcp', user: { user_id: 'user-a', role: ROLES.MEMBER } as never },
+        { boardId: 'board-a', branchId: 'branch-b' }
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
   });
 });
