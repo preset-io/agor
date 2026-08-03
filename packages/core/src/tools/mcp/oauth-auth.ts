@@ -11,6 +11,8 @@
  * - Cache hit/miss tracking
  */
 
+import { safeFetch } from '../../network/safe-fetch';
+
 export interface OAuthConfig {
   token_url: string;
   client_id?: string;
@@ -225,7 +227,7 @@ export async function fetchOAuthToken(
   try {
     addDebugStep('fetch_token', 'info', `Sending POST request to ${config.token_url}`);
 
-    response = await fetch(config.token_url, {
+    response = await safeFetch(config.token_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',

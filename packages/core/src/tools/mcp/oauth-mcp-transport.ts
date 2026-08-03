@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { safeFetch } from '../../network/safe-fetch.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
@@ -144,7 +145,7 @@ export async function discoverResourceMetadataUrl(mcpUrl: string): Promise<strin
   for (const candidate of candidates) {
     try {
       console.log('[MCP OAuth] Trying resource metadata discovery:', candidate);
-      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      const response = await safeFetch(candidate);
       if (response.ok) {
         // Validate it looks like proper metadata
         const data = (await response.json()) as Record<string, unknown>;
@@ -248,7 +249,7 @@ export async function discoverAuthorizationServerFromMcpOrigin(
   for (const candidate of unique) {
     try {
       console.log('[MCP OAuth] Trying AS-direct discovery:', candidate);
-      const response = await fetch(candidate, { signal: AbortSignal.timeout(10_000) });
+      const response = await safeFetch(candidate);
       if (!response.ok) continue;
       const data = (await response.json()) as Partial<AuthorizationServerMetadata>;
       // Minimal validation: must have authorization_endpoint + token_endpoint
@@ -341,7 +342,7 @@ export async function resolveMCPOAuthDiscovery(
  * Fetch Protected Resource Metadata (RFC 9728)
  */
 async function fetchResourceMetadata(metadataUrl: string): Promise<OAuthMetadata> {
-  const response = await fetch(metadataUrl, { signal: AbortSignal.timeout(15_000) });
+  const response = await safeFetch(metadataUrl, { timeoutMs: 15_000 });
   if (!response.ok) {
     throw new Error(
       `Failed to fetch OAuth resource metadata from ${metadataUrl} (${response.status}). ` +
@@ -416,7 +417,7 @@ async function registerDynamicClient(
     console.log('[MCP OAuth] Registering client with scope:', scope);
   }
 
-  const response = await fetch(registrationEndpoint, {
+  const response = await safeFetch(registrationEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -506,7 +507,7 @@ export async function fetchAuthorizationServerMetadata(
   for (const { url, label } of urlsToTry) {
     try {
       console.log(`[MCP OAuth] Trying ${label}: ${url}`);
-      const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      const response = await safeFetch(url, { timeoutMs: 15_000 });
       if (response.ok) {
         console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
         return (await response.json()) as AuthorizationServerMetadata;
@@ -668,7 +669,7 @@ async function exchangeCodeForToken(
     bodyKeys: Object.keys(body),
   });
 
-  const response = await fetch(tokenEndpoint, {
+  const response = await safeFetch(tokenEndpoint, {
     method: 'POST',
     headers,
     body: new URLSearchParams(body).toString(),

@@ -26,6 +26,7 @@ Tight, code-pointer-heavy notes on internals.
 | [`architecture.md`](concepts/architecture.md)                             | System shape: services / repos / executor / storage. Where to look first. |
 | [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                |
 | [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
+| [`outbound-egress.md`](concepts/outbound-egress.md)                       | Daemon SSRF policy and required deployment egress contract.               |
 | [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.   |
 | [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.       |
 | [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |

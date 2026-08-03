@@ -72,4 +72,19 @@ describe('register-services /mcp-servers/discover wiring', () => {
     // The post-resolution recheck still runs for templated URLs.
     expect(discoverBlock).toMatch(/isTemplated\(\s*serverConfig\.url/);
   });
+
+  it('routes every discover and OAuth probe request through the shared egress client', () => {
+    expect(rawSource).toMatch(
+      /import\s*\{\s*safeFetch\s*\}\s*from\s*['"]@agor\/core\/network\/safe-fetch['"]/
+    );
+    expect(discoverBlock).toMatch(/\bsafeFetch\s*\(/);
+    expect(discoverBlock).not.toMatch(/\bfetch\s*\(/);
+
+    const oauthProbeBlock = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/test-oauth'"),
+      codeOnly.indexOf("app.use('/mcp-servers/oauth-complete'")
+    );
+    expect(oauthProbeBlock).toMatch(/\bsafeFetch\s*\(/);
+    expect(oauthProbeBlock).not.toMatch(/\bfetch\s*\(/);
+  });
 });

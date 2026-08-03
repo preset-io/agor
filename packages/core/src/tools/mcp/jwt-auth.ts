@@ -5,6 +5,7 @@
  * Tokens are cached for 15 minutes to avoid excessive API calls.
  */
 
+import { safeFetch } from '../../network/safe-fetch';
 import type { MCPAuth } from '../../types/mcp';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 import { getCachedOAuth21Token } from './oauth-mcp-transport';
@@ -49,7 +50,7 @@ export async function fetchJWTToken(config: JWTConfig): Promise<string> {
   }
 
   // Fetch new token
-  const response = await fetch(api_url, {
+  const response = await safeFetch(api_url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

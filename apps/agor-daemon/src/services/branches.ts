@@ -41,6 +41,7 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { safeFetch } from '@agor/core/network/safe-fetch';
 import type {
   AuthenticatedParams,
   Board,
@@ -276,7 +277,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, {
+      const response = await safeFetch(url, {
+        addressPolicy: 'public',
+        timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
+        maxResponseBytes: maxBytes,
         method: 'GET',
         redirect: 'manual',
         signal: controller.signal,
@@ -2349,7 +2353,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
 
-      const response = await fetch(healthUrl, {
+      const response = await safeFetch(healthUrl, {
+        addressPolicy: 'health',
+        timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
+        maxRedirects: 0,
+        redirect: 'manual',
         signal: controller.signal,
         method: 'GET',
       });

@@ -26,6 +26,7 @@
 
 import type { Database } from '../../db/client';
 import { MCPServerRepository, UserMCPOAuthTokenRepository } from '../../db/repositories';
+import { safeFetch } from '../../network/safe-fetch';
 import type { MCPServerID, UserID } from '../../types';
 import { inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
@@ -127,7 +128,7 @@ export async function refreshMCPToken(
     body.client_id = opts.clientId;
   }
 
-  const response = await fetch(opts.tokenEndpoint, {
+  const response = await safeFetch(opts.tokenEndpoint, {
     method: 'POST',
     headers,
     body: new URLSearchParams(body).toString(),

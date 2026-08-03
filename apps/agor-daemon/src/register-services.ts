@@ -34,6 +34,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { safeFetch } from '@agor/core/network/safe-fetch';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -1530,7 +1531,7 @@ async function registerMCPServices(
       mcp_url?: string;
     }) {
       try {
-        const response = await fetch(data.api_url, {
+        const response = await safeFetch(data.api_url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: data.api_token, secret: data.api_secret }),
@@ -1568,7 +1569,7 @@ async function registerMCPServices(
    */
   async function probeMcpAuthViaReadOnlyToolCall(mcpUrl: string): Promise<Response | null> {
     try {
-      const listResponse = await fetch(mcpUrl, {
+      const listResponse = await safeFetch(mcpUrl, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
@@ -1584,7 +1585,7 @@ async function registerMCPServices(
       );
       if (!readOnlyTool?.name) return null;
 
-      const callResponse = await fetch(mcpUrl, {
+      const callResponse = await safeFetch(mcpUrl, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1625,7 +1626,7 @@ async function registerMCPServices(
 
         let probeResponse: Response;
         try {
-          probeResponse = await fetch(data.mcp_url, {
+          probeResponse = await safeFetch(data.mcp_url, {
             method: 'POST',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -1721,7 +1722,7 @@ async function registerMCPServices(
 
               const tokenResponse = await started.awaitToken();
 
-              const testResponse = await fetch(data.mcp_url, {
+              const testResponse = await safeFetch(data.mcp_url, {
                 method: 'POST',
                 headers: {
                   Authorization: `Bearer ${tokenResponse.access_token}`,
@@ -1776,7 +1777,7 @@ async function registerMCPServices(
             // RFC 9728 path: fetch resource metadata to get the AS URL.
             // (Above guard ensures `metadataUrl` is set when we reach here.)
             const rfc9728Url = metadataUrl as string;
-            const metadataResponse = await fetch(rfc9728Url);
+            const metadataResponse = await safeFetch(rfc9728Url);
             if (!metadataResponse.ok) {
               return {
                 success: false,
@@ -1901,7 +1902,7 @@ async function registerMCPServices(
             let mcpStatus: number | undefined;
             let mcpStatusText: string | undefined;
             try {
-              const mcpResponse = await fetch(data.mcp_url, {
+              const mcpResponse = await safeFetch(data.mcp_url, {
                 method: 'POST',
                 headers: {
                   Authorization: `Bearer ${token}`,
@@ -1997,7 +1998,7 @@ async function registerMCPServices(
           });
         }
 
-        let probeResponse = await fetch(data.mcp_url, {
+        let probeResponse = await safeFetch(data.mcp_url, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
@@ -2698,7 +2699,7 @@ async function registerMCPServices(
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
-            const probeResponse = await fetch(mcpUrl, {
+            const probeResponse = await safeFetch(mcpUrl, {
               method: 'GET',
               headers: mergeMCPRemoteHeaders({
                 base: { Accept: 'application/json' },
@@ -2799,7 +2800,10 @@ async function registerMCPServices(
                 init = { ...init, headers: { ...headersObj, 'mcp-session-id': sessionId } };
               }
             }
-            const response = await fetch(input, init);
+            const response = await safeFetch(
+              typeof input === 'string' || input instanceof URL ? input : input.url,
+              init
+            );
             const respSessionId = response.headers.get('mcp-session-id');
             if (respSessionId) sessionId = respSessionId;
             return response;
