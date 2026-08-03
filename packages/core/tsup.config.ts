@@ -16,10 +16,12 @@ export default defineConfig({
     'claude/index': 'src/claude/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
     'config/index': 'src/config/index.ts',
+    'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
     'permissions/index': 'src/permissions/index.ts',
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
+    'lib/validation': 'src/lib/validation.ts', // Node-only filesystem validation for executors
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
