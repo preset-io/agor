@@ -49,6 +49,8 @@ interface RbacPermissionFieldsProps {
   othersCanLabel?: string;
   othersFsAccessLabel?: string;
   showLegacySessionSharing?: boolean;
+  /** Branches can leave owner/group grants intact while denying the public fallback. */
+  canEditOthersCanWhenPrivate?: boolean;
 }
 
 const permissionLevelDescriptions: Record<BranchPermissionLevel, string> = {
@@ -95,6 +97,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   othersCanLabel = 'Others Can',
   othersFsAccessLabel = 'Filesystem Access',
   showLegacySessionSharing = true,
+  canEditOthersCanWhenPrivate = false,
 }) => {
   const { showError } = useThemedMessage();
   const [selectKey, setSelectKey] = useState(0);
@@ -304,25 +307,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
             </Space>
           </Form.Item>
 
-          <Form.Item
-            label={othersCanLabel}
-            labelCol={{ span: 8 }}
-            wrapperCol={{ span: 16 }}
-            help={permissionLevelDescriptions[value.othersCan]}
-          >
-            <Select
-              value={value.othersCan}
-              onChange={(othersCan) => onChange('othersCan', othersCan)}
-              disabled={!canEdit}
-              options={[
-                { value: 'view', label: 'View' },
-                { value: 'session', label: 'Own Sessions' },
-                { value: 'prompt', label: 'Prompt' },
-                { value: 'all', label: 'All' },
-              ]}
-            />
-          </Form.Item>
-
           {value.othersCan === 'prompt' && (
             <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
               <Alert
@@ -383,6 +367,28 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           )}
         </>
       )}
+
+      <Form.Item
+        label={othersCanLabel}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        help={permissionLevelDescriptions[value.othersCan]}
+      >
+        <Select
+          aria-label={othersCanLabel}
+          virtual={false}
+          value={value.othersCan}
+          onChange={(othersCan) => onChange('othersCan', othersCan)}
+          disabled={!canEdit || (!isShared && !canEditOthersCanWhenPrivate)}
+          options={[
+            { value: 'none', label: 'None' },
+            { value: 'view', label: 'View' },
+            { value: 'session', label: 'Own Sessions' },
+            { value: 'prompt', label: 'Prompt' },
+            { value: 'all', label: 'All' },
+          ]}
+        />
+      </Form.Item>
     </>
   );
 };

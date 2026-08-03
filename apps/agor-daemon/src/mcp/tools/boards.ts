@@ -5,6 +5,7 @@ import type {
   BoardObjectType,
   BranchID,
 } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
@@ -240,6 +241,14 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
         ),
         slug: mcpOptionalString('slug', 'URL-friendly slug (optional)'),
+        accessMode: z.enum(['private', 'shared']).optional(),
+        defaultOthersCan: z
+          .enum(BRANCH_PERMISSION_LEVELS)
+          .optional()
+          .describe(
+            'Default app-layer permission for non-owners of aligned branches. "none" denies the public fallback; owners and explicit group grants still apply on shared boards.'
+          ),
+        defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
         customContext: z
           .object({})
           .passthrough()
@@ -272,6 +281,11 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         metadataUpdates.background_color = args.backgroundColor;
       if (args.customCss !== undefined) metadataUpdates.custom_css = args.customCss;
       if (args.slug !== undefined) metadataUpdates.slug = args.slug;
+      if (args.accessMode !== undefined) metadataUpdates.access_mode = args.accessMode;
+      if (args.defaultOthersCan !== undefined)
+        metadataUpdates.default_others_can = args.defaultOthersCan;
+      if (args.defaultOthersFsAccess !== undefined)
+        metadataUpdates.default_others_fs_access = args.defaultOthersFsAccess;
       if (args.customContext !== undefined) metadataUpdates.custom_context = args.customContext;
 
       if (Object.keys(metadataUpdates).length > 0) {
@@ -344,6 +358,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'customCss',
           'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
         ),
+        accessMode: z.enum(['private', 'shared']).optional(),
+        defaultOthersCan: z.enum(BRANCH_PERMISSION_LEVELS).optional(),
+        defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
       }),
     },
     async (args) => {
@@ -361,6 +378,10 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.backgroundColor !== undefined)
         boardData.background_color = coerceString(args.backgroundColor);
       if (args.customCss !== undefined) boardData.custom_css = coerceString(args.customCss);
+      if (args.accessMode !== undefined) boardData.access_mode = args.accessMode;
+      if (args.defaultOthersCan !== undefined) boardData.default_others_can = args.defaultOthersCan;
+      if (args.defaultOthersFsAccess !== undefined)
+        boardData.default_others_fs_access = args.defaultOthersFsAccess;
 
       const board = await ctx.app.service('boards').create(boardData, ctx.baseServiceParams);
       return textResult(board);

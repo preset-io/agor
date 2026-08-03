@@ -218,6 +218,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
             groupGrantsError={groupGrantsError}
             ownersLoadError={ownersLoadError}
             groupsHelp="Grant explicit branch access to user groups"
+            canEditOthersCanWhenPrivate
           />
         )}
       </Form>
