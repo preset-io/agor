@@ -889,6 +889,9 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
     /** Initial working directory */
     cwd: z.string().optional(),
 
+    /** Shell: 'zellij' multiplexer (default) or 'bash' plain login shell. */
+    shell: z.enum(['zellij', 'bash']).optional(),
+
     /** Initial tab name (branch name) */
     tabName: z.string().optional(),
 

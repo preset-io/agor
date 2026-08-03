@@ -607,6 +607,7 @@ export class TerminalsService {
           params: {
             userId,
             sessionName,
+            shell: user?.preferences?.terminalShell === 'bash' ? 'bash' : 'zellij',
             ...(cwd ? { cwd } : {}),
             tabName: branchTabName,
             cols: data.cols || 160,

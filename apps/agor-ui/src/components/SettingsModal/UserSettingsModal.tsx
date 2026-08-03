@@ -216,6 +216,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
         useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
+        terminalUseZellij: userData.preferences?.terminalShell !== 'bash',
         must_change_password: userData.must_change_password ?? false,
       });
     },
@@ -442,6 +443,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         nextPreferences.use_slack_avatar = false;
       } else {
         delete nextPreferences.use_slack_avatar;
+      }
+      if (values.terminalUseZellij === false) {
+        nextPreferences.terminalShell = 'bash';
+      } else {
+        delete nextPreferences.terminalShell;
       }
 
       const updates: UpdateUserInput = {
@@ -839,6 +845,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   maxLength={32}
                   disabled={!hasMinimumRole(currentUser?.role, ROLES.ADMIN)}
                 />
+              </Form.Item>
+
+              <Form.Item
+                label="Use zellij terminal multiplexer"
+                name="terminalUseZellij"
+                valuePropName="checked"
+                tooltip="On: zellij with tabs and session restore. Off: a plain bash login shell."
+              >
+                <Switch />
               </Form.Item>
 
               <Form.Item
