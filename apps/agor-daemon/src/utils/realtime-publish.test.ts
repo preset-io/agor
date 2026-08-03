@@ -811,7 +811,7 @@ describe('configureRealtimePublish', () => {
     const revoked = user('revoked');
     const service = { user: { _isServiceAccount: true, role: 'service' } };
     const app = makeApp([{ user: allowed }, { user: revoked }, service]);
-    const r = repos({ branch: branch('b1', 'none') });
+    const r = repos({ branch: branch('b1', 'none'), permissions: {} });
     const canView = vi.fn(async (_boardId: string, userId: string) => userId === 'allowed');
     configureRealtimePublish({
       app,

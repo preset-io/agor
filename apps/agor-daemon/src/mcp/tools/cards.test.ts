@@ -167,17 +167,17 @@ describe('card MCP realtime events', () => {
     expect(cardsEmit).toHaveBeenCalledWith(
       'created',
       card,
-      expect.objectContaining({ path: 'cards', method: 'create', params: {}, result: card })
+      expect.objectContaining({ path: 'cards', method: 'create', params, result: card })
     );
     expect(cardsEmit).toHaveBeenCalledWith(
       'patched',
       expect.objectContaining({ archived: true }),
-      expect.objectContaining({ path: 'cards', method: 'patch', params: {} })
+      expect.objectContaining({ path: 'cards', method: 'patch', params })
     );
     expect(boardObjectsEmit).toHaveBeenCalledWith(
       'patched',
       boardObject,
-      expect.objectContaining({ path: 'board-objects', method: 'patch', params: {} })
+      expect.objectContaining({ path: 'board-objects', method: 'patch', params })
     );
   });
 });

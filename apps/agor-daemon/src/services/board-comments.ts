@@ -115,7 +115,7 @@ export class BoardCommentsService extends DrizzleService<
     if (!data.board_id) throw new Error('board_id is required');
     await this.authorization?.requireBoard(params, data.board_id, 'mutate');
     const result = await super.create(
-      { ...data, created_by: params?.user?.user_id ?? data.created_by },
+      { ...data, created_by: (params?.user?.user_id as UUID | undefined) ?? data.created_by },
       params
     );
     if (Array.isArray(result)) throw new Error('Unexpected multi-comment create result');
@@ -226,7 +226,7 @@ export class BoardCommentsService extends DrizzleService<
     return this.commentsRepo.bulkCreate(
       comments.map((comment) => ({
         ...comment,
-        created_by: params?.user?.user_id ?? comment.created_by,
+        created_by: (params?.user?.user_id as UUID | undefined) ?? comment.created_by,
       }))
     );
   }
@@ -263,7 +263,7 @@ export class BoardCommentsService extends DrizzleService<
     return this.commentsRepo.createReply(parentId, {
       ...data,
       board_id: parent.board_id,
-      created_by: params?.user?.user_id ?? data.created_by,
+      created_by: (params?.user?.user_id as UUID | undefined) ?? data.created_by,
     });
   }
 }
