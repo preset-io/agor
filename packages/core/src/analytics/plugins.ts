@@ -5,9 +5,6 @@ import type {
 } from '../config/types.js';
 import type { ResolvedAnalyticsPlugin } from './types.js';
 
-export const REMOVED_ANALYTICS_MODULE_PLUGIN_MESSAGE =
-  "Analytics plugin type 'module' has been removed because loading operator-selected code in the daemon is unsafe. Use the built-in 'stdout' or 'http_batch' analytics plugin instead.";
-
 interface AnalyticsTrackPayload {
   type?: string;
   event?: string;
@@ -217,7 +214,6 @@ export async function resolveAnalyticsPlugins(
       default: {
         const unsupported: never = pluginConfig;
         const type = (unsupported as { type?: unknown }).type;
-        if (type === 'module') throw new Error(REMOVED_ANALYTICS_MODULE_PLUGIN_MESSAGE);
         throw new Error(`Unsupported analytics plugin type: ${String(type)}`);
       }
     }

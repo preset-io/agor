@@ -219,14 +219,12 @@ describe('analytics plugins', () => {
     ]);
   });
 
-  it('rejects removed module plugins passed by an untyped caller', async () => {
+  it('rejects unsupported plugins passed by an untyped caller', async () => {
     await expect(
       resolveAnalyticsPlugins({
         ...enabledBase,
         plugins: [{ type: 'module', enabled: true, options: { module_path: '/plugin.js' } }],
       } as unknown as AgorAnalyticsSettings)
-    ).rejects.toThrow(
-      "Analytics plugin type 'module' has been removed because loading operator-selected code in the daemon is unsafe. Use the built-in 'stdout' or 'http_batch' analytics plugin instead."
-    );
+    ).rejects.toThrow('Unsupported analytics plugin type: module');
   });
 });
