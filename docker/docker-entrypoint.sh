@@ -150,15 +150,15 @@ echo "✅ @agor/executor initial build complete (including type definitions)"
 # installation or stale runtime copy is involved.
 if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
   echo "📦 Exposing compiled executor runtime for Unix impersonation..."
-  chmod o+x /app /app/packages \
+  sudo chmod o+x /app /app/packages \
     /app/packages/core /app/packages/git /app/packages/executor
-  chmod a+r /app/packages/core/package.json \
+  sudo chmod a+r /app/packages/core/package.json \
     /app/packages/git/package.json /app/packages/executor/package.json
-  chmod -R a+rX /app/packages/core/dist /app/packages/git/dist \
+  sudo chmod -R a+rX /app/packages/core/dist /app/packages/git/dist \
     /app/packages/executor/bin /app/packages/executor/dist
   # Preserve runtime readability for files added later by the watch compilers.
   find /app/packages/core/dist /app/packages/git/dist /app/packages/executor/dist \
-    -type d -exec setfacl -m d:o::rx {} +
+    -type d -exec sudo setfacl -m d:o::rx {} +
   export AGOR_EXECUTOR_PATH=/app/packages/executor/bin/agor-executor
   echo "✅ Compiled executor runtime ready: $AGOR_EXECUTOR_PATH"
 fi
