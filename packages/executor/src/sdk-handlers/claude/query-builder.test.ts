@@ -99,7 +99,7 @@ describe('setupQuery - Local Settings Support', () => {
   });
 
   // Pin the literal disallow list so a stray edit to the constant
-  // (e.g. dropping `ExitBranch`) trips this test, not just the plumbing one.
+  // (e.g. dropping `ExitWorktree`) trips this test, not just the plumbing one.
   // See `constants.ts` for why each name is on the list — #1177 covers
   // AskUserQuestion; the rest were operator-approved at the same time.
   // `ScheduleWakeup` added in #1253 (Agor schedules supersede /loop).
@@ -107,8 +107,8 @@ describe('setupQuery - Local Settings Support', () => {
     expect(CLAUDE_CODE_DISALLOWED_TOOLS).toEqual([
       'AskUserQuestion',
       'ExitPlanMode',
-      'EnterBranch',
-      'ExitBranch',
+      'EnterWorktree',
+      'ExitWorktree',
       'ScheduleWakeup',
     ]);
   });

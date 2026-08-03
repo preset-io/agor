@@ -12,6 +12,7 @@ import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import { sanitizeDbError } from '../sanitize-error';
 import {
   branches,
   branchOwners,
@@ -945,7 +946,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         throw new EntityNotFoundError('Session', id);
       }
     } catch (error) {
-      console.error(`❌ [SessionRepo] Failed to delete session ${id}:`, error);
+      console.error(`❌ [SessionRepo] Failed to delete session ${id}:`, sanitizeDbError(error));
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,

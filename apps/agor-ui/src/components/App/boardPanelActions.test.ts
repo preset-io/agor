@@ -34,14 +34,13 @@ describe('board panel navbar actions', () => {
     });
   });
 
-  it.each([
-    'teammate',
-    'all-sessions',
-    'comments',
-  ] as const)('opens a closed panel on the %s tab when its rail button is clicked', (tab) => {
-    expect(getSelectTeammatePanelTabState(tab)).toEqual({
-      collapsed: false,
-      activeTab: tab,
-    });
-  });
+  it.each(['teammate', 'all-sessions', 'comments'] as const)(
+    'opens a closed panel on the %s tab when its rail button is clicked',
+    (tab) => {
+      expect(getSelectTeammatePanelTabState(tab)).toEqual({
+        collapsed: false,
+        activeTab: tab,
+      });
+    }
+  );
 });

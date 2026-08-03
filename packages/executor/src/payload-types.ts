@@ -220,6 +220,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
   }),
 });
 
@@ -269,6 +272,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
 
     /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
     fixBasicPermissions: z.boolean().optional().default(false),
@@ -819,6 +825,12 @@ export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
 
     /** Daemon Unix user (added to repo group for daemon access) */
     daemonUser: z.string().optional(),
+
+    /** Post-clone initialization applies permissions to the whole repo root. */
+    initialize: z.boolean().optional(),
+
+    /** Trusted clone creator ID whose Unix identity receives initial access. */
+    creatorUserId: z.string().uuid().optional(),
 
     /** If true, delete the group instead of syncing (for repo removal) */
     delete: z.boolean().optional(),

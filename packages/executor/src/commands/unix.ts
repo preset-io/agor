@@ -222,8 +222,10 @@ export async function handleUnixSyncRepo(
       console.log(`[unix.sync-repo] Created group ${groupName}`);
     }
 
-    // Set permissions on .git/ directory
-    const gitPath = `${repo.local_path}/.git`;
+    // Initial clone setup owns the complete managed repo directory. Later
+    // reconciliation needs only Git metadata. Both paths come exclusively
+    // from the tenant-scoped repo record fetched above.
+    const gitPath = payload.params.initialize ? repo.local_path : `${repo.local_path}/.git`;
     const permCommands = UnixGroupCommands.setDirectoryGroup(
       gitPath,
       groupName,
@@ -260,6 +262,22 @@ export async function handleUnixSyncRepo(
     const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data;
 
     const addedUsers = new Set<string>();
+    if (payload.params.creatorUserId) {
+      try {
+        const creator = await client.service('users').get(payload.params.creatorUserId);
+        if (creator.unix_username) {
+          const inGroup = await checkCommand(
+            UnixGroupCommands.isUserInGroup(creator.unix_username, groupName)
+          );
+          if (!inGroup) {
+            await runCommand(UnixGroupCommands.addUserToGroup(creator.unix_username, groupName));
+          }
+          addedUsers.add(creator.unix_username);
+        }
+      } catch {
+        console.log('[unix.sync-repo] Could not add clone creator to repo group');
+      }
+    }
     for (const wt of branches) {
       // Get owners for this branch
       try {
@@ -538,6 +556,12 @@ export async function handleUnixSyncBranch(
     if (branch.repo_id) {
       try {
         const repo = await client.service('repos').get(branch.repo_id);
+        const requiresWorktreeMetadata = (branch.storage_mode ?? 'worktree') === 'worktree';
+        if (requiresWorktreeMetadata && (!repo.unix_group || !repo.local_path)) {
+          throw new Error(
+            'Worktree branch requires a repository Unix group and local path for Git metadata permissions'
+          );
+        }
         if (repo.unix_group) {
           // Add daemon user to repo group if provided
           if (payload.params.daemonUser) {
@@ -621,31 +645,28 @@ export async function handleUnixSyncBranch(
 
           // Fix .git/worktrees/<name>/ permissions
           const branchName = branch.path.split('/').pop();
-          if (branchName && repo.local_path) {
+          if (requiresWorktreeMetadata && branchName && repo.local_path) {
             const branchGitDir = `${repo.local_path}/.git/worktrees/${branchName}`;
-            try {
-              const fixCommands = UnixGroupCommands.setDirectoryGroup(
-                branchGitDir,
-                repo.unix_group,
-                REPO_GIT_PERMISSION_MODE
-              );
-              await runCommands(fixCommands);
-              // Set explicit user ACL for daemon to bypass stale supplementary groups
-              if (payload.params.daemonUser) {
-                await runCommands(
-                  UnixGroupCommands.setUserAcl(branchGitDir, payload.params.daemonUser)
-                );
-              }
-              console.log(`[unix.sync-branch] Fixed .git/worktrees/${branchName}/ permissions`);
-            } catch {
-              // Directory might not exist yet
-              console.log(
-                `[unix.sync-branch] Could not fix .git/worktrees permissions (dir may not exist)`
+            const fixCommands = UnixGroupCommands.setDirectoryGroup(
+              branchGitDir,
+              repo.unix_group,
+              REPO_GIT_PERMISSION_MODE
+            );
+            await runCommands(fixCommands);
+            // Set explicit user ACL for daemon to bypass stale supplementary groups
+            if (payload.params.daemonUser) {
+              await runCommands(
+                UnixGroupCommands.setUserAcl(branchGitDir, payload.params.daemonUser)
               );
             }
+            console.log(`[unix.sync-branch] Fixed .git/worktrees/${branchName}/ permissions`);
           }
         }
-      } catch {
+      } catch (error) {
+        // Worktree Git metadata is part of the branch's required permission
+        // boundary. Missing records, paths, groups, or command failures must
+        // fail closed before the lifecycle executor marks the branch ready.
+        if ((branch.storage_mode ?? 'worktree') === 'worktree') throw error;
         console.log(`[unix.sync-branch] Could not fetch repo, skipping repo group sync`);
       }
     }
@@ -964,11 +985,8 @@ export async function handleUnixSyncUser(
 // ============================================================
 //
 // Privileged group/ACL setup for newly cloned repos and freshly created
-// branches lives in the daemon (apps/agor-daemon/src/utils/unix-group-init.ts)
-// and is invoked via Feathers RPC: `repos.initializeUnixGroup` and
-// `branches.initializeUnixGroup`. This keeps the privileged work running with
-// daemon sudo regardless of executor impersonation mode. The executor only
-// retains the basic-mode chmod helper below for non-RBAC paths.
+// branches is invoked directly by the tenant-mounted Git lifecycle executor.
+// The executor retains the basic-mode chmod helper below for non-RBAC paths.
 
 /**
  * Fix permissions on branch's .git/worktrees/<name>/ directory without RBAC

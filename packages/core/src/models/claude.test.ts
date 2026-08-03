@@ -37,12 +37,10 @@ describe('hasNativeMillionContext', () => {
     expect(hasNativeMillionContext(modelId)).toBe(true);
   });
 
-  it.each([
-    'claude-opus-4-5',
-    'claude-opus-4-1',
-    'claude-opus-4-20250514',
-    'claude-sonnet-4-5',
-  ])('keeps %s on the opt-in context path', (modelId) => {
-    expect(hasNativeMillionContext(modelId)).toBe(false);
-  });
+  it.each(['claude-opus-4-5', 'claude-opus-4-1', 'claude-opus-4-20250514', 'claude-sonnet-4-5'])(
+    'keeps %s on the opt-in context path',
+    (modelId) => {
+      expect(hasNativeMillionContext(modelId)).toBe(false);
+    }
+  );
 });

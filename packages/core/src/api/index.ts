@@ -398,15 +398,6 @@ export interface MessagesService extends AgorService<Message> {
  */
 export interface ReposService extends AgorService<Repo> {
   /**
-   * Initialize Unix group for a repo (daemon-side privileged operation).
-   * Called by executor after cloning.
-   */
-  initializeUnixGroup(
-    data: { repoId: string; userId?: string },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
-  /**
    * Create a git branch for a repository.
    *
    * Shape matches the daemon's `/repos/:id/branches` route + Feathers
@@ -545,15 +536,6 @@ export interface UsersService extends AgorService<User> {
  * Branches service with environment management
  */
 export interface BranchesService extends AgorService<Branch> {
-  /**
-   * Initialize Unix group for a branch (daemon-side privileged operation).
-   * Called by executor after creating the git branch.
-   */
-  initializeUnixGroup(
-    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -923,9 +905,6 @@ function extendReposService(client: AgorClient): void {
     methods?: (...names: string[]) => unknown;
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
-  if (typeof reposService.methods === 'function') {
-    reposService.methods('initializeUnixGroup');
-  }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 
@@ -936,11 +915,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods(
-      'updateEnvironment',
-      'initializeUnixGroup',
-      'ensureTeammateKnowledgeNamespace'
-    );
+    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

@@ -117,18 +117,18 @@ function statusPatchCall(sessionsPatch: ReturnType<typeof vi.fn>) {
 }
 
 describe('TasksService auto-title', () => {
-  it.each([
-    TaskStatus.QUEUED,
-    TaskStatus.RUNNING,
-  ])('auto-titles an untitled session when a %s task is created', async (status) => {
-    const { service, sessionsPatch } = makeService({ session: { title: undefined } });
+  it.each([TaskStatus.QUEUED, TaskStatus.RUNNING])(
+    'auto-titles an untitled session when a %s task is created',
+    async (status) => {
+      const { service, sessionsPatch } = makeService({ session: { title: undefined } });
 
-    await service.create(makeTask({ status }), { provider: 'rest' });
+      await service.create(makeTask({ status }), { provider: 'rest' });
 
-    const titleCall = titlePatchCall(sessionsPatch);
-    expect(titleCall?.[1]).toEqual({ title: DERIVED_TITLE });
-    expect(titleCall?.[2]).toMatchObject({ provider: undefined });
-  });
+      const titleCall = titlePatchCall(sessionsPatch);
+      expect(titleCall?.[1]).toEqual({ title: DERIVED_TITLE });
+      expect(titleCall?.[2]).toMatchObject({ provider: undefined });
+    }
+  );
 
   it('writes the terminal status/ready patch prompt-flow-only, with the original params', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: undefined } });
@@ -258,21 +258,23 @@ describe('TasksService auto-title', () => {
     expect(titlePatchCall(sessionsPatch)).toBeUndefined();
   });
 
-  it.each([
-    TaskStatus.FAILED,
-    TaskStatus.STOPPED,
-  ])('keeps the create-time title when execution ends %s', async (status) => {
-    const { service, sessionsPatch, session } = makeService({
-      session: { title: undefined },
-    });
+  it.each([TaskStatus.FAILED, TaskStatus.STOPPED])(
+    'keeps the create-time title when execution ends %s',
+    async (status) => {
+      const { service, sessionsPatch, session } = makeService({
+        session: { title: undefined },
+      });
 
-    await service.create(makeTask({ status: TaskStatus.RUNNING }));
-    await service.patch(taskId, {
-      status,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+      await service.create(makeTask({ status: TaskStatus.RUNNING }));
+      await service.patch(taskId, {
+        status,
+        completed_at: '2026-01-01T00:00:05.000Z',
+      });
 
-    expect(session.title).toBe(DERIVED_TITLE);
-    expect(sessionsPatch.mock.calls.filter((call) => call[1]?.title !== undefined)).toHaveLength(1);
-  });
+      expect(session.title).toBe(DERIVED_TITLE);
+      expect(sessionsPatch.mock.calls.filter((call) => call[1]?.title !== undefined)).toHaveLength(
+        1
+      );
+    }
+  );
 });

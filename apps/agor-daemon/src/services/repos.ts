@@ -32,7 +32,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
@@ -257,10 +257,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
-    );
-
     // Unix group initialization is a filesystem concern controlled by
     // unix_user_mode, not by app-level branch RBAC.
     const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
@@ -300,11 +296,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       params
     )) as Repo;
     const repoId = placeholder.repo_id;
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      { command: 'git.clone', repo_id: repoId, user_id: userId }
+    );
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
-    // Unix group init (groupadd/chgrp/setfacl) runs daemon-side via repos.initializeUnixGroup RPC.
+    // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
     // Capture the Feathers service so the `onExit` safety net (below) writes
     // through the same service layer the executor uses — that way clients
@@ -327,6 +327,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           createDbRecord: true,
           userId: userId as string | undefined,
           initUnixGroup,
+          ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
         },
       },
       {
@@ -397,36 +398,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Return immediately - callers can poll `agor_repos_get(repoId)` for
     // `clone_status: 'ready' | 'failed'` to discover the final outcome.
     return { status: 'pending', slug, repo_id: repoId };
-  }
-
-  /**
-   * Custom method: Initialize Unix group for a repo (daemon-side privileged operation).
-   *
-   * Called by the executor via Feathers RPC after cloning a repo, so that
-   * groupadd/chgrp/setfacl run with daemon sudo privileges regardless of
-   * executor impersonation mode.
-   *
-   * Auth: only service accounts (executor JWTs) may invoke this externally.
-   * Internal calls (no `provider`) pass through.
-   */
-  async initializeUnixGroup(
-    data: { repoId: string; userId?: string },
-    params?: RepoParams
-  ): Promise<{ unixGroup: string }> {
-    if (params?.provider) {
-      const caller = (params as AuthenticatedParams | undefined)?.user;
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService) {
-        throw new Forbidden('Only the executor service account may initialize Unix groups');
-      }
-    }
-
-    const { initializeRepoUnixGroup } = await import('../utils/unix-group-init.js');
-    const unixGroup = await initializeRepoUnixGroup(this.db, this.app, data.repoId, data.userId);
-    return { unixGroup };
   }
 
   /**
@@ -928,10 +899,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
+    // Unix permissions: fail-closed inside the tenant-mounted lifecycle executor.
     try {
       const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
       );
 
       // Unix group initialization is a filesystem concern controlled by
@@ -957,6 +929,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
+            ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
             fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
               storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),

@@ -2,7 +2,12 @@
  * `agor db migrate` - Run pending database migrations
  */
 
-import { checkMigrationStatus, createDatabase, runMigrations } from '@agor/core/db';
+import {
+  checkMigrationStatus,
+  createDatabase,
+  runMigrations,
+  sanitizeDbError,
+} from '@agor/core/db';
 import { expandPath, extractDbFilePath } from '@agor/core/utils/path';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -131,9 +136,8 @@ export default class DbMigrate extends Command {
       // Force exit to close database connections (postgres-js keeps connections open)
       process.exit(0);
     } catch (error) {
-      this.error(
-        `Failed to run migrations: ${error instanceof Error ? error.message : String(error)}`
-      );
+      const safeError = sanitizeDbError(error);
+      this.error(`Failed to run migrations: ${safeError.message}`);
     }
   }
 }

@@ -56,6 +56,7 @@ import {
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  sanitizeDbError,
   shortId,
   UsersRepository,
 } from '@agor/core/db';
@@ -161,8 +162,8 @@ export function renderSchedulePrompt(
       },
     };
     return compiledTemplate(context);
-  } catch (error) {
-    console.error(`❌ Failed to render prompt template:`, error);
+  } catch {
+    console.error(`❌ Failed to render prompt template`);
     return template;
   }
 }
@@ -319,13 +320,13 @@ export class SchedulerService {
 
     // Run first tick immediately
     this.tick().catch((error) => {
-      console.error('❌ Scheduler tick failed:', error);
+      console.error('❌ Scheduler tick failed:', sanitizeDbError(error));
     });
 
     // Schedule recurring ticks
     this.intervalHandle = setInterval(() => {
       this.tick().catch((error) => {
-        console.error('❌ Scheduler tick failed:', error);
+        console.error('❌ Scheduler tick failed:', sanitizeDbError(error));
       });
     }, this.config.tickInterval);
   }
@@ -388,12 +389,15 @@ export class SchedulerService {
             await this.processSchedule(schedule, now);
           });
         } catch (error) {
-          console.error(`❌ Failed to process schedule ${shortId(ref.scheduleId)}:`, error);
+          console.error(
+            `❌ Failed to process schedule ${shortId(ref.scheduleId)}:`,
+            sanitizeDbError(error)
+          );
           // Continue processing other schedules
         }
       }
     } catch (error) {
-      console.error('❌ Scheduler tick failed:', error);
+      console.error('❌ Scheduler tick failed:', sanitizeDbError(error));
       throw error;
     }
   }
@@ -463,7 +467,10 @@ export class SchedulerService {
         await this.withTenantDatabase(() =>
           this.scheduleRepo.update(schedule.schedule_id, { next_run_at: nextRunAt })
         ).catch((err) =>
-          console.error(`Failed to advance next_run_at for ${schedule.schedule_id}:`, err)
+          console.error(
+            `Failed to advance next_run_at for ${schedule.schedule_id}:`,
+            sanitizeDbError(err)
+          )
         );
       }
       if (this.config.debug) {
@@ -863,7 +870,7 @@ export class SchedulerService {
 
       return createdSession;
     } catch (error) {
-      console.error(`      ❌ Failed to spawn session for ${schedule.name}:`, error);
+      console.error(`      ❌ Failed to spawn scheduled session:`, sanitizeDbError(error));
       throw error;
     }
   }
@@ -890,7 +897,7 @@ export class SchedulerService {
 
       await this.withTenantDatabase(() => this.scheduleRepo.update(schedule.schedule_id, updates));
     } catch (error) {
-      console.error(`      ❌ Failed to update schedule metadata:`, error);
+      console.error(`      ❌ Failed to update schedule metadata:`, sanitizeDbError(error));
       throw error;
     }
   }
@@ -940,7 +947,7 @@ export class SchedulerService {
         );
       }
     } catch (error) {
-      console.error(`      ❌ Failed to enforce retention policy:`, error);
+      console.error(`      ❌ Failed to enforce retention policy:`, sanitizeDbError(error));
       // Don't throw - retention failure shouldn't block scheduling
     }
   }
