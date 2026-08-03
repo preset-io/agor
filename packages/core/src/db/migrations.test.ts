@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 describe('Postgres migrations', () => {
   it('adds durable task runtime ownership after the artifact consent migration', async () => {
     const migration = await readFile(
-      new URL('../../drizzle/postgres/0071_task_runtime_ownership.sql', import.meta.url),
+      new URL('../../drizzle/postgres/0072_task_runtime_ownership.sql', import.meta.url),
       'utf8'
     );
 
@@ -59,7 +59,7 @@ describe('Task runtime ownership migrations', () => {
       await client.execute(`CREATE TABLE tasks (task_id text PRIMARY KEY NOT NULL, data text)`);
       await client.execute(`INSERT INTO tasks (task_id, data) VALUES ('legacy-task', '{}')`);
       const migration = await readFile(
-        new URL('../../drizzle/sqlite/0075_task_runtime_ownership.sql', import.meta.url),
+        new URL('../../drizzle/sqlite/0076_task_runtime_ownership.sql', import.meta.url),
         'utf8'
       );
       for (const statement of migration.split('--> statement-breakpoint')) {
