@@ -126,10 +126,10 @@ The shared pulse vocabulary is:
 - `unknown_activity` — an unrecognized event that is retained as diagnostic
   evidence and fails open.
 
-Provider adapters own the translation from SDK-specific events into this
-vocabulary. The common task contract must not depend on raw provider event
-names. The SDK version manifest beside the mapping makes dependency upgrades
-an explicit mapping-review point.
+Agentic-tool runtime adapters own the translation from SDK-specific events into
+this vocabulary. The common task contract must not depend on raw runtime event
+names. The SDK version manifest beside the mapping makes dependency upgrades an
+explicit mapping-review point.
 
 ## Two supervisors, two failure classes
 
@@ -160,8 +160,10 @@ an explicit mapping-review point.
 - Pauses while waiting for a known permission/input decision.
 - Tracks known active tool/background-task lifetimes so healthy silent work is
   not treated as idle.
-- Records unknown vocabulary once as `unknown_activity` and continues rather
-  than terminating work it cannot classify.
+- Records unknown vocabulary once as `unknown_activity` and fails open while
+  raw activity continues. Unknown activity does not become meaningful progress;
+  after that raw activity becomes quiet, the recognized first-progress or idle
+  deadline can still fire.
 - In `observe` mode, writes a `would_fire` diagnosis and leaves lifecycle state
   unchanged.
 - In `enforce` mode, recognized `no_first_progress` or `progress_stalled`
@@ -185,7 +187,8 @@ The termination coordinator is the single owner for executor-backed:
 It first atomically claims `stopping` with a durable `termination_request`.
 The request timestamp fences late or duplicate executor quiescence reports.
 The task-scoped executor receives the committed request over its authenticated
-socket, aborts the provider SDK, runs provider cleanup, and reports quiescence.
+socket, aborts the agentic-tool runtime, runs adapter cleanup, and reports
+quiescence.
 The durable task patch/read covers reconnect and delivery races.
 
 Containment then depends on execution mode:
@@ -194,7 +197,7 @@ Containment then depends on execution mode:
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Local executor            | Cooperative quiescence when available, followed by process-group absence verification; escalation can use `SIGTERM` then `SIGKILL`. |
 | Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                  |
-| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                      |
+| OpenCode server-side work | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                      |
 
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
@@ -228,12 +231,12 @@ Preserve these invariants:
 1. Heartbeat liveness and SDK progress remain separate.
 2. `Task.status` remains the durable lifecycle; pulses do not become a second
    state machine.
-3. Provider-specific event names stay inside provider adapters.
+3. Agentic-tool-specific event names stay inside runtime adapters.
 4. Terminal state remains immutable.
 5. `stopping` is released only through the termination coordinator.
 6. A session is not made promptable before required containment is verified.
-7. Unknown activity fails open; absence of classification is not proof of a
-   stall.
+7. Unknown activity fails open while raw activity continues; absence of
+   classification is not proof of meaningful progress or a stall.
 8. Remote launcher exit, wrapper exit, SDK quiescence, and process absence are
    different evidence and must not be collapsed.
 9. Daemon and executor releases are one runtime contract; mixed-version
