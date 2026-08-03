@@ -14,8 +14,8 @@
 
 import type { MCPCatalogProbedAuthType, MCPCatalogProbeResult } from '@agor/core/types';
 import { isOAuthRequired, resolveMCPOAuthDiscovery } from '../tools/mcp/oauth-mcp-transport';
+import { createPinnedFetch, isOutboundRefusal } from '../utils/pinned-fetch';
 import { isPublicHttpUrl } from '../utils/url';
-import { readCappedBody } from './capped-body';
 
 /** Protocol version sent in the probe handshake. */
 const PROBE_PROTOCOL_VERSION = '2025-06-18';
@@ -30,6 +30,13 @@ export interface AuthProbeOptions {
   timeoutMs?: number;
   /** Injected so tests and the ingestion run share one clock. */
   now?: () => Date;
+  /**
+   * Transport seam, so the status-to-verdict rules can be exercised without a
+   * network. Production leaves it unset and gets {@link createPinnedFetch},
+   * which is where the outbound destination filter lives and is tested; a caller
+   * that supplies its own is supplying its own guarantees with it.
+   */
+  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
 }
 
 /**
@@ -40,8 +47,9 @@ export interface AuthProbeOptions {
  * the user chose that server. Here the input is whatever an anonymous stranger
  * published to a public registry, so every request — the initial handshake, the
  * `.well-known` probes discovery derives from the origin, and the metadata URL
- * a `WWW-Authenticate` header names — is held to the same three rules: a public
- * destination, no redirect following, and a bounded body.
+ * a `WWW-Authenticate` header names — is held to the same rules: a destination
+ * that is public both as a URL and as a resolved address, no redirect
+ * following, and a bounded body.
  *
  * Rejecting by throwing is deliberate. Discovery already treats a thrown fetch
  * as "this candidate failed" and moves on, so a refused host degrades to no
@@ -50,25 +58,63 @@ export interface AuthProbeOptions {
 function createProbeFetch(
   timeoutMs: number
 ): (input: string, init?: RequestInit) => Promise<Response> {
-  return async (input, init) => {
-    if (!isPublicHttpUrl(input)) {
-      throw new Error(`Refusing to fetch non-public URL: ${input}`);
-    }
-    const response = await fetch(input, {
-      ...init,
-      // A redirect is not re-validated by re-entering this function, so refuse
-      // it outright rather than trusting a `Location` the daemon never sees.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+  return createPinnedFetch({ timeoutMs, maxBytes: MAX_METADATA_BYTES });
+}
 
-    const capped = await readCappedBody(response, MAX_METADATA_BYTES);
-    if (capped === null) {
-      throw new Error(`Response exceeded ${MAX_METADATA_BYTES} bytes: ${input}`);
+/**
+ * True when a body carries a JSON-RPC 2.0 `initialize` result.
+ *
+ * Status alone says nothing about what answered. A marketing page, a captive
+ * portal, and an API gateway's "healthy" stub all return 200, and recording
+ * that as `none` would put a connect-directly button in front of something that
+ * is not an MCP server at all. Only a well-formed handshake means the endpoint
+ * both speaks MCP and accepted an unauthenticated client.
+ *
+ * `protocolVersion` or `serverInfo` is enough: both are prescribed for an
+ * initialize result and neither appears by accident, while requiring the full
+ * result shape would misreport servers that trim optional fields.
+ */
+function isInitializeResult(body: string): boolean {
+  for (const candidate of jsonPayloadsIn(body)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
     }
-    // Re-wrap so downstream `.json()` sees the bounded body, not the socket.
-    return new Response(capped, { status: response.status, headers: response.headers });
-  };
+    if (!parsed || typeof parsed !== 'object') continue;
+    const message = parsed as { jsonrpc?: unknown; result?: unknown };
+    if (message.jsonrpc !== '2.0') continue;
+    if (!message.result || typeof message.result !== 'object') continue;
+    const result = message.result as { protocolVersion?: unknown; serverInfo?: unknown };
+    if (typeof result.protocolVersion === 'string') return true;
+    if (result.serverInfo && typeof result.serverInfo === 'object') return true;
+  }
+  return false;
+}
+
+/**
+ * Candidate JSON documents inside a response body.
+ *
+ * Streamable HTTP servers may answer either as plain JSON or as an SSE stream
+ * whose payload sits in `data:` lines, and the probe accepts both, so both
+ * framings have to be unwrapped before anything can be parsed. Consecutive
+ * `data:` lines belong to one event and are rejoined per the SSE grammar.
+ */
+function* jsonPayloadsIn(body: string): Generator<string> {
+  yield body;
+  let event: string[] = [];
+  for (const line of body.split(/\r\n|\r|\n/)) {
+    if (line.startsWith('data:')) {
+      event.push(line.slice(5).replace(/^ /, ''));
+      continue;
+    }
+    if (event.length > 0) {
+      yield event.join('\n');
+      event = [];
+    }
+  }
+  if (event.length > 0) yield event.join('\n');
 }
 
 /**
@@ -139,13 +185,26 @@ export async function probeRemoteAuthType(
   const unresolved = (type: MCPCatalogProbedAuthType = 'unknown'): MCPCatalogProbeResult => ({
     probed_auth_type: type,
     probed_at: now(),
+    probed_url: remoteUrl,
   });
 
   if (!isPublicHttpUrl(remoteUrl)) return unresolved();
 
+  const discoveryFetch = options.fetchImpl ?? createProbeFetch(timeoutMs);
+  const handshakeFetch =
+    options.fetchImpl ??
+    createPinnedFetch({
+      timeoutMs,
+      maxBytes: MAX_METADATA_BYTES,
+      // A server that answers over SSE holds the stream open for the rest of
+      // the session, so waiting for `end` would time out on exactly the servers
+      // that answered correctly.
+      isBodyComplete: isInitializeResult,
+    });
+
   let response: Response;
   try {
-    response = await fetch(remoteUrl, {
+    response = await handshakeFetch(remoteUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -162,12 +221,11 @@ export async function probeRemoteAuthType(
           clientInfo: { name: 'agor-catalog-probe', version: '1' },
         },
       }),
-      // Never follow a redirect: the registry-supplied URL is the only host the
-      // operator implicitly trusted, and a redirect could aim at a private one.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
+  } catch (error) {
+    // A destination the outbound filter declined was never contacted, so
+    // "unreachable" would be a claim about a host nothing was learned about.
+    if (isOutboundRefusal(error)) return unresolved();
     // Timeout, DNS failure, connection refused, TLS error.
     return unresolved('unreachable');
   }
@@ -176,11 +234,10 @@ export async function probeRemoteAuthType(
     const origin = await resolveAuthServerOrigin(
       response.headers.get('www-authenticate'),
       remoteUrl,
-      createProbeFetch(timeoutMs)
+      discoveryFetch
     );
     return {
-      probed_auth_type: 'oauth',
-      probed_at: now(),
+      ...unresolved('oauth'),
       ...(origin ? { auth_server_origin: origin } : {}),
     };
   }
@@ -190,13 +247,17 @@ export async function probeRemoteAuthType(
   if (response.status === 401 || response.status === 403) {
     const scheme = parseChallengeScheme(response.headers.get('www-authenticate'));
     return {
-      probed_auth_type: 'credentials',
-      probed_at: now(),
+      ...unresolved('credentials'),
       ...(scheme ? { probed_auth_scheme: scheme } : {}),
     };
   }
 
-  if (response.ok) return unresolved('none');
+  if (response.ok) {
+    // `none` is the one verdict that renders a connect-directly button, so it
+    // has to be earned by a real handshake rather than by a 2xx. Anything else
+    // answering on this URL is something the probe failed to identify.
+    return unresolved(isInitializeResult(await response.text()) ? 'none' : 'unknown');
+  }
 
   return unresolved('unreachable');
 }

@@ -529,6 +529,24 @@ and, during the auth probe, to arbitrary registry-published hosts, and nothing
 renders uncurated registry rows yet. The ~50 curated entries seed on every
 daemon start regardless, so the marketplace is populated offline.
 
+Curation is reconciled, not merely applied: an entry removed from `curated.yaml`
+has its overlay withdrawn on the next seed, so the file stays the source of
+truth for what the marketplace offers.
+
+Every request the auth probe makes goes through `createPinnedFetch`
+(`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
+refuses it unless every resolved address is public, and connects to the address
+it checked — so a registry-published hostname resolving into private space is
+refused rather than fetched. Verdicts record the URL they describe and are
+discarded when the endpoint moves, and only a valid JSON-RPC `initialize` result
+earns `probed_auth_type: none`.
+
+One sync cannot walk the whole registry — a page takes seconds and there are
+hundreds — so a run checkpoints its cursor and the next resumes from it, and
+pagination gets only part of the deadline so the probe sweep still runs. The
+checkpoint lives in the worker process: a daemon restart re-reads the head,
+which is cheap because unchanged rows are skipped.
+
 ```yaml
 # ~/.agor/config.yaml
 mcp_catalog:

@@ -1748,5 +1748,19 @@
     "id": "DAEMON-FS-CAP-181",
     "symbol": "readFile",
     "operation": "call:readFile@readAgenticToolSelectionManifest#1"
+  },
+  {
+    "id": "DAEMON-FS-CAP-182",
+    "class": "A",
+    "file": "packages/core/src/mcp-catalog/curated-loader.ts",
+    "import": "node:fs/promises",
+    "symbol": "readFile",
+    "local": "fs",
+    "operation": "call:fs.readFile@loadCuratedCatalog#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the curated catalog shipped inside the package. The path is repo-checked-in, not caller- or tenant-supplied.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

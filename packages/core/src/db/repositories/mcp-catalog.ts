@@ -12,8 +12,10 @@
  */
 
 import type {
+  MCPCatalogCuratedField,
   MCPCatalogCurationUpsert,
   MCPCatalogEntry,
+  MCPCatalogEntryData,
   MCPCatalogEntryID,
   MCPCatalogFilters,
   MCPCatalogProbeResult,
@@ -60,6 +62,30 @@ export function serializeCapabilityTags(capabilities: string[] | undefined): str
   ];
   if (normalized.length === 0) return null;
   return `${CAPABILITY_DELIMITER}${normalized.join(CAPABILITY_DELIMITER)}${CAPABILITY_DELIMITER}`;
+}
+
+/**
+ * Probe columns to rewrite when a row's endpoint moves.
+ *
+ * A verdict describes the endpoint it was collected from, not the row it is
+ * stored on. Left in place across a URL change, a replacement endpoint inherits
+ * the previous one's answer until the staleness window expires — including
+ * `none`, the one verdict that renders a connect-directly button. Returns null
+ * when the endpoint did not move.
+ *
+ * Written rather than resolved at read time because the marketplace filters on
+ * `probed_auth_type` in SQL: a verdict only the read path knew to ignore would
+ * still match `WHERE probed_auth_type = 'none'`.
+ */
+function probeInvalidation(previousUrl: string | null, nextUrl: string | null) {
+  if ((previousUrl ?? null) === (nextUrl ?? null)) return null;
+  return { probed_auth_type: 'unknown' as const, probed_at: null, auth_server_origin: null };
+}
+
+/** Drop the blob half of a probe verdict, alongside {@link probeInvalidation}. */
+function withoutProbeMetadata(data: MCPCatalogEntryData): MCPCatalogEntryData {
+  const { probed_url, probed_auth_scheme, ...rest } = data;
+  return rest;
 }
 
 /**
@@ -128,6 +154,7 @@ export class MCPCatalogRepository {
 
       probed_auth_type: row.probed_auth_type,
       probed_at: row.probed_at ? new Date(row.probed_at) : undefined,
+      probed_url: data.probed_url,
       auth_server_origin: row.auth_server_origin ?? undefined,
 
       remotes: data.remotes,
@@ -276,6 +303,7 @@ export class MCPCatalogRepository {
         remote_url: entry.remote_url ?? null,
         has_remote: Boolean(entry.remote_url),
         data: {
+          registry_mirrored: true,
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
@@ -296,50 +324,65 @@ export class MCPCatalogRepository {
     // Re-ingesting the same publication is the overwhelmingly common case.
     if (storedAt !== null && incomingAt !== null && incomingAt <= storedAt) return 'unchanged';
 
-    // Two different precedence rules, deliberately:
-    //
-    // Editorial copy is curation's to own — a hand-written title should not be
-    // replaced by the registry's on every republication.
-    const preferCurated = <T>(curatedValue: T | null, incoming: T | undefined): T | null =>
-      existing.curated && curatedValue !== null && curatedValue !== undefined
-        ? curatedValue
-        : (incoming ?? null);
+    const existingData = existing.data ?? {};
+    // Ownership is per field, not per row. `curated` only says an overlay
+    // exists; most curated entries leave `title` and `description` to the
+    // registry, so deferring on the strength of the row flag would pin whichever
+    // registry copy happened to land first and never accept a correction.
+    const curatedFields = new Set<MCPCatalogCuratedField>(existingData.curated_fields ?? []);
 
-    // The connect surface is the registry's wherever it has an opinion, but a
-    // registry that publishes a package-only release has no opinion about a
-    // remote URL — and nulling the curated one there would silently remove the
-    // entry's only way to connect.
-    const preferRegistry = <T>(curatedValue: T | null, incoming: T | undefined): T | null =>
-      incoming ?? (existing.curated ? curatedValue : null);
+    // Editorial copy the overlay actually wrote is curation's; the rest tracks
+    // the registry, including back to null when a republication drops it.
+    const editorial = <T>(
+      field: MCPCatalogCuratedField,
+      curatedValue: T | null,
+      incoming: T | undefined
+    ): T | null => (curatedFields.has(field) ? curatedValue : (incoming ?? null));
 
-    const remoteUrl = preferRegistry(existing.remote_url, entry.remote_url);
-    // `transport` describes `remote_url`, so it has to follow whichever one
-    // won. Taking the registry's `stdio` while keeping a curated remote URL
-    // would describe the row as unconnectable over HTTP when it is not.
+    // The connect surface is the registry's wherever it has an opinion. Where it
+    // has none, only a URL curation supplied survives — a registry-owned URL
+    // must not outlive the publication that carried it, or a package-only
+    // release leaves the row advertising an endpoint nobody publishes.
+    const curationOwnsSurface = existingData.connect_surface_source === 'curation';
+    const registrySuppliedRemote = entry.remote_url !== undefined;
+    const remoteUrl = registrySuppliedRemote
+      ? (entry.remote_url ?? null)
+      : curationOwnsSurface
+        ? existing.remote_url
+        : null;
+    // `transport` describes `remote_url`, so it follows whichever one won.
+    // Taking the registry's `stdio` while keeping a curated remote URL would
+    // describe the row as unconnectable over HTTP when it is not.
     const transport =
-      remoteUrl === entry.remote_url
+      registrySuppliedRemote || !curationOwnsSurface
         ? (entry.transport ?? null)
-        : (existing.transport ?? entry.transport ?? null);
+        : (existing.transport ?? null);
+    const probeReset = probeInvalidation(existing.remote_url, remoteUrl);
 
     await update(this.db, mcpCatalogEntries)
       .set({
         ...registryColumns,
-        title: preferCurated(existing.title, entry.title),
-        description: preferCurated(existing.description, entry.description),
-        website_url: preferRegistry(existing.website_url, entry.website_url),
+        title: editorial('title', existing.title, entry.title),
+        description: editorial('description', existing.description, entry.description),
+        website_url:
+          entry.website_url ?? (curatedFields.has('website_url') ? existing.website_url : null),
         transport,
         remote_url: remoteUrl,
         has_remote: Boolean(remoteUrl),
+        ...(probeReset ?? {}),
         data: {
-          ...(existing.data ?? {}),
+          ...(probeReset ? withoutProbeMetadata(existingData) : existingData),
+          registry_mirrored: true,
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
           registry_status: entry.registry_status,
           repository_source: entry.repository_source,
-          // The registry owns the surface whenever it published one; otherwise
-          // whatever owned it before still does.
-          ...(entry.remote_url ? { connect_surface_source: 'registry' as const } : {}),
+          connect_surface_source: registrySuppliedRemote
+            ? ('registry' as const)
+            : curationOwnsSurface
+              ? ('curation' as const)
+              : undefined,
         },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
@@ -354,6 +397,16 @@ export class MCPCatalogRepository {
   async upsertCuration(entry: MCPCatalogCurationUpsert): Promise<'created' | 'updated'> {
     const now = new Date();
     const existing = await this.rawByName(entry.name);
+
+    // Recorded so the registry writer can tell a value this overlay chose from
+    // one it merely inherited. Rewritten in full each seed: dropping `title`
+    // from `curated.yaml` has to hand the field back to the registry, which an
+    // additive set could never express.
+    const curatedFields = ([] as MCPCatalogCuratedField[]).concat(
+      entry.title === undefined ? [] : 'title',
+      entry.description === undefined ? [] : 'description',
+      entry.website_url === undefined ? [] : 'website_url'
+    );
 
     const curationColumns = {
       curated: true,
@@ -382,6 +435,7 @@ export class MCPCatalogRepository {
           has_remote: Boolean(entry.remote_url),
           data: {
             capabilities: entry.capabilities,
+            curated_fields: curatedFields,
             ...(entry.remote_url ? { connect_surface_source: 'curation' as const } : {}),
           },
           ...curationColumns,
@@ -399,11 +453,13 @@ export class MCPCatalogRepository {
     // column being non-null. Inferring it would pin the first curated URL
     // forever, because an edited `curated.yaml` would see its own earlier value
     // sitting there and defer to it.
+    const existingData = existing.data ?? {};
     const registryOwnsSurface =
-      existing.data?.connect_surface_source === 'registry' && Boolean(existing.remote_url);
+      existingData.connect_surface_source === 'registry' && Boolean(existing.remote_url);
     const connectSurface = registryOwnsSurface
       ? { remote_url: existing.remote_url, transport: existing.transport }
       : { remote_url: entry.remote_url ?? null, transport: entry.transport ?? null };
+    const probeReset = probeInvalidation(existing.remote_url, connectSurface.remote_url);
 
     await update(this.db, mcpCatalogEntries)
       .set({
@@ -414,9 +470,11 @@ export class MCPCatalogRepository {
         transport: connectSurface.transport,
         remote_url: connectSurface.remote_url,
         has_remote: Boolean(connectSurface.remote_url),
+        ...(probeReset ?? {}),
         data: {
-          ...(existing.data ?? {}),
+          ...(probeReset ? withoutProbeMetadata(existingData) : existingData),
           capabilities: entry.capabilities,
+          curated_fields: curatedFields,
           ...(registryOwnsSurface ? {} : { connect_surface_source: 'curation' as const }),
         },
       })
@@ -456,28 +514,109 @@ export class MCPCatalogRepository {
         probed_at: null,
         auth_server_origin: null,
         updated_at: new Date(),
-        data: { ...(existing.data ?? {}), registry_status: 'deleted' },
+        data: { ...withoutProbeMetadata(existing.data ?? {}), registry_status: 'deleted' },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
     return 'retired-curated';
   }
 
-  /** Cache an auth probe verdict on the row. */
+  /**
+   * Cache an auth probe verdict on the row.
+   *
+   * Discarded when the row's endpoint moved while the probe was in flight —
+   * probing happens outside any database unit, so the URL read at selection time
+   * is not guaranteed to still be the row's, and writing anyway would recreate
+   * exactly the stale-verdict-on-a-new-endpoint case the invalidation prevents.
+   */
   async recordProbeResult(name: string, result: MCPCatalogProbeResult): Promise<void> {
     const existing = await this.rawByName(name);
     if (!existing) return;
+    if (existing.remote_url !== result.probed_url) return;
 
     await update(this.db, mcpCatalogEntries)
       .set({
         probed_auth_type: result.probed_auth_type,
         probed_at: result.probed_at,
         auth_server_origin: result.auth_server_origin ?? null,
-        data: { ...(existing.data ?? {}), probed_auth_scheme: result.probed_auth_scheme },
+        data: {
+          ...(existing.data ?? {}),
+          probed_url: result.probed_url,
+          probed_auth_scheme: result.probed_auth_scheme,
+        },
         updated_at: new Date(),
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
+  }
+
+  /** Names of every row currently carrying a curation overlay. */
+  async listCuratedNames(): Promise<string[]> {
+    const rows = await select(this.db, { name: mcpCatalogEntries.name })
+      .from(mcpCatalogEntries)
+      .where(eq(mcpCatalogEntries.curated, true))
+      .all();
+    return rows.map((row: { name: string }) => row.name);
+  }
+
+  /**
+   * Withdraw the curation overlay from a row `curated.yaml` no longer names.
+   *
+   * The seed is otherwise additive, which makes the file the source of truth
+   * only for entries it still contains: a deleted entry keeps its shelf and its
+   * benefit copy forever, and a rename orphans the old name behind the new one.
+   *
+   * A row the registry also mirrors keeps its registry half and simply stops
+   * being curated. A row that existed only because the file named it is deleted
+   * outright — there is nothing underneath it to fall back to.
+   */
+  async retireCuration(name: string): Promise<'deleted' | 'uncurated' | 'absent'> {
+    const existing = await this.rawByName(name);
+    if (!existing?.curated) return 'absent';
+
+    const data = existing.data ?? {};
+    // The fallback covers rows mirrored before the marker existed; both signals
+    // are registry-only, so neither can be true of a curation-created row.
+    const registryMirrored =
+      data.registry_mirrored === true ||
+      existing.version !== null ||
+      existing.registry_updated_at !== null;
+
+    if (!registryMirrored) {
+      await deleteFrom(this.db, mcpCatalogEntries)
+        .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
+        .run();
+      return 'deleted';
+    }
+
+    const curationOwnsSurface = data.connect_surface_source === 'curation';
+    const remoteUrl = curationOwnsSurface ? null : existing.remote_url;
+    const probeReset = probeInvalidation(existing.remote_url, remoteUrl);
+    const { capabilities, curated_fields, connect_surface_source, ...registryData } = data;
+
+    await update(this.db, mcpCatalogEntries)
+      .set({
+        curated: false,
+        category: null,
+        capability_tags: null,
+        benefit: null,
+        starter_prompt: null,
+        permission_disclosure: null,
+        icon_url: null,
+        // `verified` is a curation claim; without the overlay there is nobody
+        // making it.
+        verified: false,
+        popularity_rank: null,
+        remote_url: remoteUrl,
+        has_remote: Boolean(remoteUrl),
+        transport: curationOwnsSurface ? null : existing.transport,
+        ...(probeReset ?? {}),
+        updated_at: new Date(),
+        data: probeReset ? withoutProbeMetadata(registryData) : registryData,
+      })
+      .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
+      .run();
+    return 'uncurated';
   }
 
   /**

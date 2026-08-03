@@ -93,6 +93,16 @@ export class MCPCatalogIngestionWorker {
   private running = false;
   private lastResult: IngestionResult | null = null;
   private lastError: string | null = null;
+  /**
+   * Where the next sync resumes.
+   *
+   * The registry takes far longer to walk than one run's deadline allows, so a
+   * run that always started at the first page would re-read the same head every
+   * six hours and never reach the tail. Held in memory rather than persisted: a
+   * daemon restart costs one repeated head, which the `unchanged` fast path
+   * makes cheap, and that is not worth a table for.
+   */
+  private resumeCursor: string | undefined;
 
   constructor(
     private db: TenantScopeAwareDatabase,
@@ -139,7 +149,7 @@ export class MCPCatalogIngestionWorker {
         log: (message) => console.warn(`[mcp-catalog] ${message}`),
       });
       console.log(
-        `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, failed: ${seeded.failed})`
+        `📚 MCP catalog curation applied (created: ${seeded.created}, updated: ${seeded.updated}, retired: ${seeded.retired}, failed: ${seeded.failed}, retirementFailures: ${seeded.retirementFailures})`
       );
 
       // Opt-in, so anything other than an explicit `true` means off. Testing
@@ -155,12 +165,14 @@ export class MCPCatalogIngestionWorker {
         ...(this.options.probeBudget === undefined
           ? {}
           : { probeBudget: this.options.probeBudget }),
+        ...(this.resumeCursor === undefined ? {} : { startCursor: this.resumeCursor }),
         log: (message) => console.warn(`[mcp-catalog] ${message}`),
       });
+      this.resumeCursor = result.nextCursor;
       this.lastResult = result;
       this.lastError = null;
       console.log(
-        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, withdrawn: ${result.withdrawn}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated}) — failures: entry=${result.entryFailures}, retirement=${result.retirementFailures}, probe=${result.probeFailures}, page=${result.pageFailures}`
+        `📚 MCP catalog sync finished (created: ${result.created}, updated: ${result.updated}, unchanged: ${result.unchanged}, withdrawn: ${result.withdrawn}, skipped: ${result.skipped}, probed: ${result.probed}, truncated: ${result.truncated}, resumes: ${result.nextCursor ? 'yes' : 'from the start'}) — failures: entry=${result.entryFailures}, retirement=${result.retirementFailures}, probe=${result.probeFailures}, page=${result.pageFailures}`
       );
       return result;
     } catch (error) {

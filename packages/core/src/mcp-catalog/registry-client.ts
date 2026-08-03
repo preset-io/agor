@@ -92,6 +92,18 @@ function normalizeTransport(value: unknown): MCPCatalogTransport | undefined {
   }
 }
 
+/**
+ * Transport for an HTTP remote, or undefined when the registry named something
+ * this cannot map onto a connect branch.
+ *
+ * `stdio` is excluded deliberately: it is a valid transport for a package, but a
+ * remote endpoint claiming it describes nothing the connect flow could dial.
+ */
+function normalizeRemoteTransport(value: unknown): MCPCatalogTransport | undefined {
+  const transport = normalizeTransport(value);
+  return transport === 'streamable-http' || transport === 'sse' ? transport : undefined;
+}
+
 function normalizeRemotes(value: unknown): MCPCatalogRemote[] {
   if (!Array.isArray(value)) return [];
   const remotes: MCPCatalogRemote[] = [];
@@ -104,6 +116,11 @@ function normalizeRemotes(value: unknown): MCPCatalogRemote[] {
     // Only http(s) endpoints are connectable, and refusing everything else here
     // keeps unvalidated schemes out of the probe's fetch target.
     if (!/^https?:\/\//i.test(url)) continue;
+    // A transport nothing can interpret makes the endpoint unconnectable, and
+    // keeping it would still set `remote_url` — presenting the row as
+    // connectable and pointing the probe at it. Dropping the remote rather than
+    // the record lets a server that also publishes a usable one still work.
+    if (!normalizeRemoteTransport(type)) continue;
     remotes.push({ type, url });
   }
   return remotes;
@@ -205,7 +222,7 @@ export function normalizeRegistryServer(record: unknown): MCPCatalogRegistryUpse
     repository_url: asString(repository?.url),
     repository_source: asString(repository?.source),
     transport: primaryRemote
-      ? normalizeTransport(primaryRemote.type)
+      ? normalizeRemoteTransport(primaryRemote.type)
       : normalizeTransport(packages[0]?.transport_type),
     remote_url: primaryRemote?.url,
     remotes: remotes.length > 0 ? remotes : undefined,

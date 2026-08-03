@@ -44,7 +44,11 @@ import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
-import { buildTenantDeletionManifest, type TenantDeletionTable } from './tenant-deletion-manifest';
+import {
+  buildTenantDeletionManifest,
+  GLOBAL_TABLES,
+  type TenantDeletionTable,
+} from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { assertTenantWriteGateGeneration } from './tenant-write-gate';
@@ -502,6 +506,35 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
   }
 }
 
+/**
+ * Assert that a relation declared global really is.
+ *
+ * Live-catalog discovery selects on forced row security, which a global table
+ * enables for its own capability policy rather than for tenant isolation. The
+ * declaration in {@link GLOBAL_TABLES} is what tells the two apart, so it has to
+ * be checked rather than trusted: a table that carries tenant data and is then
+ * named here would otherwise skip the entire tenant contract and be silently
+ * left behind by every deletion.
+ */
+function assertDeclaredGlobalRelation(relation: CatalogRelation, qualifiedName: string): void {
+  if (relation.hasTenantColumn) {
+    throw new TenantDeletionCatalogError(
+      `Refusing tenant deletion: ${qualifiedName} is declared global but has a tenant_id column`
+    );
+  }
+  for (const policy of relation.policies) {
+    const referencesTenant =
+      policy.name.startsWith('tenant_isolation_') ||
+      (policy.usingExpression ?? '').includes('agor.tenant_id') ||
+      (policy.checkExpression ?? '').includes('agor.tenant_id');
+    if (referencesTenant) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName} is declared global but policy ${policy.name} scopes rows by tenant`
+      );
+    }
+  }
+}
+
 interface CatalogAudit {
   liveTenantTables: ReadonlySet<string>;
   fingerprint: string;
@@ -534,6 +567,10 @@ async function auditLiveTenantCatalog(
       throw new TenantDeletionCatalogError(
         `Refusing tenant deletion: tenant-contract relation ${qualifiedName} participates in table inheritance`
       );
+    }
+    if (GLOBAL_TABLES.has(relation.tableName)) {
+      assertDeclaredGlobalRelation(relation, qualifiedName);
+      continue;
     }
     if (!relation.hasTenantColumn) {
       throw new TenantDeletionCatalogError(

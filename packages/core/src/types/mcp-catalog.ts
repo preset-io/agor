@@ -92,7 +92,9 @@ export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
  * different connect affordance, which is why "needs a key" and "we could not
  * reach it" are distinct rather than both collapsing into `unknown`:
  *
- * - `none`        — an unauthenticated handshake succeeded; connect directly.
+ * - `none`        — an unauthenticated JSON-RPC `initialize` handshake
+ *                   succeeded; connect directly. A 2xx alone does not qualify:
+ *                   any web page can return one.
  * - `oauth`       — 401 with an OAuth challenge; run the browser flow.
  * - `credentials` — 401/403 with a non-OAuth challenge; ask for an API key.
  * - `unreachable` — the host did not answer, or answered 5xx.
@@ -129,6 +131,15 @@ export interface MCPCatalogPackage {
 }
 
 /**
+ * Columns both writers can fill, so ownership has to be recorded rather than
+ * guessed. Everything outside this list belongs to exactly one writer by
+ * construction — `benefit` is only ever curated, `version` only ever mirrored.
+ */
+export const MCP_CATALOG_CURATED_FIELDS = ['title', 'description', 'website_url'] as const;
+
+export type MCPCatalogCuratedField = (typeof MCP_CATALOG_CURATED_FIELDS)[number];
+
+/**
  * Everything about an entry that is neither filtered nor sorted, stored in the
  * row's JSON blob following the `mcp_servers` convention.
  */
@@ -141,6 +152,14 @@ export interface MCPCatalogEntryData {
   registry_icons?: string[];
   /** `_meta["io.modelcontextprotocol.registry/official"].status`. */
   registry_status?: string;
+  /**
+   * Set once the registry mirror has written this row.
+   *
+   * Distinguishes a row the registry publishes from one that exists only
+   * because `curated.yaml` named it, which decides whether dropping the entry
+   * from that file should leave a row behind or remove it.
+   */
+  registry_mirrored?: boolean;
   /** Curated capability tags in display order (also materialized for search). */
   capabilities?: string[];
   /** Registry `repository.source`, e.g. `github`. */
@@ -156,6 +175,24 @@ export interface MCPCatalogEntryData {
    * should fill from a value it must not clobber.
    */
   connect_surface_source?: 'registry' | 'curation';
+  /**
+   * Overlay columns `curated.yaml` supplied a value for on the last seed.
+   *
+   * `curated` says the row has a curation overlay; it does not say which
+   * columns that overlay actually filled. Most curated entries deliberately
+   * leave `title` and `description` to the registry, so treating the row-level
+   * flag as per-field ownership freezes whichever registry copy landed first
+   * and lets a stale value outlive the publication that produced it.
+   */
+  curated_fields?: MCPCatalogCuratedField[];
+  /**
+   * The URL the cached probe verdict describes.
+   *
+   * The verdict is about an endpoint, not about a row. When a republication or
+   * a curation edit moves `remote_url`, this is what makes the difference
+   * visible instead of leaving the new endpoint wearing the old one's answer.
+   */
+  probed_url?: string;
 }
 
 /**
@@ -201,6 +238,8 @@ export interface MCPCatalogEntry {
   // Auth probe
   probed_auth_type: MCPCatalogProbedAuthType;
   probed_at?: Date;
+  /** The endpoint the cached verdict describes. */
+  probed_url?: string;
   /** Origin of the authorization server discovered during the probe. */
   auth_server_origin?: string;
 
@@ -278,6 +317,8 @@ export interface MCPCatalogCurationUpsert {
 export interface MCPCatalogProbeResult {
   probed_auth_type: MCPCatalogProbedAuthType;
   probed_at: Date;
+  /** The endpoint this verdict describes. Stored so a moved URL is detectable. */
+  probed_url: string;
   auth_server_origin?: string;
   /** Challenge scheme seen on a `credentials` verdict, e.g. `Basic`, `ApiKey`. */
   probed_auth_scheme?: string;

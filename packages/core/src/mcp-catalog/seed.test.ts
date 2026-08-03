@@ -50,7 +50,13 @@ describe('seedCuratedCatalog', () => {
         ],
       });
 
-      expect(result).toEqual({ created: 1, updated: 0, failed: 0 });
+      expect(result).toEqual({
+        created: 1,
+        updated: 0,
+        failed: 0,
+        retired: 0,
+        retirementFailures: 0,
+      });
       const seeded = await repository.findByName('io.sentry/mcp');
       expect(seeded).toMatchObject({
         curated: true,
@@ -76,7 +82,13 @@ describe('seedCuratedCatalog', () => {
       entries: [entry('com.notion/mcp', { category: 'productivity', benefit: 'Curated benefit' })],
     });
 
-    expect(result).toEqual({ created: 0, updated: 1, failed: 0 });
+    expect(result).toEqual({
+      created: 0,
+      updated: 1,
+      failed: 0,
+      retired: 0,
+      retirementFailures: 0,
+    });
     expect(await repository.findByName('com.notion/mcp')).toMatchObject({
       curated: true,
       category: 'productivity',
@@ -172,7 +184,13 @@ describe('seedCuratedCatalog', () => {
     await seedCuratedCatalog(withRepository(repository), { entries });
     const second = await seedCuratedCatalog(withRepository(repository), { entries });
 
-    expect(second).toEqual({ created: 0, updated: 2, failed: 0 });
+    expect(second).toEqual({
+      created: 0,
+      updated: 2,
+      failed: 0,
+      retired: 0,
+      retirementFailures: 0,
+    });
     expect(await repository.count()).toBe(2);
   });
 
@@ -205,6 +223,105 @@ describe('seedCuratedCatalog', () => {
       log: () => {},
     });
 
-    expect(result).toEqual({ created: 2, updated: 0, failed: 1 });
+    expect(result).toEqual({
+      created: 2,
+      updated: 0,
+      failed: 1,
+      retired: 0,
+      retirementFailures: 0,
+    });
+  });
+});
+
+describe('curated.yaml reconciliation', () => {
+  dbTest('removes a row for an entry the file no longer names', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one'), entry('b.example/two')],
+    });
+
+    const result = await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one')],
+    });
+
+    expect(result).toMatchObject({ updated: 1, retired: 1, retirementFailures: 0 });
+    expect(await repository.findByName('b.example/two')).toBeNull();
+  });
+
+  dbTest('uncurates rather than deletes a row the registry also publishes', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.notion/mcp',
+      version: '1.2.3',
+      description: 'Registry description',
+    });
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('com.notion/mcp'), entry('a.example/one')],
+    });
+
+    await seedCuratedCatalog(withRepository(repository), { entries: [entry('a.example/one')] });
+
+    expect(await repository.findByName('com.notion/mcp')).toMatchObject({
+      curated: false,
+      version: '1.2.3',
+      description: 'Registry description',
+    });
+  });
+
+  dbTest('follows a rename rather than leaving both names curated', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), { entries: [entry('old.example/mcp')] });
+
+    // A rename is a delete and an add as far as the natural key is concerned.
+    await seedCuratedCatalog(withRepository(repository), { entries: [entry('new.example/mcp')] });
+
+    expect(await repository.findByName('old.example/mcp')).toBeNull();
+    expect(await repository.findByName('new.example/mcp')).toMatchObject({ curated: true });
+    expect(await repository.count()).toBe(1);
+  });
+
+  dbTest('refuses to reconcile against an empty entry list', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), { entries: [entry('a.example/one')] });
+
+    // Far likelier a mistake than an instruction to unpublish the marketplace.
+    const result = await seedCuratedCatalog(withRepository(repository), { entries: [] });
+
+    expect(result.retired).toBe(0);
+    expect(await repository.findByName('a.example/one')).toMatchObject({ curated: true });
+  });
+
+  dbTest('refuses to reconcile when nothing could be applied', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one'), entry('b.example/two')],
+    });
+
+    vi.spyOn(repository, 'upsertCuration').mockRejectedValue(new Error('write rejected'));
+    const result = await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one')],
+      log: () => {},
+    });
+
+    // A run that wrote nothing has no evidence about which entries are current,
+    // so treating the survivors as deletions would act on a failure.
+    expect(result).toMatchObject({ failed: 1, retired: 0 });
+    expect(await repository.findByName('b.example/two')).toMatchObject({ curated: true });
+  });
+
+  dbTest('counts a withdrawal it could not apply', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one'), entry('b.example/two')],
+    });
+
+    vi.spyOn(repository, 'retireCuration').mockRejectedValue(new Error('delete rejected'));
+    const result = await seedCuratedCatalog(withRepository(repository), {
+      entries: [entry('a.example/one')],
+      log: () => {},
+    });
+
+    // `retired: 0` alone cannot distinguish this from "nothing was removed".
+    expect(result).toMatchObject({ retired: 0, retirementFailures: 1 });
   });
 });

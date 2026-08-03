@@ -41,6 +41,22 @@ export interface IngestionOptions {
   probeDelayMs?: number;
   /** Overall wall-clock budget for the whole run. */
   deadlineMs?: number;
+  /**
+   * Share of the run reserved for pagination, leaving the rest for probing.
+   *
+   * Without a split, pagination — which cannot finish the registry in one run —
+   * consumes the entire deadline and the probe sweep, gated on time remaining,
+   * never executes at all.
+   */
+  paginationDeadlineMs?: number;
+  /**
+   * Cursor to resume the walk from, normally a previous run's `nextCursor`.
+   *
+   * The registry is far larger than one run's deadline, so a walk that always
+   * restarts at page one re-reads the same head every time and never reaches the
+   * tail. Resuming is what makes repeated runs cover the whole registry.
+   */
+  startCursor?: string;
   probe?: (remoteUrl: string) => Promise<MCPCatalogProbeResult>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -75,6 +91,11 @@ export interface IngestionResult {
   probeFailures: number;
   /** True when the run stopped early on its deadline or failure budget. */
   truncated: boolean;
+  /**
+   * Where the next run should resume, or undefined when the walk reached the
+   * end of the registry and the next run should start over to pick up changes.
+   */
+  nextCursor?: string;
 }
 
 const DEFAULTS = {
@@ -85,6 +106,15 @@ const DEFAULTS = {
   probeMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
   probeDelayMs: 500,
   deadlineMs: 10 * 60 * 1000,
+  /**
+   * Fraction of the deadline pagination may spend.
+   *
+   * Measured against the live registry, one page takes seconds and the whole
+   * catalogue takes far longer than any sane deadline, so pagination will always
+   * hit its limit. Capping it below the overall deadline is what leaves the
+   * probe sweep any time at all.
+   */
+  paginationDeadlineFraction: 0.6,
 } as const;
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -110,6 +140,8 @@ export async function runCatalogIngestion(
   const probeMaxAgeMs = options.probeMaxAgeMs ?? DEFAULTS.probeMaxAgeMs;
   const probeDelayMs = options.probeDelayMs ?? DEFAULTS.probeDelayMs;
   const deadlineMs = options.deadlineMs ?? DEFAULTS.deadlineMs;
+  const paginationDeadlineMs =
+    options.paginationDeadlineMs ?? Math.floor(deadlineMs * DEFAULTS.paginationDeadlineFraction);
   const probe = options.probe ?? ((remoteUrl: string) => probeRemoteAuthType(remoteUrl));
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
@@ -132,8 +164,14 @@ export async function runCatalogIngestion(
 
   const startedAt = now();
   const outOfTime = (): boolean => now() - startedAt >= deadlineMs;
+  const outOfPageTime = (): boolean => now() - startedAt >= paginationDeadlineMs;
 
-  let cursor: string | undefined;
+  let cursor = options.startCursor;
+  // A checkpoint is only good while the registry still honours it. If the very
+  // first resumed fetch fails, the walk restarts from the beginning rather than
+  // spending the run failing against a cursor the registry has forgotten.
+  let resumedFromCheckpoint = cursor !== undefined;
+  let exhausted = false;
   let consecutiveFailures = 0;
   // The registry keys on name and we upsert by name, but a single malformed
   // page could still repeat one; deduplicating within a run keeps the write
@@ -142,9 +180,9 @@ export async function runCatalogIngestion(
   const seenCursors = new Set<string>();
 
   for (let page = 0; page < maxPages; page += 1) {
-    if (outOfTime()) {
+    if (outOfPageTime()) {
       result.truncated = true;
-      log('Ingestion deadline reached during registry pagination');
+      log('Pagination budget reached; the next run resumes from this cursor');
       break;
     }
 
@@ -152,8 +190,16 @@ export async function runCatalogIngestion(
     try {
       fetched = await registry.fetchPage(cursor);
       consecutiveFailures = 0;
+      resumedFromCheckpoint = false;
     } catch (error) {
       result.pageFailures += 1;
+      if (resumedFromCheckpoint) {
+        log('Resume cursor was rejected; restarting the walk from the beginning');
+        cursor = undefined;
+        resumedFromCheckpoint = false;
+        await sleep(pageDelayMs);
+        continue;
+      }
       consecutiveFailures += 1;
       log(
         `Registry page fetch failed (${consecutiveFailures}/${maxConsecutivePageFailures}): ${
@@ -223,11 +269,16 @@ export async function runCatalogIngestion(
     }
 
     const nextCursor = fetched.nextCursor;
-    if (!nextCursor) break;
+    if (!nextCursor) {
+      exhausted = true;
+      break;
+    }
     // A registry that hands back a cursor it already gave us would otherwise
-    // burn the whole page budget and report a full run.
+    // burn the whole page budget and report a full run. Treated as the end of
+    // the walk, not a checkpoint: resuming from a looping cursor would loop.
     if (seenCursors.has(nextCursor)) {
       result.truncated = true;
+      exhausted = true;
       log(`Registry returned a repeated cursor (${nextCursor}); stopping pagination`);
       break;
     }
@@ -239,6 +290,10 @@ export async function runCatalogIngestion(
     }
     await sleep(pageDelayMs);
   }
+
+  // Undefined once the walk is done, so the next run starts over and sees
+  // everything republished since.
+  result.nextCursor = exhausted ? undefined : cursor;
 
   if (probeBudget > 0 && !outOfTime()) {
     const staleBefore = new Date(now() - probeMaxAgeMs);

@@ -146,6 +146,56 @@ describe('normalizeRegistryServer', () => {
     expect(normalized?.remote_url).toBe('https://good.example.com/mcp');
   });
 
+  it('drops a remote whose transport cannot be normalized', () => {
+    const normalized = normalizeRegistryServer({
+      server: {
+        name: 'com.example/mcp',
+        version: '1',
+        remotes: [
+          { type: 'websocket-experimental', url: 'https://weird.example.com/mcp' },
+          { type: 'streamable-http', url: 'https://good.example.com/mcp' },
+        ],
+      },
+      _meta: {},
+    });
+
+    // Keeping it would set `remote_url` and present the row as connectable over
+    // a transport nothing can dial — and point the probe at it.
+    expect(normalized?.remotes).toEqual([
+      { type: 'streamable-http', url: 'https://good.example.com/mcp' },
+    ]);
+    expect(normalized?.remote_url).toBe('https://good.example.com/mcp');
+    expect(normalized?.transport).toBe('streamable-http');
+  });
+
+  it('leaves a server with no usable remote unconnectable rather than guessing', () => {
+    const normalized = normalizeRegistryServer({
+      server: {
+        name: 'com.example/mcp',
+        version: '1',
+        remotes: [{ type: 'carrier-pigeon', url: 'https://weird.example.com/mcp' }],
+      },
+      _meta: {},
+    });
+
+    expect(normalized?.remotes).toBeUndefined();
+    expect(normalized?.remote_url).toBeUndefined();
+    expect(normalized?.transport).toBeUndefined();
+  });
+
+  it('rejects a remote claiming stdio, which describes nothing dialable', () => {
+    const normalized = normalizeRegistryServer({
+      server: {
+        name: 'com.example/mcp',
+        version: '1',
+        remotes: [{ type: 'stdio', url: 'https://weird.example.com/mcp' }],
+      },
+      _meta: {},
+    });
+
+    expect(normalized?.remote_url).toBeUndefined();
+  });
+
   it('derives transport from the first package when there is no remote', () => {
     const normalized = normalizeRegistryServer(
       registryRecord('com.example/pkg', {
@@ -735,6 +785,7 @@ describe('runCatalogIngestion', () => {
     const probe = vi.fn(async (remoteUrl: string) => ({
       probed_auth_type: remoteUrl.includes('one') ? ('oauth' as const) : ('none' as const),
       probed_at: probedAt,
+      probed_url: remoteUrl,
       ...(remoteUrl.includes('one') ? { auth_server_origin: 'https://auth.example.com' } : {}),
     }));
 
@@ -757,9 +808,10 @@ describe('runCatalogIngestion', () => {
 
   dbTest('respects the probe budget instead of probing the whole catalog', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
-    const probe = vi.fn(async () => ({
+    const probe = vi.fn(async (remoteUrl: string) => ({
       probed_auth_type: 'none' as const,
       probed_at: new Date('2026-07-28T00:00:00.000Z'),
+      probed_url: remoteUrl,
     }));
 
     const result = await runCatalogIngestion(withRepository(repository), {
@@ -786,7 +838,7 @@ describe('runCatalogIngestion', () => {
     const repository = new MCPCatalogRepository(db);
     const probe = vi.fn(async (remoteUrl: string) => {
       if (remoteUrl.includes('one')) throw new Error('probe exploded');
-      return { probed_auth_type: 'none' as const, probed_at: new Date() };
+      return { probed_auth_type: 'none' as const, probed_at: new Date(), probed_url: remoteUrl };
     });
 
     const result = await runCatalogIngestion(withRepository(repository), {
@@ -805,9 +857,10 @@ describe('runCatalogIngestion', () => {
 
   dbTest('does not re-probe an entry whose cached verdict is still fresh', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
-    const probe = vi.fn(async () => ({
+    const probe = vi.fn(async (remoteUrl: string) => ({
       probed_auth_type: 'none' as const,
       probed_at: new Date('2026-07-28T00:00:00.000Z'),
+      probed_url: remoteUrl,
     }));
     const opts = {
       registry: stubRegistry([{ records: [registryRecord('a.example/one')] }]),
@@ -829,9 +882,10 @@ describe('runCatalogIngestion', () => {
 
   dbTest('never probes an entry the registry published without a remote', async ({ db }) => {
     const repository = new MCPCatalogRepository(db);
-    const probe = vi.fn(async () => ({
+    const probe = vi.fn(async (remoteUrl: string) => ({
       probed_auth_type: 'none' as const,
       probed_at: new Date(),
+      probed_url: remoteUrl,
     }));
 
     await runCatalogIngestion(withRepository(repository), {
@@ -888,5 +942,137 @@ describe('MCPRegistryClient', () => {
     const client = new MCPRegistryClient({ baseUrl: 'https://registry.test', fetchImpl });
 
     await expect(client.fetchPage()).rejects.toThrow(/429/);
+  });
+});
+
+describe('resuming a walk the deadline cut short', () => {
+  dbTest('reports where to resume when the pagination budget runs out', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    let clock = 0;
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([
+        { records: [registryRecord('a.example/one')], nextCursor: 'cursor-2' },
+        { records: [registryRecord('b.example/two')], nextCursor: 'cursor-3' },
+      ]),
+      // Enough for one page, not two.
+      paginationDeadlineMs: 100,
+      now: () => {
+        clock += 60;
+        return clock;
+      },
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.pagesFetched).toBe(1);
+    expect(result.nextCursor).toBe('cursor-2');
+  });
+
+  dbTest('continues from the cursor instead of re-reading the head', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const registry = stubRegistry([{ records: [registryRecord('b.example/two')] }]) as unknown as {
+      fetchPage: (cursor?: string) => Promise<unknown>;
+    };
+    const seen: (string | undefined)[] = [];
+    const original = registry.fetchPage.bind(registry);
+    registry.fetchPage = (cursor?: string) => {
+      seen.push(cursor);
+      return original(cursor);
+    };
+
+    await runCatalogIngestion(withRepository(repository), {
+      registry: registry as never,
+      startCursor: 'cursor-2',
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    // Without this the same first pages are re-read every run and the tail of
+    // the registry is never reached at all.
+    expect(seen[0]).toBe('cursor-2');
+  });
+
+  dbTest('clears the cursor once the walk reaches the end', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: stubRegistry([{ records: [registryRecord('a.example/one')] }]),
+      startCursor: 'cursor-2',
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    // The next run starts over, which is how republished entries are noticed.
+    expect(result.nextCursor).toBeUndefined();
+  });
+
+  dbTest('restarts from the beginning when the registry rejects the cursor', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    const seen: (string | undefined)[] = [];
+    const registry = {
+      fetchPage: async (cursor?: string) => {
+        seen.push(cursor);
+        if (cursor === 'stale-cursor') throw new Error('unknown cursor');
+        return {
+          entries: [registryRecord('a.example/one')].map(
+            (record) => normalizeRegistryServer(record) as never
+          ),
+          withdrawn: [],
+          skipped: 0,
+        };
+      },
+    };
+
+    const result = await runCatalogIngestion(withRepository(repository), {
+      registry: registry as never,
+      startCursor: 'stale-cursor',
+      probeBudget: 0,
+      sleep: noSleep,
+      log: silent,
+    });
+
+    // A cursor the registry has forgotten must not cost the whole run.
+    expect(seen).toEqual(['stale-cursor', undefined]);
+    expect(result.created).toBe(1);
+    expect(result.pageFailures).toBe(1);
+  });
+
+  dbTest('leaves the probe sweep time even when pagination fills its budget', async ({ db }) => {
+    // A registry with more pages than any deadline can walk, which is what the
+    // live one is: a page takes seconds and there are hundreds of them.
+    const endlessPages = Array.from({ length: 200 }, (_, index) => ({
+      records: [registryRecord(`e${index}.example/mcp`)],
+      nextCursor: `cursor-${index + 1}`,
+    }));
+    const probedWith = async (paginationDeadlineMs: number) => {
+      const repository = new MCPCatalogRepository(db);
+      let clock = 0;
+      return runCatalogIngestion(withRepository(repository), {
+        registry: stubRegistry(endlessPages),
+        deadlineMs: 1_000,
+        paginationDeadlineMs,
+        now: () => {
+          clock += 10;
+          return clock;
+        },
+        probe: async (remoteUrl: string) => ({
+          probed_auth_type: 'none' as const,
+          probed_at: new Date('2026-07-28T00:00:00.000Z'),
+          probed_url: remoteUrl,
+        }),
+        probeBudget: 5,
+        sleep: noSleep,
+        log: silent,
+      });
+    };
+
+    // The counterfactual: one shared deadline lets pagination — which can never
+    // finish — spend all of it, and the probe sweep, gated on time remaining,
+    // does not run at all.
+    expect((await probedWith(1_000)).probed).toBe(0);
+    expect((await probedWith(400)).probed).toBeGreaterThan(0);
   });
 });

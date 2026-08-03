@@ -367,6 +367,27 @@ function isPrivateIPv6(host: string): boolean {
 }
 
 /**
+ * True when a resolved IP literal is outside the public internet.
+ *
+ * Takes the numeric address a resolver returned, not a hostname, so it is the
+ * check to apply between resolution and connection. Anything unparseable is
+ * reported private: an address this cannot classify is not one to connect to.
+ *
+ * Kept here beside {@link isPublicHttpUrl} so both halves of the outbound
+ * filter — the URL a caller was handed and the address it actually resolves to
+ * — share one definition of "private". This file is browser-safe by design (see
+ * the header note about `node:crypto`), so the resolve-and-pin machinery that
+ * consumes this lives in `utils/pinned-fetch.ts` instead.
+ */
+export function isPrivateIpAddress(address: string): boolean {
+  const literal = address.trim().replace(/^\[|\]$/g, '');
+  if (!literal) return true;
+  if (literal.includes(':')) return isPrivateIPv6(literal);
+  const ipv4 = parseIPv4Literal(literal);
+  return ipv4 === null || isPrivateIPv4(ipv4);
+}
+
+/**
  * True when a URL is safe to fetch from the daemon on behalf of untrusted input.
  *
  * Callers that follow a URL supplied by a third party — the MCP catalog's auth
@@ -380,9 +401,11 @@ function isPrivateIPv6(host: string): boolean {
  * decimal/octal/hex and IPv4-mapped forms that spell the same addresses
  * differently.
  *
- * This is a literal-address filter. It does NOT resolve DNS, so a hostname that
- * resolves into private space still passes; defeating that requires resolving
- * and pinning the address at connect time.
+ * This is a literal-address filter and cannot be the whole story: `evil.com`
+ * passes here and still resolves to 169.254.169.254. Untrusted destinations
+ * must be reached through `createPinnedFetch`, which resolves the name, applies
+ * {@link isPrivateIpAddress} to every answer, and connects to the address it
+ * checked.
  */
 export function isPublicHttpUrl(rawUrl: string): boolean {
   let url: URL;

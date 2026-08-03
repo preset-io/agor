@@ -306,10 +306,12 @@ describe('MCPCatalogRepository filter semantics', () => {
     await repository.recordProbeResult('a.example/fresh', {
       probed_auth_type: 'none',
       probed_at: new Date('2026-07-28T00:00:00.000Z'),
+      probed_url: 'https://fresh.example.com/mcp',
     });
     await repository.recordProbeResult('b.example/stale', {
       probed_auth_type: 'none',
       probed_at: new Date('2026-01-01T00:00:00.000Z'),
+      probed_url: 'https://stale.example.com/mcp',
     });
 
     const due = await repository.findEntriesNeedingProbe(new Date('2026-07-01T00:00:00.000Z'), 10);
@@ -326,5 +328,308 @@ describe('serializeCapabilityTags', () => {
     expect(serializeCapabilityTags([])).toBeNull();
     expect(serializeCapabilityTags(undefined)).toBeNull();
     expect(serializeCapabilityTags(['  '])).toBeNull();
+  });
+});
+
+describe('field ownership across writers', () => {
+  const curation = (
+    overrides: Partial<MCPCatalogCurationUpsert> = {}
+  ): MCPCatalogCurationUpsert => ({
+    name: 'com.example/mcp',
+    category: 'dev-tools',
+    capabilities: ['code-repos'],
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+    ...overrides,
+  });
+
+  dbTest('lets the registry keep correcting copy the overlay never claimed', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'First title',
+      description: 'First description',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    // `curated.yaml` supplies no title or description for most entries, so the
+    // row is curated while these two fields still belong to the registry.
+    await repository.upsertCuration(curation());
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Corrected title',
+      description: 'Corrected description',
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      curated: true,
+      title: 'Corrected title',
+      description: 'Corrected description',
+    });
+  });
+
+  dbTest('keeps a title the overlay did claim', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(curation({ title: 'Curated title' }));
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title again',
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      title: 'Curated title',
+    });
+  });
+
+  dbTest('hands a field back when the overlay stops claiming it', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(curation({ title: 'Curated title' }));
+    // The curator deletes the `title:` line from the entry.
+    await repository.upsertCuration(curation());
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title again',
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      title: 'Registry title again',
+    });
+  });
+
+  dbTest(
+    'drops a registry remote when a later release publishes only a package',
+    async ({ db }) => {
+      const repository = new MCPCatalogRepository(db);
+      await repository.upsertRegistryEntry({
+        name: 'com.example/mcp',
+        remote_url: 'https://mcp.example.com/mcp',
+        transport: 'streamable-http',
+        registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+      });
+      await repository.upsertCuration(curation());
+
+      await repository.upsertRegistryEntry({
+        name: 'com.example/mcp',
+        transport: 'stdio',
+        packages: [{ registry_type: 'npm', identifier: 'example-mcp' }],
+        registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+      });
+
+      // The endpoint is no longer published. Continuing to offer it would send
+      // users at a URL its own publisher withdrew.
+      expect(await repository.findByName('com.example/mcp')).toMatchObject({
+        curated: true,
+        has_remote: false,
+        remote_url: undefined,
+        transport: 'stdio',
+      });
+    }
+  );
+
+  dbTest('keeps a curated remote through a package-only release', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    // The registry knows the server but publishes no endpoint; curation supplies
+    // the only way to connect, and nulling it would remove the entry's purpose.
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(
+      curation({ remote_url: 'https://curated.example.com/mcp', transport: 'streamable-http' })
+    );
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      packages: [{ registry_type: 'npm', identifier: 'example-mcp' }],
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      remote_url: 'https://curated.example.com/mcp',
+      transport: 'streamable-http',
+      has_remote: true,
+    });
+  });
+});
+
+describe('probe verdicts and the endpoint they describe', () => {
+  const probedNone = (url: string) => ({
+    probed_auth_type: 'none' as const,
+    probed_at: new Date('2026-07-28T00:00:00.000Z'),
+    probed_url: url,
+  });
+
+  dbTest('discards the verdict when the registry moves the endpoint', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remote_url: 'https://old.example.com/mcp',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.recordProbeResult(
+      'com.example/mcp',
+      probedNone('https://old.example.com/mcp')
+    );
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remote_url: 'https://new.example.com/mcp',
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    // Inheriting `none` would render a connect-directly button for an endpoint
+    // nothing has ever contacted.
+    const entry = await repository.findByName('com.example/mcp');
+    expect(entry).toMatchObject({ remote_url: 'https://new.example.com/mcp' });
+    expect(entry?.probed_auth_type).toBe('unknown');
+    expect(entry?.probed_at).toBeUndefined();
+  });
+
+  dbTest('keeps the verdict when a republication leaves the endpoint alone', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remote_url: 'https://same.example.com/mcp',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.recordProbeResult(
+      'com.example/mcp',
+      probedNone('https://same.example.com/mcp')
+    );
+
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remote_url: 'https://same.example.com/mcp',
+      description: 'New description',
+      registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      probed_auth_type: 'none',
+    });
+  });
+
+  dbTest('discards a verdict for a URL the row no longer carries', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      remote_url: 'https://current.example.com/mcp',
+    });
+
+    // Probing happens outside any database unit, so a verdict can land after the
+    // row moved on. Writing it would recreate exactly the staleness the
+    // invalidation removes.
+    await repository.recordProbeResult(
+      'com.example/mcp',
+      probedNone('https://stale.example.com/mcp')
+    );
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      probed_auth_type: 'unknown',
+    });
+  });
+});
+
+describe('retireCuration', () => {
+  const curation = (name: string): MCPCatalogCurationUpsert => ({
+    name,
+    category: 'dev-tools',
+    capabilities: ['code-repos'],
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+    popularity_rank: 1,
+  });
+
+  dbTest('deletes a row that existed only because the file named it', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertCuration(curation('invented.example/mcp'));
+
+    expect(await repository.retireCuration('invented.example/mcp')).toBe('deleted');
+    expect(await repository.findByName('invented.example/mcp')).toBeNull();
+  });
+
+  dbTest('leaves the registry half of a mirrored row intact', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      version: '1.2.3',
+      description: 'Registry description',
+      remote_url: 'https://mcp.example.com/mcp',
+      transport: 'streamable-http',
+    });
+    await repository.upsertCuration(curation('com.example/mcp'));
+
+    expect(await repository.retireCuration('com.example/mcp')).toBe('uncurated');
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      curated: false,
+      // `verified` is a claim curation made; nobody is left making it.
+      verified: false,
+      category: undefined,
+      benefit: undefined,
+      popularity_rank: undefined,
+      // The registry still publishes this, so it stays connectable.
+      version: '1.2.3',
+      remote_url: 'https://mcp.example.com/mcp',
+    });
+  });
+
+  dbTest('withdraws a connect surface only curation supplied', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'com.example/mcp', version: '1.0.0' });
+    await repository.upsertCuration({
+      ...curation('com.example/mcp'),
+      remote_url: 'https://curated.example.com/mcp',
+      transport: 'streamable-http',
+    });
+    await repository.recordProbeResult('com.example/mcp', {
+      probed_auth_type: 'none',
+      probed_at: new Date('2026-07-28T00:00:00.000Z'),
+      probed_url: 'https://curated.example.com/mcp',
+    });
+
+    expect(await repository.retireCuration('com.example/mcp')).toBe('uncurated');
+    const entry = await repository.findByName('com.example/mcp');
+    expect(entry).toMatchObject({ has_remote: false, probed_auth_type: 'unknown' });
+    expect(entry?.remote_url).toBeUndefined();
+  });
+
+  dbTest('is inert for a name that is not curated', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'com.example/mcp' });
+
+    expect(await repository.retireCuration('com.example/mcp')).toBe('absent');
+    expect(await repository.retireCuration('nobody.example/mcp')).toBe('absent');
+    expect(await repository.findByName('com.example/mcp')).not.toBeNull();
+  });
+
+  dbTest('lists exactly the curated names', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'plain.example/mcp' });
+    await repository.upsertCuration(curation('a.example/mcp'));
+    await repository.upsertCuration(curation('b.example/mcp'));
+
+    expect((await repository.listCuratedNames()).sort()).toEqual([
+      'a.example/mcp',
+      'b.example/mcp',
+    ]);
   });
 });
