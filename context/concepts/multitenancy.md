@@ -76,6 +76,7 @@ Reuse these instead of adding local tenant plumbing:
 | Queued session work                                    | `apps/agor-daemon/src/utils/session-queue-tenant-scope.ts`                                                         |
 | MCP database work                                      | `apps/agor-daemon/src/mcp/tenant-scope.ts`                                                                         |
 | Tenant-aware realtime delivery                         | `apps/agor-daemon/src/utils/realtime-publish.ts`                                                                   |
+| Operator-configured analytics event identity           | `packages/core/src/analytics/logger.ts` adds trusted ambient identity as `context.tenant_id`                       |
 | Static guard against new raw boundary bypasses         | `scripts/check-multitenancy-boundaries.mjs`                                                                        |
 
 RLS protects database rows, not files, object storage, caches, tokens, realtime

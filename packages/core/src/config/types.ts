@@ -853,7 +853,8 @@ export interface AgorTelemetrySettings {
  *
  * Disabled by default. When enabled, daemon/server code sends curated
  * lifecycle events through a central analytics client. Plugin configuration is
- * resolved by type at daemon startup.
+ * resolved by type at daemon startup. Events emitted inside a trusted tenant
+ * scope automatically include that tenant as `context.tenant_id`.
  */
 export interface AgorAnalyticsSettings {
   /** Master kill-switch. Defaults to false. */
