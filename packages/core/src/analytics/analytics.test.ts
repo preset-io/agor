@@ -132,7 +132,11 @@ describe('analytics logger', () => {
     const track = vi.fn(() => Promise.resolve());
     const logger = new AnalyticsPackageLogger({ track } as never);
 
-    logger.track('daemon.event', {}, { context: { source: 'system' } });
+    logger.track(
+      'daemon.event',
+      {},
+      { context: { source: 'system', tenant_id: 'spoofed-tenant' } }
+    );
 
     expect(track).toHaveBeenCalledWith('daemon.event', {}, { context: { source: 'system' } });
   });

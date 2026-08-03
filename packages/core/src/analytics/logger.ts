@@ -68,8 +68,10 @@ export class AnalyticsPackageLogger implements AnalyticsLogger {
     const trackOptions: Record<string, unknown> = {};
     const tenantId = getCurrentTenantId();
     if (options.context || tenantId) {
+      const callerContext = { ...options.context };
+      delete callerContext.tenant_id;
       trackOptions.context = {
-        ...options.context,
+        ...callerContext,
         ...(tenantId ? { tenant_id: tenantId } : {}),
       };
     }
