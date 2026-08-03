@@ -13,9 +13,10 @@ import type {
   UploadStageInput,
   UploadStagingStore,
 } from '@agor/core/types';
-
-export const DEFAULT_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
-export const DEFAULT_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+import {
+  DEFAULT_UPLOAD_MAX_BYTES,
+  DEFAULT_UPLOAD_TTL_MS,
+} from '../../utils/upload-staging-defaults.js';
 
 type StoredMetadata = UploadMetadata & {
   tenantId: TenantID;

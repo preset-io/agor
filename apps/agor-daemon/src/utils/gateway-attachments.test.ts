@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
@@ -11,7 +12,6 @@ import {
   isIngestableFile,
 } from './gateway-attachments.js';
 import { MAX_UPLOAD_FILE_SIZE } from './upload.js';
-import { LocalUploadStagingStore } from './upload-staging-store.js';
 
 function makeFile(overrides: Partial<InboundFile> = {}): InboundFile {
   return {

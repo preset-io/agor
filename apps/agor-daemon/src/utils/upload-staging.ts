@@ -1,10 +1,10 @@
 import { join } from 'node:path';
 import { type AgorConfig, expandHomePath, getManagedStorageSegments } from '@agor/core/config';
 import type { UploadStagingStore } from '@agor/core/types';
+import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
 import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
 import { configureUploadLimits, getUploadDirectory } from './upload.js';
-import { LocalUploadStagingStore } from './upload-staging-store.js';
 
 export type UploadStagingStoreFactory = () => UploadStagingStore;
 export type S3UploadStagingStoreFactory = (location: URL, config: AgorConfig) => UploadStagingStore;
