@@ -22,6 +22,7 @@ import { userInfo } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
+import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
   cleanBranch,
@@ -832,6 +833,13 @@ export async function handleGitClone(
     // the Agor slug when present so same-basename remotes do not collide.
     const reposDir = getReposDir();
     const outputPath = cloneOutputPath;
+
+    // The daemon selects this canonical, tenant-scoped destination. Trust only
+    // that exact path for this one-purpose executor process so an existing
+    // daemon-owned clone can be inspected/reused under Unix impersonation.
+    if (outputPath) {
+      appendGitConfigParameterPairs([`safe.directory=${outputPath}`]);
+    }
 
     // Clone the repository. If the caller pinned a default_branch, forward
     // it as `branch` so the working tree lands on that branch — otherwise
