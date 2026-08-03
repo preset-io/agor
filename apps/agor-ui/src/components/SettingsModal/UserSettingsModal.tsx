@@ -22,6 +22,7 @@ import {
   BellOutlined,
   CheckCircleFilled,
   CloseOutlined,
+  CloudUploadOutlined,
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
@@ -78,6 +79,7 @@ import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
+import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
@@ -173,6 +175,11 @@ const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keyword
   },
   security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
   tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
+  uploads: {
+    title: 'Uploads',
+    icon: <CloudUploadOutlined />,
+    keywords: 'files attachments images downloads',
+  },
   'env-vars': {
     title: 'Environment variables',
     icon: <ThunderboltOutlined />,
@@ -921,9 +928,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           { key: 'profile', ...PANEL_META.profile },
           { key: 'preferences', ...PANEL_META.preferences },
           { key: 'security', ...PANEL_META.security },
-          // Personal API tokens are scoped to the signed-in caller, so they are
-          // meaningless (and misleading) when an admin edits another user.
-          ...(isEditingOther ? [] : [{ key: 'tokens', ...PANEL_META.tokens }]),
+          // Personal API tokens and uploads are scoped to the signed-in caller,
+          // so they are meaningless (and misleading) when an admin edits another
+          // user.
+          ...(isEditingOther
+            ? []
+            : [
+                { key: 'tokens', ...PANEL_META.tokens },
+                { key: 'uploads', ...PANEL_META.uploads },
+              ]),
         ],
       },
       {
@@ -1273,6 +1286,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const isInlineSavePanel =
     activeKey === 'env-vars' ||
     activeKey === 'tokens' ||
+    activeKey === 'uploads' ||
     (!!activeTool && providerSubtab === 'auth');
 
   // Unified footer action. Batch panels commit their edits and close; inline
@@ -1747,6 +1761,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               pipelines, and external tools. Tokens have the same permissions as your user account.
             </Typography.Paragraph>
             <PersonalApiKeysTab client={client} />
+          </>
+        );
+      case 'uploads':
+        return (
+          <>
+            <PanelHeader title={PANEL_META.uploads.title} />
+            <UploadsTab />
           </>
         );
       case 'access':

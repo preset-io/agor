@@ -87,9 +87,10 @@
 
 .date {
   font-size: 0.8125rem;
-  color: var(--nx-colors-gray-10);
+  color: inherit;
   font-weight: 500;
   margin-bottom: 0.5rem;
+  opacity: 0.65;
 }
 
 .cardTitle {

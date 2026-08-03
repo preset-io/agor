@@ -18,6 +18,9 @@ vi.mock('@agor/core/unix', () => ({
   buildSpawnArgs: vi.fn(),
   escapeShellArg: (value: string) => `'${value.replace(/'/g, "'\\''")}'`,
   isSecretEnvKey: vi.fn(),
+  // Real implementation (mirrors user-manager.ts) — the {unix_user} format
+  // guard under test depends on its actual charset semantics.
+  isValidUnixUsername: (username: string) => /^[a-z_][a-z0-9_-]{0,31}$/.test(username),
   prepareImpersonationEnv: vi.fn(),
 }));
 
@@ -111,6 +114,35 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'explicit explicit-user git.clone'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
+  it('forwards a delegated read identity through a configured command template', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      {
+        executorCommandTemplate: 'launch --user {unix_user} -- {command}',
+        asUser: 'alice',
+      }
+    );
+
+    proc.stdout.emit(
+      'data',
+      Buffer.from('AGOR_EXECUTOR_RESULT {"success":true,"data":{"files":[]}}\n')
+    );
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: true,
+      data: { files: [] },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --user alice -- branch.files.browse'],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
   });
@@ -287,6 +319,47 @@ describe('configured executor spawning', () => {
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
   });
 
+  it('launches a local executor from its operator-owned package directory, not payload cwd', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+    const tenantBranchPath = '/tenant-a/worktrees/repo/feature';
+
+    spawnExecutor({ command: 'prompt', params: { cwd: tenantBranchPath } });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { cwd?: string };
+    expect(spawnOptions.cwd).toBeTruthy();
+    expect(spawnOptions.cwd).not.toBe(tenantBranchPath);
+    expect(spawnOptions.cwd).toMatch(/\/packages\/executor$/);
+    expect(JSON.parse(proc.written)).toMatchObject({ params: { cwd: tenantBranchPath } });
+  });
+
+  it('preserves the exit-0/no-result protocol failure diagnostic', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch --user {unix_user} -- {command}' }
+    );
+
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESULT_MISSING',
+        message: 'Executor exited with code 0 but did not emit a JSON result',
+        details: {
+          command: 'branch.files.browse',
+          exitCode: 0,
+          stderr: '',
+        },
+      },
+    });
+  });
+
   it('refuses every unscoped executor launch when tenant context is required', async () => {
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
     configureExecutor(null, { requireTenantContext: true });
@@ -413,5 +486,31 @@ describe('substituteTemplateVariables', () => {
     ).toThrow(
       'executor_command_template requires {tenant_id}, but no active tenant context is available'
     );
+  });
+
+  it('substitutes a valid {unix_user} value', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    const result = substituteTemplateVariables('launch --user {unix_user}', {
+      unix_user: 'agor_alice',
+    });
+
+    expect(result).toBe('launch --user agor_alice');
+  });
+
+  it.each([
+    { name: 'shell metacharacters', value: 'alice; rm -rf /' },
+    { name: 'path traversal', value: '../other-tenant' },
+    { name: 'command substitution', value: '$(whoami)' },
+    { name: 'uppercase (outside the Unix username charset)', value: 'Alice' },
+  ])('refuses a malformed {unix_user} value: $name', async ({ value }) => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    // The template runs via `sh -c` and launchers use {unix_user} as a path
+    // segment for per-user home mounts, so format validation (not escaping)
+    // is the control — it must reject both shell and path-traversal shapes.
+    expect(() =>
+      substituteTemplateVariables('launch --user {unix_user}', { unix_user: value })
+    ).toThrow('{unix_user} value is not a valid Unix username');
   });
 });

@@ -52,9 +52,39 @@ describe('resolveExecutorReadAsUser', () => {
     await expect(resolveExecutorReadAsUser(db, user)).resolves.toBe('alice');
   });
 
+  it('reports the requesting unix_username to a delegated executor command template', async () => {
+    mocks.loadConfigSync.mockReturnValue({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launcher --user {unix_user} -- agor-executor --stdin',
+      },
+    });
+    mocks.findById.mockResolvedValue(user);
+
+    await expect(resolveExecutorReadAsUser(db, user.user_id)).resolves.toBe('alice');
+    expect(mocks.findById).toHaveBeenCalledWith(user.user_id);
+  });
+
+  it('does not turn delegated local execution into sudo impersonation', async () => {
+    mocks.loadConfigSync.mockReturnValue({ execution: { unix_user_mode: 'delegated' } });
+    await expect(resolveExecutorReadAsUser(db, user)).resolves.toBeUndefined();
+  });
+
   it('loads a user id and fails clearly when strict mode lacks unix_username', async () => {
     mocks.loadConfigSync.mockReturnValue({ execution: { unix_user_mode: 'strict' } });
     mocks.findById.mockResolvedValue({ user_id: user.user_id });
+    await expect(resolveExecutorReadAsUser(db, user.user_id)).rejects.toThrow(/unix_username/);
+  });
+
+  it('fails before launch when a delegated command template lacks unix_username', async () => {
+    mocks.loadConfigSync.mockReturnValue({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launcher --user {unix_user} -- agor-executor --stdin',
+      },
+    });
+    mocks.findById.mockResolvedValue({ user_id: user.user_id });
+
     await expect(resolveExecutorReadAsUser(db, user.user_id)).rejects.toThrow(/unix_username/);
   });
 });

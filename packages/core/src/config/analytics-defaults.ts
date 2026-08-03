@@ -30,15 +30,6 @@ export function getDefaultAnalyticsConfig(): AgorAnalyticsSettings {
           headers: {},
         },
       },
-      {
-        type: 'module',
-        enabled: false,
-        options: {
-          module_path: null,
-          export_name: 'createAnalyticsPlugin',
-          plugin_options: {},
-        },
-      },
     ],
   };
 }

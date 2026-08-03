@@ -467,9 +467,39 @@ describe('agor_boards_create schema', () => {
       expect(result.error.issues[0]?.message).toMatch(/name cannot be empty/i);
     }
   });
+
+  it('accepts None as a board branch-permission default', () => {
+    const config = registerAndCaptureConfig('agor_boards_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ name: 'Private fallback', defaultOthersCan: 'none' }).success
+    ).toBe(true);
+  });
 });
 
 describe('agor_boards_update realtime events', () => {
+  it('persists None as the default for aligned branches', async () => {
+    const patch = vi.fn(async (_id, data) => ({ board_id: 'board-1', ...data }));
+    const get = vi.fn(async () => ({ board_id: 'board-1', default_others_can: 'none' }));
+    const app = {
+      service(name: string) {
+        if (name === 'boards') return { patch, get, emit: vi.fn() };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const updateBoard = registerAndCaptureHandler('agor_boards_update', {
+      app,
+      userId: 'user-1',
+      baseServiceParams: {},
+    });
+
+    await updateBoard({ boardId: 'board-1', defaultOthersCan: 'none' });
+    expect(patch).toHaveBeenCalledWith('board-1', { default_others_can: 'none' }, {});
+  });
+
   it('emits custom object mutations with a correctly-shaped HookContext', async () => {
     const params = {
       authenticated: true,

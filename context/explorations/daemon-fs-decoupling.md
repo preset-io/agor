@@ -8,6 +8,12 @@
 
 ## TL;DR
 
+**Maintenance boundary update (2026-08):** daemon `/admin/local-actions` now
+contains only legitimate host Unix identity/group operations. User-home symlink
+create/remove/cleanup and managed Git remote scrubbing remain available only as
+offline `agor local` maintenance. Startup DB URL sanitation remains daemon-owned,
+and managed `.git/config` reconciliation remains executor-owned.
+
 **The daemon is much closer to FS-free than the prompt assumed, but the gap is concentrated in three places that all reduce to the same root: the daemon believes it shares a filesystem with the branches it manages.** That belief is encoded in (a) artifact landing, (b) upload handling, and (c) environment spawning — the third being the one that hits the ACL/`--watch` wall.
 
 **Recommended target: Option D — a hybrid where the daemon stays single-host FS-coupled for self-hosted / `unix_user_mode: simple`, and becomes FS-free in hosted multi-tenant deployments by treating branches as remote resources owned by per-branch executor pods.** Local watch-mode envs survive in self-hosted (single host, single uid namespace) and are explicitly _not supported_ on hosted — long-lived watch envs in hosted become **remote env pods that share the branch volume with the executor, not with the daemon**. This avoids the ACL coordination problem Max already hit, keeps the self-hosted UX intact, and gives hosted a clean horizontal scale story.
@@ -15,6 +21,14 @@
 **Estimated to v1 of hosted-ready posture: ~15 eng-weeks**, with the easy slice (config hygiene + Postgres-only + log centralization + artifact-via-executor + upload-via-executor) ~4–5 weeks, and the hard slice (env-pod model, executor-as-volume-owner) ~10 weeks.
 
 **Phase 1A — Config hygiene — shipped in this PR (H1–H4).** Daemon stays the only authority on `~/.agor/config.yaml`; executor stops reading it directly (resolved-slice payload); shutdown sentinel + secret bootstrap degrade gracefully on read-only mounts (capability-driven, no deployment-mode flag). H5 (CLI config separation) is split to a follow-up branch. See §1.5.
+
+**2026-08-03 boundary follow-up:** `DAEMON-FS-CAP-004` is resolved by removing the
+runtime-selected analytics module plugin. The daemon no longer dynamically imports an
+operator-provided package or filesystem path. Analytics delivery is now limited to the
+type-safe built-in registry: `stdout` and HTTP batch. Existing configuration containing
+`analytics.plugins[*].type: module` fails during config loading with migration guidance;
+it is never loaded or silently ignored. The capability was removed from
+`scripts/daemon-filesystem-exceptions.json`.
 
 ---
 
@@ -72,9 +86,9 @@ The daemon process (only `apps/agor-daemon/src/**`) directly touches the FS in t
 
 #### Uploads
 
-| Touchpoint                                                                        | R/W | Frequency  | File:line                 | Decoupling path                                                                                                                                    |
-| --------------------------------------------------------------------------------- | --- | ---------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<branch>/.agor/uploads/`, `/tmp/agor-uploads/`, `~/.agor/uploads/` mkdir + write | W   | per-upload | `utils/upload.ts:118-260` | Either move write into executor, or stage to S3 / object store and have executor pull on demand. Easier for hosted: **object store from day one**. |
+| Touchpoint             | R/W | Frequency  | File:line                  | Decoupling path                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | --- | ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canonical upload bytes | W   | per-upload | `utils/upload-staging*.ts` | **Implemented:** local self-hosted staging is intentional boundary B; hosted deployments may use S3. Branch materialization streams through a scoped capability and is written only by the executor under `.agor/session-staging/`. No daemon branch-path read/write is required. Storage quotas and materialized-copy cleanup remain follow-ups. |
 
 #### Terminals
 
@@ -492,3 +506,11 @@ Same as §1.1, presented in the table format the prompt requested:
 ---
 
 _End of analysis._
+
+## 2026-08-03 closure update
+
+The production daemon no longer reaches filesystem/config loading through `@agor/git/pure`, the root `@agor/core` barrel, the shared config barrel's Node-only `.agor.yml` reader/writer, or the obsolete core environment-command spawner. Local executor subprocesses now always start in the operator-owned executor package directory; branch cwd exists only in the executor payload. Short-lived local commands expose no caller-supplied cwd seam.
+
+After rebasing across #2102, #2121, and #2122, registry count moved from 133 (A 73 / B 27 / C 33 / D 0) to 93 (A 66 / B 27 / C 0 / D 0). Because #2102 has landed, this branch also removes the unused `canonicalizeExistingPrefix` helper and `DAEMON-FS-CAP-082/083`. The Git operational capabilities 024–053 became stale once broad daemon reachability was closed and are removed rather than reclassified.
+
+Residual semantic coupling not proven by the checker: the daemon still computes tenant layout/path strings and reads branch/repo paths from tenant-owned rows for authorization and executor payload construction. Executors, not daemon subprocess launch cwd, resolve and use those paths. Any future in-daemon consumer of those strings would reopen the boundary even if it used an API absent from the checker's finite manifest.

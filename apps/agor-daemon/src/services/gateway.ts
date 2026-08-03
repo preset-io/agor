@@ -10,6 +10,7 @@ import {
   assertInlineAgenticConfigurationAllowed,
   getBaseUrl,
   resolveAgenticToolPreset,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -71,6 +72,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
+import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
@@ -2186,6 +2188,15 @@ export class GatewayService {
         gatewaySource.last_message_only = true;
       }
 
+      // In strict/delegated, refuse to create a gateway session for a user
+      // without a unix_username — it would fail at prompt time (or silently
+      // share an identity in hosted deployments).
+      assertUnixUsernameSatisfiesMode(
+        user.unix_username,
+        resolveExecutionSecurityMode().unixUserMode,
+        `gateway user ${user.user_id}`
+      );
+
       const session = await sessionsService.create({
         title: data.text.substring(0, 100),
         description: data.text,
@@ -2418,7 +2429,7 @@ export class GatewayService {
       }
 
       // Download Slack image and text attachments server-side and fold their
-      // stored paths into the prompt so the agent can Read them. Gated on the
+      // opaque handles into the prompt for executor-owned materialization. Gated on the
       // channel's ingest_files flag — channels without the files:read scope
       // never attempt downloads. Any failure degrades to a short note; the
       // prompt is always delivered.
@@ -2432,16 +2443,21 @@ export class GatewayService {
           typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
         let failedAttachments = 0;
         if (botToken) {
-          const { paths, failed } = await ingestInboundAttachments({
+          const ingestion = await ingestInboundAttachments({
             files: data.files,
             botToken,
-            tenantId: getCurrentTenantId(),
+            tenantId: requireCurrentTenantId() as TenantID,
+            sessionId,
+            branchId: channel.target_branch_id,
+            createdBy: channel.agor_user_id,
           });
+          const stagedUploads = ingestion.uploads;
+          const { failed } = ingestion;
           failedAttachments = failed;
-          if (paths.length > 0) {
-            promptText = buildPromptWithAttachments(promptText, paths);
+          if (stagedUploads.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, stagedUploads);
             console.log(
-              `[gateway] Ingested ${paths.length} Slack attachment(s) for session ${shortId(sessionId)}`
+              `[gateway] Ingested ${stagedUploads.length} Slack attachment(s) for session ${shortId(sessionId)}`
             );
           }
         } else {

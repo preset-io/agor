@@ -31,10 +31,14 @@ vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
   return {
     ...actual,
-    parseAgorYml: mocks.parseAgorYml,
-    writeAgorYml: mocks.writeAgorYml,
+    getReposDir: mocks.getReposDir,
   };
 });
+
+vi.mock('@agor/core/config/node', () => ({
+  parseAgorYml: mocks.parseAgorYml,
+  writeAgorYml: mocks.writeAgorYml,
+}));
 
 vi.mock('../git/index.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../git/index.js');
@@ -45,7 +49,6 @@ vi.mock('../git/index.js', async () => {
     createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
-    getReposDir: mocks.getReposDir,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
     getRemoteUrl: mocks.getRemoteUrl,
@@ -381,30 +384,42 @@ describe('managed executor git/fs commands', () => {
   });
 
   it('uses slug-derived output paths for git.clone to avoid same-basename collisions', async () => {
+    const previousGitConfigParameters = process.env.GIT_CONFIG_PARAMETERS;
     const patchedRepos: Array<Record<string, unknown>> = [];
     createClient({ repo: { repo_id: repoId }, patchedRepos });
 
-    const result = await handleGitClone(
-      {
-        command: 'git.clone',
-        sessionToken: 'jwt',
-        params: {
-          url: 'https://github.com/preset-io/agor-assistant.git',
-          slug: 'smoke/agor-assistant-pr1258',
-          repoId,
-          createDbRecord: true,
+    try {
+      const result = await handleGitClone(
+        {
+          command: 'git.clone',
+          sessionToken: 'jwt',
+          params: {
+            url: 'https://github.com/preset-io/agor-assistant.git',
+            slug: 'smoke/agor-assistant-pr1258',
+            repoId,
+            createDbRecord: true,
+          },
         },
-      },
-      {}
-    );
+        {}
+      );
 
-    expect(result.success).toBe(true);
-    expect(mocks.cloneRepo).toHaveBeenCalledWith(
-      expect.objectContaining({ targetDir: '/safe/repos/smoke/agor-assistant-pr1258' })
-    );
-    expect(patchedRepos.at(-1)).toMatchObject({
-      local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-    });
+      expect(result.success).toBe(true);
+      expect(mocks.cloneRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ targetDir: '/safe/repos/smoke/agor-assistant-pr1258' })
+      );
+      expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
+        "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
+      );
+      expect(patchedRepos.at(-1)).toMatchObject({
+        local_path: '/safe/repos/smoke/agor-assistant-pr1258',
+      });
+    } finally {
+      if (previousGitConfigParameters === undefined) {
+        delete process.env.GIT_CONFIG_PARAMETERS;
+      } else {
+        process.env.GIT_CONFIG_PARAMETERS = previousGitConfigParameters;
+      }
+    }
   });
 
   it('adds branch/repo safe.directory and falls back to DB branch name when current branch lookup fails', async () => {

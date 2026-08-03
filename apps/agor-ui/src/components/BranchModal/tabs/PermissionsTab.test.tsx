@@ -132,4 +132,82 @@ describe('PermissionsTab', () => {
     expect(screen.getByText('Others Can')).toBeInTheDocument();
     expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
   });
+
+  it('renders explicit None and allows transitioning away from it', () => {
+    const setField = vi.fn();
+    renderWithApp(
+      <PermissionsTab
+        loadingOwners={false}
+        canEdit
+        allUsers={[makeUser()]}
+        currentUser={makeUser()}
+        allGroups={[{ group_id: 'group-1', name: 'Reviewers' } as never]}
+        state={{
+          ...defaultState,
+          permissionSource: 'override',
+          othersCan: 'none',
+          othersFsAccess: 'write',
+          groupGrants: [{ group_id: 'group-1', can: 'view' }],
+        }}
+        setField={setField}
+      />
+    );
+
+    const selector = screen.getByRole('combobox', { name: 'Others Can' });
+    expect(selector).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('None')).toBeInTheDocument();
+    expect(screen.getAllByText('Reviewers').length).toBeGreaterThan(0);
+    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
+    expect(screen.queryByText(/Owner-only access/)).not.toBeInTheDocument();
+    fireEvent.mouseDown(selector);
+    fireEvent.click(screen.getByText('View', { selector: '.ant-select-item-option-content' }));
+    expect(setField).toHaveBeenCalledWith('othersCan', 'view');
+  });
+
+  it('shows None as an available branch fallback', () => {
+    renderWithApp(
+      <PermissionsTab
+        loadingOwners={false}
+        canEdit
+        allUsers={[makeUser()]}
+        currentUser={makeUser()}
+        state={defaultState}
+        setField={vi.fn()}
+      />
+    );
+
+    const selector = screen.getByRole('combobox', { name: 'Others Can' });
+    fireEvent.mouseDown(selector);
+    expect(
+      screen.getByText('None', { selector: '.ant-select-item-option-content' })
+    ).toBeInTheDocument();
+  });
+
+  it('distinguishes an inherited board None default from a branch override', () => {
+    const client = {
+      service: () => ({ find: vi.fn(async () => []) }),
+    };
+    renderWithApp(
+      <PermissionsTab
+        loadingOwners={false}
+        canEdit
+        allUsers={[makeUser()]}
+        currentUser={makeUser()}
+        client={client as never}
+        board={
+          {
+            board_id: 'board-1',
+            access_mode: 'shared',
+            default_others_can: 'none',
+          } as never
+        }
+        state={{ ...defaultState, permissionSource: 'board' }}
+        setField={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Aligned with board permissions')).toBeInTheDocument();
+    expect(screen.getByText('none')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Others Can' })).not.toBeInTheDocument();
+  });
 });

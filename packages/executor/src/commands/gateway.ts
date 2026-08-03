@@ -1,4 +1,5 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { BranchSlackFileUploadPayload, ExecutorResult } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
@@ -28,27 +29,33 @@ export async function handleBranchSlackFileUpload(
         `File exceeds the ${payload.params.maxBytes}-byte upload limit: ${source.relative} (${stats.size} bytes)`
       );
     }
-    const channels = client.service('gateway-channels') as unknown as {
-      methods?: (...names: string[]) => unknown;
-      uploadFileFromExecutor(data: {
-        gatewayChannelId: string;
-        channel: string;
-        threadTs?: string;
-        fileBase64: string;
-        filename: string;
-        comment?: string;
-      }): Promise<unknown>;
-    };
-    channels.methods?.('uploadFileFromExecutor');
-    const uploaded = await channels.uploadFileFromExecutor({
-      gatewayChannelId: payload.params.gatewayChannelId,
-      channel: payload.params.channel,
-      ...(payload.params.threadTs ? { threadTs: payload.params.threadTs } : {}),
-      fileBase64: (await readFile(source.absolute)).toString('base64'),
-      filename: payload.params.filename ?? basename(source.absolute),
-      ...(payload.params.comment ? { comment: payload.params.comment } : {}),
-    });
-    return { success: true, data: { uploaded } };
+    const response = await fetch(
+      `${payload.daemonUrl || 'http://localhost:3030'}/executor/gateway/slack-file-upload`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${payload.sessionToken}`,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(stats.size),
+          'X-Agor-Gateway-Channel-Id': payload.params.gatewayChannelId,
+          'X-Agor-Slack-Channel-Id': payload.params.channel,
+          'X-Agor-Filename': encodeURIComponent(
+            payload.params.filename ?? basename(source.absolute)
+          ),
+          ...(payload.params.threadTs ? { 'X-Agor-Thread-Ts': payload.params.threadTs } : {}),
+          ...(payload.params.comment
+            ? { 'X-Agor-Comment': encodeURIComponent(payload.params.comment) }
+            : {}),
+        },
+        body: createReadStream(source.absolute) as never,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' }
+    );
+    if (!response.ok) {
+      throw new Error(`Slack upload failed with HTTP ${response.status}`);
+    }
+    const result = (await response.json()) as { uploaded?: unknown };
+    return { success: true, data: { uploaded: result.uploaded } };
   } catch (error) {
     return {
       success: false,

@@ -5,7 +5,14 @@ const configMocks = vi.hoisted(() => ({
   resolveApiKey: vi.fn(),
 }));
 
+const dbMocks = vi.hoisted(() => ({
+  runWithTenantDatabaseScope: vi.fn(
+    async (db: unknown, _tenantId: unknown, work: (db: unknown) => unknown) => work(db)
+  ),
+}));
+
 vi.mock('@agor/core/config', () => configMocks);
+vi.mock('@agor/core/db', () => dbMocks);
 
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { TaskID, UserID } from '@agor/core/types';
@@ -124,6 +131,48 @@ describe('ConfigService.resolveApiKey', () => {
     expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
       userId: 'creator-1',
       db: {},
+      tool: 'codex',
+    });
+  });
+
+  it('forwards the resolved tenant into the lookups and scopes key resolution to it', async () => {
+    const db = { marker: 'db' };
+    const service = new ConfigService(db as never);
+    const taskGet = vi.fn(async () => ({
+      created_by: 'creator-1' as UserID,
+      session_id: 'session-1',
+    }));
+    const sessionGet = vi.fn(async () => ({ agentic_tool: 'codex' }));
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') return { get: taskGet };
+        if (name === 'sessions') return { get: sessionGet };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const tenant = { tenant_id: 'tenant-1', source: 'auth_claim' };
+    await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        tenant,
+        authentication: {
+          payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+        },
+      } as never
+    );
+
+    expect(taskGet).toHaveBeenCalledWith('task-1', { provider: undefined, tenant });
+    expect(sessionGet).toHaveBeenCalledWith('session-1', { provider: undefined, tenant });
+    expect(dbMocks.runWithTenantDatabaseScope).toHaveBeenCalledWith(
+      db,
+      'tenant-1',
+      expect.any(Function)
+    );
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db,
       tool: 'codex',
     });
   });

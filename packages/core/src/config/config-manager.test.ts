@@ -37,6 +37,7 @@ import {
   resolveTeammateFrameworkRepoUrl,
   saveConfig,
   setConfigValue,
+  unixUserModeRequiresUsername,
   unsetConfigValue,
 } from './config-manager';
 import type { AgorConfig } from './types';
@@ -574,6 +575,19 @@ describe('loadConfig cache', () => {
     await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
   });
 
+  it('rejects removed analytics module plugins on every load path', async () => {
+    await writeConfigFile(
+      'analytics:\n  enabled: false\n  plugins:\n    - type: module\n      enabled: false\n      options:\n        module_path: /opt/agor/plugin.js\n'
+    );
+
+    expect(() => loadConfigSync()).toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
+  });
+
   it('treats branch_rbac as app-level only in simple Unix mode', async () => {
     await writeConfigFile({
       execution: { branch_rbac: true, unix_user_mode: 'simple' },
@@ -610,6 +624,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: false,
         requiresDaemonUnixUser: false,
         shouldInitUnixGroups: false,
+        requiresUserUnixUsername: false,
       },
     },
     {
@@ -623,6 +638,23 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: false,
         requiresDaemonUnixUser: false,
         shouldInitUnixGroups: false,
+        requiresUserUnixUsername: false,
+      },
+    },
+    {
+      // Delegated requires per-user unix_username but performs no OS-level
+      // work on the daemon host: no sudo, no groups, no daemon.unix_user.
+      name: 'delegated (identity enforced by execution substrate)',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'delegated',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+        requiresUserUnixUsername: true,
       },
     },
     {
@@ -636,6 +668,7 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: true,
         requiresDaemonUnixUser: true,
         shouldInitUnixGroups: true,
+        requiresUserUnixUsername: false,
       },
     },
     {
@@ -649,10 +682,20 @@ describe('loadConfig cache', () => {
         unixGroupRefreshNeeded: true,
         requiresDaemonUnixUser: true,
         shouldInitUnixGroups: true,
+        requiresUserUnixUsername: true,
       },
     },
   ])('resolves execution security mode: $name', ({ config, expected }) => {
     expect(resolveExecutionSecurityMode(config)).toEqual(expected);
+  });
+});
+
+describe('unixUserModeRequiresUsername', () => {
+  it('requires a username only in strict and delegated', () => {
+    expect(unixUserModeRequiresUsername('simple')).toBe(false);
+    expect(unixUserModeRequiresUsername('insulated')).toBe(false);
+    expect(unixUserModeRequiresUsername('delegated')).toBe(true);
+    expect(unixUserModeRequiresUsername('strict')).toBe(true);
   });
 });
 

@@ -1,10 +1,10 @@
 import type { BranchID } from '../types/index.js';
+import { createAdminExecutor } from '../unix/command-executor.js';
 import {
-  createAdminExecutor,
   generateBranchGroupName,
   isValidBranchGroupName,
   UnixGroupCommands,
-} from '../unix/index.js';
+} from '../unix/group-manager.js';
 import { getReporter, type LocalActionOptions } from './types.js';
 
 export interface CreateBranchGroupParams extends LocalActionOptions {

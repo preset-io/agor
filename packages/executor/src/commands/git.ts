@@ -20,8 +20,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { parseAgorYml, writeAgorYml } from '@agor/core/config';
+import { getReposDir } from '@agor/core/config';
+import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
   cleanBranch,
@@ -35,7 +37,6 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
-  getReposDir,
   isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
@@ -833,6 +834,13 @@ export async function handleGitClone(
     const reposDir = getReposDir();
     const outputPath = cloneOutputPath;
 
+    // The daemon selects this canonical, tenant-scoped destination. Trust only
+    // that exact path for this one-purpose executor process so an existing
+    // daemon-owned clone can be inspected/reused under Unix impersonation.
+    if (outputPath) {
+      appendGitConfigParameterPairs([`safe.directory=${outputPath}`]);
+    }
+
     // Clone the repository. If the caller pinned a default_branch, forward
     // it as `branch` so the working tree lands on that branch — otherwise
     // `.agor.yml` on a non-default branch wouldn't be visible at parse time
@@ -845,7 +853,7 @@ export async function handleGitClone(
     );
     const cloneResult = await cloneRepo({
       url: safeCloneUrl,
-      targetDir: outputPath, // undefined = let cloneRepo compute path
+      targetDir: outputPath ?? join(reposDir, extractRepoName(safeCloneUrl)),
       bare: payload.params.bare,
       branch: pinnedBranch,
       env,

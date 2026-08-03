@@ -248,13 +248,19 @@ async function probeCodexAuthFile(
   const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
   if (!identity.ok) {
     // A missing unix_username is a real configuration gap (no credential can
-    // exist for this user yet); any other resolution failure is inconclusive.
-    return identity.reason === 'missing-username'
-      ? unauthenticated(
-          'none',
-          'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
-        )
-      : unknown('Could not resolve the Unix account that holds the Codex login.');
+    // exist for this user yet). An unsupported mode means the daemon cannot
+    // see the credential at all (it lives in the execution substrate) — pass
+    // that explanation through. Any other resolution failure is inconclusive.
+    if (identity.reason === 'missing-username') {
+      return unauthenticated(
+        'none',
+        'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
+      );
+    }
+    if (identity.reason === 'unsupported-mode') {
+      return unknown(identity.message);
+    }
+    return unknown('Could not resolve the Unix account that holds the Codex login.');
   }
 
   const inspection = await inspectCodexAuthViaExecutor(identity.unixUser);

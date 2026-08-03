@@ -1522,9 +1522,9 @@ export function LandingPage() {
           <div>
             <strong>agor</strong>
             <p>The command center for AI enablement.</p>
-            <p className={styles.footerEtymology}>
+            <Link href="/blog/making-of-agor" className={styles.footerEtymology}>
               <span>AG</span>ent <span>OR</span>chestration
-            </p>
+            </Link>
           </div>
         </div>
         <div className={styles.footerLinks}>

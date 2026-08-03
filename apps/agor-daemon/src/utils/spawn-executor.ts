@@ -32,6 +32,7 @@ import {
   buildSpawnArgs,
   escapeShellArg,
   isSecretEnvKey,
+  isValidUnixUsername,
   prepareImpersonationEnv,
 } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
@@ -112,7 +113,6 @@ export interface ExecutorSpawnContext {
 }
 
 export interface SpawnExecutorOptions {
-  cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
   /** When set, spawns via `sudo -n -u $asUser`. Secrets go through a 0600 env-file. */
@@ -168,6 +168,17 @@ export function substituteTemplateVariables(
   if (template.includes('{tenant_id}') && !variables.tenant_id) {
     throw new Error(
       'executor_command_template requires {tenant_id}, but no active tenant context is available'
+    );
+  }
+
+  // `{unix_user}` is rendered into a `sh -c` command AND is typically used by
+  // launchers as a path segment (per-user home mounts), so a malformed value
+  // is both a shell-injection and a path-traversal vector. The Unix username
+  // charset excludes shell metacharacters, `/` and `.`, so format validation
+  // is the control here (stronger than escaping, which would not stop `../`).
+  if (variables.unix_user !== undefined && !isValidUnixUsername(variables.unix_user)) {
+    throw new Error(
+      'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
     );
   }
 
@@ -321,7 +332,6 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const executorDir = path.dirname(path.dirname(executorPath)); // Go up from bin/agor-executor or dist/cli.js
 
   const {
-    cwd = executorDir,
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
     asUser: rawAsUser,
@@ -387,32 +397,6 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
-  // Detect missing-cwd up front (issue #1109). Without this, node's
-  // child_process surfaces `spawn /usr/local/bin/node ENOENT` — reported
-  // against the executable path, not the cwd that's actually gone — and
-  // operators end up debugging the wrong layer. The most common cause is
-  // running with a persistent database while `$HOME` is on an ephemeral
-  // volume (e.g. Kubernetes emptyDir): on pod redeploy the DB still
-  // references branch/repo paths that no longer exist on disk. We
-  // surface that clearly here; recovery is left to the operator
-  // (restore the volume, or use the branch/repo lifecycle commands to
-  // remove the orphan rows).
-  if (cwd && !existsSync(cwd)) {
-    console.error(
-      `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
-        `This usually means the branch or repo directory was deleted ` +
-        `out-of-band — for example a Kubernetes pod redeploy with an ` +
-        `ephemeral $HOME but a persistent database. Verify that the volume ` +
-        `backing $HOME persists across restarts. See issue #1109.`
-    );
-    // Surface failure through the normal exit-code path so onExit handlers
-    // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
-    // conventional "command not found" exit code; close enough semantically
-    // for "the cwd is gone" without inventing a new one.
-    options.onExit?.(127, { mode: 'local' });
-    return;
-  }
-
   let reportedExit = false;
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
@@ -421,7 +405,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   };
 
   const executorProcess = spawn(cmd, args, {
-    cwd,
+    cwd: executorDir,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: process.platform !== 'win32',
@@ -614,7 +598,6 @@ function runExecutorCommandLocal(
   const executorDir = path.dirname(path.dirname(executorPath));
 
   const {
-    cwd = executorDir,
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
     asUser: rawAsUser,
@@ -623,16 +606,6 @@ function runExecutorCommandLocal(
     timeoutMs = 60_000,
   } = options;
   const asUser = rawAsUser || undefined;
-
-  if (cwd && !existsSync(cwd)) {
-    return Promise.resolve({
-      success: false,
-      error: {
-        code: 'EXECUTOR_CWD_MISSING',
-        message: `Refusing to spawn: cwd does not exist on disk: ${cwd}`,
-      },
-    });
-  }
 
   const daemonUrl = getDaemonUrl();
   const envWithDaemonUrl: Record<string, string> = preparedEnv
@@ -684,7 +657,7 @@ function runExecutorCommandLocal(
     let settled = false;
 
     const child = spawn(cmd, args, {
-      cwd,
+      cwd: executorDir,
       env: asUser ? undefined : { ...envWithDaemonUrl },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false,

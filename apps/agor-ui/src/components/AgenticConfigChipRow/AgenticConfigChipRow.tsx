@@ -152,7 +152,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
   const explicitEffort = isInline ? formEffort : resolved.modelConfig?.effort;
   const resolvedEffort = explicitEffort ?? toolCapabilities.defaultReasoningEffort;
-  const advisorModel = isInline ? formModelConfig?.advisorModel : undefined;
+  const advisorModel = resolved.modelConfig?.advisorModel;
   const mcpCount = formMcp?.length ?? 0;
 
   // Seed inline fields from the currently-resolved config, then flip to Custom.
@@ -188,6 +188,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     form.setFieldValue('effort', effort);
   };
   const onAdvisorChange = (advisor: string | undefined) => {
+    ensureCustom();
     const current = (form.getFieldValue('modelConfig') as ModelConfig | undefined) ?? {
       mode: 'alias',
       model: resolvedModel,
@@ -352,13 +353,14 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           )}
         />
 
-        {/* Advisor — only meaningful (and applied) while inline config is active */}
-        {isClaude && isInline && (
+        {/* Advisor — applied from any source, so it must stay clearable from any source */}
+        {isClaude && (
           <EditableChip
             icon={<InfoCircleOutlined />}
             label={advisorModel ? `Advisor: ${shortModelName(tool, advisorModel)}` : 'Advisor: Off'}
             title="Advisor model"
-            editable
+            editable={inlineAllowed}
+            managedNote={managedNote}
             width={340}
             testid="advisor-chip"
             renderContent={() => (

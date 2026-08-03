@@ -215,6 +215,17 @@ async function ensureAgorHome(): Promise<void> {
  * Validate config and throw helpful errors for deprecated/invalid settings
  */
 function validateConfig(config: AgorConfig): void {
+  const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
+    ?.plugins;
+  const removedModulePluginIndex = configuredAnalyticsPlugins?.findIndex(
+    (plugin) =>
+      !!plugin && typeof plugin === 'object' && (plugin as { type?: unknown }).type === 'module'
+  );
+  if (removedModulePluginIndex !== undefined && removedModulePluginIndex >= 0) {
+    throw new Error(
+      `Config error: analytics.plugins[${removedModulePluginIndex}].type 'module' has been removed because loading operator-selected code in the daemon is unsafe. Use the built-in 'stdout' or 'http_batch' analytics plugin instead.`
+    );
+  }
   const removedConfig = config as AgorConfig & {
     resources?: unknown;
     services?: unknown;
@@ -280,6 +291,7 @@ function validateConfig(config: AgorConfig): void {
     'telemetry',
     'onboarding',
     'multi_tenancy',
+    'uploads',
   ]);
   const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
   if (unknownTopLevelKeys.length > 0) {
@@ -321,6 +333,7 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
+  only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',
@@ -343,6 +356,30 @@ function validateConfig(config: AgorConfig): void {
     'trusted_host_header',
     'return_host_param',
   ]);
+  if (config.uploads !== undefined) {
+    if (
+      typeof config.uploads.location !== 'undefined' &&
+      (typeof config.uploads.location !== 'string' || config.uploads.location.trim() === '')
+    ) {
+      throw new Error("Config error: 'uploads.location' must be a non-empty path or s3:// URI");
+    }
+    if (
+      typeof config.uploads.max_age_days !== 'undefined' &&
+      (!Number.isSafeInteger(config.uploads.max_age_days) ||
+        config.uploads.max_age_days < 0 ||
+        !Number.isSafeInteger(config.uploads.max_age_days * 24 * 60 * 60 * 1000))
+    ) {
+      throw new Error("Config error: 'uploads.max_age_days' must be a non-negative integer");
+    }
+    if (
+      typeof config.uploads.max_file_size_mb !== 'undefined' &&
+      (!Number.isSafeInteger(config.uploads.max_file_size_mb) ||
+        config.uploads.max_file_size_mb <= 0 ||
+        !Number.isSafeInteger(config.uploads.max_file_size_mb * 1024 * 1024))
+    ) {
+      throw new Error("Config error: 'uploads.max_file_size_mb' must be a positive integer");
+    }
+  }
   only(config.database, 'database', ['dialect', 'sqlite', 'postgresql']);
   only(config.database?.sqlite, 'database.sqlite', ['path', 'walMode', 'busyTimeout']);
   only(config.database?.postgresql, 'database.postgresql', [
@@ -445,13 +482,26 @@ function validateConfig(config: AgorConfig): void {
   only(config.analytics?.filters, 'analytics.filters', ['exclude_events']);
   for (const [index, plugin] of (config.analytics?.plugins ?? []).entries()) {
     only(plugin, `analytics.plugins[${index}]`, ['type', 'enabled', 'options']);
-    const optionKeys =
-      plugin.type === 'stdout'
-        ? ['pretty']
-        : plugin.type === 'http_batch'
-          ? ['url', 'flush_interval_ms', 'max_batch_size', 'timeout_ms', 'headers']
-          : ['module_path', 'export_name', 'plugin_options'];
-    only(plugin.options, `analytics.plugins[${index}].options`, optionKeys);
+    switch (plugin.type) {
+      case 'stdout':
+        only(plugin.options, `analytics.plugins[${index}].options`, ['pretty']);
+        break;
+      case 'http_batch':
+        only(plugin.options, `analytics.plugins[${index}].options`, [
+          'url',
+          'flush_interval_ms',
+          'max_batch_size',
+          'timeout_ms',
+          'headers',
+        ]);
+        break;
+      default: {
+        const unsupported: never = plugin;
+        throw new Error(
+          `Config error: analytics.plugins[${index}].type '${String((unsupported as { type?: unknown }).type)}' is not supported. Use 'stdout' or 'http_batch'.`
+        );
+      }
+    }
   }
   only(config.telemetry, 'telemetry', [
     'enabled',
@@ -711,6 +761,11 @@ export function getDefaultConfig(): AgorConfig {
       mode: 'static',
       static_tenant_id: 'default',
     },
+    uploads: {
+      location: '~/.agor',
+      max_age_days: 30,
+      max_file_size_mb: 50,
+    },
   };
 }
 
@@ -783,6 +838,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },
     telemetry: { ...defaults.telemetry, ...config.telemetry },
+    uploads: { ...defaults.uploads, ...config.uploads },
   };
 
   const parts = key.split('.');
@@ -1180,6 +1236,11 @@ export interface ResolvedExecutionSecurityMode {
   requiresDaemonUnixUser: boolean;
   /** Whether new repos/branches should initialize Unix groups. */
   shouldInitUnixGroups: boolean;
+  /**
+   * Whether every user must have a `unix_username` (strict and delegated).
+   * Session creation and executor/terminal launches fail loudly without one.
+   */
+  requiresUserUnixUsername: boolean;
 }
 
 /**
@@ -1188,13 +1249,16 @@ export interface ResolvedExecutionSecurityMode {
  * Keep this as the single semantic boundary between app-layer RBAC and
  * OS/filesystem isolation:
  * - `branch_rbac` controls Agor app permissions only.
- * - non-`simple` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ * - `insulated`/`strict` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ * - `delegated` requires per-user `unix_username` but performs no OS-level
+ *   work on the daemon host (no sudo, no groups, no sudoers) — identity
+ *   enforcement is delegated to the execution substrate.
  */
 export function resolveExecutionSecurityMode(
   config: AgorConfig = loadConfigSync()
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-  const unixIsolationEnabled = unixUserMode !== 'simple';
+  const unixIsolationEnabled = unixUserMode === 'insulated' || unixUserMode === 'strict';
 
   return {
     appRbacEnabled: config.execution?.branch_rbac === true,
@@ -1204,7 +1268,18 @@ export function resolveExecutionSecurityMode(
     unixGroupRefreshNeeded: unixIsolationEnabled,
     requiresDaemonUnixUser: unixIsolationEnabled,
     shouldInitUnixGroups: unixIsolationEnabled,
+    requiresUserUnixUsername: unixUserModeRequiresUsername(unixUserMode),
   };
+}
+
+/**
+ * Whether a Unix user mode treats per-user `unix_username` as load-bearing
+ * identity. Single predicate shared by `resolveExecutionSecurityMode()` and
+ * call sites that only have the raw mode, so the strict/delegated pairing
+ * cannot drift.
+ */
+export function unixUserModeRequiresUsername(mode: import('./types').UnixUserMode): boolean {
+  return mode === 'strict' || mode === 'delegated';
 }
 
 /**
@@ -1227,8 +1302,8 @@ export function isBranchRbacEnabled(): boolean {
 /**
  * Check if Unix user impersonation is enabled
  *
- * Returns true when unix_user_mode is set to anything other than 'simple'
- * (i.e., 'insulated' or 'strict')
+ * Returns true when unix_user_mode is 'insulated' or 'strict'. 'delegated'
+ * does not impersonate — identity enforcement lives in the execution substrate.
  */
 export function isUnixImpersonationEnabled(): boolean {
   try {

@@ -8,7 +8,6 @@ function attachment(overrides: Partial<ComposerAttachment> = {}): ComposerAttach
     id: 'image-1',
     file: new File(['image'], 'chart.png', { type: 'image/png' }),
     previewUrl: 'blob:chart',
-    destination: 'branch',
     status: 'pending',
     ...overrides,
   };

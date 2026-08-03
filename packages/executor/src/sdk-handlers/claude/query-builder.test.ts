@@ -5,8 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('node:child_process', () => ({
   execSync: vi.fn().mockReturnValue('/usr/bin/claude\n'),
 }));
-vi.mock('@agor/core', () => ({
+vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));

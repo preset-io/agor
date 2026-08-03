@@ -152,7 +152,7 @@ describe('SessionPanel composer send', () => {
       files: [
         {
           filename: 'chart.png',
-          path: '.agor/uploads/chart.png',
+          ref: 'upl_00000000-0000-4000-8000-000000000001',
           size: 5,
           mimeType: 'image/png',
         },
@@ -162,7 +162,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/chart.png\n\nCompare this chart and mention the anomaly',
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)\n\nCompare this chart and mention the anomaly',
       expect.any(String)
     );
   });
@@ -205,7 +205,7 @@ describe('SessionPanel composer send', () => {
       files: [
         {
           filename: 'old-session-chart.png',
-          path: '.agor/uploads/old-session-chart.png',
+          ref: 'upl_00000000-0000-4000-8000-000000000002',
           size: 9,
           mimeType: 'image/png',
         },
@@ -215,7 +215,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/old-session-chart.png\n\nOld session prompt snapshot',
+      'Attachments — use `agor_upload_materialize` to access:\n- [old-session-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000002) (image/png, 9 B)\n\nOld session prompt snapshot',
       expect.any(String)
     );
     expect(onSendPrompt).not.toHaveBeenCalledWith(
@@ -268,7 +268,7 @@ describe('SessionPanel composer send', () => {
       files: [
         {
           filename: 'rapid-chart.png',
-          path: '.agor/uploads/rapid-chart.png',
+          ref: 'upl_00000000-0000-4000-8000-000000000003',
           size: 11,
           mimeType: 'image/png',
         },
@@ -278,7 +278,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/rapid-chart.png\n\nSummarize this rapid chart',
+      'Attachments — use `agor_upload_materialize` to access:\n- [rapid-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000003) (image/png, 11 B)\n\nSummarize this rapid chart',
       expect.any(String)
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
@@ -325,7 +325,7 @@ describe('SessionPanel composer send', () => {
       files: [
         {
           filename: 'uploading-chart.png',
-          path: '.agor/uploads/uploading-chart.png',
+          ref: 'upl_00000000-0000-4000-8000-000000000004',
           size: 5,
           mimeType: 'image/png',
         },
@@ -341,7 +341,7 @@ describe('SessionPanel composer send', () => {
       files: [
         {
           filename: 'preserve-chart.png',
-          path: '.agor/uploads/preserve-chart.png',
+          ref: 'upl_00000000-0000-4000-8000-000000000005',
           size: 12,
           mimeType: 'image/png',
         },
@@ -369,7 +369,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
-      'Attached files:\n- .agor/uploads/preserve-chart.png\n\nKeep this prompt if submit fails',
+      'Attachments — use `agor_upload_materialize` to access:\n- [preserve-chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000005) (image/png, 12 B)\n\nKeep this prompt if submit fails',
       expect.any(String)
     );
     expect(textarea).toHaveValue('Keep this prompt if submit fails');

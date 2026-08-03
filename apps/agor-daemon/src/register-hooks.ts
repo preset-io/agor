@@ -583,12 +583,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tenantOwnedServicePaths = TENANT_OWNED_SERVICE_PATHS;
 
-  const stampTenantData = (data: unknown, tenantId: string): unknown => {
-    if (Array.isArray(data)) return data.map((item) => stampTenantData(item, tenantId));
-    if (!data || typeof data !== 'object') return data;
-    return { ...(data as Record<string, unknown>), tenant_id: tenantId };
-  };
-
   const stripTenantData = (data: unknown): unknown => {
     if (Array.isArray(data)) return data.map(stripTenantData);
     if (!data || typeof data !== 'object') return data;
@@ -636,9 +630,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
 
-    if (context.method === 'create') {
-      context.data = stampTenantData(context.data, tenantId) as typeof context.data;
-    } else if (context.method === 'update' || context.method === 'patch') {
+    if (context.method === 'update' || context.method === 'patch') {
       context.data = stripTenantData(context.data) as typeof context.data;
     }
 
@@ -2444,9 +2436,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
+        // Stamp session with creator's unix_username (MUST run first). Also
+        // registered without RBAC when the Unix mode (strict/delegated) makes
+        // unix_username load-bearing — otherwise sessions would be stamped
+        // null and fail only at prompt time.
+        ...(branchRbacEnabled || executionMode.requiresUserUnixUsername
+          ? [setSessionUnixUsername(usersRepository, executionMode.unixUserMode)]
+          : []),
         ...(branchRbacEnabled
           ? [
-              setSessionUnixUsername(usersRepository), // Stamp session with creator's unix_username (MUST run first)
               // Check branch permission BEFORE injecting created_by (need branch_id)
               async (context: HookContext) => {
                 // RBAC: Ensure user can create sessions in this branch ('all' permission)

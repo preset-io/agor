@@ -2,7 +2,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
+import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
@@ -74,35 +76,62 @@ describe('isIngestableFile', () => {
 });
 
 describe('buildPromptWithAttachments', () => {
+  const uploadRef = 'upl_00000000-0000-4000-8000-000000000001';
+  const attachment = {
+    ref: uploadRef as UploadRef,
+    name: 'error.log',
+    mimeType: 'text/plain',
+    size: 1024,
+    provenance: 'slack' as const,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: null,
+  };
+
   it('returns the trimmed text when there are no attachments', () => {
     expect(buildPromptWithAttachments('  hello  ', [])).toBe('hello');
   });
 
-  it('prepends the attachment block to regular prompts', () => {
-    expect(buildPromptWithAttachments('look at this', ['/tmp/a.png'])).toBe(
-      'Attached files:\n- /tmp/a.png\n\nlook at this'
+  it('prepends useful attachment metadata to regular prompts', () => {
+    expect(buildPromptWithAttachments('look at this', [attachment])).toBe(
+      `Attachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)\n\nlook at this`
     );
   });
 
   it('keeps slash commands first', () => {
-    expect(buildPromptWithAttachments('/review', ['/tmp/a.png'])).toBe(
-      '/review\n\nAttached files:\n- /tmp/a.png'
+    expect(buildPromptWithAttachments('/review', [attachment])).toBe(
+      `/review\n\nAttachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)`
     );
   });
 
   it('returns only the attachment block when the text is empty', () => {
-    expect(buildPromptWithAttachments('', ['/tmp/a.png', '/tmp/b.png'])).toBe(
-      'Attached files:\n- /tmp/a.png\n- /tmp/b.png'
+    expect(buildPromptWithAttachments('', [attachment])).toBe(
+      `Attachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)`
     );
   });
 });
 
 describe('ingestInboundAttachments', () => {
   let uploadDir: string;
+  let store: LocalUploadStagingStore;
+  const tenantId = 'tenant-test' as TenantID;
+  const sessionId = '00000000-0000-0000-0000-000000000001' as SessionID;
 
   beforeEach(async () => {
     uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-attachments-'));
+    store = new LocalUploadStagingStore(() => uploadDir);
   });
+
+  async function readStaged(ref: string): Promise<Buffer> {
+    const stream = await store.read({
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      ref: ref as never,
+    });
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk as Uint8Array));
+    return Buffer.concat(chunks);
+  }
 
   afterEach(async () => {
     await fs.rm(uploadDir, { recursive: true, force: true });
@@ -117,7 +146,11 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -125,10 +158,10 @@ describe('ingestInboundAttachments', () => {
       { headers: { Authorization: 'Bearer xoxb-test' }, redirect: 'manual' }
     );
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
-    expect(result.paths[0].startsWith(uploadDir)).toBe(true);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_screenshot_\d+\.png$/);
-    expect(new Uint8Array(await fs.readFile(result.paths[0]))).toEqual(bytes);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0].ref).toMatch(/^upl_/);
+    expect(result.uploads[0].name).toBe('F123_screenshot.png');
+    expect(new Uint8Array(await readStaged(result.uploads[0].ref))).toEqual(bytes);
   });
 
   it('downloads a text attachment and stores it in the upload dir', async () => {
@@ -151,13 +184,17 @@ describe('ingestInboundAttachments', () => {
       ],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_errors_\d+\.csv$/);
-    expect(await fs.readFile(result.paths[0], 'utf8')).toBe(body);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0].name).toBe('F123_errors.csv');
+    expect((await readStaged(result.uploads[0].ref)).toString('utf8')).toBe(body);
   });
 
   it('ignores non-ingestable attachments without counting them as failures', async () => {
@@ -167,11 +204,15 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ mimetype: 'application/pdf', name: 'doc.pdf' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 0 });
+    expect(result).toEqual({ uploads: [], failed: 0 });
   });
 
   it('never fetches disallowed hosts and counts them as failed', async () => {
@@ -182,11 +223,15 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ url_private_download: 'https://evil.example.com/a.png' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
     expect(warn).toHaveBeenCalled();
   });
 
@@ -198,11 +243,15 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ size: MAX_UPLOAD_FILE_SIZE + 1 })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
   });
 
   it('rejects redirects to non-allowlisted hosts and never sends the token there', async () => {
@@ -219,10 +268,14 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
     // The Authorization header must only ever reach allowlisted slack.com
     // hosts: the redirect target is validated BEFORE any fetch to it.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -247,11 +300,15 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(1);
+    expect(result.uploads).toHaveLength(1);
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       'https://files.slack.com/files-pri/T1-F123/other/screenshot.png',
@@ -283,13 +340,20 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ name: 'server.log', mimetype: 'text/plain' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
     // Reading stopped as soon as the running total crossed the 50MB ceiling.
-    expect(chunksPulled).toBeLessThanOrEqual(MAX_UPLOAD_FILE_SIZE / chunkSize + 2);
-    expect(await fs.readdir(uploadDir)).toEqual([]);
+    expect(chunksPulled).toBeLessThanOrEqual(MAX_UPLOAD_FILE_SIZE / chunkSize + 3);
+    const objectBuckets = await fs.readdir(path.join(uploadDir, 'objects'));
+    for (const bucket of objectBuckets) {
+      expect(await fs.readdir(path.join(uploadDir, 'objects', bucket))).toEqual([]);
+    }
   });
 
   it('rejects image/svg+xml response bodies (excluded from the upload allowlist)', async () => {
@@ -306,10 +370,14 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
@@ -327,10 +395,14 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ name: 'report.txt', mimetype: 'text/plain' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
@@ -341,13 +413,19 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile({ id: 'F1', name: 'image.png' }), makeFile({ id: 'F2', name: 'image.png' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(result.failed).toBe(0);
-    expect(result.paths).toHaveLength(2);
-    expect(result.paths[0]).not.toBe(result.paths[1]);
-    expect(await fs.readdir(uploadDir)).toHaveLength(2);
+    expect(result.uploads).toHaveLength(2);
+    expect(result.uploads[0].ref).not.toBe(result.uploads[1].ref);
+    expect(await readStaged(result.uploads[0].ref)).toEqual(Buffer.from([1]));
+    expect(await readStaged(result.uploads[1].ref)).toEqual(Buffer.from([1]));
+    expect(result.uploads.map((upload) => upload.name)).toEqual(['F1_image.png', 'F2_image.png']);
   });
 
   it('rejects non-image response bodies (Slack HTML error pages)', async () => {
@@ -364,10 +442,14 @@ describe('ingestInboundAttachments', () => {
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
-    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(result).toEqual({ uploads: [], failed: 1 });
   });
 
   it('continues past failures and still stores the remaining images', async () => {
@@ -385,12 +467,16 @@ describe('ingestInboundAttachments', () => {
       ],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(result.failed).toBe(1);
-    expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F2_second_\d+\.png$/);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0].name).toBe('F2_second.png');
   });
 
   it('counts images beyond the per-message cap as failed without fetching them', async () => {
@@ -405,11 +491,15 @@ describe('ingestInboundAttachments', () => {
       files,
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(10);
-    expect(result.paths).toHaveLength(10);
+    expect(result.uploads).toHaveLength(10);
     expect(result.failed).toBe(2);
   });
 });
