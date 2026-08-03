@@ -79,6 +79,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   private rowToSession(row: SessionRow, branchBoardId?: UUID | null, baseUrl?: string): Session {
     const genealogyData = row.data.genealogy || { children: [] };
+    // Older rows may still contain the former session-level git_state JSON.
+    // Task snapshots are authoritative; do not expose the legacy projection.
+    const { git_state: _legacyGitState, ...sessionData } = row.data as typeof row.data & {
+      git_state?: unknown;
+    };
     const sessionId = row.session_id as SessionID;
     const boardId = branchBoardId ?? null;
 
@@ -103,7 +108,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branch_id: row.branch_id as UUID,
         branch_board_id: boardId,
         url,
-        ...row.data,
+        ...sessionData,
         tasks: row.data.tasks.map((id) => id as UUID),
         genealogy: {
           parent_session_id: row.parent_session_id as UUID | undefined,
@@ -168,11 +173,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
         title: session.title,
         description: session.description,
-        git_state: session.git_state ?? {
-          ref: 'main',
-          base_sha: '',
-          current_sha: '',
-        },
         genealogy: session.genealogy ?? {
           children: [],
         },

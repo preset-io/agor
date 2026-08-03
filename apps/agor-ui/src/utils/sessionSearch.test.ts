@@ -23,7 +23,6 @@ function session(overrides: Partial<Session>): Session {
     unix_username: null,
     branch_id: 'branch-1' as Session['branch_id'],
     url: null,
-    git_state: { ref: 'main', base_sha: 'base', current_sha: 'head' },
     contextFiles: [],
     genealogy: { children: [] },
     tasks: [],

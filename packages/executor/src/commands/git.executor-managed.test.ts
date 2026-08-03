@@ -75,7 +75,6 @@ vi.mock('./unix.js', async () => {
 import {
   handleBranchAgorYmlExport,
   handleBranchAgorYmlImport,
-  handleBranchInspect,
   handleGitBranchAdd,
   handleGitBranchRemove,
   handleGitClone,
@@ -529,52 +528,6 @@ describe('managed executor git/fs commands', () => {
     );
     expect(result).toMatchObject({ success: false, error: { message: 'chgrp failed' } });
     expect(patchedRepos).not.toContainEqual(expect.objectContaining({ clone_status: 'ready' }));
-  });
-
-  it('adds branch/repo safe.directory and falls back to DB branch name when current branch lookup fails', async () => {
-    mocks.gitRaw.mockImplementation(async (args: string[]) => {
-      if (args.includes('status')) return '';
-      if (args.includes('--abbrev-ref')) throw new Error('dubious ownership');
-      if (args.includes('HEAD')) return 'sha-abc\n';
-      return '';
-    });
-    createClient({
-      repo: { repo_id: repoId, local_path: '/safe/repos/repo' },
-      branch: {
-        branch_id: branchId,
-        repo_id: repoId,
-        name: 'feature-x',
-        path: '/safe/worktrees/repo/feature-x',
-      },
-    });
-
-    const result = await handleBranchInspect(
-      { command: 'branch.inspect', sessionToken: 'jwt', params: { branchId } },
-      {}
-    );
-
-    expect(result.success).toBe(true);
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/worktrees/repo/feature-x',
-      true,
-      'global'
-    );
-    expect(mocks.addConfig).toHaveBeenCalledWith(
-      'safe.directory',
-      '/safe/repos/repo',
-      true,
-      'global'
-    );
-    expect(mocks.gitRaw).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        '-c',
-        'safe.directory=/safe/worktrees/repo/feature-x',
-        '-c',
-        'safe.directory=/safe/repos/repo',
-      ])
-    );
-    expect(result.data).toMatchObject({ currentSha: 'sha-abc', currentRef: 'feature-x' });
   });
 
   it('pages through every branch before deleting repo directories', async () => {

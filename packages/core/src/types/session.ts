@@ -192,13 +192,6 @@ export interface Session {
    */
   url: string | null;
 
-  // Git state
-  git_state: {
-    ref: string;
-    base_sha: string;
-    current_sha: string;
-  };
-
   // Context (context file paths relative to context/)
   contextFiles: ContextFilePath[];
 

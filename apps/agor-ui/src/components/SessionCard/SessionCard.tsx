@@ -80,7 +80,9 @@ const SessionCard = ({
   const isForked = !!session.genealogy.forked_from_session_id;
   const isSpawned = !!session.genealogy.parent_session_id;
 
-  const { cleanSha, isDirty } = parseGitStateSha(session.git_state.current_sha);
+  const latestGitState = tasks.at(-1)?.git_state;
+  const latestSha = latestGitState?.sha_at_end ?? latestGitState?.sha_at_start;
+  const { cleanSha, isDirty } = parseGitStateSha(latestSha);
 
   // Task list collapse header (just the "Tasks" label)
   const taskListHeader = (
@@ -266,19 +268,21 @@ const SessionCard = ({
           </div>
         )}
 
-        {/* Git State */}
-        <div style={{ marginBottom: 8 }}>
-          <Space size={4}>
-            <Typography.Text type="secondary">
-              📍 {session.git_state.ref} @ {cleanSha.substring(0, 7)}
-            </Typography.Text>
-            {isDirty && (
-              <Tag icon={<EditOutlined />} color="orange" style={{ fontSize: 11 }}>
-                uncommitted
-              </Tag>
-            )}
-          </Space>
-        </div>
+        {/* Latest task Git state */}
+        {latestGitState && latestSha && latestSha !== 'unknown' && (
+          <div style={{ marginBottom: 8 }}>
+            <Space size={4}>
+              <Typography.Text type="secondary">
+                📍 {latestGitState.ref_at_start} @ {cleanSha.substring(0, 7)}
+              </Typography.Text>
+              {isDirty && (
+                <Tag icon={<EditOutlined />} color="orange" style={{ fontSize: 11 }}>
+                  uncommitted
+                </Tag>
+              )}
+            </Space>
+          </div>
+        )}
 
         {/* Concepts - TODO: Re-implement with contextFiles */}
         {/* {session.contextFiles && session.contextFiles.length > 0 && (

@@ -282,17 +282,6 @@ async function captureGitStateForSession(
       `[Git SHA Capture] Captured git state at task ${phase}: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''} ref=${ref}`
     );
 
-    // Update session's current_sha to keep it in sync as tasks complete.
-    if (phase === 'end' && sha && sha !== 'unknown') {
-      try {
-        await client.service('sessions').patch(sessionId, {
-          git_state: { ...session.git_state, current_sha: sha, ref },
-        });
-      } catch (sessionPatchError) {
-        console.warn('[Git SHA Capture] Failed to update session current_sha:', sessionPatchError);
-      }
-    }
-
     return { sha, ref };
   } catch (error) {
     console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);

@@ -86,11 +86,6 @@ async function testSessionRepository(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: {
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'abc123',
-    },
     genealogy: {
       children: [],
     },
@@ -269,7 +264,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: TaskStatus.COMPLETED,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
     genealogy: { children: [] },
     contextFiles: [],
     tasks: [],
@@ -283,7 +277,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       forked_from_session_id: parent.session_id,
       fork_point_task_id: 'task-123' as TaskID,
@@ -301,7 +294,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       parent_session_id: parent.session_id,
       spawn_point_task_id: 'task-456' as TaskID,

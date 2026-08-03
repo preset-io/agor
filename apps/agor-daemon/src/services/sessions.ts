@@ -613,7 +613,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.
         // Strict-mode deployments refuse to launch sessions with null unix_username.
-        git_state: { ...parent.git_state },
         genealogy: {
           forked_from_session_id: parent.session_id,
           fork_point_task_id: data.task_id as TaskID,
@@ -803,7 +802,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.
         // Strict-mode deployments refuse to launch sessions with null unix_username.
-        git_state: { ...parent.git_state },
         genealogy: {
           parent_session_id: parent.session_id,
           spawn_point_task_id: data.task_id as TaskID,

@@ -19,22 +19,7 @@
  */
 
 import { type HookContext, TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
-
-const gitReadMocks = vi.hoisted(() => ({
-  inspectBranchViaExecutor: vi.fn(async () => ({
-    currentSha: 'scheduled-sha',
-    currentRef: 'main',
-  })),
-  resolveExecutorReadAsUser: vi.fn(async () => 'scheduler-owner'),
-}));
-
-vi.mock('./utils/branch-inspect', () => ({
-  inspectBranchViaExecutor: gitReadMocks.inspectBranchViaExecutor,
-}));
-vi.mock('./utils/executor-read-impersonation', () => ({
-  resolveExecutorReadAsUser: gitReadMocks.resolveExecutorReadAsUser,
-}));
+import { describe, expect, it } from 'vitest';
 
 import {
   enrichSessionFindResultWithRemoteRelationships,
@@ -64,68 +49,10 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     tasks: [],
     genealogy: { children: [] },
     contextFiles: [],
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
     scheduled_from_branch: false,
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
-
-describe('sessions.create git state', () => {
-  it('uses stamped created_by for an internal create without params.user', async () => {
-    let sessionCreateHooks: Array<(context: HookContext) => unknown> = [];
-    const app = {
-      service(path: string) {
-        const normalized = path.replace(/^\//, '');
-        return {
-          hooks(hooks: { before?: { create?: Array<(context: HookContext) => unknown> } }) {
-            if (normalized === 'sessions' && hooks.before?.create)
-              sessionCreateHooks = hooks.before.create;
-          },
-          async get(id: string) {
-            if (normalized === 'branches') {
-              return { branch_id: id, repo_id: 'repo-1', name: 'main', path: '/worktree' };
-            }
-            if (normalized === 'repos') return { repo_id: id, slug: 'repo' };
-            return {};
-          },
-        };
-      },
-      use() {},
-      publish() {},
-    };
-
-    registerHooks({
-      db: {} as RegisterHooksContext['db'],
-      app: app as RegisterHooksContext['app'],
-      config: {} as RegisterHooksContext['config'],
-      jwtSecret: 'test-secret',
-      branchRbacEnabled: false,
-      requireAuth: async (context) => context,
-      superadminOpts: { allowSuperadmin: true },
-      sessionsService: {} as RegisterHooksContext['sessionsService'],
-      messagesService: {} as RegisterHooksContext['messagesService'],
-      boardsService: undefined,
-      branchRepository: {} as RegisterHooksContext['branchRepository'],
-      usersRepository: {} as RegisterHooksContext['usersRepository'],
-      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
-    });
-
-    const context = {
-      app,
-      data: { branch_id: 'branch-1', created_by: 'owner-1' },
-      params: {},
-    } as unknown as HookContext;
-    await sessionCreateHooks.at(-1)!(context);
-
-    expect(gitReadMocks.resolveExecutorReadAsUser).toHaveBeenCalledWith(
-      expect.anything(),
-      'owner-1'
-    );
-    expect(context.data).toMatchObject({
-      git_state: { ref: 'main', base_sha: 'scheduled-sha', current_sha: 'scheduled-sha' },
-    });
-  });
-});
 
 describe('protectExternalTaskCreate', () => {
   const context = (data: unknown, provider: string | null = 'rest') =>
@@ -570,9 +497,6 @@ describe('isPromptFlowPatchOnly', () => {
 
     it('accepts the executor git-SHA capture shape', () => {
       // packages/executor/src/handlers/sdk/base-executor.ts patches current SHA
-      expect(isPromptFlowPatchOnly({ git_state: { current_sha: 'deadbeef', ref: 'main' } })).toBe(
-        true
-      );
     });
 
     it('accepts the executor opencode init shape', () => {

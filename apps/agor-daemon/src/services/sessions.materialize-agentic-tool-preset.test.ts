@@ -63,7 +63,6 @@ async function seedPresetSession(
     agentic_tool_preset_id: preset.preset_id,
     status: SessionStatus.IDLE,
     created_by: ACTOR_ID,
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },

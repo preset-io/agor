@@ -12,7 +12,6 @@
  */
 
 import { resolveExecutionSecurityMode } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
@@ -26,8 +25,6 @@ import type {
 } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
@@ -101,14 +98,6 @@ export async function fireAlwaysNewZoneTrigger(
     mcp_server_ids: inheritedMcpIds,
   } = resolveSessionDefaults({ agenticTool, user, branch });
 
-  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
-  const asUser = db ? await resolveExecutorReadAsUser(db, user) : undefined;
-
-  const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
-    asUser,
-    logPrefix: `[zone-trigger ${branch.name}]`,
-  });
-
   // In strict/delegated, refuse to create a zone-triggered session for a user
   // without a unix_username — it would fail at prompt time (or silently share
   // an identity in hosted deployments).
@@ -128,11 +117,6 @@ export async function fireAlwaysNewZoneTrigger(
       unix_username: user.unix_username,
       permission_config: permissionConfig,
       ...(modelConfig && { model_config: modelConfig }),
-      git_state: {
-        ref: currentRef,
-        base_sha: currentSha,
-        current_sha: currentSha,
-      },
       genealogy: { children: [] },
       tasks: [],
     },

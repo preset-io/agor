@@ -523,27 +523,6 @@ export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
 export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Branch Inspect Payload
-// ═══════════════════════════════════════════════════════════
-
-/**
- * Branch inspect payload - read current git ref/SHA from a branch checkout.
- */
-export const BranchInspectPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('branch.inspect'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** Branch ID whose checkout should be inspected */
-    branchId: z.string().uuid(),
-  }),
-});
-
-export type BranchInspectPayload = z.infer<typeof BranchInspectPayloadSchema>;
-
-// ═══════════════════════════════════════════════════════════
 // Branch .agor.yml Payloads
 // ═══════════════════════════════════════════════════════════
 
@@ -977,7 +956,6 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchKnowledgeReadPayloadSchema,
   BranchSlackFileUploadPayloadSchema,
   BranchUploadMaterializePayloadSchema,
-  BranchInspectPayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
@@ -1057,7 +1035,6 @@ export function getSupportedCommands(): string[] {
     'branch.knowledge.read',
     'branch.gateway.slack-file-upload',
     'branch.upload.materialize',
-    'branch.inspect',
     'branch.agor-yml.import',
     'branch.agor-yml.export',
     'environment.lifecycle',

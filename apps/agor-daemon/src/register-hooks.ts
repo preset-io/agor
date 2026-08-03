@@ -131,9 +131,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
   redactMCPServerSecrets,
@@ -292,7 +290,6 @@ function validateBranchEnvPolicyHook() {
  *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
- *   - executor git-SHA capture → `git_state` (per-message current_sha)
  *   - executor opencode init   → `sdk_session_id` (SDK session handle)
  *
  * When a `patch` touches ONLY these fields, the sessions hook chain downgrades
@@ -306,7 +303,7 @@ function validateBranchEnvPolicyHook() {
  * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
  * so widening the whitelist here cannot accidentally leak metadata writes.
  *
- * NOTE: `git_state` and `sdk_session_id` are on this list because the executor
+ * NOTE: `sdk_session_id` is on this list because the executor
  * authenticates as the session creator (see auth/session-token-strategy.ts),
  * not as a service account. Proper long-term fix is to give the executor a
  * service-account token so these patches bypass RBAC entirely.
@@ -317,7 +314,6 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'archived_reason',
   'status',
   'ready_for_prompt',
-  'git_state',
   'sdk_session_id',
 ];
 
@@ -2474,7 +2470,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // ID. See utils/apply-session-config-defaults.ts.
         applySessionConfigDefaults(),
         async (context) => {
-          // Populate repo field and auto-populate git_state from branch_id
+          // Populate repo field from branch_id.
           if (!Array.isArray(context.data) && context.data?.branch_id) {
             try {
               const branch = await context.app.service('branches').get(context.data.branch_id);
@@ -2489,40 +2485,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     managed_branch: true,
                   };
                   console.log(`✅ Populated repo.cwd from branch: ${branch.path}`);
-                }
-
-                // Auto-populate git_state if not provided (UI and gateway don't set it).
-                // Branch git reads go through the executor so the daemon never
-                // runs git inside the managed checkout.
-                const existingGitState = (context.data as Record<string, unknown>).git_state as
-                  | { base_sha?: string }
-                  | undefined;
-                if (!existingGitState?.base_sha && branch.path) {
-                  try {
-                    const { currentSha, currentRef } = await inspectBranchViaExecutor(
-                      context.app as Application,
-                      branch.branch_id,
-                      {
-                        asUser: await resolveExecutorReadAsUser(
-                          db,
-                          ((context.params as AuthenticatedParams).user?.user_id ??
-                            context.data.created_by) as UserID | undefined
-                        ),
-                        logPrefix: `[sessions.create ${branch.name}]`,
-                      }
-                    );
-                    (context.data as Record<string, unknown>).git_state = {
-                      ref: currentRef || branch.name || 'unknown',
-                      base_sha: currentSha,
-                      current_sha: currentSha,
-                    };
-                    console.log(
-                      `✅ Auto-populated git_state from branch: ref=${currentRef}, sha=${currentSha.substring(0, 8)}`
-                    );
-                  } catch (gitError) {
-                    const message = gitError instanceof Error ? gitError.message : String(gitError);
-                    console.warn(`Failed to auto-populate git_state from branch: ${message}`);
-                  }
                 }
               }
             } catch (error) {

@@ -95,7 +95,6 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
     created_by: userId,
     created_at: new Date().toISOString(),
     last_updated: new Date().toISOString(),
-    git_state: { ref: 'main', base_sha: 'a', current_sha: 'b' },
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },

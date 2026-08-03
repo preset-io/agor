@@ -560,7 +560,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
     expect(commands).toContain('branch.upload.materialize');
-    expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
@@ -573,6 +572,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(32);
+    expect(commands.length).toBe(31);
   });
 });

@@ -273,7 +273,7 @@ describe('configured executor spawning', () => {
 
     const resultPromise = runWithTenantContext('tenant-run', () =>
       runExecutorCommand(
-        { command: 'branch.inspect' },
+        { command: 'git.repo.inspect' },
         {
           executorCommandTemplate: 'launch --tenant-id {tenant_id} -- {command}',
         }
@@ -288,7 +288,7 @@ describe('configured executor spawning', () => {
     });
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
-      ['-c', "launch --tenant-id 'tenant-run' -- branch.inspect"],
+      ['-c', "launch --tenant-id 'tenant-run' -- git.repo.inspect"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
   });

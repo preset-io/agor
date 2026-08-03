@@ -92,7 +92,6 @@ async function createSession(
     agentic_tool: 'claude-code',
     status: SessionStatus.IDLE,
     created_by: TEST_USER_ID,
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },

@@ -33,9 +33,7 @@ import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -452,11 +450,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           : 'root';
       result.parent_session_id = gen?.parent_session_id || gen?.forked_from_session_id || null;
       result.children_count = gen?.children?.length || 0;
-
-      // Git state (flat)
-      result.branch = session.git_state?.ref || null;
-      result.base_sha = session.git_state?.base_sha || null;
-      result.current_sha = session.git_state?.current_sha || null;
 
       if (session.branch_id) {
         try {
@@ -984,15 +977,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Get current git state via executor so the daemon does not run git in the branch checkout.
-      const asUser = await runWithMcpTenantDatabaseScope(ctx, (db) =>
-        resolveExecutorReadAsUser(db, user)
-      );
-      const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
-        asUser,
-        logPrefix: `[mcp.sessions.create ${branch.name}]`,
-      });
-
       // Resolve permission_config / model_config / inherited mcp_server_ids
       // from the explicit MCP args (highest priority) > user defaults > system
       // fallback. Single source of truth for this dance lives in
@@ -1130,11 +1114,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ...(modelConfig && { model_config: modelConfig }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
-        git_state: {
-          ref: currentRef,
-          base_sha: currentSha,
-          current_sha: currentSha,
-        },
         genealogy: {
           ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
           children: [],
