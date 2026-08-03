@@ -637,6 +637,77 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) as Promise<Session>;
   }
 
+  /**
+   * Headless code-sync trigger. After a task completes, if the session's branch
+   * runs a REMOTE environment — one whose variant defines a `sync` command (e.g.
+   * a Codespace) — and that environment is running, push the branch's latest
+   * committed code into it. This is the design's "event-driven sync": the commit
+   * the task just produced is the event, so the remote environment tracks the
+   * branch with no polling and no click.
+   *
+   * Fire-and-forget and best-effort:
+   * - Never blocks or fails task completion (all errors are swallowed).
+   * - Idempotent: if HEAD did not advance, the remote fast-forward is a no-op.
+   * - Cheap gate: a branch with no running environment returns immediately; only
+   *   a running environment loads the repo to check for a `sync` command, so
+   *   local (non-remote) environments — which have none — are skipped.
+   */
+  private async maybeAutoSyncEnvironmentAfterTask(
+    branchId: string,
+    params?: TaskParams
+  ): Promise<void> {
+    try {
+      const branchesService = this.app.service('branches') as unknown as {
+        get: (
+          id: string,
+          p?: unknown
+        ) => Promise<{
+          repo_id: string;
+          environment_variant?: string | null;
+          environment_instance?: { status?: string; tenant?: { tenant_id?: string } };
+        }>;
+        syncEnvironment: (id: string, p?: unknown) => Promise<unknown>;
+      };
+      const branch = await branchesService.get(branchId, params);
+      if (branch.environment_instance?.status !== 'running') return;
+
+      const repo = (await this.app.service('repos').get(branch.repo_id, params)) as {
+        environment?: {
+          default?: string;
+          variants?: Record<string, { sync?: string; extends?: string }>;
+        };
+      };
+      const variants = repo.environment?.variants;
+      const variantName = branch.environment_variant ?? repo.environment?.default;
+      if (!variants || !variantName) return;
+      // Resolve one level of `extends` so an inherited `sync` still counts.
+      const v = variants[variantName];
+      const hasSync = !!(v?.sync || (v?.extends && variants[v.extends]?.sync));
+      if (!hasSync) return;
+
+      // Carry an explicit tenant so the executor spawn (deferred, off the request
+      // scope) can resolve one — a fire-and-forget call has lost the ambient
+      // tenant context by the time the environment executor is dispatched.
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id ??
+        branch.environment_instance?.tenant?.tenant_id;
+      const syncParams = tenantId
+        ? ({ ...(params ?? {}), tenant: { tenant_id: tenantId } } as TaskParams)
+        : params;
+
+      console.log(
+        `🔄 [TasksService] Auto-syncing remote environment for branch ${shortId(branchId)} after task completion`
+      );
+      await branchesService.syncEnvironment(branchId, syncParams);
+    } catch (err) {
+      console.warn(
+        `⚠️  [TasksService] Auto-sync after task failed for branch ${shortId(branchId)}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
@@ -662,6 +733,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
             );
           });
+
+        // Headless "event-driven sync": the commit this task just produced is the
+        // trigger. If the branch runs a remote environment (variant defines a
+        // `sync` command) and it is running, push the branch's latest code into
+        // it — no polling, no click.
+        //
+        // Defer to AFTER this task-patch transaction commits (the same idiom the
+        // executor dispatch uses): the sync itself dispatches an executor via
+        // deferWithTenantContext, which enqueues the spawn behind the active DB
+        // transaction — running it inline here would trap that spawn behind a
+        // transaction that never re-fires its commit hook, so the sync would
+        // never actually run. Best-effort: never blocks or fails completion.
+        const syncBranchId = session.branch_id;
+        deferWithTenantContext(
+          params,
+          () => this.maybeAutoSyncEnvironmentAfterTask(syncBranchId, params),
+          (err) =>
+            console.warn(
+              `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            )
+        );
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];
