@@ -32,22 +32,22 @@ describe('SdkWatchdog', () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it.each([
-    'observe',
-    'enforce',
-  ] as const)('uses the same first-progress decision in %s mode', (mode) => {
-    const { watchdog, decisions } = harness({ mode });
-    watchdog.record('sdk_started');
-    vi.advanceTimersByTime(1_000);
-    expect(decisions).toMatchObject([
-      {
-        reason: 'no_first_progress',
-        watchdog_action: mode === 'enforce' ? 'enforced' : 'would_fire',
-      },
-    ]);
-    vi.advanceTimersByTime(5_000);
-    expect(decisions).toHaveLength(1);
-  });
+  it.each(['observe', 'enforce'] as const)(
+    'uses the same first-progress decision in %s mode',
+    (mode) => {
+      const { watchdog, decisions } = harness({ mode });
+      watchdog.record('sdk_started');
+      vi.advanceTimersByTime(1_000);
+      expect(decisions).toMatchObject([
+        {
+          reason: 'no_first_progress',
+          watchdog_action: mode === 'enforce' ? 'enforced' : 'would_fire',
+        },
+      ]);
+      vi.advanceTimersByTime(5_000);
+      expect(decisions).toHaveLength(1);
+    }
+  );
 
   it('disarms first-progress policy after meaningful progress', () => {
     const { watchdog, decisions } = harness();

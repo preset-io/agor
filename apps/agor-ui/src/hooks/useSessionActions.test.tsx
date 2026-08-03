@@ -122,29 +122,29 @@ describe('useSessionActions OpenCode model config', () => {
     expect(create.mock.calls[0][0]).not.toHaveProperty('permission_config');
   });
 
-  it.each([
-    'autoEdit',
-    'yolo',
-  ] as const)('serializes an explicit %s permission override', async (permissionMode) => {
-    const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
-    const client = makeClient({ sessions: { create } });
-    const { result } = renderHook(() => useSessionActions(client));
+  it.each(['autoEdit', 'yolo'] as const)(
+    'serializes an explicit %s permission override',
+    async (permissionMode) => {
+      const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));
+      const client = makeClient({ sessions: { create } });
+      const { result } = renderHook(() => useSessionActions(client));
 
-    await act(async () => {
-      await result.current.createSession({
-        branch_id: 'branch-1',
-        agent: 'opencode',
-        modelConfig: undefined,
-        permissionMode,
+      await act(async () => {
+        await result.current.createSession({
+          branch_id: 'branch-1',
+          agent: 'opencode',
+          modelConfig: undefined,
+          permissionMode,
+        });
       });
-    });
 
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        permission_config: { mode: permissionMode },
-      })
-    );
-  });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          permission_config: { mode: permissionMode },
+        })
+      );
+    }
+  );
 
   it('does not create a detached effort-only model config when selection is omitted', async () => {
     const create = vi.fn(async (data) => ({ session_id: 'session-1', ...data }));

@@ -31,21 +31,17 @@ describe('surface route registry', () => {
     expect(routeUsesSharedUserSettings(path)).toBe(true);
   });
 
-  it.each([
-    '/',
-    '/b/board/',
-    '/s/session/',
-    '/w/branch/',
-    '/a/artifact/',
-    '/m',
-  ])('classifies %s as Workspace', (path) => {
-    expect(getRouteSurface(path).id).toBe('workspace');
-    expect(isKnowledgeRoutePath(path)).toBe(false);
-    expect(isWorkspaceRoutePath(path)).toBe(true);
-    expect(routeStartsWorkspaceRuntime(path)).toBe(true);
-    expect(routeUsesDeviceRouter(path)).toBe(true);
-    expect(routeUsesSharedUserSettings(path)).toBe(false);
-  });
+  it.each(['/', '/b/board/', '/s/session/', '/w/branch/', '/a/artifact/', '/m'])(
+    'classifies %s as Workspace',
+    (path) => {
+      expect(getRouteSurface(path).id).toBe('workspace');
+      expect(isKnowledgeRoutePath(path)).toBe(false);
+      expect(isWorkspaceRoutePath(path)).toBe(true);
+      expect(routeStartsWorkspaceRuntime(path)).toBe(true);
+      expect(routeUsesDeviceRouter(path)).toBe(true);
+      expect(routeUsesSharedUserSettings(path)).toBe(false);
+    }
+  );
 
   it.each(['/a/artifact/fullscreen'])('classifies %s as Artifact fullscreen', (path) => {
     expect(getRouteSurface(path).id).toBe('artifact-fullscreen');
@@ -63,14 +59,13 @@ describe('surface route registry', () => {
     expect(routeUsesSharedUserSettings('/demo/streamdown')).toBe(false);
   });
 
-  it.each([
-    '/demo',
-    '/demo/',
-    '/demo/anything-else',
-  ])('falls back to Workspace for unregistered demo path %s', (path) => {
-    expect(getRouteSurface(path).id).toBe('workspace');
-    expect(routeStartsWorkspaceRuntime(path)).toBe(true);
-  });
+  it.each(['/demo', '/demo/', '/demo/anything-else'])(
+    'falls back to Workspace for unregistered demo path %s',
+    (path) => {
+      expect(getRouteSurface(path).id).toBe('workspace');
+      expect(routeStartsWorkspaceRuntime(path)).toBe(true);
+    }
+  );
 
   it('does not treat similarly prefixed paths as Knowledge', () => {
     expect(isKnowledgeRoutePath('/kbish')).toBe(false);

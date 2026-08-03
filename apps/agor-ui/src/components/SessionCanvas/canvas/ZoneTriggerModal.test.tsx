@@ -343,51 +343,51 @@ describe('ZoneTriggerModal reasoning effort', () => {
     );
   });
 
-  it.each([
-    'fork',
-    'spawn',
-  ] as const)('folds an explicit effort into a reused session %s config', async (action) => {
-    const session = {
-      ...makeSession('s-codex', 'completed', '2026-06-20T00:00:00.000Z', 'Codex session'),
-      agentic_tool: 'codex',
-      model_config: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
-      permission_config: { mode: 'allow-all' },
-    } as unknown as Session;
-    const onExecute = vi.fn().mockResolvedValue(undefined);
+  it.each(['fork', 'spawn'] as const)(
+    'folds an explicit effort into a reused session %s config',
+    async (action) => {
+      const session = {
+        ...makeSession('s-codex', 'completed', '2026-06-20T00:00:00.000Z', 'Codex session'),
+        agentic_tool: 'codex',
+        model_config: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        permission_config: { mode: 'allow-all' },
+      } as unknown as Session;
+      const onExecute = vi.fn().mockResolvedValue(undefined);
 
-    render(
-      <ZoneTriggerModal
-        open
-        onCancel={() => {}}
-        client={null}
-        branchId={BRANCH_ID}
-        branch={undefined}
-        sessionsByBranch={new Map([[BRANCH_ID, [session]]])}
-        zoneName="Zone"
-        trigger={{ template: 'prompt' } as never}
-        availableAgents={[]}
-        mcpServerById={new Map()}
-        onExecute={onExecute}
-      />
-    );
+      render(
+        <ZoneTriggerModal
+          open
+          onCancel={() => {}}
+          client={null}
+          branchId={BRANCH_ID}
+          branch={undefined}
+          sessionsByBranch={new Map([[BRANCH_ID, [session]]])}
+          zoneName="Zone"
+          trigger={{ template: 'prompt' } as never}
+          availableAgents={[]}
+          mcpServerById={new Map()}
+          onExecute={onExecute}
+        />
+      );
 
-    fireEvent.click(screen.getByText(new RegExp(`^${action}`, 'i')));
-    fireEvent.click(screen.getByText('Session Configuration (codex)'));
-    const effort = await screen.findByLabelText('zone-effort');
-    await waitFor(() => expect(effort).toHaveValue('medium'));
-    fireEvent.change(effort, { target: { value: 'xhigh' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
+      fireEvent.click(screen.getByText(new RegExp(`^${action}`, 'i')));
+      fireEvent.click(screen.getByText('Session Configuration (codex)'));
+      const effort = await screen.findByLabelText('zone-effort');
+      await waitFor(() => expect(effort).toHaveValue('medium'));
+      fireEvent.change(effort, { target: { value: 'xhigh' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Execute Trigger' }));
 
-    await waitFor(() =>
-      expect(onExecute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: 's-codex',
-          action,
-          modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
-        })
-      )
-    );
-  });
+      await waitFor(() =>
+        expect(onExecute).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: 's-codex',
+            action,
+            modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+          })
+        )
+      );
+    }
+  );
 });
 
 const staleOpenCodeDefault = {

@@ -85,15 +85,14 @@ describe('OpenCode credential namespace routing', () => {
     ).toThrow(/unavailable in delegated Unix user mode/i);
   });
 
-  it.each([
-    'simple',
-    'insulated',
-    'strict',
-  ] as const)('returns supported %s execution mode for downstream path resolution', (mode) => {
-    expect(
-      assertOpenCodeNativeAuthSupported({
-        execution: { unix_user_mode: mode },
-      })
-    ).toBe(mode);
-  });
+  it.each(['simple', 'insulated', 'strict'] as const)(
+    'returns supported %s execution mode for downstream path resolution',
+    (mode) => {
+      expect(
+        assertOpenCodeNativeAuthSupported({
+          execution: { unix_user_mode: mode },
+        })
+      ).toBe(mode);
+    }
+  );
 });

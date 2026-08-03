@@ -37,16 +37,14 @@ describe('resolveExecutorHeartbeatConfig', () => {
     expect(resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms: 42_000 })).toBe(42_000);
   });
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects invalid dispatch timeout %s instead of changing policy', (dispatch_connect_timeout_ms) => {
-    expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
-      'positive safe integer'
-    );
-  });
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid dispatch timeout %s instead of changing policy',
+    (dispatch_connect_timeout_ms) => {
+      expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
+        'positive safe integer'
+      );
+    }
+  );
 });
 
 describe('resolveSdkWatchdogConfig', () => {
@@ -66,15 +64,14 @@ describe('resolveSdkWatchdogConfig', () => {
     ).toBeNull();
   });
 
-  it.each([
-    'first_progress_timeout_ms',
-    'abort_grace_ms',
-    'claude_idle_timeout_ms',
-  ] as const)('rejects invalid %s rather than silently changing policy', (key) => {
-    expect(() => resolveSdkWatchdogConfig({ sdk_watchdog: { [key]: 0 } })).toThrow(
-      'positive safe integer'
-    );
-  });
+  it.each(['first_progress_timeout_ms', 'abort_grace_ms', 'claude_idle_timeout_ms'] as const)(
+    'rejects invalid %s rather than silently changing policy',
+    (key) => {
+      expect(() => resolveSdkWatchdogConfig({ sdk_watchdog: { [key]: 0 } })).toThrow(
+        'positive safe integer'
+      );
+    }
+  );
 
   it('rejects an invalid runtime mode', () => {
     expect(() =>
