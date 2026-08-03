@@ -1,8 +1,7 @@
 import { BadRequest } from '@agor/core/feathers';
-import type { LocalActionResult } from '@agor/core/local-actions';
 import type { Params } from '@agor/core/types';
 import { AGOR_HOME_BASE } from '@agor/core/unix';
-import type { DaemonHostOperations } from '../host/operations.js';
+import type { DaemonHostOperationResult, DaemonHostOperations } from '../host/operations.js';
 
 export type LocalActionName =
   | 'unix.group.createBranch'
@@ -35,7 +34,7 @@ function homeBase(params: Record<string, unknown>): string | undefined {
 }
 export function createLocalActionsService(host: DaemonHostOperations) {
   return {
-    async create(data: LocalActionRequest, _params?: Params): Promise<LocalActionResult> {
+    async create(data: LocalActionRequest, _params?: Params): Promise<DaemonHostOperationResult> {
       const p = data.params ?? {};
       const options = { dryRun: data.dryRun === true, verbose: data.verbose === true };
       switch (data.action) {

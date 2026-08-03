@@ -140,6 +140,37 @@ function bindingsFor(sf) {
         const arg = call.arguments[0];
         const source = arg && ts.isStringLiteralLike(arg) ? arg.text : NON_LITERAL;
         bindPattern(node.name, source);
+      } else if (ts.isIdentifier(node.name) && ts.isIdentifier(call)) {
+        const original = bindings.get(call.text);
+        if (original) bind(node.name.text, original.source, original.symbol);
+      } else if (ts.isIdentifier(node.name) && ts.isPropertyAccessExpression(call)) {
+        let base = call.expression;
+        while (ts.isPropertyAccessExpression(base)) base = base.expression;
+        if (ts.isIdentifier(base)) {
+          const original = bindings.get(base.text);
+          if (original)
+            bind(
+              node.name.text,
+              original.source,
+              original.symbol === '<namespace>' || original.symbol === 'default'
+                ? call.name.text
+                : original.symbol
+            );
+        }
+      } else if (ts.isObjectBindingPattern(node.name)) {
+        let base = call;
+        while (ts.isPropertyAccessExpression(base)) base = base.expression;
+        if (ts.isIdentifier(base)) {
+          const original = bindings.get(base.text);
+          if (original)
+            for (const element of node.name.elements)
+              if (ts.isIdentifier(element.name))
+                bind(
+                  element.name.text,
+                  original.source,
+                  element.propertyName?.getText(sf) ?? element.name.text
+                );
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -177,14 +208,12 @@ function operationsFor(file) {
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const arg = node.arguments[0];
       if (!arg || !ts.isStringLiteralLike(arg))
-        operations.push({
-          file,
-          line: lineOf(sf, node),
-          import: NON_LITERAL,
-          symbol: '<expression>',
-          local: '<dynamic>',
-          operation: `review:dynamic-import@${contextName(node)}#1`,
-        });
+        add(
+          node,
+          { source: NON_LITERAL, symbol: '<expression>', local: '<dynamic>' },
+          'dynamic-import',
+          'review'
+        );
       else imports.push(arg.text);
     }
     if (
@@ -194,14 +223,12 @@ function operationsFor(file) {
     ) {
       const arg = node.arguments[0];
       if (!arg || !ts.isStringLiteralLike(arg))
-        operations.push({
-          file,
-          line: lineOf(sf, node),
-          import: NON_LITERAL,
-          symbol: '<expression>',
-          local: 'require',
-          operation: `review:require@${contextName(node)}#1`,
-        });
+        add(
+          node,
+          { source: NON_LITERAL, symbol: '<expression>', local: 'require' },
+          'require',
+          'review'
+        );
       else imports.push(arg.text);
     }
     if (ts.isCallExpression(node)) {

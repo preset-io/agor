@@ -59,6 +59,22 @@ test('non-literal import and require require review', () => {
   assert.match(errors.join('\n'), /review:dynamic-import@load/);
   assert.match(errors.join('\n'), /review:require@load/);
 });
+test('tracks simple assignments and destructuring from privileged bindings', () => {
+  const errors = run({
+    'apps/agor-daemon/src/index.ts': `import fs from 'node:fs'; async function load(){const read=fs.readFileSync;read('a');const {rm}=fs.promises;await rm('a')}`,
+  });
+  assert.match(errors.join('\n'), /node:fs#readFileSync capability call:read@load#1/);
+  assert.match(errors.join('\n'), /node:fs#rm capability call:rm@load#1/);
+});
+test('numbers repeated non-literal imports and requires independently', () => {
+  const errors = run({
+    'apps/agor-daemon/src/index.ts': `async function load(a,b){await import(a);await import(b);require(a);require(b)}`,
+  }).join('\n');
+  assert.match(errors, /review:dynamic-import@load#1/);
+  assert.match(errors, /review:dynamic-import@load#2/);
+  assert.match(errors, /review:require@load#1/);
+  assert.match(errors, /review:require@load#2/);
+});
 test('follows a workspace package and barrel into shared filesystem code', () => {
   const errors = run({
     'apps/agor-daemon/src/index.ts': `import {load} from '@fixture/shared'; load();`,
