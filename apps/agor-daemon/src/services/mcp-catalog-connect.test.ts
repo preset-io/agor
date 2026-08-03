@@ -193,6 +193,12 @@ describe('mcp-catalog/connect', () => {
       /branch not found/
     );
     expect(removed).toEqual(['server-1']);
+    // Undoing this request's own write is the daemon's business, not another
+    // authorization decision — the row was created moments ago under the
+    // caller's own params, so the delete is deliberately internal.
+    expect(
+      (services['mcp-servers'] as { remove: ReturnType<typeof vi.fn> }).remove
+    ).toHaveBeenCalledWith('server-1', expect.objectContaining({ provider: undefined }));
   });
 
   it('takes back the server it created when the attach is refused', async () => {
