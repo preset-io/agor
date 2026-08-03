@@ -142,6 +142,9 @@ export async function safeFetch(
   let method = options.method ?? 'GET';
   let body = options.body;
   let headers = headersObject(options.headers);
+  if (!Object.keys(headers).some((name) => name.toLowerCase() === 'accept-encoding')) {
+    headers['accept-encoding'] = 'identity';
+  }
 
   for (let redirects = 0; ; redirects += 1) {
     validateUrl(url, policy);
