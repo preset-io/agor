@@ -264,7 +264,6 @@ export interface ArtifactPayload {
   /**
    * Whether the daemon injected secrets into this payload.
    *
-   * - 'self' — viewer is the author; secrets always injected.
    * - 'trusted' — an active trust grant matched the requested set.
    * - 'untrusted' — empty values injected; UI should offer the consent flow.
    * - 'no_secrets_needed' — artifact requested no env vars or grants.
@@ -288,12 +287,12 @@ export interface ArtifactPayload {
 /**
  * Where the daemon found the trust grant that authorized injection.
  */
-export type ArtifactTrustScopeType = 'self' | 'instance' | 'author' | 'artifact' | 'session';
+export type ArtifactTrustScopeType = 'artifact' | 'session';
 
 /**
  * Trust state attached to a payload.
  */
-export type ArtifactTrustState = 'self' | 'trusted' | 'untrusted' | 'no_secrets_needed';
+export type ArtifactTrustState = 'trusted' | 'untrusted' | 'no_secrets_needed';
 
 /**
  * Console log entry from Sandpack runtime (captured in browser, sent to daemon)
@@ -340,8 +339,8 @@ export interface ArtifactStatus {
 
 /**
  * A persisted trust grant. The viewer (`user_id`) consented to inject the
- * listed `env_vars_set` and `agor_grants_set` into one or more artifacts
- * matching `scope_type` + `scope_value`.
+ * listed `env_vars_set` and `agor_grants_set` into the exact artifact render
+ * identified by `artifact_hash`.
  *
  * Soft-deleted via `revoked_at` for audit history.
  */
@@ -352,12 +351,13 @@ export interface ArtifactTrustGrant {
   /**
    * Resolves per scope_type:
    * - 'artifact'  → ArtifactID
-   * - 'author'    → UserID (artifact author)
-   * - 'instance'  → null
    * - 'session'   → in-memory only; never persisted with this row shape
-   * - 'self'      → never persisted (viewer-is-author bypass)
    */
   scope_value: string | null;
+  /** Exact render-affecting artifact hash reviewed when consent was granted. */
+  artifact_hash: string;
+  /** Separate consent for moving secret-derived runtime output into agent context. */
+  allow_introspection: boolean;
   env_vars_set: string[];
   agor_grants_set: AgorGrants;
   granted_at: string;

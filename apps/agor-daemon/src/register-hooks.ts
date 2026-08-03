@@ -1200,7 +1200,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       '/artifacts/:id/trust',
       {
         async create(
-          data: { scopeType: import('@agor/core/types').ArtifactTrustScopeType },
+          data: {
+            scopeType: import('@agor/core/types').ArtifactTrustScopeType;
+            allowIntrospection?: boolean;
+          },
           _params: RouteParams
         ) {
           const artifactId = _params.route?.id;
@@ -1217,6 +1220,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId,
             artifactId,
             scopeType: data.scopeType,
+            allowIntrospection: data.allowIntrospection === true,
           });
         },
       },

@@ -14,12 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import {
-  getDaemonBaseUrl,
-  loadConfig,
-  PAGINATION,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
   ArtifactRepository,
   ArtifactTrustGrantRepository,
@@ -204,7 +199,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * Just-once / session-scope grants live here only — never persisted.
    * Keyed by `${userId}:${artifactId}`. Cleared when the daemon restarts.
    */
-  private sessionGrants: Map<string, { envVars: Set<string>; grants: AgorGrants }> = new Map();
+  private sessionGrants: Map<
+    string,
+    { envVars: Set<string>; grants: AgorGrants; artifactHash: string; allowIntrospection: boolean }
+  > = new Map();
 
   /**
    * In-flight runtime queries keyed by request_id.
@@ -982,7 +980,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       });
       trustState = decision.state;
       trustScope = decision.scope;
-      if (decision.state === 'self' || decision.state === 'trusted') {
+      if (decision.state === 'trusted') {
         envValues = await this.resolveEnvVarValues(userId, requiredEnvVars);
       }
     }
@@ -1009,7 +1007,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         grants,
         artifact,
         userId,
-        injectConsentGated: trustState === 'self' || trustState === 'trusted',
+        injectConsentGated: trustState === 'trusted',
       });
       // Only emit a .env if we have something meaningful to put in it AND
       // the artifact's bundler can read it. For vanilla/static templates the
@@ -1061,9 +1059,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * Resolve consent for an artifact's requested env vars + grants.
    * Returns the trust state and (when applicable) the scope of the matching grant.
    *
-   * Resolution order matches the roadmap:
-   *   1. Author is the viewer → 'self'.
-   *   2. instance > author > artifact > session — first matching wins.
+   * Authorship is attribution, not consent. Every grant is bound to the
+   * artifact's exact render-affecting hash and is invalidated by any change.
    */
   private async resolveTrust(input: {
     artifact: Artifact;
@@ -1072,31 +1069,24 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     grants: AgorGrants;
   }): Promise<{ state: ArtifactPayload['trust_state']; scope?: ArtifactTrustScopeType }> {
     const { artifact, userId, requiredEnvVars, grants } = input;
-    if (userId && artifact.created_by && artifact.created_by === userId) {
-      return { state: 'self', scope: 'self' };
-    }
     if (!userId) return { state: 'untrusted' };
+    const artifactHash = this.computeRuntimeReportHash(artifact);
 
     const consentRelevantGrants = pickConsentRelevantGrants(grants);
 
-    const tryScopes: {
-      type: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
-      value: string | null;
-    }[] = [
-      { type: 'instance', value: null },
-      { type: 'author', value: artifact.created_by ?? null },
-      { type: 'artifact', value: artifact.artifact_id },
-    ];
-    for (const sc of tryScopes) {
-      if (sc.type === 'author' && !sc.value) continue;
-      const matches = await this.trustRepo.findActiveForScope({
-        userId,
-        scopeType: sc.type,
-        scopeValue: sc.value,
-      });
-      if (matches.some((g) => coversRequest(g, requiredEnvVars, consentRelevantGrants))) {
-        return { state: 'trusted', scope: sc.type };
-      }
+    const matches = await this.trustRepo.findActiveForScope({
+      userId,
+      scopeType: 'artifact',
+      scopeValue: artifact.artifact_id,
+    });
+    if (
+      matches.some(
+        (g) =>
+          g.artifact_hash === artifactHash &&
+          coversRequest(g, requiredEnvVars, consentRelevantGrants)
+      )
+    ) {
+      return { state: 'trusted', scope: 'artifact' };
     }
 
     const sessionKey = `${userId}:${artifact.artifact_id}`;
@@ -1104,7 +1094,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (sessionGrant) {
       const envCovered = requiredEnvVars.every((v) => sessionGrant.envVars.has(v));
       const grantsCovered = grantsAreSubset(consentRelevantGrants, sessionGrant.grants);
-      if (envCovered && grantsCovered) {
+      if (envCovered && grantsCovered && sessionGrant.artifactHash === artifactHash) {
         return { state: 'trusted', scope: 'session' };
       }
     }
@@ -1261,9 +1251,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     userId: string;
     artifactId: string;
     scopeType: ArtifactTrustScopeType;
+    allowIntrospection?: boolean;
   }): Promise<{ scope: ArtifactTrustScopeType; persisted: boolean }> {
-    if (input.scopeType === 'self') {
-      throw new Error("'self' grants are implicit and cannot be persisted");
+    if (input.scopeType !== 'artifact' && input.scopeType !== 'session') {
+      throw new Error('Artifact trust must be scoped to this artifact or this render session');
     }
 
     // Server-derive the consent surface from the artifact's current request.
@@ -1276,43 +1267,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
     const sanitizedEnv = sanitizeEnvVarNames(artifact.required_env_vars ?? []);
     const sanitizedGrants = canonicalizeAgorGrants(artifact.agor_grants ?? {});
+    const artifactHash = this.computeRuntimeReportHash(artifact);
 
     if (input.scopeType === 'session') {
       const key = `${input.userId}:${input.artifactId}`;
       this.sessionGrants.set(key, {
         envVars: new Set(sanitizedEnv),
         grants: sanitizedGrants,
+        artifactHash,
+        allowIntrospection: input.allowIntrospection === true,
       });
       return { scope: 'session', persisted: false };
     }
 
-    // Resolve scope_value from artifact when needed.
-    let scopeValue: string | null = null;
-    if (input.scopeType === 'artifact') {
-      scopeValue = input.artifactId;
-    } else if (input.scopeType === 'author') {
-      if (!artifact.created_by) {
-        throw new Error('Cannot grant author-scope trust: artifact has no recorded author');
-      }
-      scopeValue = artifact.created_by;
-    } else if (input.scopeType === 'instance') {
-      scopeValue = null;
-      // Instance-wide trust is meaningful only on single-user instances. On
-      // multi-user setups it would mean "trust any artifact published by any
-      // user on this server with my secrets" — too broad. Reject.
-      const config = await loadConfig();
-      const unixMode = config.execution?.unix_user_mode ?? 'simple';
-      if (unixMode !== 'simple') {
-        throw new Error(
-          "'instance'-scope trust grants are disabled when execution.unix_user_mode is not 'simple' (multi-user instance)"
-        );
-      }
-    }
-
     await this.trustRepo.create({
       user_id: input.userId,
-      scope_type: input.scopeType,
-      scope_value: scopeValue,
+      scope_type: 'artifact',
+      scope_value: input.artifactId,
+      artifact_hash: artifactHash,
+      allow_introspection: input.allowIntrospection === true,
       env_vars_set: sanitizedEnv,
       agor_grants_set: sanitizedGrants,
     });
@@ -1518,6 +1491,19 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       );
     }
 
+    const requiredEnvVars = artifact.required_env_vars ?? [];
+    const grants = canonicalizeAgorGrants(artifact.agor_grants);
+    const needsSecretConsent =
+      requiredEnvVars.length > 0 || Object.keys(pickConsentRelevantGrants(grants)).length > 0;
+    if (needsSecretConsent) {
+      const allowed = await this.hasIntrospectionConsent(artifact, input.userId);
+      if (!allowed) {
+        throw new Error(
+          'Runtime introspection is locked because this artifact can receive secrets. Grant separate DOM-to-agent consent for this exact artifact version.'
+        );
+      }
+    }
+
     const requestId = generateId();
     const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 5000, 500), 30000);
 
@@ -1550,6 +1536,22 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     });
 
     return promise;
+  }
+
+  private async hasIntrospectionConsent(artifact: Artifact, userId: string): Promise<boolean> {
+    const artifactHash = this.computeRuntimeReportHash(artifact);
+    const persisted = await this.trustRepo.findActiveForScope({
+      userId,
+      scopeType: 'artifact',
+      scopeValue: artifact.artifact_id,
+    });
+    const sessionGrant = this.sessionGrants.get(`${userId}:${artifact.artifact_id}`);
+    return (
+      persisted.some(
+        (grant) => grant.artifact_hash === artifactHash && grant.allow_introspection
+      ) ||
+      (sessionGrant?.artifactHash === artifactHash && sessionGrant.allowIntrospection === true)
+    );
   }
 
   /**
@@ -1801,10 +1803,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
 
     const key = userId ? this.viewerKey(artifactId, userId) : null;
-    const sandpackError = key ? (this.sandpackErrors.get(key) ?? null) : null;
+    const needsSecretConsent =
+      (artifact.required_env_vars?.length ?? 0) > 0 ||
+      Object.keys(pickConsentRelevantGrants(canonicalizeAgorGrants(artifact.agor_grants))).length >
+        0;
+    const outputAllowed =
+      !needsSecretConsent || (!!userId && (await this.hasIntrospectionConsent(artifact, userId)));
+    const sandpackError = key && outputAllowed ? (this.sandpackErrors.get(key) ?? null) : null;
     const sandpackStatus = key ? this.sandpackStatuses.get(key) : undefined;
     const runtimeObservedAt = key ? this.runtimeObservedAt.get(key) : undefined;
-    const consoleLogs = key ? (this.consoleLogs.get(key) ?? []) : [];
+    const consoleLogs = key && outputAllowed ? (this.consoleLogs.get(key) ?? []) : [];
 
     let buildStatus = artifact.build_status;
     let buildErrors = artifact.build_errors;

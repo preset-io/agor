@@ -1,7 +1,7 @@
 import type { AppBoardObject, BoardObject, SandpackTemplate } from '@agor-live/client';
 import { CodeOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import { SandpackPreview, SandpackProvider, type SandpackSetup } from '@codesandbox/sandpack-react';
-import { Button, Card, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Card, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
@@ -28,6 +28,7 @@ const MIN_HEIGHT = 200;
 export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
   const [interactMode, setInteractMode] = useState(false);
+  const [legacyExecutionAllowed, setLegacyExecutionAllowed] = useState(false);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const sandpackInputs = useStableSandpackProviderInputs({
     template: data.template,
@@ -150,22 +151,37 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
             pointerEvents: interactMode ? 'auto' : 'none',
           }}
         >
-          <SandpackProvider
-            template={sandpackInputs.template as 'react'}
-            files={sandpackInputs.files}
-            customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
-            options={sandpackInputs.options}
-          >
-            <SandpackPreview
-              style={{
-                height: previewHeight > 0 ? previewHeight : 200,
-                border: 'none',
-              }}
-              showNavigator={false}
-              showOpenInCodeSandbox={false}
-              showRefreshButton={interactMode}
+          {!legacyExecutionAllowed ? (
+            <Alert
+              type="warning"
+              showIcon
+              title="Legacy active app disabled"
+              description="This board app predates artifact consent. Migrate it to an artifact, or explicitly run this untrusted code without secrets or agent introspection."
+              action={
+                <Button size="small" danger onClick={() => setLegacyExecutionAllowed(true)}>
+                  Run without secrets
+                </Button>
+              }
+              style={{ margin: 12 }}
             />
-          </SandpackProvider>
+          ) : (
+            <SandpackProvider
+              template={sandpackInputs.template as 'react'}
+              files={sandpackInputs.files}
+              customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
+              options={sandpackInputs.options}
+            >
+              <SandpackPreview
+                style={{
+                  height: previewHeight > 0 ? previewHeight : 200,
+                  border: 'none',
+                }}
+                showNavigator={false}
+                showOpenInCodeSandbox={false}
+                showRefreshButton={interactMode}
+              />
+            </SandpackProvider>
+          )}
         </div>
       </Card>
     </>

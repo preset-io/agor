@@ -2,12 +2,10 @@
  * Artifact Trust Grants Repository
  *
  * Stores per-viewer TOFU consent for injecting env vars and daemon grants
- * into artifacts they didn't author. The viewer is `user_id`. The grant
+ * into artifacts regardless of authorship. The viewer is `user_id`. The grant
  * matches an artifact via `(scope_type, scope_value)`:
  *
  * - 'artifact'  → scope_value = artifact_id
- * - 'author'    → scope_value = author user_id
- * - 'instance'  → scope_value = null (covers every artifact on this Agor instance)
  * - 'session'   → in-memory only; the service layer keeps these out of the DB.
  *
  * Soft-deletion: `revoked_at` is set instead of DELETE so the audit log
@@ -35,6 +33,8 @@ export class ArtifactTrustGrantRepository {
       user_id: row.user_id as never,
       scope_type: row.scope_type as ArtifactTrustScopeType,
       scope_value: row.scope_value ?? null,
+      artifact_hash: row.artifact_hash,
+      allow_introspection: row.allow_introspection,
       env_vars_set: row.env_vars_set,
       agor_grants_set: canonicalizeAgorGrants(row.agor_grants_set),
       granted_at: new Date(row.granted_at).toISOString(),
@@ -50,8 +50,10 @@ export class ArtifactTrustGrantRepository {
    */
   async create(input: {
     user_id: string;
-    scope_type: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
+    scope_type: Exclude<ArtifactTrustScopeType, 'session'>;
     scope_value: string | null;
+    artifact_hash: string;
+    allow_introspection: boolean;
     env_vars_set: string[];
     agor_grants_set: AgorGrants;
   }): Promise<ArtifactTrustGrant> {
@@ -63,6 +65,8 @@ export class ArtifactTrustGrantRepository {
       user_id: input.user_id,
       scope_type: input.scope_type,
       scope_value: input.scope_value,
+      artifact_hash: input.artifact_hash,
+      allow_introspection: input.allow_introspection,
       env_vars_set: input.env_vars_set,
       agor_grants_set: canonicalizeAgorGrants(input.agor_grants_set),
       granted_at: now,
@@ -96,7 +100,7 @@ export class ArtifactTrustGrantRepository {
    */
   async findActiveForScope(input: {
     userId: string;
-    scopeType: Exclude<ArtifactTrustScopeType, 'session' | 'self'>;
+    scopeType: Exclude<ArtifactTrustScopeType, 'session'>;
     scopeValue: string | null;
   }): Promise<ArtifactTrustGrant[]> {
     const conditions = [

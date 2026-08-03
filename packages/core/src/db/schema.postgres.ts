@@ -1499,6 +1499,9 @@ export const artifactTrustGrants = pgTable(
     user_id: varchar('user_id', { length: 36 }).notNull(),
     scope_type: text('scope_type').notNull(),
     scope_value: text('scope_value'),
+    // Empty default deliberately invalidates legacy broad grants.
+    artifact_hash: text('artifact_hash').notNull().default(''),
+    allow_introspection: t.bool('allow_introspection').notNull().default(false),
     env_vars_set: t.json<string[]>('env_vars_set').notNull(),
     agor_grants_set: t.json<AgorGrants>('agor_grants_set').notNull(),
     granted_at: t.timestamp('granted_at').notNull(),
