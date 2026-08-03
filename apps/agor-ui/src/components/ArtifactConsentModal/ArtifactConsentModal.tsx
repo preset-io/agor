@@ -9,23 +9,18 @@
  * Scopes:
  *  - just-once     → in-memory session grant (cleared on daemon restart)
  *  - this-artifact → DB-backed; only this artifact ID
- *  - this-author   → DB-backed; every artifact this author publishes
- *  - instance-wide → DB-backed; every artifact on this Agor instance
- *
- * `instance-wide` is hidden when the daemon is in multi-user mode
- * (`unix_user_mode !== 'simple'`). The roadmap's reasoning: a "trust everyone"
- * button on a shared instance is too sharp.
+ * Both choices are bound to the exact render-affecting artifact hash. Secret
+ * consent and agent/LLM introspection consent are independent decisions.
  *
  */
 
 import type { AgorGrants, ArtifactTrustScopeType } from '@agor-live/client';
 import { LockOutlined, SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Modal, Radio, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Modal, Radio, Space, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { ThemedSyntaxHighlighter } from '@/components/ThemedSyntaxHighlighter';
 import { getDaemonUrl } from '@/config/daemon';
-import { useAuthConfig } from '@/hooks/useAuthConfig';
 import { getAuthHeaders } from '@/utils/authHeaders';
 import { getLanguageFromPath } from '@/utils/language';
 import { useThemedMessage } from '@/utils/message';
@@ -43,7 +38,6 @@ interface ArtifactConsentModalProps {
    * left unset, the modal hides instance scope automatically on multi-user
    * Unix isolation modes (read from `/health` features.multiUser).
    */
-  hideInstanceScope?: boolean;
   onClose: () => void;
   onGranted: () => void;
 }
@@ -55,18 +49,14 @@ export function ArtifactConsentModal({
   files,
   requiredEnvVars,
   grants,
-  hideInstanceScope,
   onClose,
   onGranted,
 }: ArtifactConsentModalProps) {
-  const { featuresConfig } = useAuthConfig();
   const { showSuccess, showError } = useThemedMessage();
-  const [scope, setScope] = useState<Exclude<ArtifactTrustScopeType, 'self'>>('artifact');
+  const [scope, setScope] = useState<ArtifactTrustScopeType>('artifact');
+  const [allowIntrospection, setAllowIntrospection] = useState(false);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // Auto-hide the instance scope when the daemon is in multi-user Unix
-  // isolation mode, unless the caller explicitly forces a value via prop.
-  const effectivelyHideInstanceScope = hideInstanceScope ?? featuresConfig?.multiUser === true;
 
   const fileItems: FileItem[] = useMemo(
     () =>
@@ -90,7 +80,7 @@ export function ArtifactConsentModal({
         headers: getAuthHeaders(),
         // The server derives the consent surface (env vars + grants) from
         // the artifact itself; the client only nominates the scope.
-        body: JSON.stringify({ scopeType: scope }),
+        body: JSON.stringify({ scopeType: scope, allowIntrospection }),
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
@@ -126,7 +116,7 @@ export function ArtifactConsentModal({
         icon={<WarningOutlined />}
         style={{ marginBottom: 16 }}
         title="Read the source before granting trust"
-        description="Granting trust injects your env-var values and any requested daemon capabilities into this artifact's runtime. The artifact's JS can read those values. Secrets never enter LLM context — but the artifact iframe can still exfiltrate them via fetch()."
+        description="Granting trust injects your env-var values and requested daemon capabilities into this exact reviewed artifact version. The artifact can read and exfiltrate them. Any change invalidates this consent."
       />
 
       <div
@@ -214,13 +204,23 @@ export function ArtifactConsentModal({
           <Space orientation="vertical">
             <Radio value="session">Just once (in-memory; cleared when daemon restarts)</Radio>
             <Radio value="artifact">This artifact only</Radio>
-            <Radio value="author">Anything published by this author</Radio>
-            {!effectivelyHideInstanceScope && (
-              <Radio value="instance">Anything on this Agor instance</Radio>
-            )}
           </Space>
         </Radio.Group>
       </div>
+
+      <Alert
+        type="info"
+        style={{ marginTop: 16 }}
+        title="Agent introspection is a separate permission"
+        description={
+          <Checkbox
+            checked={allowIntrospection}
+            onChange={(event) => setAllowIntrospection(event.target.checked)}
+          >
+            Allow DOM and page output from this secret-bearing render to enter agent/LLM context
+          </Checkbox>
+        }
+      />
 
       <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Button onClick={onClose}>Render without secrets</Button>

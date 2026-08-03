@@ -264,24 +264,14 @@ export function ArtifactTrustStatusIcon({
 
   const isUntrusted = state === 'untrusted';
   const isTrusted = state === 'trusted';
-  const isSelf = state === 'self';
-  const scopeLabel =
-    payload.trust_scope === 'instance'
-      ? 'instance-wide'
-      : payload.trust_scope === 'author'
-        ? 'this author'
-        : payload.trust_scope === 'session'
-          ? 'just-once'
-          : 'this artifact';
+  const scopeLabel = payload.trust_scope === 'session' ? 'just-once' : 'this artifact version';
   const title = isUntrusted
     ? onTrustClick
       ? 'Click to review and grant trust so secrets are injected'
       : 'Secrets are locked until trust is granted'
     : isTrusted
       ? `Secrets injected — trust granted for ${scopeLabel}`
-      : isSelf
-        ? 'You created this artifact; secrets are injected'
-        : 'Artifact trust status';
+      : 'Artifact trust status';
   const color = isUntrusted ? token.colorWarning : isTrusted ? token.colorSuccess : token.colorInfo;
   const backgroundColor = isUntrusted
     ? token.colorWarningBg

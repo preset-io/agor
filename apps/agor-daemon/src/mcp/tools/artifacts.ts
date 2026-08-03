@@ -121,12 +121,12 @@ DECLARATIVE CONFIG:
     \`agor_board_id: true\`   → \`AGOR_BOARD_ID\` (informational, no consent).
 - \`sandpackConfig\`: author-controlled SandpackProvider config (template, customSetup, theme, options). Sanitized on write — UI-affecting / private-account props are stripped.
 
-CONSENT MODEL (TOFU): when the viewer is NOT the artifact author, the daemon does NOT inject env vars or grants without an explicit trust grant. Untrusted artifacts render with empty env values and a "Trust to render with secrets" badge.
+CONSENT MODEL: authorship never grants secret access. The daemon injects env vars or sensitive grants only after the viewer explicitly consents to the exact render-affecting artifact hash. Untrusted or changed artifacts render with empty env values and a "Trust to render with secrets" badge.
 
 SYNCHRONOUS-ISH VALIDATION: pass \`waitForStatus: true\` to wait briefly for YOUR browser render to report Sandpack boot status, errors, and console output. This is not a headless/server build: Sandpack runs in the browser, and logs are per-viewer to avoid leaking secret-derived output. If no browser tab for you is viewing the artifact, the validation returns \`observed:false\` with a note instead of pretending success.
 
 IMPORTANT:
-- Secret VALUES are never sent to the LLM as-is — they're only injected into the served \`.env\` at view time. CAVEAT: if your artifact renders a secret-derived value into the DOM (e.g. \`<div>API: {key}</div>\`), an agent calling \`agor_artifacts_query_dom\` against your own running render WILL see the rendered text. Treat any \`agor_artifacts_query_*\` reply as potentially carrying secret-derived output if the artifact renders one.
+- Secret VALUES are injected only after explicit hash-bound consent. DOM/document and console output remain unavailable to agents unless the viewer separately consents to introspection for that same hash.
 - Missing user env vars render as "" — your app should detect that and surface a "configure SOMETHING in Settings" message rather than calling APIs with empty creds.
 - For node.js / static templates without a dotenv path, env vars are NOT injected; the daemon emits a warning if you declared any.`,
       inputSchema: z.object({
