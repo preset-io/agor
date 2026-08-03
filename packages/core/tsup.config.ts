@@ -1,4 +1,4 @@
-import { cpSync } from 'node:fs';
+import { chmodSync, cpSync } from 'node:fs';
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
@@ -89,6 +89,9 @@ export default defineConfig({
 
     // Copy template files to dist so they're available at runtime
     cpSync('src/templates/agor-system-prompt.md', 'dist/templates/agor-system-prompt.md');
+    // Executor processes can run as a different Unix user. Do not preserve the
+    // group-private mode inherited from an ACL-managed development worktree.
+    chmodSync('dist/templates/agor-system-prompt.md', 0o644);
     console.log('✅ Copied agor-system-prompt.md template to dist/');
   },
 });
