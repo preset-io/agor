@@ -25,6 +25,7 @@ import type {
   ZoneBoardObject,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import type { CollaborationAuthorization } from '../utils/collaboration-authorization.js';
 
 export type CardParams = QueryParams<{
   board_id?: BoardID;
@@ -38,7 +39,10 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   private cardRepo: CardRepository;
   private boardObjectRepo: BoardObjectRepository;
 
-  constructor(db: TenantScopeAwareDatabase) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    private authorization?: CollaborationAuthorization
+  ) {
     const cardRepo = new CardRepository(db);
     super(cardRepo, {
       id: 'card_id',
@@ -66,13 +70,49 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
    * `archived`). Anything else falls through to the unchanged in-memory filter,
    * preserving current behavior exactly.
    */
-  protected async fetchData(query: Query, _params?: CardParams): Promise<Card[]> {
+  protected async fetchData(query: Query, params?: CardParams): Promise<Card[]> {
     const filter: { board_id?: BoardID; archived?: boolean } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
     if (typeof query.archived === 'boolean') filter.archived = query.archived;
 
-    return this.cardRepo.findAll(filter);
+    const cards = await this.cardRepo.findAll(filter);
+    if (!this.authorization || !params?.provider) return cards;
+    const visible = await Promise.all(
+      cards.map(async (card) =>
+        (await this.authorization!.canViewBoard(params, card.board_id)) ? card : null
+      )
+    );
+    return visible.filter((card): card is Card => card !== null);
+  }
+
+  override async get(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.cardRepo.findById(id);
+    if (!card) throw new Error(`Card ${id} not found`);
+    await this.authorization?.requireBoard(params, card.board_id, 'view');
+    return card;
+  }
+
+  override async patch(id: string, data: Partial<Card>, params?: CardParams): Promise<Card> {
+    const immutable = ['card_id', 'board_id', 'created_by', 'created_at', 'updated_at'] as const;
+    if (immutable.some((field) => field in data)) {
+      throw new Error('Card identity, ownership, and board cannot be changed');
+    }
+    const card = await this.cardRepo.findById(id);
+    if (!card) throw new Error(`Card ${id} not found`);
+    await this.authorization?.requireBoard(params, card.board_id, 'mutate');
+    const result = await super.patch(id, data, params);
+    if (Array.isArray(result)) throw new Error('Unexpected multi-card patch result');
+    return result;
+  }
+
+  override async remove(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.cardRepo.findById(id);
+    if (!card) throw new Error(`Card ${id} not found`);
+    await this.authorization?.requireBoard(params, card.board_id, 'mutate');
+    const result = await super.remove(id, params);
+    if (Array.isArray(result)) throw new Error('Unexpected multi-card remove result');
+    return result;
   }
 
   /**
@@ -97,6 +137,8 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     },
     params?: CardParams
   ): Promise<{ card: Card; boardObject: BoardEntityObject }> {
+    if (!data.board_id) throw new Error('board_id is required');
+    await this.authorization?.requireBoard(params, data.board_id, 'mutate');
     // Create the card
     const card = await this.cardRepo.create({
       ...data,
@@ -140,7 +182,9 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Get card with resolved CardType info
    */
-  async getWithType(id: string): Promise<CardWithType | null> {
+  async getWithType(id: string, params?: CardParams): Promise<CardWithType | null> {
+    const card = await this.cardRepo.findById(id);
+    if (card) await this.authorization?.requireBoard(params, card.board_id, 'view');
     return this.cardRepo.findByIdWithType(id);
   }
 
@@ -149,8 +193,10 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
    */
   async findByBoardId(
     boardId: BoardID,
-    options?: { archived?: boolean; limit?: number; offset?: number }
+    options?: { archived?: boolean; limit?: number; offset?: number },
+    params?: CardParams
   ): Promise<Card[]> {
+    await this.authorization?.requireBoard(params, boardId, 'view');
     return this.cardRepo.findByBoardId(boardId, options);
   }
 
@@ -184,14 +230,18 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Archive a card
    */
-  async archive(id: string): Promise<Card> {
+  async archive(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.get(id, params);
+    await this.authorization?.requireBoard(params, card.board_id, 'mutate');
     return this.cardRepo.archive(id);
   }
 
   /**
    * Unarchive a card
    */
-  async unarchive(id: string): Promise<Card> {
+  async unarchive(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.get(id, params);
+    await this.authorization?.requireBoard(params, card.board_id, 'mutate');
     return this.cardRepo.unarchive(id);
   }
 
@@ -201,8 +251,11 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   async moveToZone(
     cardId: CardID,
     zoneId: string | null,
-    zoneData?: ZoneBoardObject
+    zoneData?: ZoneBoardObject,
+    params?: CardParams
   ): Promise<BoardEntityObject> {
+    const card = await this.get(cardId, params);
+    await this.authorization?.requireBoard(params, card.board_id, 'mutate');
     const boardObj = await this.boardObjectRepo.findByCardId(cardId);
     if (!boardObj) {
       throw new Error(`Card ${cardId} has no board placement`);
@@ -229,6 +282,9 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   }
 }
 
-export function createCardsService(db: TenantScopeAwareDatabase): CardsService {
-  return new CardsService(db);
+export function createCardsService(
+  db: TenantScopeAwareDatabase,
+  authorization?: CollaborationAuthorization
+): CardsService {
+  return new CardsService(db, authorization);
 }

@@ -77,11 +77,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         path: 'cards',
         event: 'created',
         data: card,
+        params: ctx.baseServiceParams,
       });
       emitServiceEvent(ctx.app, {
         path: 'board-objects',
         event: 'created',
         data: boardObject,
+        params: ctx.baseServiceParams,
       });
       return textResult({ card, boardObject });
     }
@@ -99,7 +101,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const cardWithType = await cardsService.getWithType(args.cardId);
+      const cardWithType = await cardsService.getWithType(args.cardId, ctx.baseServiceParams);
       if (!cardWithType) throw new Error(`Card ${args.cardId} not found`);
       return textResult(cardWithType);
     }
@@ -123,7 +125,6 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const boardIdRaw = coerceString(args.boardId);
       const boardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
       const cardTypeId = coerceString(args.cardTypeId);
@@ -133,30 +134,19 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const limit = typeof args.limit === 'number' ? args.limit : 50;
       const offset = typeof args.offset === 'number' ? args.offset : 0;
 
-      let cardsList: Card[];
-      if (zoneId && boardId) {
-        cardsList = await cardsService.findByZoneId(boardId as never, zoneId);
-      } else if (search) {
-        cardsList = await cardsService.searchCards(search, {
-          boardId: boardId as never,
+      const result = await ctx.app.service('cards').find({
+        ...ctx.baseServiceParams,
+        query: {
+          ...(boardId ? { board_id: boardId } : {}),
+          ...(cardTypeId ? { card_type_id: cardTypeId } : {}),
+          ...(zoneId ? { zone_id: zoneId } : {}),
+          ...(search ? { search } : {}),
           archived,
-          limit,
-          offset,
-        });
-      } else if (cardTypeId) {
-        cardsList = await cardsService.findByCardTypeId(cardTypeId as never, { limit, offset });
-      } else if (boardId) {
-        cardsList = await cardsService.findByBoardId(boardId as never, {
-          archived,
-          limit,
-          offset,
-        });
-      } else {
-        const result = await cardsService.find({
-          query: { $limit: limit, $skip: offset },
-        } as never);
-        cardsList = 'data' in result ? result.data : result;
-      }
+          $limit: limit,
+          $skip: offset,
+        },
+      } as never);
+      const cardsList: Card[] = 'data' in result ? result.data : result;
 
       return textResult({
         total: Array.isArray(cardsList) ? cardsList.length : 0,
@@ -238,12 +228,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const archivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.archive(args.cardId)
+        cardsService.archive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
         event: 'patched',
         data: archivedCard,
+        params: ctx.baseServiceParams,
         id: args.cardId,
       });
       return textResult(archivedCard);
@@ -262,12 +253,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const unarchivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.unarchive(args.cardId)
+        cardsService.unarchive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
         event: 'patched',
         data: unarchivedCard,
+        params: ctx.baseServiceParams,
         id: args.cardId,
       });
       return textResult(unarchivedCard);
@@ -303,12 +295,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.moveToZone(cardId as never, zoneId, zoneData)
+        cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'board-objects',
         event: 'patched',
         data: boardObject,
+        params: ctx.baseServiceParams,
       });
       return textResult(boardObject);
     }
@@ -411,11 +404,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           path: 'cards',
           event: 'created',
           data: card,
+          params: ctx.baseServiceParams,
         });
         emitServiceEvent(ctx.app, {
           path: 'board-objects',
           event: 'created',
           data: boardObject,
+          params: ctx.baseServiceParams,
         });
       }
 
@@ -522,12 +517,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           if (zone?.type === 'zone') zoneData = zone;
         }
         const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-          cardsService.moveToZone(cardId as never, zoneId, zoneData)
+          cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
         );
         emitServiceEvent(ctx.app, {
           path: 'board-objects',
           event: 'patched',
           data: boardObject,
+          params: ctx.baseServiceParams,
         });
         results.push({ cardId, boardObject });
       }

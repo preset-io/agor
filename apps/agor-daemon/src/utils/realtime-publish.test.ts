@@ -788,7 +788,7 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
-  it('leaves optional branch-scoped events global when no branch/session is attached', async () => {
+  it('fails closed for board-child events without a resolvable board', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const app = makeApp([{ user: allowed }, { user: denied }]);
@@ -803,7 +803,31 @@ describe('configureRealtimePublish', () => {
       { path: 'board-objects', method: 'patch', event: 'patched' }
     );
 
-    expect(channel.connections).toEqual([{ user: allowed }, { user: denied }]);
+    expect(channel.connections).toEqual([]);
+  });
+
+  it('re-checks current board visibility for every board/card event', async () => {
+    const allowed = user('allowed');
+    const revoked = user('revoked');
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: allowed }, { user: revoked }, service]);
+    const r = repos({ branch: branch('b1', 'none') });
+    const canView = vi.fn(async (_boardId: string, userId: string) => userId === 'allowed');
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      ...r,
+      boardRepository: { canView } as never,
+    });
+
+    const channel = await app.runPublish(
+      { card_id: 'card1', board_id: 'board1', note: 'private' },
+      { path: 'cards', method: 'patch', event: 'patched' }
+    );
+
+    expect(canView).toHaveBeenCalledWith('board1', 'allowed');
+    expect(canView).toHaveBeenCalledWith('board1', 'revoked');
+    expect(channel.connections).toEqual([{ user: allowed }, service]);
   });
 
   it('keeps null-branch artifact events scoped to creator/admin/service connections', async () => {

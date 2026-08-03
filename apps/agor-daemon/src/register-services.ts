@@ -135,6 +135,7 @@ import { userRoomName } from './setup/socketio.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { CollaborationAuthorization } from './utils/collaboration-authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
 import {
@@ -270,18 +271,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   app.use('/messages', messagesService, {
-    methods: [
-      'find',
-      'get',
-      'create',
-      'update',
-      'patch',
-      'remove',
-      'findBySession',
-      'findByTask',
-      'findByRange',
-      'createMany',
-    ],
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
     events: [
       'queued',
       'streaming:start',
@@ -349,11 +339,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       ],
     }
   );
-  app.use('/board-objects', createBoardObjectsService(db, app));
+  const collaborationAuthorization = new CollaborationAuthorization(
+    db,
+    branchRbacEnabled,
+    allowSuperadmin
+  );
+  app.use('/board-objects', createBoardObjectsService(db, app, collaborationAuthorization));
 
   const boardsService = safeService('boards') as unknown as BoardsServiceImpl | undefined;
   app.use('/card-types', createCardTypesService(db));
-  app.use('/cards', createCardsService(db));
+  app.use('/cards', createCardsService(db, collaborationAuthorization));
   // `agor-query` is the runtime-introspection fan-out event (daemon →
   // viewer's browser tab). Feathers' default `serviceEvents` is just
   // ['created','updated','patched','removed'], so without this it
@@ -371,7 +366,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'validateFromExecutor',
     ],
   });
-  app.use('/board-comments', createBoardCommentsService(db));
+  app.use('/board-comments', createBoardCommentsService(db, collaborationAuthorization));
 
   // ============================================================================
   // Branches, repos

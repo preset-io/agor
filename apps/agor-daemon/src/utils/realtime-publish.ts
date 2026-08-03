@@ -4,9 +4,14 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
-import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
+import {
+  BoardRepository,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  shortId,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
+import type { BoardID, BranchID, HookContext, User, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
@@ -146,6 +151,7 @@ type RealtimePublishOptions = {
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
   sessionsRepository: SessionRepository;
+  boardRepository?: Pick<BoardRepository, 'canView'>;
   accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
   multiTenancy?: ResolvedMultiTenancyConfig;
@@ -156,6 +162,7 @@ type PublishChannel = ReturnType<Application['channel']>;
 type PublishScope =
   | { kind: 'global' }
   | { kind: 'branch'; branchId: BranchID | null }
+  | { kind: 'board'; boardId: BoardID | null }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
@@ -168,6 +175,7 @@ const SESSION_ID_SCOPED_PATHS = new Set([
   'session-env-selections',
 ]);
 const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
+const BOARD_SCOPED_PATHS = new Set(['boards', 'cards']);
 
 // High-frequency per-chunk events emitted on the `messages` service during a
 // streaming turn (text + thinking deltas). These fan out once per token-batch,
@@ -251,6 +259,17 @@ function extractMessageId(data: unknown): string | undefined {
 function extractCreatedBy(data: unknown): string | undefined {
   const record = asRecord(data);
   return pickString(record, 'created_by', 'createdBy');
+}
+
+function extractBoardId(data: unknown, context: PublishContext): string | undefined {
+  const record = asRecord(data);
+  if (context.path === 'boards') {
+    return (
+      pickString(record, 'board_id', 'boardId') ??
+      (typeof context.id === 'string' ? context.id : undefined)
+    );
+  }
+  return pickString(record, 'board_id', 'boardId');
 }
 
 function userFromConnection(
@@ -370,6 +389,11 @@ async function resolvePublishScope(
 ): Promise<PublishScope> {
   if (!context.path) return { kind: 'global' };
 
+  if (BOARD_SCOPED_PATHS.has(context.path)) {
+    const boardId = extractBoardId(data, context);
+    return { kind: 'board', boardId: (boardId as BoardID | undefined) ?? null };
+  }
+
   if (BRANCH_ID_SCOPED_PATHS.has(context.path) || ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path)) {
     const branchId = extractBranchId(data, context);
     return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
@@ -398,9 +422,8 @@ async function resolvePublishScope(
     );
     if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
 
-    // These services can also emit global/card/board rows with no branch,
-    // session, task, or message attachment.
-    return { kind: 'global' };
+    const boardId = extractBoardId(data, context);
+    return { kind: 'board', boardId: (boardId as BoardID | undefined) ?? null };
   }
 
   if (context.path === 'artifacts') {
@@ -603,6 +626,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
+    boardRepository = db ? new BoardRepository(db) : undefined,
     accessCache = new RealtimeAccessCache({
       branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
       sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
@@ -633,8 +657,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     let tenantId: string | undefined;
     if (multiTenancy) {
       try {
-        tenantId = resolveRealtimeTenantId(multiTenancy, context);
-        tenantScoped = app.channel(tenantChannelName(tenantId));
+        const resolvedTenantId = resolveRealtimeTenantId(multiTenancy, context);
+        tenantId = resolvedTenantId;
+        tenantScoped = app.channel(tenantChannelName(resolvedTenantId));
       } catch (error) {
         if (error instanceof TenantResolutionError) {
           console.warn('[realtime] Suppressing event without tenant context', {
@@ -679,6 +704,39 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
       if (scope.kind === 'users') {
         return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
+      }
+
+      if (scope.kind === 'board') {
+        if (!scope.boardId || !boardRepository) {
+          console.warn('[realtime] Suppressing board event without resolvable board context', {
+            path: context.path,
+            event: context.event,
+          });
+          return filterToServiceConnections(tenantScoped);
+        }
+        const allowedUserIds = new Set<string>();
+        for (const connection of tenantScoped.connections ?? []) {
+          const user = userFromConnection(connection);
+          if (
+            !user?.user_id ||
+            user._isServiceAccount ||
+            isAdminConnection(connection, allowSuperadmin)
+          )
+            continue;
+          try {
+            if (await boardRepository.canView(scope.boardId, user.user_id as UserID)) {
+              allowedUserIds.add(user.user_id);
+            }
+          } catch {
+            // A missing/revoked board is intentionally not published.
+          }
+        }
+        return tenantScoped.filter(
+          (connection: unknown) =>
+            isServiceConnection(connection) ||
+            isAdminConnection(connection, allowSuperadmin) ||
+            allowedUserIds.has(userFromConnection(connection)?.user_id ?? '')
+        );
       }
 
       if (!scope.branchId) {

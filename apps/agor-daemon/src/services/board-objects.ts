@@ -21,6 +21,7 @@ import type {
   QueryParams,
   UUID,
 } from '@agor/core/types';
+import type { CollaborationAuthorization } from '../utils/collaboration-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export type BoardObjectPatchedEventPayload = Omit<BoardEntityObject, 'zone_id'> & {
@@ -89,7 +90,8 @@ export class BoardObjectsService {
 
   constructor(
     db: TenantScopeAwareDatabase,
-    private app?: Application
+    private app?: Application,
+    private authorization?: CollaborationAuthorization
   ) {
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
@@ -115,6 +117,7 @@ export class BoardObjectsService {
     if (!data.board_id) {
       throw new Error('board_id is required');
     }
+    await this.authorization?.requireBoard(params, data.board_id, 'mutate');
 
     // Use repository to create
     const boardObject = await this.boardObjectRepo.create({
@@ -160,11 +163,12 @@ export class BoardObjectsService {
   /**
    * Get single board object
    */
-  async get(id: string, _params?: BoardObjectParams): Promise<BoardEntityObject> {
+  async get(id: string, params?: BoardObjectParams): Promise<BoardEntityObject> {
     const object = await this.boardObjectRepo.findByObjectId(id);
     if (!object) {
       throw new Error(`Board object ${id} not found`);
     }
+    await this.authorization?.requireBoard(params, object.board_id, 'view');
     return object;
   }
 
@@ -174,8 +178,11 @@ export class BoardObjectsService {
   async patch(
     id: string,
     data: Partial<BoardEntityObject>,
-    _params?: BoardObjectParams
+    params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
+    const current = await this.boardObjectRepo.findByObjectId(id);
+    if (!current) throw new Error(`Board object ${id} not found`);
+    await this.authorization?.requireBoard(params, current.board_id, 'mutate');
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
       // Update both atomically without emitting intermediate events
@@ -201,7 +208,9 @@ export class BoardObjectsService {
    * Remove board object
    */
   async remove(id: string, params?: BoardObjectParams): Promise<BoardEntityObject> {
-    const object = await this.get(id, params);
+    const object = await this.boardObjectRepo.findByObjectId(id);
+    if (!object) throw new Error(`Board object ${id} not found`);
+    await this.authorization?.requireBoard(params, object.board_id, 'mutate');
     await this.boardObjectRepo.remove(id);
 
     return object;
@@ -215,6 +224,9 @@ export class BoardObjectsService {
     position: { x: number; y: number },
     params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
+    const current = await this.boardObjectRepo.findByObjectId(objectId);
+    if (!current) throw new Error(`Board object ${objectId} not found`);
+    await this.authorization?.requireBoard(params, current.board_id, 'mutate');
     const boardObject = await this.boardObjectRepo.updatePosition(objectId, position);
 
     this.emitPatched(boardObject, params);
@@ -230,6 +242,9 @@ export class BoardObjectsService {
     zoneId: string | undefined | null,
     params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
+    const current = await this.boardObjectRepo.findByObjectId(objectId);
+    if (!current) throw new Error(`Board object ${objectId} not found`);
+    await this.authorization?.requireBoard(params, current.board_id, 'mutate');
     const boardObject = await this.boardObjectRepo.updateZone(objectId, zoneId);
 
     this.emitPatched(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject, params);
@@ -282,7 +297,8 @@ export class BoardObjectsService {
  */
 export function createBoardObjectsService(
   db: TenantScopeAwareDatabase,
-  app?: Application
+  app?: Application,
+  authorization?: CollaborationAuthorization
 ): BoardObjectsService {
-  return new BoardObjectsService(db, app);
+  return new BoardObjectsService(db, app, authorization);
 }

@@ -307,7 +307,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DAEMON_BUILD_INFO,
     resolvedSecurity,
     sessionsService,
-    messagesService,
     boardsService,
     branchRepository,
     usersRepository: _usersRepository,
@@ -699,7 +698,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/messages/bulk',
     {
       async create(data: unknown, params: RouteParams) {
-        return messagesService.createMany(data as Message[]);
+        if (!Array.isArray(data) || data.length === 0 || data.length > 100) {
+          throw new BadRequest('Message batch must contain between 1 and 100 items');
+        }
+        const sessionIds = new Set((data as Message[]).map((message) => message.session_id));
+        if (sessionIds.size !== 1) throw new BadRequest('Message batch must target one session');
+        const created: Message[] = [];
+        for (const message of data as Message[]) {
+          created.push(await app.service('messages').create(message, params));
+        }
+        return created;
       },
     },
     {
@@ -3069,7 +3077,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const boardCommentsService = safeService('board-comments') as unknown as {
     toggleReaction: (
       id: string,
-      data: { user_id: string; emoji: string },
+      data: { user_id?: string; emoji: string },
       params?: unknown
     ) => Promise<import('@agor/core/types').BoardComment>;
     createReply: (
@@ -3084,12 +3092,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       app,
       '/board-comments/:id/toggle-reaction',
       {
-        async create(data: { user_id: string; emoji: string }, params: RouteParams) {
+        async create(data: { user_id?: string; emoji: string }, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          if (!data.user_id) throw new Error('user_id required');
           if (!data.emoji) throw new Error('emoji required');
-          const updated = await boardCommentsService.toggleReaction(id, data, params);
+          const updated = await boardCommentsService.toggleReaction(
+            id,
+            { emoji: data.emoji },
+            params
+          );
           emitServiceEvent(app, {
             path: 'board-comments',
             event: 'patched',
