@@ -35,7 +35,7 @@ function migrationTenantTables(): string[] {
   );
   const uploadsMigration = readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql');
   const refreshTokensMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0070_refresh_token_families.sql'
+    'packages/core/drizzle/postgres/0071_refresh_token_families.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -57,7 +57,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0070_refresh_token_families.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0071_refresh_token_families.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
