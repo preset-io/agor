@@ -24,10 +24,10 @@ environment:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
         branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
-        docker-compose.yml -f docker-compose.override.yml -f docker-compose.postgres.yml -p agor-{{branch.name}}
+        docker-compose.yml -f docker-compose.postgres.yml -p agor-{{branch.name}}
         --profile postgres up -d --build postgres agor-dev
       stop: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
         Production-like: PostgreSQL + branch RBAC + strict Unix user impersonation (each Agor user
@@ -35,10 +35,10 @@ environment:
         docker/sudoers/.
       extends: sqlite
       nuke: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v
       logs: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres logs --tail=100
     sqlite:
       start: >-
@@ -53,19 +53,19 @@ environment:
     postgres:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true docker compose -f docker-compose.yml -f docker-compose.override.yml -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true docker compose -f docker-compose.yml -f
         docker-compose.override.postgres.yml -p agor-{{branch.name}} --profile postgres up -d
         --build postgres agor-dev
       stop: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
       extends: sqlite
       nuke: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v
       logs: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres logs --tail=100
     sqlite-demo:
       start: >-
@@ -79,11 +79,11 @@ environment:
     postgres-demo:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true LOAD_FIXTURES=true docker compose -f docker-compose.yml -f docker-compose.override.yml -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true LOAD_FIXTURES=true docker compose -f docker-compose.yml -f
         docker-compose.override.postgres.yml -p agor-{{branch.name}} --profile postgres up -d
         --build postgres agor-dev
       stop: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
         PostgreSQL dev + demo fixtures (SEED + LOAD_FIXTURES): boots a populated demo board with 4
@@ -91,8 +91,8 @@ environment:
         for instant E2E testing. Dev-only.
       extends: sqlite
       nuke: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v
       logs: >-
-        docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.override.postgres.yml -p
+        docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres logs --tail=100
