@@ -444,10 +444,12 @@ placed beneath that namespace.
 - Native OpenCode credential storage is also unavailable in `delegated` Unix
   user mode. The execution substrate does not yet provide the daemon with a
   trusted per-user home boundary for native OpenCode state, so authentication,
-  catalog discovery, and task execution reject before starting OpenCode.
-- Task and catalog servers for one user may run concurrently. Credential
+  saved-provider reads, and task execution reject before accessing OpenCode
+  state.
+- Task and authentication servers for one user may run concurrently. Credential
   mutations and OAuth attempts are serialized; a mutation is guaranteed for
-  later server starts, not an already-running turn.
+  later server starts, not an already-running turn. Model selection reads saved
+  provider evidence without starting a server.
 
 ---
 

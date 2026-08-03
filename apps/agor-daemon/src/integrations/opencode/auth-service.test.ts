@@ -7,7 +7,7 @@ import {
 } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
-import { createOpenCodeAuthService, resolveOpenCodeCreateModelFallback } from './auth-service';
+import { createOpenCodeAuthService } from './auth-service';
 import { startOpenCodeOAuthExecutor } from './oauth-executor.js';
 
 vi.mock('@agor/core/config', async () => {
@@ -122,34 +122,6 @@ describe('OpenCode provider auth service', () => {
       service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
     );
 
-    expect(runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          tool: 'opencode',
-          request: { operation: 'discover', directory: '/worktrees/branch-1' },
-        },
-      }),
-      expect.any(Object)
-    );
-  });
-
-  it('uses the same branch-aware snapshot for the exact create-time fallback', async () => {
-    loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'simple', branch_rbac: true },
-    } as never);
-    runCommand.mockResolvedValueOnce({
-      success: true,
-      data: {
-        ...discovery,
-        suggestedSelection: { providerId: 'openai', modelId: 'gpt-next' },
-      },
-    });
-
-    const fallback = await runWithTenantContext('tenant-a', () =>
-      resolveOpenCodeCreateModelFallback(db, params, 'branch-1')
-    );
-
-    expect(fallback).toEqual({ mode: 'exact', provider: 'openai', model: 'gpt-next' });
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         params: {

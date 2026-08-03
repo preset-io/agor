@@ -35,6 +35,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  OpenCodeModelCatalog,
   OpenCodeOAuthAttempt,
   OpenCodeOAuthAttemptPatch,
   OpenCodeOAuthConnectRequest,
@@ -227,6 +228,7 @@ export interface ServiceTypes {
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
   'opencode-auth': OpenCodeProviderSettings;
+  'opencode-models': OpenCodeModelCatalog;
 }
 
 /**
@@ -341,6 +343,10 @@ export interface OpenCodeAuthService {
     params?: Params
   ): Promise<OpenCodeOAuthAttempt>;
   remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
+}
+
+export interface OpenCodeModelsService {
+  find(params?: Params): Promise<OpenCodeModelCatalog>;
 }
 
 /**
@@ -682,6 +688,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
   service(path: 'opencode-auth'): OpenCodeAuthService;
+  service(path: 'opencode-models'): OpenCodeModelsService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;

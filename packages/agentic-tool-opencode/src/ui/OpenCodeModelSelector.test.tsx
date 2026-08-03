@@ -4,20 +4,15 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useLayoutEffect, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
-import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
-import { publishOpenCodeConfiguration } from './useOpenCodeConfiguration.js';
+import { invalidateOpenCodeModelCatalog } from './useOpenCodeModelCatalog.js';
 
 const catalog = {
-  runtime: 'available',
   runtimeVersion: '1.14.33',
-  isolation: { mode: 'simple', boundary: 'logical' },
   providers: [
     {
       id: 'openai',
       name: 'OpenAI',
-      runtimeAvailable: true,
-      credentialPresence: 'present',
-      authMethods: [],
+      availableForSelection: true,
       suggestedModel: 'gpt-5',
       models: [
         { id: 'gpt-5', name: 'GPT-5', status: 'active' },
@@ -32,7 +27,7 @@ const nativeScaleCatalog = {
   providers: Array.from({ length: 4 }, (_, providerIndex) => ({
     id: `provider-${providerIndex}`,
     name: `Provider ${providerIndex}`,
-    runtimeAvailable: true,
+    availableForSelection: true,
     models: Array.from({ length: 80 }, (_, modelIndex) => ({
       id: `model-${modelIndex}`,
       name: `Provider ${providerIndex} model ${modelIndex}`,
@@ -62,7 +57,7 @@ function deferred<T>() {
 }
 
 describe('OpenCodeModelSelector', () => {
-  it('loads the authenticated configuration and selects an exact pair', async () => {
+  it('loads the authenticated known catalog and selects an exact pair', async () => {
     const onChange = vi.fn();
     const { client, find } = clientWithCatalog();
     render(
@@ -70,7 +65,7 @@ describe('OpenCodeModelSelector', () => {
     );
 
     const providerSelect = await screen.findByLabelText('OpenCode provider');
-    expect(find).toHaveBeenCalledWith({ query: { branch_id: 'branch-1' } });
+    await waitFor(() => expect(find).toHaveBeenCalledWith());
 
     fireEvent.mouseDown(providerSelect);
     fireEvent.click(await screen.findByText('OpenAI'));
@@ -108,7 +103,7 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
-  it('distinguishes and disables unavailable known providers in normal selection', async () => {
+  it('omits unavailable providers and their models from normal selection', async () => {
     const onChange = vi.fn();
     const { client } = clientWithCatalog({
       ...catalog,
@@ -117,7 +112,7 @@ describe('OpenCodeModelSelector', () => {
         {
           id: 'catalog-only',
           name: 'Catalog only',
-          runtimeAvailable: false,
+          availableForSelection: false,
           models: [{ id: 'manual-model', name: 'Manual model', status: 'active' }],
         },
       ],
@@ -125,12 +120,10 @@ describe('OpenCodeModelSelector', () => {
     render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
 
     const providerSelect = await screen.findByLabelText('OpenCode provider');
+    await waitFor(() => expect(client.service).toHaveBeenCalled());
     fireEvent.mouseDown(providerSelect);
-    const unavailable = await screen.findByText('Catalog only · unavailable');
-    expect(unavailable.closest('.ant-select-item-option')).toHaveClass(
-      'ant-select-item-option-disabled'
-    );
-    fireEvent.click(unavailable);
+    expect(screen.queryByText(/catalog only/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/manual model/i)).not.toBeInTheDocument();
 
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getByLabelText('OpenCode model')).toBeDisabled();
@@ -143,6 +136,7 @@ describe('OpenCodeModelSelector', () => {
     render(<OpenCodeModelSelector client={client as never} onChange={onChange} compact />);
 
     const selector = await screen.findByLabelText('OpenCode model');
+    await waitFor(() => expect(client.service).toHaveBeenCalled());
     expect(screen.queryByText('Provider 3 model 79')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Provider 3 model 79' })).not.toBeInTheDocument();
 
@@ -170,7 +164,7 @@ describe('OpenCodeModelSelector', () => {
     expect(screen.queryByText(/legacy\/stored \(unavailable\)/i)).not.toBeInTheDocument();
   });
 
-  it('keeps a stored compact pair honest after configuration loading fails', async () => {
+  it('keeps a stored compact pair honest after catalog refresh fails', async () => {
     const find = vi.fn().mockRejectedValue(new Error('catalog unavailable'));
     const client = { service: vi.fn(() => ({ find })) };
 
@@ -204,7 +198,7 @@ describe('OpenCodeModelSelector', () => {
     expect(screen.queryByText(/\(unavailable\)/i)).not.toBeInTheDocument();
   });
 
-  it('refetches when the authorized branch configuration scope changes', async () => {
+  it('does not refetch the user-scoped catalog when only the branch changes', async () => {
     const { client, find } = clientWithCatalog();
     const { rerender } = render(
       <OpenCodeModelSelector
@@ -225,9 +219,8 @@ describe('OpenCodeModelSelector', () => {
       />
     );
 
-    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText('GPT-5')).toBeInTheDocument();
-    expect(find).toHaveBeenLastCalledWith({ query: { branch_id: 'branch-b' } });
+    expect(screen.getByText('GPT-5')).toBeInTheDocument();
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
   it('does not call an unlisted stored exact pair unavailable', async () => {
@@ -251,7 +244,7 @@ describe('OpenCodeModelSelector', () => {
       ...catalog,
       providers: catalog.providers.map((provider) => ({
         ...provider,
-        runtimeAvailable: false,
+        availableForSelection: false,
       })),
     });
 
@@ -263,17 +256,44 @@ describe('OpenCodeModelSelector', () => {
       />
     );
 
-    expect(await screen.findByText('GPT-5 · provider unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('openai/gpt-5 (unavailable)')).toBeInTheDocument();
     expect(screen.getByLabelText('OpenCode model warning')).toBeInTheDocument();
   });
 
-  it('keeps manual exact entry available without an automatic default when loading fails', async () => {
+  it('does not open exact entry while saved-provider evidence is still loading', async () => {
+    const resolvedCatalog = {
+      ...catalog,
+      providers: catalog.providers.map((provider) => ({
+        ...provider,
+        models: [
+          ...provider.models,
+          { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', status: 'active' as const },
+        ],
+      })),
+    };
+    const pending = deferred<typeof resolvedCatalog>();
+    const client = { service: vi.fn(() => ({ find: vi.fn(() => pending.promise) })) };
+
+    render(
+      <OpenCodeModelSelector
+        client={client as never}
+        value={{ provider: 'openai', model: 'gpt-5.6-luna' }}
+      />
+    );
+
+    expect(screen.queryByLabelText('OpenCode provider ID')).not.toBeInTheDocument();
+    await act(async () => pending.resolve(resolvedCatalog));
+    expect(await screen.findByText('OpenAI')).toBeInTheDocument();
+    expect(screen.queryByLabelText('OpenCode provider ID')).not.toBeInTheDocument();
+  });
+
+  it('keeps manual exact entry available without an automatic default when refresh fails', async () => {
     const onChange = vi.fn();
     const find = vi.fn().mockRejectedValue(new Error('private path /secret should not render'));
     const client = { service: vi.fn(() => ({ find })) };
     render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
 
-    expect(await screen.findByText(/could not load opencode providers and models/i)).toBeTruthy();
+    expect(await screen.findByText(/could not load configured opencode providers/i)).toBeTruthy();
     expect(screen.queryByText(/private path|secret/i)).toBeNull();
 
     expect(screen.queryByRole('button', { name: /use opencode default/i })).toBeNull();
@@ -290,7 +310,7 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
   });
 
-  it('accepts an exact provider and model outside discovery', async () => {
+  it('accepts an exact provider and model outside the known catalog', async () => {
     const onChange = vi.fn();
     const { client } = clientWithCatalog();
     render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
@@ -311,9 +331,59 @@ describe('OpenCodeModelSelector', () => {
     });
   });
 
-  it('has no unconditional refresh control and preserves an unlisted stored pair visibly', async () => {
+  it('shows a configured custom provider and opens exact model entry for it', async () => {
+    const { client } = clientWithCatalog({
+      ...catalog,
+      providers: [
+        ...catalog.providers,
+        {
+          id: 'custom-provider',
+          name: 'custom-provider',
+          availableForSelection: true,
+          models: [],
+        },
+      ],
+    });
+    render(<OpenCodeModelSelector client={client as never} />);
+
+    const providerSelect = await screen.findByLabelText('OpenCode provider');
+    fireEvent.mouseDown(providerSelect);
+    fireEvent.click(await screen.findByTitle('custom-provider'));
+
+    expect(screen.getByLabelText('OpenCode model')).toBeDisabled();
+    expect(screen.getByLabelText('OpenCode provider ID')).toHaveValue('custom-provider');
+    expect(screen.getByText('Enter an exact model ID below')).toBeInTheDocument();
+  });
+
+  it('shares configured-provider reads and invalidates after mutations and reauthentication', async () => {
+    const find = vi.fn().mockResolvedValue(catalog);
+    let authentication: unknown = { userId: 'first' };
+    let authenticated: (() => void) | undefined;
+    const client = {
+      service: vi.fn(() => ({ find })),
+      get: vi.fn(() => authentication),
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === 'authenticated') authenticated = listener;
+      }),
+    };
+    render(
+      <>
+        <OpenCodeModelSelector client={client as never} />
+        <OpenCodeModelSelector client={client as never} compact />
+      </>
+    );
+
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+    act(() => invalidateOpenCodeModelCatalog(client as never));
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    authentication = { userId: 'second' };
+    act(() => authenticated?.());
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(3));
+  });
+
+  it('has no unconditional refresh control and preserves an unavailable stored pair visibly', async () => {
     const onChange = vi.fn();
-    const { client, find } = clientWithCatalog();
+    const { client } = clientWithCatalog();
     render(
       <OpenCodeModelSelector
         value={{ provider: 'legacy', model: 'removed' }}
@@ -322,15 +392,13 @@ describe('OpenCodeModelSelector', () => {
       />
     );
 
-    expect(
-      await screen.findByText(/legacy\/removed is not in the discovered configuration/i)
-    ).toBeTruthy();
+    expect(await screen.findByText(/legacy\/removed is outside the known catalog/i)).toBeTruthy();
     expect(screen.getByDisplayValue('legacy')).toBeTruthy();
     expect(screen.getByDisplayValue('removed')).toBeTruthy();
     expect(onChange).not.toHaveBeenCalled();
 
     expect(screen.queryByRole('button', { name: /refresh known models/i })).toBeNull();
-    expect(find).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /^retry$/i })).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -359,17 +427,8 @@ describe('OpenCodeModelSelector', () => {
       find: secondFind,
       client: { service: vi.fn(() => ({ find: secondFind })) },
     };
-    const staleCatalogSeenDuringCommit: boolean[] = [];
-
     const Harness = () => {
       const [client, setClient] = useState(first.client);
-      useLayoutEffect(() => {
-        if (client === second.client) {
-          staleCatalogSeenDuringCommit.push(
-            document.body.querySelector('[aria-label="OpenCode provider"]') !== null
-          );
-        }
-      }, [client]);
       return (
         <>
           <button type="button" onClick={() => setClient(second.client)}>
@@ -381,12 +440,16 @@ describe('OpenCodeModelSelector', () => {
     };
 
     render(<Harness />);
-    expect(await screen.findByLabelText('OpenCode provider')).toBeTruthy();
+    const providerSelect = await screen.findByLabelText('OpenCode provider');
+    await waitFor(() => expect(first.find).toHaveBeenCalledTimes(1));
+    fireEvent.mouseDown(providerSelect);
+    expect(await screen.findByText('OpenAI')).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
 
     fireEvent.click(screen.getByRole('button', { name: /switch user/i }));
 
-    expect(staleCatalogSeenDuringCommit).toEqual([false]);
-    expect(await screen.findByText(/could not load opencode providers and models/i)).toBeTruthy();
+    expect(await screen.findByText(/could not load configured opencode providers/i)).toBeTruthy();
+    expect(screen.queryByText('OpenAI')).toBeNull();
     expect(first.find).toHaveBeenCalledTimes(1);
     expect(second.find).toHaveBeenCalledTimes(1);
   });
@@ -427,113 +490,5 @@ describe('OpenCodeModelSelector', () => {
     expect(
       screen.getByText(/execution uses the immutable session owner's opencode credentials/i)
     ).toBeTruthy();
-  });
-
-  it('shares one user-scoped configuration read between Providers and Defaults', async () => {
-    const { client, find } = clientWithCatalog(catalog);
-
-    render(
-      <>
-        <OpenCodeProviderSettings client={client as never} />
-        <OpenCodeModelSelector client={client as never} />
-      </>
-    );
-
-    expect(await screen.findByLabelText('OpenCode provider')).toBeTruthy();
-    expect(find).toHaveBeenCalledTimes(1);
-  });
-
-  it('invalidates a branch snapshot after a provider mutation', async () => {
-    const branchConfiguration = {
-      ...catalog,
-      providers: catalog.providers.map((provider) => ({ ...provider, name: 'Before mutation' })),
-    };
-    const refreshedConfiguration = {
-      ...catalog,
-      providers: catalog.providers.map((provider) => ({ ...provider, name: 'After mutation' })),
-    };
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce(branchConfiguration)
-      .mockResolvedValueOnce(refreshedConfiguration);
-    const client = { service: vi.fn(() => ({ find })) };
-
-    render(<OpenCodeModelSelector client={client as never} branchId="branch-a" />);
-    fireEvent.mouseDown(await screen.findByLabelText('OpenCode provider'));
-    expect(await screen.findByText('Before mutation')).toBeTruthy();
-
-    act(() => publishOpenCodeConfiguration(client as never, catalog as never));
-
-    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
-    fireEvent.mouseDown(screen.getByLabelText('OpenCode provider'));
-    expect(await screen.findByText('After mutation')).toBeTruthy();
-  });
-
-  it('drops cached configuration when the same client authenticates again', async () => {
-    const firstConfiguration = {
-      ...catalog,
-      providers: catalog.providers.map((provider) => ({ ...provider, name: 'First identity' })),
-    };
-    const secondConfiguration = {
-      ...catalog,
-      providers: catalog.providers.map((provider) => ({ ...provider, name: 'Second identity' })),
-    };
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce(firstConfiguration)
-      .mockResolvedValueOnce(secondConfiguration);
-    let authentication: unknown = { userId: 'first' };
-    let authenticated: (() => void) | undefined;
-    const client = {
-      service: vi.fn(() => ({ find })),
-      get: vi.fn(() => authentication),
-      on: vi.fn((event: string, listener: () => void) => {
-        if (event === 'authenticated') authenticated = listener;
-      }),
-    };
-
-    render(<OpenCodeModelSelector client={client as never} />);
-    fireEvent.mouseDown(await screen.findByLabelText('OpenCode provider'));
-    expect(await screen.findByText('First identity')).toBeTruthy();
-
-    authentication = { userId: 'second' };
-    act(() => authenticated?.());
-
-    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
-    fireEvent.mouseDown(screen.getByLabelText('OpenCode provider'));
-    expect(await screen.findByText('Second identity')).toBeTruthy();
-  });
-
-  it('does not render a cached identity after the client authentication scope changes', async () => {
-    const configuration = (modelName: string) => ({
-      ...catalog,
-      providers: catalog.providers.map((provider) => ({
-        ...provider,
-        models: provider.models.map((model) => ({ ...model, name: modelName })),
-      })),
-    });
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce(configuration('First identity model'))
-      .mockResolvedValueOnce(configuration('Second identity model'));
-    let authentication: unknown = { userId: 'first' };
-    const client = {
-      service: vi.fn(() => ({ find })),
-      get: vi.fn(() => authentication),
-    };
-    const props = {
-      client: client as never,
-      compact: true,
-      value: { provider: 'openai', model: 'gpt-5' },
-    };
-    const { rerender } = render(<OpenCodeModelSelector {...props} />);
-    expect(await screen.findByText('First identity model')).toBeTruthy();
-
-    authentication = { userId: 'second' };
-    rerender(<OpenCodeModelSelector {...props} />);
-
-    expect(screen.queryByText('First identity model')).toBeNull();
-    expect(await screen.findByText('Second identity model')).toBeTruthy();
-    expect(find).toHaveBeenCalledTimes(2);
   });
 });

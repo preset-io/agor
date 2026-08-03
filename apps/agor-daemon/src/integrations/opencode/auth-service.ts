@@ -433,18 +433,3 @@ export class OpenCodeAuthService {
 export function createOpenCodeAuthService(db: TenantScopeAwareDatabase) {
   return new OpenCodeAuthService(db);
 }
-
-export async function resolveOpenCodeCreateModelFallback(
-  db: TenantScopeAwareDatabase,
-  params: AuthenticatedParams,
-  branchId: string
-) {
-  const settings = await createOpenCodeAuthService(db).find({
-    ...params,
-    query: { branch_id: branchId },
-  });
-  const suggestion = settings.suggestedSelection;
-  return suggestion
-    ? { mode: 'exact' as const, provider: suggestion.providerId, model: suggestion.modelId }
-    : undefined;
-}

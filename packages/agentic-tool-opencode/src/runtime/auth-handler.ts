@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
+  OpenCodeModelCatalog,
   OpenCodeModelPair,
   OpenCodeOAuthAuthorization,
   OpenCodeProviderAuthMethod,
@@ -8,8 +9,10 @@ import type {
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
 import {
+  ensureOpenCodeDataHome as defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer as defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary as defaultVerifyOpenCodeAuthFileBoundary,
   OPENCODE_VERSION,
@@ -22,11 +25,13 @@ export interface OpenCodeCommandOptions {
 }
 
 export interface OpenCodeAuthRuntimeDependencies {
+  ensureOpenCodeDataHome: typeof defaultEnsureOpenCodeDataHome;
   startManagedOpenCodeServer: typeof defaultStartManagedOpenCodeServer;
   verifyOpenCodeAuthFileBoundary: typeof defaultVerifyOpenCodeAuthFileBoundary;
 }
 
 const DEFAULT_AUTH_RUNTIME: OpenCodeAuthRuntimeDependencies = {
+  ensureOpenCodeDataHome: defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer: defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary: defaultVerifyOpenCodeAuthFileBoundary,
 };
@@ -141,6 +146,18 @@ async function savedCredentialProviderIds(dataHome: string): Promise<Set<string>
   } catch {
     return null;
   }
+}
+
+async function discoverModels(
+  dataHome: string,
+  runtime = DEFAULT_AUTH_RUNTIME
+): Promise<OpenCodeModelCatalog> {
+  await runtime.ensureOpenCodeDataHome(dataHome);
+  await runtime.verifyOpenCodeAuthFileBoundary(dataHome, { allowMissing: true });
+  return {
+    runtimeVersion: OPENCODE_VERSION,
+    ...createOpenCodeKnownModelCatalog(await savedCredentialProviderIds(dataHome)),
+  };
 }
 
 function configuredPair(model: string | undefined): OpenCodeModelPair | undefined {
@@ -285,6 +302,10 @@ export async function handleOpenCodeAuth(
           runtime
         ),
       };
+    }
+
+    if (payload.params.operation === 'read-model-catalog') {
+      return { success: true, data: await discoverModels(payload.dataHome, runtime) };
     }
 
     if (payload.params.operation === 'connect-oauth') {

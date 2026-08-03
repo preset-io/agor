@@ -5,8 +5,10 @@ import { access, chmod, lstat, mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OPENCODE_VERSION } from '../shared/known-models.js';
 
-export const OPENCODE_VERSION = '1.14.33';
+export { OPENCODE_VERSION };
+
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const READINESS_POLL_INTERVAL_MS = 25;

@@ -5,7 +5,6 @@ import type { OpenCodeProviderSettings as Settings } from '@agor/core/types';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
-import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
 import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
 
 const initial: Settings = {
@@ -367,15 +366,13 @@ describe('OpenCodeProviderSettings', () => {
     connect.resolve(after);
     await act(async () => connect.promise);
     render(
-      <OpenCodeModelSelector
-        client={client}
-        compact
-        value={{ provider: providerId, model: 'model' }}
-      />
+      <AntApp>
+        <OpenCodeProviderSettings client={client} />
+      </AntApp>
     );
 
-    expect(await screen.findByText(/Before model/)).toBeInTheDocument();
-    expect(screen.queryByText(/After model/)).not.toBeInTheDocument();
+    expect((await screen.findAllByText('Provider before')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Provider after')).not.toBeInTheDocument();
   });
 
   it('does not store a deferred OAuth attempt from a previous authenticated client scope', async () => {

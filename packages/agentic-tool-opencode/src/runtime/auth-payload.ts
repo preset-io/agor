@@ -5,6 +5,7 @@ export const OpenCodeAuthParamsSchema = z.discriminatedUnion('operation', [
     operation: z.literal('discover'),
     directory: z.string().min(1).optional(),
   }),
+  z.object({ operation: z.literal('read-model-catalog') }).strict(),
   z.object({
     operation: z.literal('connect-api-key'),
     providerId: z.string().trim().min(1).max(200),

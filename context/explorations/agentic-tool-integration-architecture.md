@@ -128,12 +128,11 @@ precedence rules.
 
 When configured sources still cannot produce a required model selection during
 session creation, the host may ask the selected integration for a create-time
-fallback. OpenCode derives that fallback from its authenticated, branch-aware
-configuration snapshot: prefer the first runtime-available provider with
-confirmed saved credentials and an active native default, then the first
-runtime-available provider with an active native default. The returned pair is fed through the
-same generic resolver as the lowest-precedence source and is persisted on the
-new Session.
+fallback. OpenCode derives that fallback from its versioned known-model catalog
+and the session owner's saved-provider evidence: prefer the first configured
+known provider, then the first known provider that needs no saved credential.
+The returned pair is fed through the same generic resolver as the
+lowest-precedence source and is persisted on the new Session.
 
 This fallback never overwrites explicit, preset, parent, personal, workspace,
 or stale selections. It is not consulted while executing or resuming an
@@ -187,15 +186,19 @@ patched terminal inside the OpenCode adapter.
 
 The host authorizes the caller, selects the tenant-scoped credential namespace,
 and exposes generic transport. The integration owns OpenCode's provider
-discovery, OAuth/API-key protocol, native model normalization, credential-
-evidence mapping, and tool-specific errors. After validating the native-data
-boundary, one managed server reads provider, authentication, model, and project
-configuration into a normalized secret-safe snapshot. Authentication mutations
-return a refreshed snapshot from their existing managed server before cleanup.
-The OpenCode UI shares each caller-and-branch snapshot briefly so Providers and
-Defaults do not duplicate discovery work; unconditional refresh controls are
-replaced by failure-only retry. Providers and models outside discovery remain
-available through exact manual configuration, and the task runtime remains
+discovery, OAuth/API-key protocol, known-model catalog, credential-evidence
+mapping, and tool-specific errors.
+
+Provider management is dynamic: a managed server discovers native
+authentication methods and returns refreshed secret-safe settings after a
+mutation. Model selection is deliberately lighter. The package ships a
+versioned known-model catalog and combines it with a server-free read of the
+caller's saved provider IDs. The fixed choices render immediately; one shared,
+identity-scoped resource coalesces that availability read and is invalidated by
+authentication changes. Unavailable choices are absent from normal selectors,
+while a stored unavailable pair remains visible and unlisted configured
+providers remain available through exact manual entry. Unconditional refresh
+controls are replaced by failure-only retry. The task runtime remains
 authoritative for every selected pair.
 
 Secrets never enter browser registry metadata. UI contributions receive only

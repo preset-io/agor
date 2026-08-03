@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const runtime = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
   close: vi.fn(async () => undefined),
+  ensureDataHome: vi.fn(async () => undefined),
   readAuthFile: vi.fn(),
   start: vi.fn(),
   verifyAuthFileBoundary: vi.fn(async () => undefined),
@@ -30,6 +31,7 @@ import {
 } from './auth-handler.js';
 
 const runtimeDependencies = {
+  ensureOpenCodeDataHome: runtime.ensureDataHome,
   startManagedOpenCodeServer: runtime.start,
   verifyOpenCodeAuthFileBoundary: runtime.verifyAuthFileBoundary,
 };
@@ -121,6 +123,42 @@ beforeEach(() => {
 });
 
 describe('opencode.auth executor command', () => {
+  it('returns configured known choices without starting an OpenCode server', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ openai: { type: 'api', key: 'must-not-cross' } })
+    );
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'read-model-catalog' },
+    });
+
+    expect(runtime.ensureDataHome).toHaveBeenCalledWith(
+      '/home/alice/.local/share/agor/opencode/opaque'
+    );
+    expect(runtime.verifyAuthFileBoundary).toHaveBeenCalledWith(
+      '/home/alice/.local/share/agor/opencode/opaque',
+      { allowMissing: true }
+    );
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        runtimeVersion: expect.any(String),
+        suggestedSelection: {
+          providerId: 'openai',
+          modelId: 'gpt-5.6-terra-pro',
+        },
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: 'openai', availableForSelection: true }),
+          expect.objectContaining({ id: 'opencode', availableForSelection: true }),
+        ]),
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
   it('returns one secret-safe branch-scoped configuration snapshot from one server', async () => {
     runtime.readAuthFile.mockResolvedValue(
       JSON.stringify({ openai: { type: 'api', key: 'must-not-cross' } })

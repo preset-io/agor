@@ -9,6 +9,7 @@ import {
   visibleAuthPrompts,
 } from './OpenCodeProviderListItem';
 import { publishOpenCodeConfiguration, useOpenCodeConfiguration } from './useOpenCodeConfiguration';
+import { invalidateOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
 
 interface ProviderAction {
   generation: number;
@@ -121,6 +122,13 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       isCurrentScope(action.generation) && actionIdRef.current === action.actionId,
     [isCurrentScope]
   );
+  const publishSettings = useCallback(
+    (next: Settings) => {
+      publishOpenCodeConfiguration(client, next);
+      invalidateOpenCodeModelCatalog(client);
+    },
+    [client]
+  );
   const updateSelectedProvider = useCallback((providerId: string | undefined) => {
     if (selectedProviderRef.current === providerId) return false;
     selectedProviderRef.current = providerId;
@@ -186,7 +194,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       onResult: (next) => {
         storeAttempt(selectedProviderId, next, generation);
         if (next.phase === 'configured' && next.settings) {
-          publishOpenCodeConfiguration(client, next.settings);
+          publishSettings(next.settings);
         }
       },
       onError: () => setError('OpenCode authorization status could not be refreshed.'),
@@ -199,6 +207,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     scopeGeneration,
     selectedProviderId,
     storeAttempt,
+    publishSettings,
   ]);
 
   const connectableProviders = useMemo(
@@ -280,7 +289,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
           ...(Object.keys(metadata).length ? { metadata } : {}),
         }) as Promise<Settings>,
       (next) => {
-        publishOpenCodeConfiguration(client, next);
+        publishSettings(next);
         setApiKey('');
         setPromptValues({});
       }
@@ -311,7 +320,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       (attempt, generation) => {
         if (!storeAttempt(providerId, attempt, generation)) return;
         if (attempt.phase === 'configured' && attempt.settings) {
-          publishOpenCodeConfiguration(client, attempt.settings);
+          publishSettings(attempt.settings);
         }
       }
     );
@@ -359,7 +368,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       providerId,
       'OpenCode could not disconnect that provider.',
       () => client.service('opencode-auth').remove(providerId),
-      (next) => publishOpenCodeConfiguration(client, next)
+      publishSettings
     );
   };
 

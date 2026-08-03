@@ -631,12 +631,15 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   // around hook. codex-auth/logout was missing here, so `Remove login` ran with
   // no active tenant scope and threw "Missing active tenant context for Codex
   // auth logout" — the delete-only logout never worked end-to-end.
-  it.each(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout', 'opencode-auth'])(
-    'grants ambient tenant identity to %s',
-    (path) => {
-      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
-    }
-  );
+  it.each([
+    'codex-auth/device',
+    'codex-auth/import',
+    'codex-auth/logout',
+    'opencode-auth',
+    'opencode-models',
+  ])('grants ambient tenant identity to %s', (path) => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+  });
 
   it('keeps the codex-auth endpoints grouped together', () => {
     const codexPaths = TENANT_IDENTITY_ONLY_SERVICE_PATHS.filter((path) =>
