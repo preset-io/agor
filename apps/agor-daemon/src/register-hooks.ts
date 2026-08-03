@@ -2505,9 +2505,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                       {
                         asUser: await resolveExecutorReadAsUser(
                           db,
-                          (context.params as AuthenticatedParams).user?.user_id as
-                            | UserID
-                            | undefined
+                          ((context.params as AuthenticatedParams).user?.user_id ??
+                            context.data.created_by) as UserID | undefined
                         ),
                         logPrefix: `[sessions.create ${branch.name}]`,
                       }
@@ -3008,7 +3007,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               board_id: shortId(result.board_id),
               objectId,
               objectsCount: Object.keys(result.objects || {}).length,
-              objects: result.objects,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
             emitServiceEvent(app, {
