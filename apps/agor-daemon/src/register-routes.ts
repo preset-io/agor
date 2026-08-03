@@ -25,10 +25,12 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
+  setMcpMemberPolicy,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -47,9 +49,11 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import { filterMCPServersForSession, isMCPServerUsableInSession } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   HookContext,
+  MCPMemberPolicy,
   Message,
   MessageID,
   MessageSource,
@@ -67,6 +71,7 @@ import type {
 import {
   hasMinimumRole,
   isTaskPendingDispatch,
+  MCP_MEMBER_POLICIES,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -107,6 +112,7 @@ import {
 } from './permissions/deliver-permission-decision.js';
 import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
+import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -3793,6 +3799,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     checkSessionOwnerOrAdmin(user, session, superadminOpts);
   };
 
+  // Same authorization, but returns the session. MCP routes need its
+  // `created_by`: that identity, not the caller's, decides which private
+  // servers the session may see, so it has to be loaded for service-account
+  // callers too rather than short-circuited.
+  const authorizeAndLoadSessionForMcpConfig = async (
+    sessionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+    params: any
+  ): Promise<Session> => {
+    const user = params?.user;
+    if (!user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+    const session = (await sessionsService.get(sessionId, { provider: undefined })) as
+      | Session
+      | undefined;
+    if (!session) {
+      throw new NotFound(`Session not found: ${sessionId}`);
+    }
+    if (!user._isServiceAccount) {
+      checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    }
+    return session;
+  };
+
   // ============================================================================
   // Session MCP servers routes
   // ============================================================================
@@ -3804,7 +3835,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
         const includeGlobal =
@@ -3860,9 +3891,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               }
             })
           );
-          const entries = withMetadata.filter(
-            (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
-          );
+          const entries = withMetadata
+            .filter(
+              (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
+            )
+            .filter((entry) => isMCPServerUsableInSession(entry.server, session));
           return shouldExposeMCPServerSecrets(params, {
             allowSessionToken: true,
             sessionId: id,
@@ -3891,6 +3924,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           scope: 'global',
           ...(enabledOnly ? { enabled: true } : {}),
           ...(userId ? { forUserId: userId } : {}),
+          // Global scope means "every session of everyone who may use it", not
+          // "every session in the tenant": a private server belongs to its
+          // owner's sessions only. Keyed on the session's creator rather than
+          // the caller or the query's `forUserId`, neither of which is the
+          // identity the session runs as.
+          usableByUserId: session.created_by,
           $limit: 1000,
         };
         const globalResult = includeGlobal
@@ -3901,16 +3940,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             })
           : [];
         const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = includeGlobal
-          ? [
-              ...new Map(
-                [...globalServers, ...sessionServers].map((server) => [
-                  server.mcp_server_id,
-                  server,
-                ])
-              ).values(),
-            ]
-          : sessionServers;
+        const servers = filterMCPServersForSession(
+          includeGlobal
+            ? [
+                ...new Map(
+                  [...globalServers, ...sessionServers].map((server) => [
+                    server.mcp_server_id,
+                    server,
+                  ])
+                ).values(),
+              ]
+            : sessionServers,
+          session
+        );
         return shouldExposeMCPServerSecrets(params, {
           allowSessionToken: true,
           sessionId: id,
@@ -3922,7 +3964,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.mcpServerId) throw new Error('MCP Server ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
+
+        // Being allowed to configure this session says nothing about being
+        // allowed to hand it someone else's server — and its credential.
+        const attaching = await app.service('mcp-servers').get(data.mcpServerId, {
+          ...params,
+          provider: undefined,
+          query: {},
+        });
+        if (!isMCPServerUsableInSession(attaching, session)) {
+          throw new Forbidden('That MCP server is private to another user');
+        }
 
         await sessionMCPServersService.addServer(
           id as import('@agor/core/types').SessionID,
@@ -3991,6 +4044,55 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
       patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
     },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP member policy
+  //
+  // Routes:
+  //   GET   /mcp-member-policy   — the policy in force for the caller
+  //   PATCH /mcp-member-policy   — set the tenant-wide value (admin)
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-member-policy',
+    {
+      async find(params: RouteParams) {
+        return {
+          policy: await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId()),
+        };
+      },
+      async patch(_id: unknown, data: { policy: MCPMemberPolicy }, params: RouteParams) {
+        if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
+          throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
+        }
+        await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+        return { policy: data.policy };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: ROLES.MEMBER, action: 'read the MCP member policy' },
+      patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP marketplace connect
+  // ============================================================================
+
+  // A "long" route: it probes a remote endpoint before writing anything, so it
+  // carries tenant identity without holding a transaction open across the
+  // network call. Every write it makes goes through a service that opens its
+  // own unit of work.
+  registerLongAuthenticatedRoute(
+    app,
+    '/mcp-catalog/connect',
+    createMCPCatalogConnectService(app),
+    { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );
 

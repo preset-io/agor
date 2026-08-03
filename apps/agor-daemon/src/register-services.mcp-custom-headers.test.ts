@@ -58,4 +58,8 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
   });
+
+  it('scopes the global set to what the session may use', () => {
+    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
+  });
 });

@@ -79,8 +79,14 @@ describe('register-services OAuth callback URL regression', () => {
       codeOnly.indexOf("app.use('/mcp-servers/oauth-start'"),
       codeOnly.indexOf("app.service('mcp-servers/oauth-start').hooks")
     );
+    // The saved row is loaded inside the tenant scope and by the supplied id,
+    // through the loader that also decides whether this caller may see it —
+    // `loadMcpServerForCaller` is `findById` plus that check, so pinning it
+    // keeps the authority this test is named for and adds the caller to it.
+    // `params` is part of the pin: without it the lookup would resolve any
+    // tenant row, and a member could borrow another user's OAuth client.
     expect(oauthStartBody).toMatch(
-      /runInOAuthTenantScope\s*\([\s\S]*findById\s*\(\s*savedServerId/
+      /runInOAuthTenantScope\s*\([\s\S]*loadMcpServerForCaller\s*\(\s*db,\s*savedServerId,\s*params/
     );
     expect(oauthStartBody).toMatch(/effectiveMcpUrl\s*=\s*savedServer\?\.url\s*\?\?/);
     expect(oauthStartBody).toMatch(/clientId:\s*savedServer\s*\?\s*clientIdFromConfig/);

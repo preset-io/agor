@@ -29,6 +29,12 @@ export type MCPServerParams = QueryParams<{
   transport?: string;
   enabled?: boolean;
   source?: string;
+  /**
+   * Narrow the result to servers this user may use: shared ones plus their own
+   * private ones. Set by the caller — a hook for external requests, the
+   * session MCP route for session resolution — never accepted from the client.
+   */
+  usableByUserId?: string;
 }>;
 
 /**
@@ -67,6 +73,7 @@ export class MCPServersService extends DrizzleService<
       if (params.query.transport) filters.transport = params.query.transport as MCPTransport;
       if (params.query.enabled !== undefined) filters.enabled = params.query.enabled;
       if (params.query.source) filters.source = params.query.source as MCPSource;
+      if (params.query.usableByUserId) filters.usableByUserId = params.query.usableByUserId;
     }
 
     const servers = await this.mcpServerRepo.findAll(filters);

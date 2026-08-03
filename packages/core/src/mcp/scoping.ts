@@ -5,16 +5,19 @@
  * Used by agentic-tool runtime adapters to ensure consistent behavior.
  *
  * Scoping Rules:
- * - ALL global-scoped MCPs are included in every session (available to all users)
+ * - ALL shared global-scoped MCPs are included in every session
  * - PLUS any session-scoped MCPs that are explicitly assigned to this session
+ * - MINUS any server private to a user other than the session's creator
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
  * Templates are resolved using process.env, which contains the user's decrypted
  * environment variables (populated by createUserProcessEnvironment when spawning).
  *
- * Note: owner_user_id on MCP servers is NOT used for filtering. Global MCPs are
- * truly global and available to all sessions regardless of who created them.
+ * Ownership is resolved by the daemon, which knows the session's creator: the
+ * `/sessions/:id/mcp-servers` route both narrows its global query and filters
+ * the merged result. Nothing here re-derives it — the executor is given a set
+ * that has already had another user's private servers removed.
  */
 
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
@@ -173,6 +176,9 @@ export async function getMcpServersForSession(
         {
           scope: 'global',
           enabled: true,
+          // The route above resolves ownership from the session; this branch
+          // has only the acting user, so it asks for that user's set.
+          ...(deps.forUserId ? { usableByUserId: deps.forUserId } : {}),
         },
         deps.forUserId
       );

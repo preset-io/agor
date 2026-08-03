@@ -6,6 +6,7 @@
 
 import type {
   CreateMCPServerInput,
+  MCPCatalogEntryID,
   MCPScope,
   MCPServer,
   MCPServerFilters,
@@ -13,7 +14,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
 import {
@@ -58,6 +59,7 @@ export class MCPServerRepository
       display_name: row.data.display_name,
       description: row.data.description,
       import_path: row.data.import_path,
+      catalog_entry_id: row.data.catalog_entry_id as MCPCatalogEntryID | undefined,
 
       // Transport config
       command: row.data.command,
@@ -114,6 +116,7 @@ export class MCPServerRepository
         display_name: data.display_name,
         description: data.description,
         import_path: data.import_path,
+        catalog_entry_id: data.catalog_entry_id,
         command: data.command,
         args: data.args,
         url: data.url,
@@ -223,6 +226,12 @@ export class MCPServerRepository
 
       if (filters?.source) {
         conditions.push(eq(mcpServers.source, filters.source));
+      }
+
+      if (filters?.usableByUserId) {
+        conditions.push(
+          or(isNull(mcpServers.owner_user_id), eq(mcpServers.owner_user_id, filters.usableByUserId))
+        );
       }
 
       if (conditions.length > 0) {

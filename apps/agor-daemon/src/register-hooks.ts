@@ -45,7 +45,13 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import {
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+  Unavailable,
+} from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -59,6 +65,7 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
+import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
@@ -69,6 +76,7 @@ import type {
   GroupID,
   HookContext,
   MCPServer,
+  MCPTransport,
   MessageID,
   Paginated,
   Params,
@@ -149,6 +157,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import {
+  authorizeMcpServerWrite,
+  loadMcpServerForWrite,
+} from './utils/mcp-server-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -1800,20 +1812,66 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  // NOTE: mcp-servers is global admin-managed configuration. These rows are
-  // not branch- or session-scoped, so no RBAC find() scoping is applied.
-  // Creation/update/removal remain gated by requireMinimumRole(ADMIN).
+  // Writes are decided by `mcp_member_policy` plus ownership, not by role
+  // alone — see `authorizeMcpServerWrite`. Reads are narrowed to the servers
+  // the caller may use, because a private server is another user's
+  // configuration and credential, not shared tenant configuration.
+  const authorizeMcpServerWriteHook = async (context: HookContext): Promise<HookContext> => {
+    const method = context.method as 'create' | 'update' | 'patch' | 'remove';
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+    const existing =
+      method === 'create' ? undefined : await loadMcpServerForWrite(db, context.id ?? undefined);
+
+    for (const item of items) {
+      const data = (item ?? undefined) as
+        | { transport?: MCPTransport; owner_user_id?: string | null }
+        | undefined;
+      const decision = await authorizeMcpServerWrite(db, context.params, {
+        method,
+        existing,
+        data,
+      });
+      if (decision.owner_user_id !== undefined && data) {
+        data.owner_user_id = decision.owner_user_id;
+      }
+    }
+
+    return context;
+  };
+
+  const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    const user = context.params.user;
+    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+    context.params.query = { ...(context.params.query ?? {}), usableByUserId: user.user_id };
+    return context;
+  };
+
+  const denyMcpServerGetOfOthersPrivate = async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    const user = context.params.user;
+    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+    const server = context.result as MCPServer | undefined;
+    if (server && !isMCPServerUsableBy(server, user.user_id)) {
+      throw new NotFound(`MCP server not found: ${String(context.id)}`);
+    }
+    return context;
+  };
+
   safeService('mcp-servers')?.hooks({
     before: {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
-      create: [requireMinimumRole(ROLES.ADMIN, 'create MCP servers')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
-      update: [requireMinimumRole(ROLES.ADMIN, 'update MCP servers')],
-      remove: [requireMinimumRole(ROLES.ADMIN, 'delete MCP servers')],
+      find: [scopeMcpServerFindToUsable],
+      create: [authorizeMcpServerWriteHook],
+      update: [authorizeMcpServerWriteHook],
+      patch: [authorizeMcpServerWriteHook],
+      remove: [authorizeMcpServerWriteHook],
     },
     after: {
       find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
-      get: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      get: [denyMcpServerGetOfOthersPrivate, injectPerUserOAuthTokens, redactMCPServerSecretFields],
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],

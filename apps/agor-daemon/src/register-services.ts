@@ -34,6 +34,7 @@ import {
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
+  SessionRepository,
   select,
   sessionMcpServers,
   shortId,
@@ -55,6 +56,7 @@ import type {
   MCPOAuthAttemptID,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
+  MCPServer,
   MCPServerID,
   MessageSource,
   Params,
@@ -189,6 +191,7 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import { loadMcpServerForCaller } from './utils/mcp-server-authorization.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -672,7 +675,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/cursor-models').hooks({ before: { find: [ctx.requireAuth] } });
 
   const branchRepository = new BranchRepository(db);
-  const { UsersRepository, SessionRepository } = await import('@agor/core/db');
+  const { UsersRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
   app.use('/file', createFileService(branchRepository, db, app));
@@ -2601,11 +2604,12 @@ async function registerMCPServices(
         let compatibilityMode: 'strict' | 'legacy' = 'strict';
         let dcrMode: MCPOAuthDCRMode | undefined;
         const savedServerId = data.mcp_server_id;
+        // Its stored OAuth client configuration belongs to whoever owns the
+        // row; a caller who may not use the server may not borrow it either.
         const savedServer = savedServerId
-          ? await runInOAuthTenantScope(db, tenantId, () => {
-              const mcpServerRepo = new MCPServerRepository(db);
-              return mcpServerRepo.findById(savedServerId);
-            })
+          ? await runInOAuthTenantScope(db, tenantId, () =>
+              loadMcpServerForCaller(db, savedServerId, params)
+            )
           : null;
 
         if (
@@ -2874,6 +2878,7 @@ async function registerMCPServices(
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
+      await loadMcpServerForCaller(db, data.mcp_server_id, params);
       const tenantId = tenantIdFromParams(params);
       const currentUser =
         tenantId && params?.user?.user_id
@@ -3074,16 +3079,26 @@ async function registerMCPServices(
         const { attachedServers, globalServers } = await runInOAuthTenantScope(
           db,
           tenantId,
-          async () => ({
-            attachedServers: await new SessionMCPServerRepository(db).listServers(
-              executorSessionId as SessionID,
-              true
-            ),
-            globalServers: await new MCPServerRepository(db).findAll({
-              scope: 'global',
-              enabled: true,
-            }),
-          })
+          async () => {
+            // The session's own scope, which for a shared-mode OAuth server is
+            // the only thing standing between this token and a session that may
+            // not use that server. Same rule and same key as session resolution.
+            const executorSession = await new SessionRepository(db).findById(executorSessionId);
+            if (!executorSession) {
+              throw new Forbidden('oauth-auth-headers requires a resolvable executor session');
+            }
+            return {
+              attachedServers: await new SessionMCPServerRepository(db).listServers(
+                executorSessionId as SessionID,
+                true
+              ),
+              globalServers: await new MCPServerRepository(db).findAll({
+                scope: 'global',
+                enabled: true,
+                usableByUserId: executorSession.created_by,
+              }),
+            };
+          }
         );
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),
@@ -3263,10 +3278,11 @@ async function registerMCPServices(
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
+        // In `shared` mode this refreshes a token nobody in particular owns,
+        // so the server row is the only thing that says who may ask.
         const server = await runInOAuthTenantScope(db, tenantId, () =>
-          new MCPServerRepository(db).findById(serverId)
+          loadMcpServerForCaller(db, serverId, params)
         );
-        if (!server) return { success: false, error: 'server_not_found' };
         if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
 
         const mode = server.auth.oauth_mode ?? 'per_user';
@@ -3362,6 +3378,33 @@ async function registerMCPServices(
     before: { create: [ctx.requireAuth] },
   });
 
+  /**
+   * Discovery refreshes a server's capability list, which means opening its
+   * transport with its stored credential and then writing `tools` / `resources`
+   * / `prompts` back onto the row. That is a narrow mutation of its own, not
+   * ordinary configuration CRUD, so it does not run through
+   * `authorizeMcpServerWrite` — but it still needs an answer to "whose server
+   * is this?".
+   *
+   * Admins keep the reach they had. Members gain exactly one thing: a server
+   * they own, whatever its scope — which is what a marketplace install is.
+   * Shared servers stay admin-only here, as they were before ownership
+   * existed; nothing in this phase asks to widen an endpoint that makes an
+   * outbound request on a shared credential.
+   */
+  const denyDiscoverOfAnotherUsersServer = (
+    server: MCPServer,
+    params?: AuthenticatedParams
+  ): { success: false; error: string } | null => {
+    if (!params?.provider || !params.user) return null;
+    if (hasMinimumRole(params.user.role?.toLowerCase(), ROLES.ADMIN)) return null;
+    if (server.owner_user_id && server.owner_user_id === params.user.user_id) return null;
+    return {
+      success: false,
+      error: 'Access denied: only an admin or the server owner can discover this MCP server',
+    };
+  };
+
   // Discover endpoint
   app.use('/mcp-servers/discover', {
     async create(
@@ -3396,8 +3439,6 @@ async function registerMCPServices(
         const { mergeMCPRemoteHeaders, restoreRedactedMCPCustomHeaders } = await import(
           '@agor/core/tools/mcp/http-headers'
         );
-        const { hasMinimumRole, ROLES } = await import('@agor/core/types');
-
         const tenantId = tenantIdFromParams(params);
         const mcpServerRepo = new MCPServerRepository(db);
 
@@ -3452,22 +3493,8 @@ async function registerMCPServices(
               mcpServerRepo.findById(data.mcp_server_id!)
             );
             if (!server) return { success: false, error: 'MCP server not found' };
-            if (params?.provider && params.user) {
-              const userId = params.user.user_id;
-              const userRole = params.user.role?.toLowerCase();
-              const isAdmin = hasMinimumRole(userRole, ROLES.ADMIN);
-              const isOwner = server.owner_user_id === userId;
-              if (server.scope === 'global' && !isOwner && !isAdmin)
-                return {
-                  success: false,
-                  error: 'Access denied: only server owner or admin can update this MCP server',
-                };
-              if (server.scope === 'session' && !isAdmin)
-                return {
-                  success: false,
-                  error: 'Access denied: admin role required to update session-scoped MCP servers',
-                };
-            }
+            const denial = denyDiscoverOfAnotherUsersServer(server, params);
+            if (denial) return denial;
             serverConfig.auth = restoreRedactedMCPAuthSecrets({
               current: server.auth,
               next: data.auth,
@@ -3483,22 +3510,8 @@ async function registerMCPServices(
             mcpServerRepo.findById(data.mcp_server_id!)
           );
           if (!server) return { success: false, error: 'MCP server not found' };
-          if (params?.provider && params.user) {
-            const userId = params.user.user_id;
-            const userRole = params.user.role?.toLowerCase();
-            const isAdmin = hasMinimumRole(userRole, ROLES.ADMIN);
-            const isOwner = server.owner_user_id === userId;
-            if (server.scope === 'global' && !isOwner && !isAdmin)
-              return {
-                success: false,
-                error: 'Access denied: only server owner or admin can discover this MCP server',
-              };
-            if (server.scope === 'session' && !isAdmin)
-              return {
-                success: false,
-                error: 'Access denied: admin role required to discover session-scoped MCP servers',
-              };
-          }
+          const denial = denyDiscoverOfAnotherUsersServer(server, params);
+          if (denial) return denial;
           if (server.url && !isTemplated(server.url)) {
             const urlValidation = validateUrl(server.url);
             if (!urlValidation.valid) return { success: false, error: urlValidation.error };

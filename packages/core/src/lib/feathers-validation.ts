@@ -264,6 +264,10 @@ export const mcpServerQuerySchema = createQuerySchema(
     // Executor/session-token callers pass this so hooks can inject the
     // task creator's per-user OAuth token instead of the session owner's.
     forUserId: Type.Optional(CommonSchemas.uuid),
+    // Narrows a listing to shared servers plus one user's private ones.
+    // Trusted callers set it; on an external member request the service hooks
+    // overwrite whatever arrived with the caller's own id.
+    usableByUserId: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );

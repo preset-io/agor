@@ -6,6 +6,7 @@
 
 import type { MCPServer, MCPServerID, SessionID, SessionMCPServer } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
+import { isMCPServerUsableInSession, MCPServerNotUsableError } from '../../mcp/ownership';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type SessionMCPServerInsert, sessionMcpServers } from '../schema';
@@ -26,21 +27,45 @@ export class SessionMCPServerRepository {
   }
 
   /**
+   * Resolve a session/server pair, refusing one the session may not use.
+   *
+   * Every path that *links* a server to a session — route, session service,
+   * scheduler, gateway, zone trigger, fork/spawn copy — ends up here, so the
+   * ownership rule is enforced once rather than in each of them. It answers on
+   * the session's creator, not the caller, because the caller is not always
+   * the identity the session will run as.
+   *
+   * This is not the only seam ownership needs. Global-scope resolution never
+   * touches the junction table, and OAuth credential issuance works from
+   * server ids directly; both carry their own check.
+   */
+  private async resolveUsablePair(
+    sessionId: SessionID,
+    serverId: MCPServerID
+  ): Promise<{ server: MCPServer }> {
+    const session = await this.sessionRepo.findById(sessionId);
+    if (!session) {
+      throw new EntityNotFoundError('Session', sessionId);
+    }
+
+    const server = await this.mcpServerRepo.findById(serverId);
+    if (!server) {
+      throw new EntityNotFoundError('MCPServer', serverId);
+    }
+
+    if (!isMCPServerUsableInSession(server, session)) {
+      throw new MCPServerNotUsableError(serverId, sessionId);
+    }
+
+    return { server };
+  }
+
+  /**
    * Add MCP server to session
    */
   async addServer(sessionId: SessionID, serverId: MCPServerID): Promise<void> {
     try {
-      // Verify session exists
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        throw new EntityNotFoundError('Session', sessionId);
-      }
-
-      // Verify MCP server exists
-      const server = await this.mcpServerRepo.findById(serverId);
-      if (!server) {
-        throw new EntityNotFoundError('MCPServer', serverId);
-      }
+      await this.resolveUsablePair(sessionId, serverId);
 
       // Insert-first instead of check-then-insert: the unique index is the
       // durable idempotency guard when two recovering daemons attach the same
@@ -64,6 +89,7 @@ export class SessionMCPServerRepository {
         .run();
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
       throw new RepositoryError(
         `Failed to add MCP server to session: ${error instanceof Error ? error.message : String(error)}`,
         error
@@ -142,10 +168,11 @@ export class SessionMCPServerRepository {
         .all();
 
       // Fetch full MCP server details for each relationship
+      const session = await this.sessionRepo.findById(sessionId);
       const servers: MCPServer[] = [];
       for (const rel of relationships) {
         const server = await this.mcpServerRepo.findById(rel.mcp_server_id);
-        if (server) {
+        if (server && session && isMCPServerUsableInSession(server, session)) {
           servers.push(server);
         }
       }
@@ -181,10 +208,11 @@ export class SessionMCPServerRepository {
         .all();
 
       // Fetch full MCP server details with metadata for each relationship
+      const session = await this.sessionRepo.findById(sessionId);
       const results: Array<{ server: MCPServer; added_at: number; enabled: boolean }> = [];
       for (const rel of relationships) {
         const server = await this.mcpServerRepo.findById(rel.mcp_server_id);
-        if (server) {
+        if (server && session && isMCPServerUsableInSession(server, session)) {
           results.push({
             server,
             added_at: new Date(rel.added_at).getTime(), // Convert to timestamp
@@ -208,10 +236,17 @@ export class SessionMCPServerRepository {
    */
   async setServers(sessionId: SessionID, serverIds: MCPServerID[]): Promise<void> {
     try {
-      // Verify session exists
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        throw new EntityNotFoundError('Session', sessionId);
+      // Reject the whole set before deleting anything, so a refused server
+      // cannot leave the session with fewer servers than it started with.
+      for (const serverId of serverIds) {
+        await this.resolveUsablePair(sessionId, serverId);
+      }
+
+      if (serverIds.length === 0) {
+        const session = await this.sessionRepo.findById(sessionId);
+        if (!session) {
+          throw new EntityNotFoundError('Session', sessionId);
+        }
       }
 
       // Remove all existing relationships
@@ -232,6 +267,7 @@ export class SessionMCPServerRepository {
       }
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
       throw new RepositoryError(
         `Failed to set MCP servers for session: ${error instanceof Error ? error.message : String(error)}`,
         error

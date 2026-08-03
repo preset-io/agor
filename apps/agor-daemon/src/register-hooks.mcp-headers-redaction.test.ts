@@ -14,7 +14,10 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(source).toContain('redactMCPServerSecrets');
     expect(utilSource).toContain('redactMCPAuthSecrets(server.auth)');
     expect(source).toMatch(/find:\s*\[injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/);
-    expect(source).toMatch(/get:\s*\[injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/);
+    // Ownership hooks may run ahead of these; redaction must still be last.
+    expect(source).toMatch(
+      /get:\s*\[[^\]]*injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/
+    );
   });
 
   it('redacts session MCP server route responses that bypass service hooks', () => {

@@ -1388,9 +1388,9 @@ export const mcpServers = pgTable(
     }).notNull(),
     enabled: t.bool('enabled').notNull().default(true),
 
-    // Scope foreign key
-    // For 'global' scope: which user owns this server
-    // For 'session' scope: use session_mcp_servers junction table (many-to-many)
+    // Owner of a private server, NULL for a shared one. Applies to both
+    // scopes: a private server is only ever resolved into, and attachable to,
+    // sessions its owner created.
     owner_user_id: varchar('owner_user_id', { length: 36 }),
 
     // Source tracking (materialized for queries)
@@ -1405,6 +1405,8 @@ export const mcpServers = pgTable(
         display_name?: string;
         description?: string;
         import_path?: string;
+        // Catalog entry this server was installed from (UUID, never the name).
+        catalog_entry_id?: string;
 
         // Transport config
         command?: string;
