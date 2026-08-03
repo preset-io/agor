@@ -234,6 +234,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // the App shell doesn't have to forward them into every modal.
   const mcpServerById = useAgorStore(selectMcpServerById);
   const tenantToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
+  // Tenant tool settings hydrate in the background; until they do, an empty map
+  // reports every tool as enabled. Gate provider content on this flag so a
+  // disabled-provider deep link can't fail open during the cold-load window.
+  const tenantToolSettingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
   const visibleAgenticToolTabs = useMemo(
     () =>
       AGENTIC_TOOL_TABS.filter(
@@ -250,8 +254,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const initializedUserIdRef = useRef<string | null>(null);
   // A search hit for a provider setting requests the sub-tab it lives on; the
   // provider-subtab reset effect consumes this so the hit lands on the right
-  // sub-tab instead of the default Authentication view.
-  const pendingProviderSubtabRef = useRef<ProviderSubtab | null>(null);
+  // sub-tab instead of the default Authentication view. Scoped to the provider
+  // key so a hit for the ALREADY-active provider can't leak its sub-tab onto
+  // the next provider opened.
+  const pendingProviderSubtabRef = useRef<{ panelKey: string; subtab: ProviderSubtab } | null>(
+    null
+  );
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
@@ -264,6 +272,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Mirrors the permission gating that builds `navGroups`.
   const activeKey = ((): string => {
     if (rawActiveKey.startsWith(PROVIDER_KEY_PREFIX)) {
+      // FAIL CLOSED until availability is known: an unhydrated store reports
+      // every tool as enabled, so a disabled-provider deep link would briefly
+      // mount its credential/default controls. Resolve to Profile until the
+      // settings load, then apply the enabled filter.
+      if (!tenantToolSettingsHydrated) return 'profile';
       return visibleAgenticToolTabs.includes(toolFromProviderKey(rawActiveKey))
         ? rawActiveKey
         : 'profile';
@@ -440,9 +453,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // they land there directly.
   useEffect(() => {
     if (!activeTool) return;
-    // A pending sub-tab from a search hit wins over the default; consume it once.
-    const requested = pendingProviderSubtabRef.current;
+    // A pending sub-tab from a search hit wins over the default, but only for
+    // the provider it targeted; consume it once regardless so it can't leak.
+    const pending = pendingProviderSubtabRef.current;
     pendingProviderSubtabRef.current = null;
+    const requested = pending?.panelKey === providerKeyFor(activeTool) ? pending.subtab : undefined;
     const hasAuth = (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0;
     setProviderSubtab(requested ?? (hasAuth ? 'auth' : 'defaults'));
   }, [activeTool]);
@@ -1130,9 +1145,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const name = AGENTIC_TOOL_DISPLAY_NAMES[tool];
       const providerKey = providerKeyFor(tool);
       const kw = (extra: string) => `${name} ${tool} ${extra}`;
-      const toolFields = TOOL_FIELD_CONFIGS[tool] ?? [];
+      // `allToolFields` decides whether an Authentication pane exists at all;
+      // `toolFields` is the subset actually rendered for the effective auth
+      // method — index only those so every credential hit lands on a VISIBLE
+      // control (e.g. no OpenAI key entry while Codex is on a ChatGPT login).
+      const { allToolFields, toolFields } = resolveProvider(tool);
 
-      if (toolFields.length > 0) {
+      if (allToolFields.length > 0) {
         entries.push({
           label: 'Authentication',
           kind: 'setting',
@@ -1245,7 +1264,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       }
     }
     return entries;
-  }, [navGroups, visibleAgenticToolTabs, isAdmin, isEditingOther, isSelf, onRestartOnboarding]);
+  }, [
+    navGroups,
+    visibleAgenticToolTabs,
+    resolveProvider,
+    isAdmin,
+    isEditingOther,
+    isSelf,
+    onRestartOnboarding,
+  ]);
 
   const searchActive = search.trim().length > 0;
 
@@ -1324,9 +1351,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const entry = searchResults[Number(key)];
     if (!entry) return;
     // Provider hits carry the sub-tab they live on so a "Session defaults"
-    // result opens the defaults pane, not the default Authentication view.
+    // result opens the defaults pane, not the default Authentication view. Set
+    // it directly (covers the already-active provider, where the reset effect
+    // won't re-fire) and queue it scoped to the target for the tab switch.
     if (entry.subtab) {
-      pendingProviderSubtabRef.current = entry.subtab;
+      pendingProviderSubtabRef.current = { panelKey: entry.panelKey, subtab: entry.subtab };
       setProviderSubtab(entry.subtab);
     }
     setActiveKey(entry.panelKey);

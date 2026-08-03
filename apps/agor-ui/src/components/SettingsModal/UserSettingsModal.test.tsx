@@ -2,7 +2,7 @@ import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
 import { type ReactNode, useState } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -11,7 +11,9 @@ vi.mock('../ApiKeyFields', () => ({
   TOOL_FIELD_CONFIGS: {
     'claude-code': [],
     codex: [{ field: 'OPENAI_API_KEY', label: 'OpenAI API Key' }],
-    gemini: [],
+    // A second provider with an Authentication pane, so tests can prove a
+    // sub-tab from one provider's search hit doesn't leak onto another.
+    gemini: [{ field: 'GEMINI_API_KEY', label: 'Gemini API Key' }],
     opencode: [],
     copilot: [],
     cursor: [],
@@ -923,10 +925,119 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     expect(screen.getByRole('dialog', { name: 'User Settings' })).toBeInTheDocument();
   });
+
+  it('fails closed for a disabled-provider deep link while tenant settings hydrate', async () => {
+    // Cold load: tenant tool settings have NOT hydrated yet, so the store reports
+    // every tool as enabled. A `provider:` deep link must not fail open.
+    agorStore.getState().reset();
+    const services: string[] = [];
+    const client = {
+      service: (name: string) => {
+        services.push(name);
+        return {
+          findAll: vi.fn(async () => []),
+          find: vi.fn(async () => ({ data: [] })),
+          create: vi.fn(async () => ({})),
+          remove: vi.fn(async () => ({})),
+          get: vi.fn(async () => ({})),
+        };
+      },
+    } as unknown as AgorClient;
+    const user = makeUser();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="codex"
+      />
+    );
+
+    // During the hydration window the deep link resolves to Profile — no Codex
+    // credential/default content mounts, so its services are never contacted.
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Codex' })).not.toBeInTheDocument();
+    expect(services).not.toContain('agentic-tool-presets');
+    expect(services).not.toContain('check-auth');
+
+    // Settings arrive with Codex disabled — it stays closed.
+    agorStore.getState().setAgenticToolSettings([{ tool: 'codex', enabled: false }] as never);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument()
+    );
+    expect(screen.queryByRole('heading', { name: 'Codex' })).not.toBeInTheDocument();
+    expect(services).not.toContain('agentic-tool-presets');
+  });
+
+  it('does not leak a search sub-tab onto the next provider opened', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // Codex is already active on its default Authentication sub-tab.
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    // A search hit for the ACTIVE provider's Session defaults switches its sub-tab.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'Sandbox Mode' },
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Sandbox Mode/i }));
+    expect(screen.getByRole('tab', { name: 'Session defaults' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    // Opening a DIFFERENT provider must land on its own default (Authentication),
+    // not the sub-tab queued for Codex.
+    fireEvent.click(screen.getByRole('menuitem', { name: /gemini/i }));
+    await screen.findByRole('heading', { name: 'Gemini' });
+    expect(screen.getByRole('tab', { name: 'Authentication' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('does not index credential fields hidden by the effective auth method', async () => {
+    // On a ChatGPT subscription the OpenAI key field is not rendered, so a search
+    // for it must not surface a hit that would land on a control that isn't there.
+    const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'OpenAI API Key' },
+    });
+    await screen.findByText(/No settings match/i);
+    expect(screen.queryByRole('menuitem', { name: /OpenAI API Key/i })).not.toBeInTheDocument();
+  });
 });
 
-// The tenant tool-settings store is module-global; clear any per-test seeding so
-// provider visibility doesn't leak between tests.
+// The tenant tool-settings store is module-global. Seed it as HYDRATED (empty =
+// every tool enabled) before each test so provider panels render, and clear any
+// per-test override afterwards so visibility never leaks between tests.
+beforeEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
+});
 afterEach(() => {
   agorStore.getState().setAgenticToolSettings([]);
 });
