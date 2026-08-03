@@ -335,6 +335,13 @@ export function executorRuntimeScopeGuard() {
         throw new Forbidden('Executor token is not valid for this endpoint');
       }
       requireMatchingSessionRoute(context, scope);
+    } else if (path === 'mcp-servers/oauth-auth-headers') {
+      // This executor-only endpoint validates the submitted session token and
+      // limits returned headers to MCP servers in that session's effective
+      // scope. Let only its read-like create operation reach that validation.
+      if (context.method !== 'create') {
+        throw new Forbidden('Executor token is not valid for this endpoint');
+      }
     } else if (path === 'config/resolve-api-key') {
       if (context.method !== 'create') {
         throw new Forbidden('Executor token is not valid for this endpoint');

@@ -243,6 +243,35 @@ describe('executorRuntimeScopeGuard', () => {
     );
   });
 
+  it('allows OAuth auth-header hydration create to reach its session-token validation', async () => {
+    const context = ctx({
+      path: 'mcp-servers/oauth-auth-headers',
+      method: 'create',
+      data: { mcp_server_ids: ['server-1'], executorSessionToken: 'executor-token' },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it.each(['find', 'get', 'patch', 'remove'])(
+    'still blocks OAuth auth-header hydration %s',
+    async (method) => {
+      const context = ctx({ path: 'mcp-servers/oauth-auth-headers', method });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
+  it('still blocks other MCP server endpoints', async () => {
+    const context = ctx({ path: 'mcp-servers', method: 'find' });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
   it('bypasses internal (provider-less) service composition', async () => {
     // Route handlers the executor legitimately reaches fan out to non-allowlisted
     // services internally (e.g. sessions/:id/mcp-servers reading `mcp-servers`).
