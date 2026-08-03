@@ -50,11 +50,16 @@ agent/user git commands.
   `url` / `pushurl` config entries. Unlike daemon startup repair, the explicit
   offline command includes registered local repos/branches too. The remote
   `agor admin scrub-git-remotes` command was removed because it granted the
-  daemon branch/Git filesystem maintenance authority.
+  daemon branch/Git filesystem maintenance authority. This offline command is
+  intended for a stopped self-hosted instance or an explicitly tenant-scoped
+  database. It does not establish trusted tenant context and is not a repair
+  mechanism for a shared `required_from_auth` deployment; those deployments
+  leave physical reconciliation to the tenant storage authority.
 
 ## Operational guidance
 
-1. Remove embedded credentials from all shared repo configs:
+1. On a stopped self-hosted instance or explicitly tenant-scoped database,
+   remove embedded credentials from shared repo configs:
    `agor local scrub-git-remotes --write`.
 2. Rotate any token that was ever embedded in a git remote URL.
 3. Prefer credential helpers or Agor's per-user git token flow; never persist
