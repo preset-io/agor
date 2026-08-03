@@ -198,11 +198,14 @@ mapping-review point.
 - Tracks parallel tool/item/background work by stable operation ID, each with
   quiet and absolute deadlines.
 - Records unknown vocabulary once as `unknown_activity` and continues rather
-  than terminating work it cannot classify.
+  than terminating work it cannot classify. Unknown activity does not refresh
+  progress or suppress an independent recognized deadline.
 - In `observe` mode, writes a `would_fire` diagnosis and leaves lifecycle state
-  unchanged.
+  unchanged. The fired deadline is latched to avoid a busy repeat; meaningful
+  activity for that deadline invalidates the latch and rearms supervision.
 - In `enforce` mode, recognized first-progress, idle, operation, or wait
-  deadline failures request SDK abort and hand containment to the daemon.
+  deadline failures terminate supervision once, request SDK abort, and hand
+  containment to the daemon.
 
 First-progress supervision covers all mapped executor SDKs, including Cursor.
 Claude and Codex also have a one-hour post-progress idle timeout by default;
@@ -227,7 +230,8 @@ top-level executor accepts that outcome only after the adapter's SDK call and
 bounded cooperative cleanup have settled. Outstanding transcript-stream side
 effects are drained within the same bound so a terminal outcome cannot overtake
 them. The executor then reports one semantic `quiesced` settlement to the
-daemon. The daemon commits terminal timing and result fields atomically.
+daemon. The daemon strictly validates that runtime payload at the trust seam,
+then commits terminal timing and result fields atomically.
 Process-level failure handlers never guess terminality; cleanup uncertainty
 reports `containment_required` and converges on the termination coordinator.
 
@@ -247,7 +251,9 @@ Executor launch payloads also declare whether the surface is `interactive` or
 `unattended`. Direct agent sessions are interactive. Scheduled and gateway
 sessions are unattended while those surfaces lack a matching permission
 response path, so permission requests fail immediately rather than waiting for
-a responder that cannot answer.
+a responder that cannot answer. Interactive permission waits, including
+OpenCode's provider-side wait telemetry, use the shared
+`execution.permission_timeout_ms` resolver and its ten-minute default.
 
 ## Termination and safe release
 
@@ -316,12 +322,21 @@ admission/UI projection:
   created Task is durably queued;
 - permission and Stop states are projected while their task owns the turn;
 - terminal settlement writes the task terminal state, then projects the
-  session back to its appropriate resting state in the same transaction;
-  queue processing and other idempotent side effects run after commit;
+  session back to its appropriate resting state in the same transaction. A
+  fresh transition publishes its task event and analytics once; observing the
+  same immutable terminal truth again reruns reconciliation without duplicating
+  them;
+- required reconciliation failures propagate so later terminal observation can
+  retry them. Queue processing and other idempotent side effects run after
+  commit;
 - after verified settlement, a separately queued durable Task may run after
   commit; it is not a retry or replay of the settled prompt;
 - reconciliation repairs a failed/not-ready session when no non-queued task
-  still owns that busy state.
+  still owns that busy state;
+- `reconcileSessionState` is the bounded startup/route repair entry point and
+  derives the coarse projection from durable Task truth;
+- generic Session patch hooks do not independently drain the queue or finalize
+  gateways.
 
 UI and gateway consumers use the shared runtime presentation projection derived
 from Task status, latest activity, latest meaningful progress, and stall
@@ -369,7 +384,9 @@ Preserve these invariants:
     agentic-tool query settles.
 14. An unattended launch cannot block on an interactive permission response.
 15. Parallel operations are tracked by identity and retain absolute deadlines.
-16. Terminal consequences are idempotent and run only after terminal state commits.
+16. Fresh and already-observed terminal settlements run idempotent terminal
+    consequences only after terminal state commits; only the fresh transition
+    emits lifecycle analytics and events.
 
 ## Code map
 

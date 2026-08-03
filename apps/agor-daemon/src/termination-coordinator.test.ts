@@ -400,23 +400,23 @@ describe('termination coordinator', () => {
     );
   });
 
-  it.each([
-    'codex',
-    'opencode',
-  ])('keeps %s work blocked when absence is unverified', async (tool) => {
-    containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
-    const state = appDouble(tool);
-    state.claim(stopping('heartbeat_lost'));
-    state.settle(
-      task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
-      'unverified'
-    );
+  it.each(['codex', 'opencode'])(
+    'keeps %s work blocked when absence is unverified',
+    async (tool) => {
+      containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
+      const state = appDouble(tool);
+      state.claim(stopping('heartbeat_lost'));
+      state.settle(
+        task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
+        'unverified'
+      );
 
-    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
-      status: 'unverified',
-      task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
-    });
-  });
+      await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+        status: 'unverified',
+        task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
+      });
+    }
+  );
 
   it('keeps tracking when unverified containment races with terminal settlement', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });

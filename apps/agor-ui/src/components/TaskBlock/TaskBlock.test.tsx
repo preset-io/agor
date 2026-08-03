@@ -463,29 +463,32 @@ describe('TaskBlock SDK failure presentation', () => {
     ['waiting', 'permission.request'],
     ['sdk_started', 'turn.started'],
     ['unknown_activity', 'future.event'],
-  ] as const)('does not resurrect a recovered diagnosis after later %s activity', (kind, detail) => {
-    renderTaskBlock(
-      makeTask({
-        sdk_failure: observedSdkFailure,
-        latest_executor_progress: {
-          sequence: 2,
-          kind: 'progress',
-          observed_at: '2026-07-23T20:03:01.000Z',
-        },
-        latest_executor_pulse: {
-          sequence: 3,
-          kind,
-          detail,
-          observed_at: '2026-07-23T20:03:02.000Z',
-        },
-      }),
-      true,
-      [pendingToolMessage()]
-    );
+  ] as const)(
+    'does not resurrect a recovered diagnosis after later %s activity',
+    (kind, detail) => {
+      renderTaskBlock(
+        makeTask({
+          sdk_failure: observedSdkFailure,
+          latest_executor_progress: {
+            sequence: 2,
+            kind: 'progress',
+            observed_at: '2026-07-23T20:03:01.000Z',
+          },
+          latest_executor_pulse: {
+            sequence: 3,
+            kind,
+            detail,
+            observed_at: '2026-07-23T20:03:02.000Z',
+          },
+        }),
+        true,
+        [pendingToolMessage()]
+      );
 
-    expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
-    expectRunningPresentation(kind !== 'waiting');
-  });
+      expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
+      expectRunningPresentation(kind !== 'waiting');
+    }
+  );
 
   it('does not mistake unknown activity for meaningful progress', () => {
     renderTaskBlock(

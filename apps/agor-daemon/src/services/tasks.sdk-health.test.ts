@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const claimExecutorTermination = vi.hoisted(() => vi.fn());
 const requestExecutorTermination = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const recordSdkHealthObservation = vi.hoisted(() => vi.fn());
+const taskEmit = vi.hoisted(() => vi.fn());
+const updateProgress = vi.hoisted(() => vi.fn());
 const deferred = vi.hoisted(
   () =>
     ({ work: undefined as (() => Promise<void>) | undefined, schedule: vi.fn() }) as {
@@ -36,25 +39,33 @@ const task = {
   sdk_watchdog_mode: 'observe' as const,
 };
 
-function serviceFor(current = task, observationAccepted = true) {
+function serviceFor(
+  current = task,
+  observationOutcome: 'recorded' | 'unchanged' | 'conflict' = 'recorded'
+) {
   const service = Object.create(TasksService.prototype) as TasksService & {
     app: unknown;
     get: ReturnType<typeof vi.fn>;
   };
   service.get = vi.fn().mockResolvedValue(current);
+  recordSdkHealthObservation.mockImplementation(async (_id: string, failure: SdkFailure) => {
+    if (observationOutcome === 'conflict') return null;
+    return {
+      outcome: observationOutcome,
+      task: observationOutcome === 'recorded' ? { ...current, sdk_failure: failure } : current,
+    };
+  });
   Object.defineProperty(service, 'taskRepo', {
     value: {
-      recordSdkHealthObservation: vi.fn(async (_id: string, failure: SdkFailure) =>
-        observationAccepted ? { ...current, sdk_failure: failure } : null
-      ),
+      recordSdkHealthObservation,
     },
   });
   service.app = {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
       if (name === 'sessions') return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
-      if (name === 'tasks') return { emit: vi.fn() };
-      if (name === 'gateway') return { updateProgress: vi.fn() };
+      if (name === 'tasks') return { emit: taskEmit };
+      if (name === 'gateway') return { updateProgress };
       throw new Error(`unexpected service ${name}`);
     },
   };
@@ -65,6 +76,9 @@ describe('TasksService SDK health reports', () => {
   beforeEach(() => {
     claimExecutorTermination.mockReset();
     requestExecutorTermination.mockReset().mockResolvedValue({});
+    recordSdkHealthObservation.mockReset();
+    taskEmit.mockReset();
+    updateProgress.mockReset();
     deferred.work = undefined;
     deferred.schedule.mockReset();
   });
@@ -90,11 +104,39 @@ describe('TasksService SDK health reports', () => {
       },
     });
     expect(claimExecutorTermination).not.toHaveBeenCalled();
+    expect(taskEmit).toHaveBeenCalledOnce();
+    expect(updateProgress).toHaveBeenCalledOnce();
+  });
+
+  it('returns an unchanged observation without duplicate emission or projection', async () => {
+    const current = {
+      ...task,
+      sdk_failure: {
+        reason: 'progress_stalled' as const,
+        detected_at: '2026-01-01T00:03:01.000Z',
+        tool: 'codex' as const,
+        pulse_sequence_at_detection: 4,
+        watchdog_action: 'would_fire' as const,
+        termination: 'not_requested' as const,
+      },
+    };
+
+    await expect(
+      serviceFor(current, 'unchanged').reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'progress_stalled',
+        watchdog_action: 'would_fire',
+        pulse_sequence_at_detection: 4,
+      })
+    ).resolves.toBe(current);
+    expect(recordSdkHealthObservation).toHaveBeenCalledOnce();
+    expect(taskEmit).not.toHaveBeenCalled();
+    expect(updateProgress).not.toHaveBeenCalled();
   });
 
   it('does not attach observe-only evidence after normal completion wins', async () => {
     await expect(
-      serviceFor(task, false).reportSdkHealthFailure({
+      serviceFor(task, 'conflict').reportSdkHealthFailure({
         task_id: task.task_id,
         reason: 'no_first_progress',
         watchdog_action: 'would_fire',

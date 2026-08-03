@@ -121,7 +121,10 @@ describe('OpenCode executor adapter', () => {
       },
     });
 
-    await execute(state.value);
+    await expect(execute(state.value)).resolves.toMatchObject({
+      status: 'completed',
+      taskPatch: { model: 'openai/gpt-test' },
+    });
 
     expect(mocks.runTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -134,10 +137,7 @@ describe('OpenCode executor adapter', () => {
       expect.anything()
     );
     expect(state.services.sessions.patch).not.toHaveBeenCalled();
-    expect(state.services.tasks.patch).toHaveBeenCalledWith(
-      taskId,
-      expect.objectContaining({ status: 'completed', model: 'openai/gpt-test' })
-    );
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
   });
 
   it('persists a newly-created native session before completing the task', async () => {
@@ -169,7 +169,7 @@ describe('OpenCode executor adapter', () => {
     expect(state.services.sessions.patch).toHaveBeenCalledWith(sessionId, {
       sdk_session_id: 'oc-created',
     });
-    expect(order).toEqual(['session', 'turn-clean', 'task']);
+    expect(order).toEqual(['session', 'turn-clean']);
   });
 
   it('surfaces a provider failure in the task and transcript', async () => {
@@ -185,15 +185,13 @@ describe('OpenCode executor adapter', () => {
     });
     mocks.runTurn.mockRejectedValue(new Error('OpenCode provider authentication failed'));
 
-    await expect(execute(state.value)).rejects.toThrow('OpenCode provider authentication failed');
+    await expect(execute(state.value)).resolves.toMatchObject({
+      status: 'failed',
+      taskPatch: { error_message: 'OpenCode provider authentication failed' },
+      error: expect.objectContaining({ message: 'OpenCode provider authentication failed' }),
+    });
 
-    expect(state.services.tasks.patch).toHaveBeenCalledWith(
-      taskId,
-      expect.objectContaining({
-        status: 'failed',
-        error_message: 'OpenCode provider authentication failed',
-      })
-    );
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).toHaveBeenCalledWith(
       expect.objectContaining({
         session_id: sessionId,
@@ -204,21 +202,21 @@ describe('OpenCode executor adapter', () => {
         metadata: { is_task_failure: true },
       })
     );
-    expect(order).toEqual(['message', 'task']);
+    expect(order).toEqual(['message']);
   });
 
   it('rejects a missing exact pair before provider side effects', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'openai', model: '' } });
 
-    await expect(execute(state.value)).rejects.toThrow(/provider and model/i);
+    await expect(execute(state.value)).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.objectContaining({ message: expect.stringMatching(/provider and model/i) }),
+    });
 
     expect(mocks.branchFind).not.toHaveBeenCalled();
     expect(mocks.createUserMessage).not.toHaveBeenCalled();
     expect(mocks.runTurn).not.toHaveBeenCalled();
-    expect(state.services.tasks.patch).toHaveBeenCalledWith(
-      taskId,
-      expect.objectContaining({ status: 'failed' })
-    );
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
   });
 
   it('leaves cleanup-unverified work active for daemon containment', async () => {
@@ -240,7 +238,7 @@ describe('OpenCode executor adapter', () => {
     abortController.abort();
     mocks.runTurn.mockRejectedValue(new Error('cancelled'));
 
-    await expect(execute(state.value, abortController)).rejects.toThrow('cancelled');
+    await expect(execute(state.value, abortController)).resolves.toEqual({ status: 'stopped' });
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();

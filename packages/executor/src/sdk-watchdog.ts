@@ -118,6 +118,12 @@ interface WatchdogState {
 
 type WatchdogReason = Exclude<WatchdogEvidence['reason'], undefined>;
 
+interface WatchdogDeadline {
+  reason: WatchdogReason;
+  key: string;
+  at: number;
+}
+
 function positiveTimeout(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -133,6 +139,7 @@ export class SdkWatchdog {
   };
   private timer?: ReturnType<typeof setTimeout>;
   private decided = false;
+  private readonly observeLatches = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -169,6 +176,7 @@ export class SdkWatchdog {
         return unknown;
       }
       this.state.waits.delete(activity.id);
+      this.observeLatches.delete(`wait_timed_out:${activity.id}`);
       if (this.state.waits.size === 0 && this.state.pausedAt !== undefined) {
         const pausedFor = now - this.state.pausedAt;
         for (const key of ['startedAt', 'firstProgressAt', 'idleAnchor'] as const) {
@@ -198,6 +206,7 @@ export class SdkWatchdog {
         const existing = this.state.operations.get(activity.id);
         if (existing) {
           existing.lastProgressAt = now;
+          this.observeLatches.delete(`operation_stalled:${activity.id}`);
           break;
         }
         const quietTimeoutMs = positiveTimeout(
@@ -226,6 +235,7 @@ export class SdkWatchdog {
           return unknown;
         }
         operation.lastProgressAt = now;
+        this.observeLatches.delete(`operation_stalled:${activity.id}`);
         this.recordProgress(now);
         break;
       }
@@ -236,6 +246,8 @@ export class SdkWatchdog {
           return unknown;
         }
         this.state.operations.delete(activity.id);
+        this.observeLatches.delete(`operation_stalled:${activity.id}`);
+        this.observeLatches.delete(`operation_timed_out:${activity.id}`);
         this.recordProgress(now);
         break;
     }
@@ -251,6 +263,8 @@ export class SdkWatchdog {
   private recordProgress(now: number): void {
     this.state.firstProgressAt ??= now;
     this.state.idleAnchor = now;
+    this.observeLatches.delete('no_first_progress');
+    this.observeLatches.delete('progress_stalled');
   }
 
   private recordUnknown(detail: string, now: number): RuntimeActivity {
@@ -285,28 +299,33 @@ export class SdkWatchdog {
   private check(): void {
     if (this.decided) return;
     const now = this.now();
-    let reason: WatchdogReason | undefined;
-    let nextCheckAt: number | undefined;
+    const deadlines: WatchdogDeadline[] = [];
 
     for (const wait of this.state.waits.values()) {
       const deadline = wait.startedAt + wait.absoluteTimeoutMs;
-      if (now >= deadline) reason = 'wait_timed_out';
-      nextCheckAt = Math.min(nextCheckAt ?? deadline, deadline);
+      deadlines.push({ reason: 'wait_timed_out', key: `wait_timed_out:${wait.id}`, at: deadline });
     }
     for (const operation of this.state.operations.values()) {
       const absoluteDeadline = operation.startedAt + operation.absoluteTimeoutMs;
       const quietDeadline = operation.lastProgressAt + operation.quietTimeoutMs;
-      if (now >= absoluteDeadline) reason = 'operation_timed_out';
-      else if (this.state.waits.size === 0 && now >= quietDeadline) reason = 'operation_stalled';
-      nextCheckAt = Math.min(nextCheckAt ?? absoluteDeadline, absoluteDeadline);
-      if (this.state.waits.size === 0) nextCheckAt = Math.min(nextCheckAt, quietDeadline);
+      deadlines.push({
+        reason: 'operation_timed_out',
+        key: `operation_timed_out:${operation.id}`,
+        at: absoluteDeadline,
+      });
+      if (this.state.waits.size === 0 && now < absoluteDeadline) {
+        deadlines.push({
+          reason: 'operation_stalled',
+          key: `operation_stalled:${operation.id}`,
+          at: quietDeadline,
+        });
+      }
     }
 
-    if (!reason && this.state.waits.size === 0 && this.state.operations.size === 0) {
+    if (this.state.waits.size === 0 && this.state.operations.size === 0) {
       if (this.state.startedAt !== undefined && this.state.firstProgressAt === undefined) {
         const deadline = this.state.startedAt + this.options.config.first_progress_timeout_ms;
-        if (now >= deadline) reason = 'no_first_progress';
-        nextCheckAt = Math.min(nextCheckAt ?? deadline, deadline);
+        deadlines.push({ reason: 'no_first_progress', key: 'no_first_progress', at: deadline });
       } else if (this.state.firstProgressAt !== undefined) {
         const idleTimeout =
           this.options.tool === 'claude-code'
@@ -316,20 +335,34 @@ export class SdkWatchdog {
               : null;
         if (idleTimeout !== null) {
           const deadline = (this.state.idleAnchor ?? this.state.firstProgressAt) + idleTimeout;
-          if (now >= deadline) reason = 'progress_stalled';
-          nextCheckAt = Math.min(nextCheckAt ?? deadline, deadline);
+          deadlines.push({ reason: 'progress_stalled', key: 'progress_stalled', at: deadline });
         }
       }
     }
 
-    if (reason) {
-      this.emitDecision(reason, now, true);
-      return;
+    const decision = deadlines.find(
+      (deadline) => now >= deadline.at && !this.observeLatches.has(deadline.key)
+    );
+    if (decision) {
+      this.emitDecision(decision.reason, now, true, decision.key);
+      if (this.decided) return;
     }
+
+    const nextCheckAt = deadlines
+      .filter((deadline) => !this.observeLatches.has(deadline.key))
+      .reduce<number | undefined>(
+        (earliest, deadline) => Math.min(earliest ?? deadline.at, deadline.at),
+        undefined
+      );
     this.schedule(nextCheckAt);
   }
 
-  private emitDecision(reason: WatchdogReason, now: number, terminalDecision: boolean): void {
+  private emitDecision(
+    reason: WatchdogReason,
+    now: number,
+    terminalDecision: boolean,
+    observeKey?: string
+  ): void {
     const action =
       reason === 'unknown_activity' || this.options.config.mode !== 'enforce'
         ? 'would_fire'
@@ -341,7 +374,10 @@ export class SdkWatchdog {
       unknown_event_count: this.state.unknownCount,
       sdk_version: this.options.sdkVersion,
     };
-    if (terminalDecision) this.stop();
+    if (terminalDecision) {
+      if (action === 'enforced') this.stop();
+      else if (observeKey) this.observeLatches.add(observeKey);
+    }
     queueMicrotask(() => void this.options.onDecision(evidence));
   }
 

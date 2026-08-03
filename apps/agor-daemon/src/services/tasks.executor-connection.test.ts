@@ -103,9 +103,10 @@ describe('TasksService executor patches', () => {
     });
     const reconcileTerminalTask = vi.fn().mockResolvedValue(true);
     const emit = vi.fn();
+    const trackTaskCompleted = vi.fn();
     Reflect.set(service, 'taskRepo', { settleExecutorOutcome });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
-    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    Reflect.set(service, 'trackTaskCompleted', trackTaskCompleted);
     Reflect.set(service, 'reconcileTerminalTask', reconcileTerminalTask);
 
     await service.reportExecutorSettlement({
@@ -125,6 +126,90 @@ describe('TasksService executor patches', () => {
       TaskStatus.COMPLETED,
       expect.objectContaining({ provider: undefined })
     );
+    expect(emit).toHaveBeenCalledOnce();
+    expect(trackTaskCompleted).toHaveBeenCalledOnce();
+  });
+
+  it('reconciles an already-terminal outcome without duplicate events or analytics', async () => {
+    const terminalTask = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: TaskStatus.COMPLETED,
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const reconcileTerminalTask = vi.fn().mockResolvedValue(true);
+    const emit = vi.fn();
+    const trackTaskCompleted = vi.fn();
+    Reflect.set(service, 'taskRepo', {
+      settleExecutorOutcome: vi.fn().mockResolvedValue({ outcome: 'terminal', task: terminalTask }),
+    });
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'trackTaskCompleted', trackTaskCompleted);
+    Reflect.set(service, 'reconcileTerminalTask', reconcileTerminalTask);
+
+    await service.reportExecutorSettlement({
+      task_id: terminalTask.task_id,
+      kind: 'quiesced',
+      status: TaskStatus.COMPLETED,
+    });
+
+    expect(reconcileTerminalTask).toHaveBeenCalledOnce();
+    expect(emit).not.toHaveBeenCalled();
+    expect(trackTaskCompleted).not.toHaveBeenCalled();
+  });
+
+  it('propagates required terminal reconciliation failures', async () => {
+    const terminalTask = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: TaskStatus.COMPLETED,
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      settleExecutorOutcome: vi.fn().mockResolvedValue({ outcome: 'terminal', task: terminalTask }),
+    });
+    Reflect.set(
+      service,
+      'reconcileTerminalTask',
+      vi.fn().mockRejectedValue(new Error('read failed'))
+    );
+
+    await expect(
+      service.reportExecutorSettlement({
+        task_id: terminalTask.task_id,
+        kind: 'quiesced',
+        status: TaskStatus.COMPLETED,
+      })
+    ).rejects.toThrow('read failed');
+  });
+
+  it.each([
+    {
+      task_id: 'task-1',
+      kind: 'quiesced',
+      status: TaskStatus.RUNNING,
+    },
+    {
+      task_id: 'task-1',
+      kind: 'quiesced',
+      status: TaskStatus.COMPLETED,
+      task_patch: { status: TaskStatus.FAILED },
+    },
+    {
+      task_id: 'task-1',
+      kind: 'containment_required',
+      error_message: 'cleanup failed',
+      unexpected: true,
+    },
+  ])('rejects malformed executor settlement data at the service boundary %#', async (input) => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const settleExecutorOutcome = vi.fn();
+    Reflect.set(service, 'taskRepo', { settleExecutorOutcome });
+
+    await expect(service.reportExecutorSettlement(input as never)).rejects.toThrow(
+      'Invalid executor settlement payload'
+    );
+    expect(settleExecutorOutcome).not.toHaveBeenCalled();
   });
 });
 

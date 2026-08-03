@@ -2,12 +2,62 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveTaskRuntimeProgressState,
   ExecutorPulseKind,
+  ExecutorSettlementInputSchema,
   isTaskExecuting,
   isTaskPendingDispatch,
   NONTERMINAL_TASK_STATUSES,
   TaskStatus,
   TERMINAL_TASK_STATUSES,
 } from './task';
+
+describe('ExecutorSettlementInputSchema', () => {
+  const quiesced = {
+    task_id: 'task-1',
+    kind: 'quiesced',
+    status: TaskStatus.COMPLETED,
+    task_patch: {
+      git_state: { sha_at_end: 'abc123' },
+      model: 'test-model',
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+        contextUsageSnapshot: { totalTokens: 3, maxTokens: 100, percentage: 3 },
+      },
+      report: {
+        path: 'session/task.md',
+        template: 'standard',
+        generated_at: '2026-01-01T00:00:00.000Z',
+      },
+    },
+  } as const;
+
+  it('accepts both executor settlement variants', () => {
+    expect(ExecutorSettlementInputSchema.parse(quiesced)).toEqual(quiesced);
+    expect(
+      ExecutorSettlementInputSchema.parse({
+        task_id: 'task-1',
+        kind: 'containment_required',
+        error_message: 'cleanup was not verified',
+      })
+    ).toMatchObject({ kind: 'containment_required' });
+  });
+
+  it.each([
+    { ...quiesced, status: TaskStatus.RUNNING },
+    { ...quiesced, unexpected: true },
+    { ...quiesced, task_patch: { unexpected: true } },
+    { ...quiesced, task_patch: { git_state: { sha_at_end: 'abc123', unexpected: true } } },
+    {
+      ...quiesced,
+      task_patch: {
+        normalized_sdk_response: {
+          tokenUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, unexpected: true },
+        },
+      },
+    },
+  ])('rejects malformed or unknown settlement data %#', (input) => {
+    expect(ExecutorSettlementInputSchema.safeParse(input).success).toBe(false);
+  });
+});
 
 describe('task execution helpers', () => {
   it('identifies only states that still need a daemon dispatch claim', () => {

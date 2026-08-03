@@ -7,9 +7,18 @@ function completionHarness(input: {
   resultTask: Record<string, unknown>;
   sessionTasks?: string[];
   sessionReadFails?: boolean;
+  settlementOutcome?: 'transitioned' | 'terminal';
 }) {
   const sessionsPatch = vi.fn().mockResolvedValue({ session_id: input.resultTask.session_id });
   const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
+  const sessionsGet = input.sessionReadFails
+    ? vi.fn().mockRejectedValue(new Error('transient read'))
+    : vi.fn().mockResolvedValue({
+        session_id: input.resultTask.session_id,
+        status: 'running',
+        ready_for_prompt: false,
+        tasks: input.sessionTasks ?? [input.resultTask.task_id as string],
+      });
   const service = Object.create(TasksService.prototype) as TasksService & {
     app: unknown;
     get: ReturnType<typeof vi.fn>;
@@ -22,9 +31,10 @@ function completionHarness(input: {
   service.id = 'task_id';
   service.emit = vi.fn();
   (service as unknown as { taskRepo: { settleTermination: ReturnType<typeof vi.fn> } }).taskRepo = {
-    settleTermination: vi
-      .fn()
-      .mockResolvedValue({ outcome: 'transitioned', task: input.resultTask }),
+    settleTermination: vi.fn().mockResolvedValue({
+      outcome: input.settlementOutcome ?? 'transitioned',
+      task: input.resultTask,
+    }),
   };
   service.app = {
     service: (name: string) => {
@@ -32,14 +42,7 @@ function completionHarness(input: {
       if (name === 'branches') return { get: vi.fn() };
       if (name === 'sessions') {
         return {
-          get: input.sessionReadFails
-            ? vi.fn().mockRejectedValue(new Error('transient read'))
-            : vi.fn().mockResolvedValue({
-                session_id: input.resultTask.session_id,
-                status: 'running',
-                ready_for_prompt: false,
-                tasks: input.sessionTasks ?? [input.resultTask.task_id as string],
-              }),
+          get: sessionsGet,
           patch: sessionsPatch,
           triggerQueueProcessing,
         };
@@ -47,7 +50,7 @@ function completionHarness(input: {
       throw new Error(`unexpected service ${name}`);
     },
   };
-  return { service, sessionsPatch, triggerQueueProcessing };
+  return { service, sessionsGet, sessionsPatch, triggerQueueProcessing };
 }
 
 describe('TasksService executor heartbeat helpers', () => {
@@ -159,7 +162,7 @@ describe('TasksService executor heartbeat helpers', () => {
     }
   );
 
-  it('does not rewrite the atomic Session projection when completion context cannot load', async () => {
+  it('propagates terminal reconciliation failures without a duplicate fallback path', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000010';
     const sessionId = '018f0000-0000-7000-8000-000000000011';
     const failedTask = {
@@ -173,10 +176,42 @@ describe('TasksService executor heartbeat helpers', () => {
         requested_at: '2026-01-01T00:00:04.000Z',
       },
     };
-    const { service, sessionsPatch } = completionHarness({
+    const { service, sessionsPatch, triggerQueueProcessing } = completionHarness({
       currentTask: failedTask,
       resultTask: failedTask,
       sessionReadFails: true,
+    });
+
+    await expect(
+      service.settleTermination({
+        taskId,
+        outcome: 'verified_absent',
+        coordinationToken: 'completion-test',
+      })
+    ).rejects.toThrow('transient read');
+
+    expect(sessionsPatch).not.toHaveBeenCalled();
+    expect(triggerQueueProcessing).not.toHaveBeenCalled();
+  });
+
+  it('reconciles consequences when termination re-observes a terminal task', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000010';
+    const sessionId = '018f0000-0000-7000-8000-000000000011';
+    const failedTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.FAILED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '2026-01-01T00:00:04.000Z',
+      },
+    };
+    const { service, sessionsGet, sessionsPatch, triggerQueueProcessing } = completionHarness({
+      currentTask: failedTask,
+      resultTask: failedTask,
+      settlementOutcome: 'terminal',
     });
 
     await service.settleTermination({
@@ -185,7 +220,9 @@ describe('TasksService executor heartbeat helpers', () => {
       coordinationToken: 'completion-test',
     });
 
+    expect(sessionsGet).toHaveBeenCalledOnce();
     expect(sessionsPatch).not.toHaveBeenCalled();
+    expect(triggerQueueProcessing).not.toHaveBeenCalled();
   });
 
   it('does not clobber a newer Task that claimed the Session after settlement', async () => {

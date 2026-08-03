@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  type ExecutorOutcomeSettlementResult,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -54,6 +55,7 @@ import type {
 import {
   deriveTaskRuntimeProgressState,
   ExecutorPulseKind,
+  ExecutorSettlementInputSchema,
   isTaskExecuting,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
@@ -463,43 +465,57 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<TerminationSettlementResult> {
     const result = await this.taskRepo.settleTermination(input);
-    if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
-
-    await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
-      emitServiceEvent(this.app, {
-        path: 'tasks',
-        event: 'patched',
-        data: result.task,
-        id: result.task.task_id,
-        params,
+    if (result.outcome === 'unverified') {
+      await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
       });
-      if (result.outcome === 'unverified') return;
+      return result;
+    }
+    await this.reconcileTerminalSettlement(result, params);
+    return result;
+  }
 
-      this.trackTaskCompleted(result.task);
+  private async reconcileTerminalSettlement(
+    result: ExecutorOutcomeSettlementResult | TerminationSettlementResult,
+    params?: TaskParams
+  ): Promise<void> {
+    if (result.outcome !== 'transitioned' && result.outcome !== 'terminal') return;
+
+    const reconcile = async () => {
+      if (result.outcome === 'transitioned') {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: result.task,
+          id: result.task.task_id,
+          params,
+        });
+        this.trackTaskCompleted(result.task);
+      }
+
       const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
       const isStop = result.task.status === TaskStatus.STOPPED;
-      const completionParams = {
-        ...internalParams,
-        // Avoid a second eager hand-off from the settlement path. The durable
-        // all-daemon queue worker will independently reevaluate the committed
-        // Task outcome and Session projection; user Stop may still delegate
-        // an immediate hand-off to its caller while the Session lock is held.
-        suppressTerminalQueueProcessing:
-          !isStop || params?.suppressTerminalQueueProcessing === true,
-      };
-      // The repository committed the authoritative Task settlement and
-      // minimal Session projection atomically. Post-commit work must never
-      // patch that projection again: a new Task may already have claimed the
-      // Session, and an unconditional retry here would clobber
-      // RUNNING/ready=false.
-      await this.processCompletionSideEffects(
+      await this.reconcileTerminalTask(
         result.task,
         result.task.status,
-        completionParams,
+        {
+          ...internalParams,
+          // The durable all-daemon queue worker reevaluates non-Stop terminal
+          // outcomes. A Stop caller may still own one immediate hand-off.
+          suppressTerminalQueueProcessing:
+            !isStop || params?.suppressTerminalQueueProcessing === true,
+        },
         true
       );
-    });
-    return result;
+    };
+
+    if (!enqueueTenantDatabasePostCommitCallback(reconcile)) await reconcile();
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -679,115 +695,107 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     sessionProjectionAlreadyCommitted = false
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
-    try {
-      const session = await this.app.service('sessions').get(task.session_id, params);
+    const session = await this.app.service('sessions').get(task.session_id, params);
 
-      if (session.branch_id) {
-        this.app
-          .service('branches')
-          .get(session.branch_id, params)
-          .then((branch) => {
-            const repoId = branch?.repo_id;
-            if (!repoId) return;
-            return ensureRepoOriginAlignedById(this.app, repoId, params);
-          })
-          .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
-            console.warn(
-              `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
-            );
-          });
-      }
-
-      const latestTaskId = session.tasks?.[session.tasks.length - 1];
-      const suppressBtwCleanup = params?.suppressBtwCleanup === true;
-      const isStop = status === TaskStatus.STOPPED;
-      const isTermination = task.termination_request !== undefined;
-
-      if (latestTaskId && latestTaskId !== task.task_id && !isTermination) {
-        console.log(
-          `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
-        );
-        if (!isStop) {
-          await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
-        }
-        return false;
-      }
-
-      if (sessionProjectionAlreadyCommitted) {
-        // Publish the latest Session fact rather than rewriting it. It may
-        // already reflect a newer Task admitted after the settlement commit.
-        emitServiceEvent(this.app, {
-          path: 'sessions',
-          event: 'patched',
-          data: session,
-          id: session.session_id,
-          params,
+    if (session.branch_id) {
+      this.app
+        .service('branches')
+        .get(session.branch_id, params)
+        .then((branch) => {
+          const repoId = branch?.repo_id;
+          if (!repoId) return;
+          return ensureRepoOriginAlignedById(this.app, repoId, params);
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
+          );
         });
-      } else {
-        await this.projectTerminalSession(task, status, params);
-        console.log(
-          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-        );
-      }
+    }
 
-      // Defensive fallback for tasks created before create-time auto-title
-      // ran (or after a transient title-patch failure). Later completed
-      // textual tasks can still title a session left unset by blank or
-      // image-only prompts.
-      if (status === TaskStatus.COMPLETED) {
-        await this.autoTitleSession(task, params);
-      }
+    const latestTaskId = session.tasks?.[session.tasks.length - 1];
+    const suppressBtwCleanup = params?.suppressBtwCleanup === true;
+    const isStop = status === TaskStatus.STOPPED;
+    const isTermination = task.termination_request !== undefined;
 
+    if (latestTaskId && latestTaskId !== task.task_id && !isTermination) {
+      console.log(
+        `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
+      );
       if (!isStop) {
         await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
       }
+      return false;
+    }
 
-      if (session.fork_origin === 'btw') {
-        if (!suppressBtwCleanup) {
-          try {
-            await this.app.service('sessions').patch(session.session_id, {
-              archived: true,
-              archived_reason: 'btw_completed',
-            });
-            console.log(
-              `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-            );
-          } catch (error) {
-            console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
-          }
-        }
+    if (sessionProjectionAlreadyCommitted) {
+      // Publish the latest Session fact rather than rewriting it. It may
+      // already reflect a newer Task admitted after the settlement commit.
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'patched',
+        data: session,
+        id: session.session_id,
+        params,
+      });
+    } else {
+      await this.projectTerminalSession(task, status, params);
+      console.log(
+        `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+      );
+    }
 
-        if (!isStop && !isTermination) {
-          await this.injectBtwResultMessage(task, session, params);
+    // Defensive fallback for tasks created before create-time auto-title
+    // ran (or after a transient title-patch failure). Later completed
+    // textual tasks can still title a session left unset by blank or
+    // image-only prompts.
+    if (status === TaskStatus.COMPLETED) {
+      await this.autoTitleSession(task, params);
+    }
+
+    if (!isStop) {
+      await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
+    }
+
+    if (session.fork_origin === 'btw') {
+      if (!suppressBtwCleanup) {
+        try {
+          await this.app.service('sessions').patch(session.session_id, {
+            archived: true,
+            archived_reason: 'btw_completed',
+          });
+          console.log(
+            `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+          );
+        } catch (error) {
+          console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
         }
       }
 
-      await this.runAfterTenantDatabaseCommit('finalizeGatewayTurn', async () => {
-        try {
-          const gateway = this.app.service('gateway') as unknown as GatewayService;
-          await gateway.flushOutboundBuffer(task.session_id);
-          await gateway.updateProgress({
-            session_id: task.session_id,
-            task_id: task.task_id,
-            state:
-              status === TaskStatus.FAILED || status === TaskStatus.TIMED_OUT ? 'failed' : 'done',
-            ...(task.error_message ? { error_message: task.error_message } : {}),
-          });
-        } catch (error) {
-          console.warn(
-            `[gateway] Failed to finalize terminal Task ${shortId(task.task_id)}:`,
-            error
-          );
-        }
-      });
-
-      await this.continueQueuedTasksAfterTerminalSettlement(task, params);
-      return true;
-    } catch (error) {
-      console.error('❌ [TasksService] Failed to process task completion:', error);
-      return false;
+      if (!isStop && !isTermination) {
+        await this.injectBtwResultMessage(task, session, params);
+      }
     }
+
+    await this.runAfterTenantDatabaseCommit('finalizeGatewayTurn', async () => {
+      try {
+        const gateway = this.app.service('gateway') as unknown as GatewayService;
+        await gateway.flushOutboundBuffer(task.session_id);
+        await gateway.updateProgress({
+          session_id: task.session_id,
+          task_id: task.task_id,
+          state:
+            status === TaskStatus.FAILED || status === TaskStatus.TIMED_OUT ? 'failed' : 'done',
+          ...(task.error_message ? { error_message: task.error_message } : {}),
+        });
+      } catch (error) {
+        console.warn(`[gateway] Failed to finalize terminal Task ${shortId(task.task_id)}:`, error);
+      }
+    });
+
+    await this.continueQueuedTasksAfterTerminalSettlement(task, params);
+    return true;
   }
 
   /**
@@ -1499,36 +1507,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: ExecutorSettlementInput,
     params?: TaskParams
   ): Promise<Task> {
-    if (data.kind === 'containment_required') {
+    const parsed = ExecutorSettlementInputSchema.safeParse(data);
+    if (!parsed.success) throw new BadRequest('Invalid executor settlement payload');
+    const settlement = parsed.data;
+
+    if (settlement.kind === 'containment_required') {
       return this.claimAndDeferExecutorTermination(
         {
-          taskId: data.task_id,
+          taskId: settlement.task_id,
           cause: 'runtime_cleanup_failed',
-          errorMessage: data.error_message,
+          errorMessage: settlement.error_message,
         },
         params
       );
     }
 
     const result = await this.taskRepo.settleExecutorOutcome({
-      taskId: data.task_id,
-      status: data.status,
-      taskPatch: data.task_patch,
+      taskId: settlement.task_id,
+      status: settlement.status,
+      taskPatch: settlement.task_patch,
     });
-    if (result.outcome !== 'transitioned') return result.task;
-
-    emitServiceEvent(this.app, {
-      path: 'tasks',
-      event: 'patched',
-      data: result.task,
-      id: result.task.task_id,
-      params,
-    });
-    this.trackTaskCompleted(result.task);
-    await this.reconcileTerminalTask(result.task, result.task.status, {
-      ...(params ?? {}),
-      provider: undefined,
-    });
+    await this.reconcileTerminalSettlement(result, params);
     return result.task;
   }
 
@@ -1635,14 +1634,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (data.watchdog_action !== action) {
       throw new BadRequest(`watchdog_action must be ${action} for this Task`);
     }
-    const duplicate =
+    const repeatedEnforcedFailure =
+      action === 'enforced' &&
       current.sdk_failure?.reason === data.reason &&
       current.sdk_failure.watchdog_action === action &&
-      (action === 'would_fire' ||
-        isTerminalTaskStatus(current.status) ||
+      (isTerminalTaskStatus(current.status) ||
         (current.status === TaskStatus.STOPPING &&
           current.termination_request?.cause === 'sdk_health_failure'));
-    if (duplicate) return current;
+    if (repeatedEnforcedFailure) return current;
     if (
       isTerminalTaskStatus(current.status) ||
       current.status === TaskStatus.STOPPING ||
@@ -1664,17 +1663,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       termination: action === 'enforced' ? 'requested' : 'not_requested',
     };
     if (action === 'would_fire') {
-      const observed = await this.taskRepo.recordSdkHealthObservation(data.task_id, failure);
-      if (!observed) throw new Conflict(`Task ${shortId(data.task_id)} is no longer active`);
+      const observation = await this.taskRepo.recordSdkHealthObservation(data.task_id, failure);
+      if (!observation) throw new Conflict(`Task ${shortId(data.task_id)} is no longer active`);
+      if (observation.outcome === 'unchanged') return observation.task;
       emitServiceEvent(this.app, {
         path: 'tasks',
         event: 'patched',
-        data: observed,
-        id: observed.task_id,
+        data: observation.task,
+        id: observation.task.task_id,
         params,
       });
-      await this.updateGatewayRuntimeProjectionAfterCommit(observed, params);
-      return observed;
+      await this.updateGatewayRuntimeProjectionAfterCommit(observation.task, params);
+      return observation.task;
     }
 
     const stopping = await this.claimAndDeferExecutorTermination(

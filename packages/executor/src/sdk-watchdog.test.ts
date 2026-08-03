@@ -74,6 +74,10 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([
       expect.objectContaining({ reason: 'progress_stalled', watchdog_action: 'enforced' }),
     ]);
+
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(decisions).toHaveLength(1);
   });
 
   it('lets meaningful Codex progress extend the quiet deadline', async () => {
@@ -127,6 +131,26 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([
       expect.objectContaining({ reason: 'progress_stalled', watchdog_action: 'would_fire' }),
     ]);
+  });
+
+  it('rearms an observe-mode stall only after meaningful progress', async () => {
+    const { watchdog, decisions } = setup({ mode: 'observe' });
+    watchdog.record({ type: 'progress' });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(decisions).toHaveLength(1);
+
+    watchdog.record({ type: 'unknown_activity', detail: 'future.event' });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(decisions.filter(({ reason }) => reason === 'progress_stalled')).toHaveLength(1);
+
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(decisions.filter(({ reason }) => reason === 'progress_stalled')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decisions.filter(({ reason }) => reason === 'progress_stalled')).toHaveLength(2);
   });
 
   it('tracks parallel operations independently by ID', async () => {

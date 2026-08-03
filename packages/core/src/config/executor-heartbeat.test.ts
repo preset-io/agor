@@ -3,6 +3,7 @@ import { getDefaultConfig } from './config-manager';
 import {
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
+  resolvePermissionTimeoutMs,
   resolveSdkWatchdogConfig,
 } from './executor-heartbeat';
 
@@ -37,16 +38,30 @@ describe('resolveExecutorHeartbeatConfig', () => {
     expect(resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms: 42_000 })).toBe(42_000);
   });
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects invalid dispatch timeout %s instead of changing policy', (dispatch_connect_timeout_ms) => {
-    expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
-      'positive safe integer'
-    );
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid dispatch timeout %s instead of changing policy',
+    (dispatch_connect_timeout_ms) => {
+      expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
+        'positive safe integer'
+      );
+    }
+  );
+});
+
+describe('resolvePermissionTimeoutMs', () => {
+  it('uses the shared ten-minute default and preserves a configured timeout', () => {
+    expect(resolvePermissionTimeoutMs()).toBe(600_000);
+    expect(resolvePermissionTimeoutMs({ permission_timeout_ms: 42_000 })).toBe(42_000);
   });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid permission timeout %s',
+    (permission_timeout_ms) => {
+      expect(() => resolvePermissionTimeoutMs({ permission_timeout_ms })).toThrow(
+        'execution.permission_timeout_ms must be a positive safe integer'
+      );
+    }
+  );
 });
 
 describe('resolveSdkWatchdogConfig', () => {

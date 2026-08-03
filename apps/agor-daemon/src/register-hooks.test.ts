@@ -140,26 +140,23 @@ describe('protectServerManagedTaskWrites', () => {
     ).rejects.toThrow('executor token scoped to this task');
   });
 
-  it.each([
-    'task_id',
-    'session_id',
-    'created_by',
-    'queue_position',
-    'sdk_failure',
-  ])('rejects executor patch field %s outside the result allowlist', async (field) => {
-    await expect(
-      protectServerManagedTaskWrites(
-        externalContext(
-          'patch',
-          { [field]: 'forged' },
-          {
-            taskId: 'task-1',
-            executorTaskId: 'task-1',
-          }
+  it.each(['task_id', 'session_id', 'created_by', 'queue_position', 'sdk_failure'])(
+    'rejects executor patch field %s outside the result allowlist',
+    async (field) => {
+      await expect(
+        protectServerManagedTaskWrites(
+          externalContext(
+            'patch',
+            { [field]: 'forged' },
+            {
+              taskId: 'task-1',
+              executorTaskId: 'task-1',
+            }
+          )
         )
-      )
-    ).rejects.toThrow('not executor-managed');
-  });
+      ).rejects.toThrow('not executor-managed');
+    }
+  );
 
   it('allows a task-scoped executor to publish bounded nonterminal result fields', async () => {
     await expect(
@@ -191,21 +188,21 @@ describe('protectServerManagedTaskWrites', () => {
     ).rejects.toThrow('reportExecutorSettlement');
   });
 
-  it.each([
-    TaskStatus.AWAITING_PERMISSION,
-    TaskStatus.AWAITING_INPUT,
-  ])('allows a scoped executor to request resume from %s', async () => {
-    const context = externalContext(
-      'patch',
-      { status: TaskStatus.RUNNING },
-      {
-        taskId: 'task-1',
-        executorTaskId: 'task-1',
-      }
-    );
+  it.each([TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT])(
+    'allows a scoped executor to request resume from %s',
+    async () => {
+      const context = externalContext(
+        'patch',
+        { status: TaskStatus.RUNNING },
+        {
+          taskId: 'task-1',
+          executorTaskId: 'task-1',
+        }
+      );
 
-    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
-  });
+      await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+    }
+  );
 
   it('preserves trusted internal direct-to-running task writes', async () => {
     const context = externalContext('patch', {
@@ -425,11 +422,12 @@ describe('enrichSessionFindResultWithRemoteRelationships', () => {
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {
-    it.each(
-      PROMPT_FLOW_PATCH_FIELDS.map((f) => [f])
-    )('accepts single whitelisted field: %s', (field) => {
-      expect(isPromptFlowPatchOnly({ [field]: 'any-value' })).toBe(true);
-    });
+    it.each(PROMPT_FLOW_PATCH_FIELDS.map((f) => [f]))(
+      'accepts single whitelisted field: %s',
+      (field) => {
+        expect(isPromptFlowPatchOnly({ [field]: 'any-value' })).toBe(true);
+      }
+    );
 
     it('accepts the prompt-route task-append shape', () => {
       // register-routes.ts: /sessions/:id/prompt appends task_id to session.tasks
@@ -576,13 +574,12 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   // around hook. codex-auth/logout was missing here, so `Remove login` ran with
   // no active tenant scope and threw "Missing active tenant context for Codex
   // auth logout" — the delete-only logout never worked end-to-end.
-  it.each([
-    'codex-auth/device',
-    'codex-auth/import',
-    'codex-auth/logout',
-  ])('grants ambient tenant identity to %s', (path) => {
-    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
-  });
+  it.each(['codex-auth/device', 'codex-auth/import', 'codex-auth/logout'])(
+    'grants ambient tenant identity to %s',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+    }
+  );
 
   it('keeps the codex-auth endpoints grouped together', () => {
     const codexPaths = TENANT_IDENTITY_ONLY_SERVICE_PATHS.filter((path) =>

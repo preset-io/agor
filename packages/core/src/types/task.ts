@@ -1,4 +1,6 @@
 // src/types/task.ts
+
+import { z } from 'zod';
 import type { PersistedAgenticToolName } from './agentic-tool';
 import type { GatewayInboundEventID } from './gateway';
 import type { MessageID, SessionID, TaskID, UserID } from './id';
@@ -441,34 +443,6 @@ export interface Task {
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }
 
-/**
- * Result fields an executor may report after its agentic-tool runtime has
- * quiesced. Lifecycle fields are deliberately absent: the daemon derives and
- * commits terminal timing atomically.
- */
-export type ExecutorOutcomePatch = Omit<
-  Partial<
-    Pick<
-      Task,
-      | 'git_state'
-      | 'message_range'
-      | 'model'
-      | 'raw_sdk_response'
-      | 'normalized_sdk_response'
-      | 'computed_context_window'
-      | 'tool_use_count'
-      | 'duration_ms'
-      | 'agent_session_id'
-      | 'error_message'
-      | 'report'
-    >
-  >,
-  'git_state'
-> & {
-  /** Repository settlement deep-merges this with the immutable start snapshot. */
-  git_state?: Partial<Task['git_state']>;
-};
-
 export type ExecutorSettlementStatus =
   | typeof TaskStatus.COMPLETED
   | typeof TaskStatus.FAILED
@@ -478,18 +452,84 @@ export type ExecutorSettlementStatus =
  * One semantic report from the executor finalizer. A quiesced runtime may be
  * settled normally; cleanup uncertainty must converge on daemon containment.
  */
-export type ExecutorSettlementInput =
-  | {
-      task_id: string;
-      kind: 'quiesced';
-      status: ExecutorSettlementStatus;
-      task_patch?: ExecutorOutcomePatch;
-    }
-  | {
-      task_id: string;
-      kind: 'containment_required';
-      error_message: string;
-    };
+const ExecutorOutcomePatchSchema = z.strictObject({
+  git_state: z
+    .strictObject({
+      ref_at_start: z.string().optional(),
+      sha_at_start: z.string().optional(),
+      sha_at_end: z.string().optional(),
+      commit_message: z.string().optional(),
+    })
+    .optional(),
+  message_range: z
+    .strictObject({
+      start_index: z.number().int().nonnegative(),
+      end_index: z.number().int().nonnegative(),
+      start_timestamp: z.string(),
+      end_timestamp: z.string().optional(),
+    })
+    .optional(),
+  model: z.string().optional(),
+  raw_sdk_response: z.unknown().optional(),
+  normalized_sdk_response: z
+    .strictObject({
+      tokenUsage: z.strictObject({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        totalTokens: z.number().int().nonnegative(),
+        cacheReadTokens: z.number().int().nonnegative().optional(),
+        cacheCreationTokens: z.number().int().nonnegative().optional(),
+      }),
+      contextWindowLimit: z.number().int().nonnegative().optional(),
+      costUsd: z.number().nonnegative().optional(),
+      primaryModel: z.string().optional(),
+      durationMs: z.number().nonnegative().optional(),
+      contextUsageSnapshot: z
+        .strictObject({
+          totalTokens: z.number().int().nonnegative(),
+          maxTokens: z.number().int().positive(),
+          percentage: z.number().int().min(0).max(100),
+        })
+        .optional(),
+    })
+    .optional(),
+  computed_context_window: z.number().int().nonnegative().optional(),
+  tool_use_count: z.number().int().nonnegative().optional(),
+  duration_ms: z.number().nonnegative().optional(),
+  agent_session_id: z.string().optional(),
+  error_message: z.string().optional(),
+  report: z
+    .strictObject({
+      path: z.string(),
+      template: z.enum(['standard', 'technical', 'summary', 'custom']),
+      generated_at: z.string(),
+    })
+    .optional(),
+});
+
+/**
+ * Result fields an executor may report after its agentic-tool runtime has
+ * quiesced. Lifecycle fields are deliberately absent: the daemon derives and
+ * commits terminal timing atomically. Repository settlement deep-merges the
+ * optional git state with the immutable start snapshot.
+ */
+export type ExecutorOutcomePatch = z.infer<typeof ExecutorOutcomePatchSchema>;
+
+export const ExecutorSettlementInputSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    task_id: z.string().min(1),
+    kind: z.literal('quiesced'),
+    status: z.enum([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TIMED_OUT]),
+    task_patch: ExecutorOutcomePatchSchema.optional(),
+  }),
+  z.strictObject({
+    task_id: z.string().min(1),
+    kind: z.literal('containment_required'),
+    error_message: z.string().min(1),
+  }),
+]);
+
+export type ExecutorSettlementInput = z.infer<typeof ExecutorSettlementInputSchema>;
 
 export type TaskRuntimeProgressState = 'working' | 'waiting' | 'stalled' | 'terminal' | 'inactive';
 

@@ -1026,14 +1026,33 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
-  /** Record observe-only SDK health evidence only while the executor still owns the task. */
-  async recordSdkHealthObservation(id: string, failure: SdkFailure): Promise<Task | null> {
+  /** Record fresh observe-only SDK health evidence while the executor still owns the task. */
+  async recordSdkHealthObservation(
+    id: string,
+    failure: SdkFailure
+  ): Promise<{ outcome: 'recorded' | 'unchanged'; task: Task } | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       if (!executorOwnsTask(row)) return null;
 
+      const current = this.rowToTask(row);
+      const previous = current.sdk_failure;
+      const sequence = failure.pulse_sequence_at_detection;
+      const newerSequence =
+        sequence !== undefined &&
+        (previous?.pulse_sequence_at_detection === undefined ||
+          sequence > previous.pulse_sequence_at_detection);
+      if (
+        previous?.reason === failure.reason &&
+        previous.watchdog_action === failure.watchdog_action &&
+        failure.watchdog_action === 'would_fire' &&
+        !newerSequence
+      ) {
+        return { outcome: 'unchanged', task: current };
+      }
+
       const data = { ...row.data, sdk_failure: failure };
       await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-      return this.rowToTask({ ...row, data });
+      return { outcome: 'recorded', task: this.rowToTask({ ...row, data }) };
     });
   }
 

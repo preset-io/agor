@@ -4,7 +4,13 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { MessageID, Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
+import type {
+  MessageID,
+  SdkFailure,
+  Task,
+  TaskPendingDispatchStatus,
+  UUID,
+} from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
@@ -1393,17 +1399,63 @@ describe('TaskRepository.recordSdkHealthObservation', () => {
       termination: 'not_requested' as const,
     };
 
-    const [, observed] = await Promise.all([
+    const [, observation] = await Promise.all([
       taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED }),
       taskRepo.recordSdkHealthObservation(task.task_id, failure),
     ]);
     const completed = await taskRepo.findById(task.task_id);
 
     expect(completed).toMatchObject({ status: TaskStatus.COMPLETED });
-    expect(completed?.sdk_failure).toEqual(observed?.sdk_failure);
+    expect(completed?.sdk_failure).toEqual(observation?.task.sdk_failure);
     expect(await taskRepo.recordSdkHealthObservation(task.task_id, failure)).toBeNull();
     expect((await taskRepo.findById(task.task_id))?.sdk_failure).toEqual(completed?.sdk_failure);
   });
+
+  dbTest(
+    'keeps the newest same-reason pulse across concurrent and ordered reports',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const failureAt = (sequence: number): SdkFailure => ({
+        reason: 'progress_stalled',
+        detected_at: `2026-01-01T00:03:0${sequence}.000Z`,
+        tool: 'codex',
+        pulse_sequence_at_detection: sequence,
+        watchdog_action: 'would_fire',
+        termination: 'not_requested',
+      });
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-01-01T00:00:01.000Z',
+          sdk_failure: failureAt(4),
+        })
+      );
+
+      const [sequenceFive, sequenceSix] = await Promise.all([
+        taskRepo.recordSdkHealthObservation(task.task_id, failureAt(5)),
+        taskRepo.recordSdkHealthObservation(task.task_id, failureAt(6)),
+      ]);
+
+      expect(sequenceFive).not.toBeNull();
+      expect(sequenceSix).toMatchObject({
+        outcome: 'recorded',
+        task: { sdk_failure: { pulse_sequence_at_detection: 6 } },
+      });
+      expect(await taskRepo.findById(task.task_id)).toMatchObject({
+        sdk_failure: { pulse_sequence_at_detection: 6 },
+      });
+      for (const sequence of [5, 6]) {
+        expect(
+          await taskRepo.recordSdkHealthObservation(task.task_id, failureAt(sequence))
+        ).toMatchObject({
+          outcome: 'unchanged',
+          task: { sdk_failure: { pulse_sequence_at_detection: 6 } },
+        });
+      }
+    }
+  );
 });
 
 describe('TaskRepository.settleExecutorOutcome', () => {

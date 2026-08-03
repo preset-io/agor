@@ -5,6 +5,7 @@ export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
 export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
 export const SDK_WATCHDOG_DEFAULT_IDLE_TIMEOUT_MS = 60 * 60_000;
+export const DEFAULT_PERMISSION_TIMEOUT_MS = 10 * 60_000;
 export type ResolvedSdkWatchdogConfig = Required<
   NonNullable<AgorExecutionSettings['sdk_watchdog']>
 >;
@@ -68,6 +69,14 @@ export function resolveDispatchConnectTimeoutMs(execution?: AgorExecutionSetting
     execution?.dispatch_connect_timeout_ms ?? undefined,
     EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS,
     'execution.dispatch_connect_timeout_ms'
+  );
+}
+
+export function resolvePermissionTimeoutMs(execution?: AgorExecutionSettings): number {
+  return positiveSafeInteger(
+    execution?.permission_timeout_ms,
+    DEFAULT_PERMISSION_TIMEOUT_MS,
+    'execution.permission_timeout_ms'
   );
 }
 

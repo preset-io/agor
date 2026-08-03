@@ -85,51 +85,57 @@ describe('PermissionService interaction capability', () => {
     });
   });
 
-  it('reports an identified, bounded permission wait lifecycle', async () => {
-    const emit = vi.fn();
-    const onActivity = vi.fn();
-    const client = {
-      service: vi.fn(() => ({ emit })),
-    } as unknown as AgorClient;
-    const service = createExecutionPermissionService({ client, onActivity });
+  it.each([
+    [undefined, 600_000],
+    [{ execution: { permission_timeout_ms: 42_000 } }, 42_000],
+  ] as const)(
+    'reports an identified permission wait using the resolved %s timeout',
+    async (resolvedConfig, expectedTimeoutMs) => {
+      const emit = vi.fn();
+      const onActivity = vi.fn();
+      const client = {
+        service: vi.fn(() => ({ emit })),
+      } as unknown as AgorClient;
+      const service = createExecutionPermissionService({ client, onActivity, resolvedConfig });
 
-    await service.emitRequest(sessionId, {
-      requestId: 'request-1',
-      taskId,
-      toolName: 'Bash',
-      toolInput: {},
-      timestamp: new Date().toISOString(),
-    });
+      await service.emitRequest(sessionId, {
+        requestId: 'request-1',
+        taskId,
+        toolName: 'Bash',
+        toolInput: {},
+        timestamp: new Date().toISOString(),
+      });
 
-    const resolution = service.waitForDecision(
-      'request-1',
-      taskId,
-      sessionId,
-      new AbortController().signal
-    );
-    expect(onActivity).toHaveBeenCalledWith({
-      type: 'waiting_started',
-      id: 'request-1',
-      reason: 'permission',
-      absoluteTimeoutMs: 600_000,
-    });
-    service.resolvePermission({
-      requestId: 'request-1',
-      taskId,
-      allow: true,
-      remember: false,
-      scope: PermissionScope.ONCE,
-      decidedBy: 'user-1',
-    });
-    await expect(resolution).resolves.toMatchObject({ outcome: 'approved' });
-    expect(onActivity).toHaveBeenLastCalledWith({
-      type: 'waiting_finished',
-      id: 'request-1',
-      outcome: 'approved',
-    });
-    expect(emit).toHaveBeenCalledWith(
-      'permission:request',
-      expect.objectContaining({ requestId: 'request-1', sessionId, taskId })
-    );
-  });
+      const resolution = service.waitForDecision(
+        'request-1',
+        taskId,
+        sessionId,
+        new AbortController().signal
+      );
+      expect(onActivity).toHaveBeenCalledWith({
+        type: 'waiting_started',
+        id: 'request-1',
+        reason: 'permission',
+        absoluteTimeoutMs: expectedTimeoutMs,
+      });
+      service.resolvePermission({
+        requestId: 'request-1',
+        taskId,
+        allow: true,
+        remember: false,
+        scope: PermissionScope.ONCE,
+        decidedBy: 'user-1',
+      });
+      await expect(resolution).resolves.toMatchObject({ outcome: 'approved' });
+      expect(onActivity).toHaveBeenLastCalledWith({
+        type: 'waiting_finished',
+        id: 'request-1',
+        outcome: 'approved',
+      });
+      expect(emit).toHaveBeenCalledWith(
+        'permission:request',
+        expect.objectContaining({ requestId: 'request-1', sessionId, taskId })
+      );
+    }
+  );
 });

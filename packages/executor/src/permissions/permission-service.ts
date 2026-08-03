@@ -22,6 +22,7 @@
  * 7. Promise resolves → SDK resumes execution
  */
 
+import { resolvePermissionTimeoutMs } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope, PermissionStatus } from '@agor/core/types';
@@ -73,8 +74,6 @@ export function getPermissionStatus(resolution: PermissionResolution): Permissio
 // Re-export for convenience
 export { PermissionScope };
 
-/** Default permission timeout: 10 minutes */
-const DEFAULT_PERMISSION_TIMEOUT_MS = 600_000;
 const PermissionEvent = {
   REQUEST: 'permission:request',
   TIMEOUT: 'permission:timeout',
@@ -86,6 +85,7 @@ type PermissionEvent = (typeof PermissionEvent)[keyof typeof PermissionEvent];
  * Emits events via IPC to daemon instead of directly via WebSocket
  */
 export class PermissionService {
+  private readonly timeoutMs: number;
   private pendingRequests = new Map<
     string,
     {
@@ -101,10 +101,12 @@ export class PermissionService {
    */
   constructor(
     private emitEvent: (event: PermissionEvent, data: unknown) => Promise<void>,
-    private timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
+    timeoutMs?: number,
     private interactionMode: InteractionMode = 'interactive',
     private onActivity?: SdkActivityCallback
-  ) {}
+  ) {
+    this.timeoutMs = resolvePermissionTimeoutMs({ permission_timeout_ms: timeoutMs });
+  }
 
   /**
    * Emit a permission request event to daemon (which broadcasts via WebSocket)
@@ -275,12 +277,9 @@ export function createExecutionPermissionService(params: {
   interactionMode?: InteractionMode;
   onActivity?: SdkActivityCallback;
 }): PermissionService {
-  const timeoutMs =
-    params.resolvedConfig?.execution?.permission_timeout_ms ?? DEFAULT_PERMISSION_TIMEOUT_MS;
-
   return new PermissionService(
     async (event, data) => params.client.service('sessions').emit(event, data),
-    timeoutMs,
+    params.resolvedConfig?.execution?.permission_timeout_ms,
     params.interactionMode,
     params.onActivity
   );
