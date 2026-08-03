@@ -13,22 +13,8 @@ export interface SanitizedDbError {
 
 type ErrorRecord = Record<string, unknown>;
 
-const STATEMENT_MARKER = /(?:failed\s+query|query|params?|parameters?)\s*:/i;
-
 function asRecord(value: unknown): ErrorRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as ErrorRecord) : undefined;
-}
-
-/** Remove SQL/parameter sections that some database drivers embed in messages. */
-export function sanitizeDbErrorMessage(message: string): string {
-  const marker = STATEMENT_MARKER.exec(message);
-  if (!marker) return message;
-
-  const prefix = message
-    .slice(0, marker.index)
-    .trimEnd()
-    .replace(/[:\s]+$/, '');
-  return prefix ? `${prefix}: [database statement redacted]` : '[database statement redacted]';
 }
 
 /**
@@ -45,7 +31,6 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     (error instanceof Error && error.name) ||
     'DatabaseError';
 
-  const messages: string[] = [];
   let code: string | undefined;
   let constraint: string | undefined;
   let current: unknown = error;
@@ -54,17 +39,6 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
     const record = asRecord(current);
-    const rawMessage =
-      typeof record?.message === 'string'
-        ? record.message
-        : current instanceof Error
-          ? current.message
-          : undefined;
-    if (rawMessage) {
-      const safeMessage = sanitizeDbErrorMessage(rawMessage);
-      if (!messages.includes(safeMessage)) messages.push(safeMessage);
-    }
-
     if (!code && typeof record?.code === 'string') code = record.code;
     const candidateConstraint = record?.constraint_name ?? record?.constraint;
     if (!constraint && typeof candidateConstraint === 'string') constraint = candidateConstraint;
@@ -72,7 +46,13 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     current = record?.cause;
   }
 
-  const message = messages.join(': ') || sanitizeDbErrorMessage(String(error));
+  // Driver messages are not safe metadata. PostgreSQL commonly embeds rejected
+  // values in otherwise ordinary messages (for example invalid UUID syntax),
+  // without a `query:` or `params:` marker. Keep a stable diagnostic category
+  // instead; code and constraint retain the actionable database context.
+  const message = code?.startsWith('23')
+    ? 'Database constraint violation'
+    : 'Database operation failed';
   return {
     name,
     message,

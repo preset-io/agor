@@ -31,19 +31,31 @@ describe('sanitizeDbError', () => {
     expect(output).not.toContain('SECRET_SENTINEL');
     expect(output).not.toContain('insert into sessions');
     expect(output).not.toContain('cause');
-    expect(output).toContain('duplicate key value violates unique constraint');
+    expect(output).toContain('Database constraint violation');
     expect(output).toContain('sessions_schedule_run_unique');
     expect(output).toContain('23505');
   });
 
-  it('sanitizes RepositoryError messages and causes at the repository boundary', () => {
+  it('sanitizes RepositoryError output without changing its cause semantics', () => {
     const failure = drizzleFailure();
     const wrapped = new RepositoryError(`Failed to create session: ${failure.message}`, failure);
-    const output = inspect(wrapped);
+    const output = inspect(sanitizeDbError(wrapped));
 
     expect(output).not.toContain('SECRET_SENTINEL');
     expect(output).not.toContain('insert into sessions');
     expect(output).toContain('sessions_schedule_run_unique');
-    expect(output).toContain('Failed to create session');
+    expect(wrapped.cause).toBe(failure);
+  });
+
+  it('does not trust root or nested driver messages', () => {
+    const nested = Object.assign(new Error('invalid uuid: "SECRET_SENTINEL"'), {
+      code: '22P02',
+    });
+    const root = Object.assign(new Error('SECRET_SENTINEL'), { cause: nested });
+    const output = inspect(sanitizeDbError(root));
+
+    expect(output).not.toContain('SECRET_SENTINEL');
+    expect(output).toContain('Database operation failed');
+    expect(output).toContain('22P02');
   });
 });

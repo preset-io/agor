@@ -26,7 +26,7 @@ import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
 import { insert, isPostgresDatabase, isSQLiteDatabase, select } from './database-wrapper';
-import { type SanitizedDbError, sanitizeDbError, sanitizeDbErrorMessage } from './sanitize-error';
+import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
 import { getCurrentTenantId } from './tenant-scope';
 
@@ -34,12 +34,12 @@ import { getCurrentTenantId } from './tenant-scope';
  * Error thrown when migration fails
  */
 export class MigrationError extends Error {
-  public readonly cause?: SanitizedDbError;
-
-  constructor(message: string, cause?: unknown) {
-    super(sanitizeDbErrorMessage(message));
+  constructor(
+    message: string,
+    public readonly cause?: unknown
+  ) {
+    super(message);
     this.name = 'MigrationError';
-    this.cause = cause === undefined ? undefined : sanitizeDbError(cause);
   }
 }
 

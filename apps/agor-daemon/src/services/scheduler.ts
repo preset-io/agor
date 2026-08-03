@@ -162,8 +162,8 @@ export function renderSchedulePrompt(
       },
     };
     return compiledTemplate(context);
-  } catch (error) {
-    console.error(`❌ Failed to render prompt template:`, sanitizeDbError(error));
+  } catch {
+    console.error(`❌ Failed to render prompt template`);
     return template;
   }
 }
