@@ -575,6 +575,19 @@ describe('loadConfig cache', () => {
     await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
   });
 
+  it('rejects removed analytics module plugins on every load path', async () => {
+    await writeConfigFile(
+      'analytics:\n  enabled: false\n  plugins:\n    - type: module\n      enabled: false\n      options:\n        module_path: /opt/agor/plugin.js\n'
+    );
+
+    expect(() => loadConfigSync()).toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
+  });
+
   it('treats branch_rbac as app-level only in simple Unix mode', async () => {
     await writeConfigFile({
       execution: { branch_rbac: true, unix_user_mode: 'simple' },

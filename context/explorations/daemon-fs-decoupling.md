@@ -16,6 +16,14 @@
 
 **Phase 1A — Config hygiene — shipped in this PR (H1–H4).** Daemon stays the only authority on `~/.agor/config.yaml`; executor stops reading it directly (resolved-slice payload); shutdown sentinel + secret bootstrap degrade gracefully on read-only mounts (capability-driven, no deployment-mode flag). H5 (CLI config separation) is split to a follow-up branch. See §1.5.
 
+**2026-08-03 boundary follow-up:** `DAEMON-FS-CAP-004` is resolved by removing the
+runtime-selected analytics module plugin. The daemon no longer dynamically imports an
+operator-provided package or filesystem path. Analytics delivery is now limited to the
+type-safe built-in registry: `stdout` and HTTP batch. Existing configuration containing
+`analytics.plugins[*].type: module` fails during config loading with migration guidance;
+it is never loaded or silently ignored. The capability was removed from
+`scripts/daemon-filesystem-exceptions.json`.
+
 ---
 
 ## 1. Today's reality

@@ -1,13 +1,12 @@
-import { pathToFileURL } from 'node:url';
-import type { AnalyticsPlugin } from 'analytics';
 import type {
   AgorAnalyticsHttpBatchPluginSettings,
-  AgorAnalyticsModulePluginSettings,
-  AgorAnalyticsPluginSettings,
   AgorAnalyticsSettings,
   AgorAnalyticsStdoutPluginSettings,
 } from '../config/types.js';
-import type { AnalyticsPluginContext, ResolvedAnalyticsPlugin } from './types.js';
+import type { ResolvedAnalyticsPlugin } from './types.js';
+
+export const REMOVED_ANALYTICS_MODULE_PLUGIN_MESSAGE =
+  "Analytics plugin type 'module' has been removed because loading operator-selected code in the daemon is unsafe. Use the built-in 'stdout' or 'http_batch' analytics plugin instead.";
 
 interface AnalyticsTrackPayload {
   type?: string;
@@ -172,55 +171,6 @@ export function createHttpBatchAnalyticsPlugin(
   };
 }
 
-function importTargetForModulePath(modulePath: string): string | null {
-  if (modulePath.startsWith('.')) {
-    warnAnalytics(
-      'module plugin options.module_path must be a package specifier or absolute path; skipping relative path'
-    );
-    return null;
-  }
-  if (modulePath.startsWith('/')) {
-    return pathToFileURL(modulePath).href;
-  }
-  return modulePath;
-}
-
-export async function createModuleAnalyticsPlugins(
-  settings: AgorAnalyticsModulePluginSettings,
-  context: AnalyticsPluginContext
-): Promise<ResolvedAnalyticsPlugin[]> {
-  const options = settings.options ?? {};
-  if (!options.module_path) {
-    warnAnalytics('module plugin enabled without options.module_path; skipping plugin');
-    return [];
-  }
-
-  try {
-    const importTarget = importTargetForModulePath(options.module_path);
-    if (!importTarget) return [];
-
-    const imported = await import(importTarget);
-    const exportName = options.export_name ?? 'createAnalyticsPlugin';
-    const factory = imported[exportName];
-    if (typeof factory !== 'function') {
-      warnAnalytics(`module plugin export "${exportName}" is not a function; skipping plugin`);
-      return [];
-    }
-    const result = await factory(options.plugin_options ?? {}, context);
-    const plugins = Array.isArray(result) ? result : [result];
-    return plugins.filter((plugin): plugin is ResolvedAnalyticsPlugin => {
-      return (
-        !!plugin &&
-        typeof plugin === 'object' &&
-        typeof (plugin as AnalyticsPlugin).name === 'string'
-      );
-    });
-  } catch (error) {
-    warnAnalytics('module plugin failed to load', error);
-    return [];
-  }
-}
-
 function wrapPluginMethod(pluginName: string, methodName: string, method: unknown): unknown {
   if (typeof method !== 'function') return method;
   return (...args: unknown[]) => {
@@ -255,19 +205,21 @@ export async function resolveAnalyticsPlugins(
   for (const pluginConfig of config.plugins ?? []) {
     if (pluginConfig.enabled !== true) continue;
 
-    const context: AnalyticsPluginContext = { config, pluginConfig };
-    if (pluginConfig.type === 'stdout') {
-      resolved.push(createStdoutAnalyticsPlugin(pluginConfig));
-    } else if (pluginConfig.type === 'http_batch') {
-      const plugin = createHttpBatchAnalyticsPlugin(pluginConfig);
-      if (plugin) resolved.push(plugin);
-    } else if (pluginConfig.type === 'module') {
-      resolved.push(...(await createModuleAnalyticsPlugins(pluginConfig, context)));
-    } else {
-      const unknown = pluginConfig as AgorAnalyticsPluginSettings;
-      warnAnalytics(
-        `unknown plugin type "${(unknown as { type?: string }).type}"; skipping plugin`
-      );
+    switch (pluginConfig.type) {
+      case 'stdout':
+        resolved.push(createStdoutAnalyticsPlugin(pluginConfig));
+        break;
+      case 'http_batch': {
+        const plugin = createHttpBatchAnalyticsPlugin(pluginConfig);
+        if (plugin) resolved.push(plugin);
+        break;
+      }
+      default: {
+        const unsupported: never = pluginConfig;
+        const type = (unsupported as { type?: unknown }).type;
+        if (type === 'module') throw new Error(REMOVED_ANALYTICS_MODULE_PLUGIN_MESSAGE);
+        throw new Error(`Unsupported analytics plugin type: ${String(type)}`);
+      }
     }
   }
 

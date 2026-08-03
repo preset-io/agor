@@ -42,20 +42,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-004",
-    "class": "D",
-    "file": "packages/core/src/analytics/plugins.ts",
-    "import": "<non-literal-dynamic-import>",
-    "symbol": "<expression>",
-    "local": "<dynamic>",
-    "operation": "review:dynamic-import@createModuleAnalyticsPlugins#1",
-    "owner": "@agor/core analytics maintainers",
-    "boundary": "ambiguous product decision",
-    "rationale": "Product decision is required before runtime-selected code loading can be classified.",
-    "reviewTarget": "Decide whether plugin loading is a daemon-host capability or must use a constrained registry.",
-    "reviewDate": "2026-09-01"
-  },
-  {
     "id": "DAEMON-FS-CAP-005",
     "class": "A",
     "file": "packages/core/src/telemetry/version.ts",

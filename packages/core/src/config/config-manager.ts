@@ -215,6 +215,17 @@ async function ensureAgorHome(): Promise<void> {
  * Validate config and throw helpful errors for deprecated/invalid settings
  */
 function validateConfig(config: AgorConfig): void {
+  const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
+    ?.plugins;
+  const removedModulePluginIndex = configuredAnalyticsPlugins?.findIndex(
+    (plugin) =>
+      !!plugin && typeof plugin === 'object' && (plugin as { type?: unknown }).type === 'module'
+  );
+  if (removedModulePluginIndex !== undefined && removedModulePluginIndex >= 0) {
+    throw new Error(
+      `Config error: analytics.plugins[${removedModulePluginIndex}].type 'module' has been removed because loading operator-selected code in the daemon is unsafe. Use the built-in 'stdout' or 'http_batch' analytics plugin instead.`
+    );
+  }
   const removedConfig = config as AgorConfig & {
     resources?: unknown;
     services?: unknown;
@@ -445,13 +456,26 @@ function validateConfig(config: AgorConfig): void {
   only(config.analytics?.filters, 'analytics.filters', ['exclude_events']);
   for (const [index, plugin] of (config.analytics?.plugins ?? []).entries()) {
     only(plugin, `analytics.plugins[${index}]`, ['type', 'enabled', 'options']);
-    const optionKeys =
-      plugin.type === 'stdout'
-        ? ['pretty']
-        : plugin.type === 'http_batch'
-          ? ['url', 'flush_interval_ms', 'max_batch_size', 'timeout_ms', 'headers']
-          : ['module_path', 'export_name', 'plugin_options'];
-    only(plugin.options, `analytics.plugins[${index}].options`, optionKeys);
+    switch (plugin.type) {
+      case 'stdout':
+        only(plugin.options, `analytics.plugins[${index}].options`, ['pretty']);
+        break;
+      case 'http_batch':
+        only(plugin.options, `analytics.plugins[${index}].options`, [
+          'url',
+          'flush_interval_ms',
+          'max_batch_size',
+          'timeout_ms',
+          'headers',
+        ]);
+        break;
+      default: {
+        const unsupported: never = plugin;
+        throw new Error(
+          `Config error: analytics.plugins[${index}].type '${String((unsupported as { type?: unknown }).type)}' is not supported. Use 'stdout' or 'http_batch'.`
+        );
+      }
+    }
   }
   only(config.telemetry, 'telemetry', [
     'enabled',

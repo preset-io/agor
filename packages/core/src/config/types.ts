@@ -878,8 +878,7 @@ export interface AgorAnalyticsSettings {
 
 export type AgorAnalyticsPluginSettings =
   | AgorAnalyticsStdoutPluginSettings
-  | AgorAnalyticsHttpBatchPluginSettings
-  | AgorAnalyticsModulePluginSettings;
+  | AgorAnalyticsHttpBatchPluginSettings;
 
 export interface AgorAnalyticsStdoutPluginSettings {
   type: 'stdout';
@@ -901,19 +900,6 @@ export interface AgorAnalyticsHttpBatchPluginSettings {
     timeout_ms?: number;
     /** Static headers only. */
     headers?: Record<string, string>;
-  };
-}
-
-export interface AgorAnalyticsModulePluginSettings {
-  type: 'module';
-  enabled?: boolean;
-  options?: {
-    /** Package name or absolute local module path to dynamically import. */
-    module_path?: string | null;
-    /** Factory export to call. Defaults to createAnalyticsPlugin. */
-    export_name?: string;
-    /** Passed as the first argument to the module factory. */
-    plugin_options?: Record<string, unknown>;
   };
 }
 
