@@ -643,6 +643,7 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }
