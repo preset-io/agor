@@ -8,16 +8,15 @@
  * automation. Human audit logging goes to stderr so stdout stays parseable.
  */
 
+import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   assertValidTenantId,
-  createDatabase,
   deleteTenant,
-  getDatabaseUrl,
   InvalidTenantIdError,
   TenantDeletionUnsupportedError,
   TenantDeletionVerificationError,
   TenantFilesystemDeletionPendingError,
-} from '@agor/core/db';
+} from '@agor/core/tenant-portability';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {

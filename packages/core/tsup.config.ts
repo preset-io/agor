@@ -9,6 +9,7 @@ export default defineConfig({
     'types/index': 'src/types/index.ts',
     'db/index': 'src/db/index.ts',
     'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
+    'tenant-portability/index': 'src/tenant-portability/index.ts',
     'git/index': 'src/git/index.ts',
     'git/pure': 'src/git/pure.ts',
     'git/exec': 'src/git/exec.ts',

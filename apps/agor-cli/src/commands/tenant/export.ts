@@ -6,14 +6,13 @@
  * stderr. No row or file contents, and no secrets, are ever printed.
  */
 
+import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   assertValidTenantId,
-  createDatabase,
   exportTenant,
-  getDatabaseUrl,
   InvalidTenantIdError,
   TenantPortabilityUnsupportedError,
-} from '@agor/core/db';
+} from '@agor/core/tenant-portability';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {

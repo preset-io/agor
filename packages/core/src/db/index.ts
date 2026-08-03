@@ -50,23 +50,17 @@ export * from './repositories';
 export * from './schema';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
-// Tenant data portability (inspect / export / import / verify)
-export * from './tenant-archive';
+// Tenant database lifecycle primitives. Filesystem-backed portability operations
+// live at @agor/core/tenant-portability so importing the daemon's database
+// surface does not implicitly grant host-filesystem capabilities.
 export * from './tenant-catalog';
-export * from './tenant-database-io';
 // Tenant deletion (permanent, audited, idempotent per-tenant erasure)
-export * from './tenant-delete';
 export * from './tenant-deletion';
 export * from './tenant-deletion-manifest';
-export * from './tenant-export';
-export * from './tenant-filesystem';
 export * from './tenant-imperative-tables';
-export * from './tenant-import';
-export * from './tenant-inspect';
 export * from './tenant-portability-manifest';
 export * from './tenant-scope';
 export * from './tenant-unit-of-work';
-export * from './tenant-verify';
 // Tenant write gate (generation-bound per-tenant write freeze)
 export * from './tenant-write-gate';
 // User utilities

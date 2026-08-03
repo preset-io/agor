@@ -7,15 +7,14 @@
  * single stable JSON summary is written to stdout; audit lines go to stderr.
  */
 
+import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
-  createDatabase,
-  getDatabaseUrl,
   importTenant,
   MalformedArchiveError,
   readManifest,
   TenantPortabilityUnsupportedError,
   UnsafeArchivePathError,
-} from '@agor/core/db';
+} from '@agor/core/tenant-portability';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {
