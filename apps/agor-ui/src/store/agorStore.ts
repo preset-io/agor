@@ -52,6 +52,8 @@ interface AgorMeta {
   /** Set once the background gateway-channels hydration first applies (empty result included). */
   gatewayChannelsHydrated: boolean;
   agenticToolSettingsByName: Map<TenantAgenticToolName, TenantAgenticToolSettings>;
+  /** Set once the background agentic-tool-settings hydration first applies (empty result included). */
+  agenticToolSettingsHydrated: boolean;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -113,6 +115,7 @@ const INITIAL_META: AgorMeta = {
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
   agenticToolSettingsByName: new Map(),
+  agenticToolSettingsHydrated: false,
 };
 
 export const agorStore = createStore<AgorState>()(
@@ -147,7 +150,10 @@ export const agorStore = createStore<AgorState>()(
       if (!get()[flag]) set({ [flag]: true } as Partial<AgorState>);
     },
     setAgenticToolSettings: (settings) => {
-      set({ agenticToolSettingsByName: new Map(settings.map((item) => [item.tool, item])) });
+      set({
+        agenticToolSettingsByName: new Map(settings.map((item) => [item.tool, item])),
+        agenticToolSettingsHydrated: true,
+      });
     },
 
     setMap: (key, value) => {
