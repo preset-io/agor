@@ -364,6 +364,8 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     /** Path to the branch to clean */
     branchPath: z.string(),
+    branchId: z.string().uuid(),
+    branchesRoot: z.string().min(1),
   }),
 });
 
@@ -608,6 +610,7 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Branch checkout path. Executor refetches the branch but this avoids ambiguity. */
       branchPath: z.string().optional(),
+      branchesRoot: z.string().min(1),
 
       /** Lifecycle action */
       action: z.enum(['start', 'stop', 'restart', 'nuke']),
@@ -667,6 +670,7 @@ export const EnvironmentLogsPayloadSchema = BasePayloadSchema.extend({
 
     /** Branch checkout path. Executor refetches the branch but this avoids ambiguity. */
     branchPath: z.string().optional(),
+    branchesRoot: z.string().min(1),
 
     /** Shell logs command */
     logsCommand: z.string(),

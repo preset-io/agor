@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./workspace-paths": {
+      "source": "./src/workspace-paths.ts",
+      "types": "./dist/workspace-paths.d.ts",
+      "import": "./dist/workspace-paths.js",
+      "require": "./dist/workspace-paths.cjs"
+    },
     "./design/board-backgrounds": {
       "source": "./src/design/board-backgrounds.ts",
       "types": "./dist/design/board-backgrounds.d.ts",

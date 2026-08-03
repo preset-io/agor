@@ -10,12 +10,14 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { ENVIRONMENT } from '@agor/core/config';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
+import { assertManagedBranchPath } from '@agor/core/workspace-paths';
 import type {
   EnvironmentLifecyclePayload,
   EnvironmentLogsPayload,
   ExecutorResult,
 } from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { assertCanonicalWorkspaceContainment } from '../workspace-paths.js';
 import type { CommandOptions } from './index.js';
 
 const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
@@ -83,6 +85,25 @@ async function updateBranchEnvironment(
   });
 }
 
+async function resolveEnvironmentWorkspace(
+  client: Awaited<ReturnType<typeof createExecutorClient>>,
+  branch: { repo_id: string; name: string; path: string },
+  params: { branchPath?: string; branchesRoot: string }
+): Promise<string> {
+  const repo = await client.service('repos').get(branch.repo_id);
+  const trustedPath = assertManagedBranchPath({
+    root: params.branchesRoot,
+    repoSlug: repo.slug,
+    branchName: branch.name,
+    storedPath: branch.path,
+  });
+  if (params.branchPath && params.branchPath !== trustedPath) {
+    throw new Error('Executor branch path does not match the trusted workspace layout');
+  }
+  await assertCanonicalWorkspaceContainment(params.branchesRoot, trustedPath);
+  return trustedPath;
+}
+
 async function runShellCommand(options: {
   command: string;
   cwd: string;
@@ -146,9 +167,9 @@ export async function handleEnvironmentLogs(
   const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
   const client = await createExecutorClient(daemonUrl, payload.sessionToken);
   const branch = await client.service('branches').get(payload.params.branchId);
-  const cwd = payload.params.branchPath || branch.path;
 
   try {
+    const cwd = await resolveEnvironmentWorkspace(client, branch, payload.params);
     const result = await runShellCommand({
       command: payload.params.logsCommand,
       cwd,
@@ -200,7 +221,7 @@ export async function handleEnvironmentLifecycle(
 
   try {
     const branch = await client.service('branches').get(branchId);
-    const cwd = payload.params.branchPath || branch.path;
+    const cwd = await resolveEnvironmentWorkspace(client, branch, payload.params);
 
     if (payload.params.action === 'restart' && payload.params.stopCommand) {
       await updateBranchEnvironment(client, branchId, {

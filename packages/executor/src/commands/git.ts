@@ -23,6 +23,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import { assertManagedBranchPath } from '@agor/core/workspace-paths';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
@@ -1179,8 +1180,7 @@ export async function handleGitBranchAdd(
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const { assertManagedBranchPath } = await import('@agor/core/config');
-    const branchPath = await assertManagedBranchPath({
+    const branchPath = assertManagedBranchPath({
       root: payload.params.branchesRoot,
       repoSlug: repo.slug,
       branchName: branchRecord.name,
@@ -1703,8 +1703,24 @@ export async function handleGitBranchClean(
     };
   }
 
+  let client: AgorClient | null = null;
   try {
-    const branchPath = payload.params.branchPath;
+    client = await createExecutorClient(
+      payload.daemonUrl || 'http://localhost:3030',
+      payload.sessionToken
+    );
+    const branch = await client.service('branches').get(payload.params.branchId);
+    const repo = await client.service('repos').get(branch.repo_id);
+    const branchPath = assertManagedBranchPath({
+      root: payload.params.branchesRoot,
+      repoSlug: repo.slug,
+      branchName: branch.name,
+      storedPath: branch.path,
+    });
+    if (payload.params.branchPath !== branchPath) {
+      throw new Error('Executor branch path does not match the trusted workspace layout');
+    }
+    await assertCanonicalWorkspaceContainment(payload.params.branchesRoot, branchPath);
 
     console.log(`[git.branch.clean] Cleaning branch at ${branchPath}...`);
 

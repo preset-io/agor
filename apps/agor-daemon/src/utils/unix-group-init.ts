@@ -15,7 +15,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDaemonUser } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { shortId, UsersRepository } from '@agor/core/db';
+import { getCurrentTenantId, shortId, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, RepoID } from '@agor/core/types';
 import {
@@ -25,6 +25,7 @@ import {
   REPO_GIT_PERMISSION_MODE,
   UnixGroupCommands,
 } from '@agor/core/unix';
+import { resolveTrustedBranchWorkspace } from './branch-workspace.js';
 
 const execAsync = promisify(exec);
 
@@ -146,7 +147,7 @@ export async function initializeBranchUnixGroup(
 
   // Look up branch from DB
   const branch = await app.service('branches').get(branchId);
-  const branchPath = branch.path;
+  const branchPath = await resolveTrustedBranchWorkspace(db, branch, getCurrentTenantId());
 
   // Create group if it doesn't exist
   const exists = await checkCommand(UnixGroupCommands.groupExists(groupName));

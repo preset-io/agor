@@ -233,6 +233,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440000',
         branchPath: '/data/agor/worktrees/repo/feature',
+        branchesRoot: '/data/agor/worktrees',
         action: 'start',
         startCommand: 'docker compose up -d --build',
         appUrl: 'http://localhost:3000',
@@ -267,6 +268,7 @@ describe('EnvironmentLogsPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440000',
         branchPath: '/data/agor/worktrees/repo/feature',
+        branchesRoot: '/data/agor/worktrees',
         logsCommand: 'docker compose logs --tail=100',
       },
     };

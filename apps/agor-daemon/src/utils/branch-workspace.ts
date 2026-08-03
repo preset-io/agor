@@ -1,10 +1,11 @@
-import { assertManagedBranchPath, getBranchesDir } from '@agor/core/config';
+import { getBranchesDir } from '@agor/core/config';
 import {
   RepoRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { Branch } from '@agor/core/types';
+import { assertManagedBranchPath } from '@agor/core/workspace-paths';
 
 /** Fail closed when a historical branch row reaches an execution boundary. */
 export async function resolveTrustedBranchWorkspace(

@@ -769,7 +769,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const allUsedIds = await branchRepo.getAllUsedUniqueIds();
     const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
 
-    const branchesService = this.app.service('branches');
+    const branchesService = this.app.service(
+      'branches'
+    ) as unknown as import('./branches').BranchesService;
 
     // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
     // rendered here. They will be rendered by the executor after Unix groups are created
@@ -785,7 +787,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
     // 3. Render environment templates with full context including GID
     // 4. Patch branch to 'ready' with rendered templates
-    const branch = (await branchesService.create(
+    const branch = (await branchesService.createManaged(
       {
         repo_id: repo.repo_id,
         name: data.name,
@@ -803,16 +805,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-        sessions: [],
         last_used: new Date().toISOString(),
-        issue_url: data.issue_url,
-        pull_request_url: data.pull_request_url,
-        notes: data.notes,
+        issue_url: data.issue_url ?? undefined,
+        pull_request_url: data.pull_request_url ?? undefined,
+        notes: data.notes ?? undefined,
         custom_context: data.custom_context,
-        board_id: data.boardId,
+        board_id: data.boardId as import('@agor/core/types').BoardID,
         created_by: userId,
       },
-      { ...params, _agorTrustedBranchCreate: true } as never
+      params
     )) as Branch;
 
     // Add creating user as owner of the branch

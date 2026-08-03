@@ -69,6 +69,7 @@ import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { resolveTrustedBranchWorkspace } from '../utils/branch-workspace.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
@@ -104,8 +105,6 @@ export type BranchParams = QueryParams<{
     _include_sessions?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlBranchAccessUserId?: UUID;
-    /** Server-only capability set by ReposService after deriving the workspace path. */
-    _agorTrustedBranchCreate?: boolean;
   };
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
@@ -118,6 +117,7 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   params: {
     branchId: BranchID;
     branchPath: string;
+    branchesRoot: string;
     action: EnvironmentLifecycleAction;
     startCommand?: string;
     stopCommand?: string;
@@ -415,6 +415,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, options.params);
+    const branchPath = await this.resolveWorkspace(branch, params);
 
     return {
       asUser,
@@ -426,7 +427,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         env,
         params: {
           branchId: branch.branch_id,
-          branchPath: branch.path,
+          branchPath,
+          branchesRoot: getBranchesDir(params?.tenant?.tenant_id ?? getCurrentTenantId()),
           action,
           startCommand: branch.start_command,
           stopCommand: branch.stop_command,
@@ -538,6 +540,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, params);
+    const branchPath = await this.resolveWorkspace(branch, params);
     const result = await runExecutorCommand(
       {
         command: 'environment.logs',
@@ -546,7 +549,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         env,
         params: {
           branchId: branch.branch_id,
-          branchPath: branch.path,
+          branchPath,
+          branchesRoot: getBranchesDir(params?.tenant?.tenant_id ?? getCurrentTenantId()),
           logsCommand,
         },
       },
@@ -750,11 +754,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
   ): Promise<Branch | Branch[]> {
-    if (params?.provider && !params._agorTrustedBranchCreate) {
+    if (params?.provider) {
       throw new BadRequest(
         'Direct branch creation is unavailable; use the repository branch creation endpoint'
       );
     }
+    return this.createManaged(data, params);
+  }
+
+  /** Internal creation boundary used after ReposService derives the managed path. */
+  async createManaged(
+    data: Partial<Branch> | Partial<Branch>[],
+    params?: BranchParams
+  ): Promise<Branch | Branch[]> {
     const assertHasBoard = (item: Partial<Branch>) => {
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');
@@ -785,6 +797,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     await this.maybeSetBoardPrimaryTeammate(readyBranch, params);
     this.trackBranchCreated(readyBranch);
     return readyBranch;
+  }
+
+  private resolveWorkspace(branch: Branch, params?: BranchParams): Promise<string> {
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    return this.withTenantDatabase(params, () =>
+      resolveTrustedBranchWorkspace(this.db, branch, tenantId)
+    );
   }
 
   private trackBranchCreated(branch: Branch): void {
@@ -1327,6 +1346,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Get branch details before deletion
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const branchPath = deleteFromFilesystem
+      ? await this.resolveWorkspace(branch, params)
+      : branch.path;
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
     const result = await super.remove(id, params);
@@ -1334,7 +1356,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Then remove from filesystem via executor (fire-and-forget)
     // Executor handles its own logging and error reporting via Feathers
     if (deleteFromFilesystem) {
-      console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
+      console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branchPath}`);
 
       // Resolve Unix user for sudo wrap. Returns undefined in simple/no-RBAC
       // mode so we don't try to sudo on hosts without passwordless sudoers
@@ -1360,7 +1382,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               daemonUrl: getDaemonUrl(),
               params: {
                 branchId: branch.branch_id,
-                branchPath: branch.path,
+                branchPath,
                 branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Already deleted above
                 // Clean up the branch if it was created by Agor
@@ -1409,6 +1431,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const branchPath =
+      filesystemAction === 'preserved' ? branch.path : await this.resolveWorkspace(branch, params);
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
@@ -1434,7 +1459,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
 
     if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
+      console.log(`🧹 Spawning executor to clean branch filesystem: ${branchPath}`);
 
       // No user impersonation for infrastructure operations — the daemon user
       // owns all branches and impersonation would resolve getBranchesDir()
@@ -1455,7 +1480,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               sessionToken,
               daemonUrl: getDaemonUrl(),
               params: {
-                branchPath: branch.path,
+                branchId: branch.branch_id,
+                branchPath,
+                branchesRoot: getBranchesDir(tenantId),
               },
             },
             {
@@ -1470,8 +1497,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
         });
     } else if (filesystemAction === 'deleted') {
-      console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
-      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+      console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branchPath}`);
 
       // No user impersonation for infrastructure operations — the daemon user
       // owns all branches and impersonation would resolve getBranchesDir()
@@ -1497,7 +1523,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               daemonUrl: getDaemonUrl(),
               params: {
                 branchId: branch.branch_id,
-                branchPath: branch.path,
+                branchPath,
                 branchesRoot: getBranchesDir(tenantId),
                 deleteDbRecord: false, // Daemon handles DB deletion separately
                 // Clean up the branch if it was created by Agor

@@ -4,7 +4,6 @@
  * Exports configuration management, repo reference parsing utilities.
  */
 
-export * from '../workspace-paths';
 export * from './agentic-tool-preset-resolver';
 export * from './config-manager';
 export * from './constants';

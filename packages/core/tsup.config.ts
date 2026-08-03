@@ -16,6 +16,7 @@ export default defineConfig({
     'claude/index': 'src/claude/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
     'config/index': 'src/config/index.ts',
+    'workspace-paths': 'src/workspace-paths.ts',
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
     'permissions/index': 'src/permissions/index.ts',
