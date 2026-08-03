@@ -29,6 +29,7 @@ export interface RenderedEnvironmentSnapshot {
   variant: string;
   start: string;
   stop: string;
+  sync?: string;
   nuke?: string;
   logs?: string;
   health?: string;
@@ -177,6 +178,7 @@ export function renderBranchSnapshot(
     start: renderTemplate(resolved.start, context),
     stop: renderTemplate(resolved.stop, context),
   };
+  if (resolved.sync) snapshot.sync = renderTemplate(resolved.sync, context);
   if (resolved.nuke) snapshot.nuke = renderTemplate(resolved.nuke, context);
   if (resolved.logs) snapshot.logs = renderTemplate(resolved.logs, context);
   if (resolved.health) snapshot.health = renderTemplate(resolved.health, context);

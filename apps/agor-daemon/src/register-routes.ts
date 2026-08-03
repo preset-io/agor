@@ -3566,6 +3566,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerLongAuthenticatedRoute(
     app,
+    '/branches/:id/sync',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        return branchesService.syncEnvironment(id as import('@agor/core/types').BranchID, params);
+      },
+    },
+    {
+      // Branch `all`/admin control is enforced at the service layer.
+      create: { role: ROLES.VIEWER, action: 'sync branch environments' },
+    },
+    requireAuth
+  );
+
+  registerLongAuthenticatedRoute(
+    app,
     '/branches/:id/render-environment',
     {
       async create(data: unknown, params: RouteParams) {

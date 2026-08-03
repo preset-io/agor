@@ -31,6 +31,7 @@ export interface YamlVariant {
   extends?: string;
   start?: string;
   stop?: string;
+  sync?: string;
   nuke?: string;
   logs?: string;
   health?: string;
@@ -81,6 +82,7 @@ export function toVariant(name: string, y: YamlVariant): RepoEnvironmentVariant 
   if (typeof y.stop === 'string') variant.stop = y.stop;
   if (y.description) variant.description = y.description;
   if (y.extends) variant.extends = y.extends;
+  if (y.sync) variant.sync = y.sync;
   if (y.nuke) variant.nuke = y.nuke;
   if (y.logs) variant.logs = y.logs;
   if (y.health) variant.health = y.health;
@@ -157,6 +159,7 @@ export function resolveVariant(
   };
   if (variant.description ?? parent.description)
     merged.description = variant.description ?? parent.description;
+  if (variant.sync ?? parent.sync) merged.sync = variant.sync ?? parent.sync;
   if (variant.nuke ?? parent.nuke) merged.nuke = variant.nuke ?? parent.nuke;
   if (variant.logs ?? parent.logs) merged.logs = variant.logs ?? parent.logs;
   if (variant.health ?? parent.health) merged.health = variant.health ?? parent.health;

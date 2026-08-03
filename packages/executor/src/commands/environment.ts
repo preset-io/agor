@@ -86,6 +86,8 @@ function successMessage(action: EnvironmentLifecyclePayload['params']['action'])
       return 'Restart command completed';
     case 'nuke':
       return 'Nuke command completed';
+    case 'sync':
+      return 'Sync command completed';
   }
 }
 
@@ -97,6 +99,8 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
       return payload.params.stopCommand!;
     case 'nuke':
       return payload.params.nukeCommand!;
+    case 'sync':
+      return payload.params.syncCommand!;
     case 'restart':
       return payload.params.startCommand!;
   }
@@ -234,6 +238,30 @@ export async function handleEnvironmentLifecycle(
   try {
     const branch = await client.service('branches').get(branchId);
     const cwd = payload.params.branchPath || branch.path;
+
+    // Sync: push the branch's latest code into the already-running environment.
+    // Distinct from start/stop — it does NOT change status (the environment
+    // keeps running) and does NOT touch access_urls/facts (those describe the
+    // environment's identity, not this push). It only records the command
+    // outcome so the UI can show sync progress/errors.
+    if (payload.params.action === 'sync') {
+      const result = await runShellCommand({
+        command: payload.params.syncCommand!,
+        cwd,
+        env: payload.env,
+        commandType: 'start',
+      });
+      await updateBranchEnvironment(client, branchId, {
+        last_command: {
+          action: 'sync',
+          status: 'succeeded',
+          timestamp: new Date().toISOString(),
+          message: successMessage('sync'),
+          ...(result.output ? { output: result.output } : {}),
+        },
+      });
+      return { success: true, data: { branchId, action: 'sync' } };
+    }
 
     if (payload.params.action === 'restart' && payload.params.stopCommand) {
       await updateBranchEnvironment(client, branchId, {

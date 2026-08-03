@@ -101,7 +101,7 @@ export type BranchParams = QueryParams<{
     _agorSqlBranchAccessUserId?: UUID;
   };
 
-type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
+type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
 
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   command: 'environment.lifecycle';
@@ -364,6 +364,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     branch: Branch;
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
+    // Sync has no frozen branch column (unlike start/stop/nuke). It is rendered
+    // fresh at dispatch time — with current facts — and passed through here.
+    syncCommand?: string;
   }): Promise<{
     payload: EnvironmentLifecycleExecutorPayload;
     delegatedHomeKey?: string;
@@ -409,6 +412,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           stopCommand: branch.stop_command,
           nukeCommand: branch.nuke_command,
           appUrl: branch.app_url,
+          ...(options.syncCommand ? { syncCommand: options.syncCommand } : {}),
         },
       },
     };
@@ -418,6 +422,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     branch: Branch;
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
+    syncCommand?: string;
   }): Promise<void> {
     const { branch, action, params } = options;
     const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
@@ -2292,6 +2297,73 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       throw error;
     }
+  }
+
+  /**
+   * Custom method: Sync environment
+   *
+   * Push the branch's latest committed code into the already-running remote
+   * environment (e.g. a Codespace, which shares no filesystem with Agor). The
+   * variant's `sync` command is rendered FRESH here — with the environment's
+   * reported facts (`{{env.*}}`) — rather than read from a frozen branch column,
+   * so it always targets the current environment. Does not change status.
+   *
+   * Generic: any repo whose environment variant defines `sync` gets this for
+   * free; variants without a `sync` command reject the call.
+   */
+  async syncEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    const branch = await this.loadEnvironmentForAction(id, params, 'sync branch environments');
+
+    const reposService = this.app.service('repos');
+    const repo = await this.withTenantDatabase(
+      params,
+      () => reposService.get(branch.repo_id, params) as Promise<Repo>
+    );
+    const env = repo.environment;
+    if (!env) {
+      throw new Error('Repo has no v2 environment config; nothing to sync');
+    }
+
+    // Match the executor's render context (host IP + unix GID) and, crucially,
+    // pass the environment's facts so a `sync` template referencing `{{env.*}}`
+    // resolves to the running environment's real identity.
+    const config = await loadConfig();
+    const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
+    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
+
+    const snapshot = renderBranchSnapshot(
+      { slug: repo.slug, environment: env },
+      {
+        branch_unique_id: branch.branch_unique_id,
+        name: branch.name,
+        path: branch.path,
+        custom_context: branch.custom_context,
+        unix_gid: unixGid,
+        host_ip_address: hostIpAddress,
+        base_ref: branch.base_ref,
+        ref_type: branch.ref_type,
+        facts: branch.environment_instance?.facts,
+      },
+      branch.environment_variant ?? undefined
+    );
+    if (!snapshot?.sync) {
+      throw new Error(
+        `Environment variant "${branch.environment_variant ?? env.default}" defines no sync command`
+      );
+    }
+
+    // Shell-command execution only for now (the sync mechanism is a git push +
+    // remote fast-forward). A webhook-shaped sync can be added alongside the
+    // start/stop webhook path later if a backend needs it.
+    console.log(`🔄 Syncing environment for branch ${branch.name}`);
+    await this.dispatchEnvironmentExecutor({
+      branch,
+      action: 'sync',
+      params,
+      syncCommand: snapshot.sync,
+    });
+
+    return await this.withTenantDatabase(params, () => this.get(id, params));
   }
 
   /**

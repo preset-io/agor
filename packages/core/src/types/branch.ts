@@ -521,7 +521,7 @@ export interface BranchEnvironmentInstance {
    * the health monitor still waits for the app to become reachable.
    */
   last_command?: {
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
     status: 'succeeded' | 'failed';
     timestamp: string;
     message?: string;
@@ -699,6 +699,18 @@ export interface RepoEnvironmentVariant {
    * declaration when `extends` supplies it. See {@link start}.
    */
   stop?: string;
+
+  /**
+   * Optional command to push the branch's latest committed code into a running
+   * remote environment (Handlebars template). For a local environment this is
+   * usually unset (the environment already runs on the branch's own files); for
+   * a remote backend (e.g. a Codespace, which shares no filesystem with Agor)
+   * it publishes the branch and has the remote fast-forward its working tree, so
+   * the remote always sits on the latest state and in-environment watchers
+   * hot-reload. Invoked via `syncEnvironment` — on demand or after a commit.
+   * Emits facts like start/stop (e.g. `AGOR_FACT synced_sha=…`).
+   */
+  sync?: string;
 
   /**
    * Destructive reset command (Handlebars template).
