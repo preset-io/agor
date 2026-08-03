@@ -11,8 +11,8 @@
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
  * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
- *    (`repos.initializeUnixGroup`, `branches.initializeUnixGroup`) so it runs
- *    with daemon sudo privileges regardless of executor impersonation mode.
+ *    (`repos.syncUnixPermissions`, `branches.syncUnixPermissions`) which
+ *    synchronously dispatch a tenant-mounted operator executor.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
@@ -897,10 +897,11 @@ export async function handleGitClone(
 
       if (payload.params.repoId) {
         // Daemon pre-created the row in `cloneRepository` so failures stay
-        // queryable. Patch it to `ready` and fill in the post-clone fields.
+        // queryable. Fill post-clone fields but keep it `cloning` until the
+        // synchronous operator permission handoff below completes.
         repoId = payload.params.repoId;
         console.log(
-          `[git.clone] Patching pre-created repo ${shortId(repoId)} to ready: ` +
+          `[git.clone] Patching pre-created repo ${shortId(repoId)} with cloned metadata: ` +
             `slug=${slug} default_branch=${defaultBranch}` +
             (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
         );
@@ -908,7 +909,7 @@ export async function handleGitClone(
           name: repoName,
           local_path: cloneResult.path,
           default_branch: defaultBranch,
-          clone_status: 'ready',
+          clone_status: 'cloning',
           // Explicit null clears any prior `clone_error` (e.g. from a retry
           // through the daemon's failed-row replace path). `deepMerge` in
           // `RepoRepository.update` propagates the null; `repoToInsert`
@@ -934,22 +935,21 @@ export async function handleGitClone(
           remote_url: safeCloneUrl,
           local_path: cloneResult.path,
           default_branch: defaultBranch,
-          clone_status: 'ready',
+          clone_status: 'cloning',
           ...(environment ? { environment } : {}),
         });
         repoId = repoRecord.repo_id;
         console.log(`[git.clone] Repo record created: ${repoId}`);
       }
 
-      // Initialize Unix group for repo isolation via daemon RPC (if requested).
-      // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
-      // sudo privileges regardless of executor impersonation mode.
+      // Synchronize Unix isolation through the tenant-mounted operator
+      // executor. Failure remains best-effort (the historical contract), but
+      // the awaited handoff prevents clients observing `ready` before the
+      // permission attempt has completed.
       if (payload.params.initUnixGroup && repoId) {
         try {
           console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
-          const result = await client
-            .service('repos')
-            .initializeUnixGroup({ repoId, userId: payload.params.userId });
+          const result = await client.service('repos').syncUnixPermissions({ repoId });
           unixGroup = result.unixGroup;
           console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
         } catch (error) {
@@ -959,6 +959,10 @@ export async function handleGitClone(
             error instanceof Error ? error.message : String(error)
           );
         }
+      }
+
+      if (repoId) {
+        await client.service('repos').patch(repoId, { clone_status: 'ready' });
       }
     }
 
@@ -1139,7 +1143,6 @@ export async function handleGitBranchAdd(
   let resolvedRepoPath: string | undefined;
   let resolvedBranchPath: string | undefined;
   let resolvedBranchName: string | undefined;
-  let resolvedOthersAccess: 'none' | 'read' | 'write' = 'read';
 
   // Dry run mode
   if (options.dryRun) {
@@ -1184,7 +1187,6 @@ export async function handleGitBranchAdd(
     resolvedRepoPath = repoPath;
     resolvedBranchPath = branchPath;
     resolvedBranchName = branchName;
-    resolvedOthersAccess = branchRecord.others_fs_access || 'read';
     const branch = branchRecord.ref || branchName;
     const shouldCreateBranch = branchRecord.new_branch ?? false;
     const sourceBranch = branchRecord.base_ref || repo.default_branch || 'main';
@@ -1266,17 +1268,13 @@ export async function handleGitBranchAdd(
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Initialize Unix group for branch isolation via daemon RPC (if requested).
-    // Runs daemon-side so that groupadd/chgrp/setfacl execute with daemon
-    // sudo privileges regardless of executor impersonation mode.
+    // Synchronize Unix isolation through a capability-scoped operator executor.
+    // This call is synchronous so the branch cannot become ready first.
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && branchId) {
       try {
-        const othersAccess = resolvedOthersAccess;
         console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
-        const result = await client
-          .service('branches')
-          .initializeUnixGroup({ branchId, othersAccess });
+        const result = await client.service('branches').syncUnixPermissions({ branchId });
         unixGroup = result.unixGroup;
         console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
       } catch (error) {
@@ -1396,12 +1394,11 @@ export async function handleGitBranchAdd(
         }
       }
 
-      // Step 2: Apply perms/ACLs via daemon RPC (runs even if dir already existed from a prior attempt)
+      // Step 2: synchronously dispatch idempotent operator repair, even when a
+      // prior attempt already created the directory.
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          await client
-            .service('branches')
-            .initializeUnixGroup({ branchId, othersAccess: resolvedOthersAccess });
+          await client.service('branches').syncUnixPermissions({ branchId });
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {

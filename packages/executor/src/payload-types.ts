@@ -820,6 +820,12 @@ export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
     /** Daemon Unix user (added to repo group for daemon access) */
     daemonUser: z.string().optional(),
 
+    /** Post-clone initialization applies permissions to the whole repo root. */
+    initialize: z.boolean().optional(),
+
+    /** Trusted clone creator ID whose Unix identity receives initial access. */
+    creatorUserId: z.string().uuid().optional(),
+
     /** If true, delete the group instead of syncing (for repo removal) */
     delete: z.boolean().optional(),
   }),

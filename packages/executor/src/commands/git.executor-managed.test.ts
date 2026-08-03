@@ -109,7 +109,7 @@ function createClient(records: {
             return { ...(records.repo ?? {}), ...data };
           }),
           create: vi.fn(async (data: Record<string, unknown>) => data),
-          initializeUnixGroup: vi.fn(async () => ({ unix_group: 'agor_repo_test' })),
+          syncUnixPermissions: vi.fn(async () => ({ unixGroup: 'agor_repo_test' })),
           find,
         };
       }
@@ -410,9 +410,12 @@ describe('managed executor git/fs commands', () => {
       expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
         "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
       );
-      expect(patchedRepos.at(-1)).toMatchObject({
-        local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-      });
+      expect(patchedRepos).toContainEqual(
+        expect.objectContaining({
+          local_path: '/safe/repos/smoke/agor-assistant-pr1258',
+        })
+      );
+      expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
     } finally {
       if (previousGitConfigParameters === undefined) {
         delete process.env.GIT_CONFIG_PARAMETERS;
