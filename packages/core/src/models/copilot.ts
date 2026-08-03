@@ -28,6 +28,13 @@ export const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.6';
  *
  * Order matters — the picker renders in this order, and the first entry
  * is what alias-mode falls back to.
+ *
+ * Claude Opus 5 is deliberately absent. Anthropic documents it on the Claude
+ * API, Bedrock, Vertex, and Microsoft Foundry, but does not list GitHub Copilot
+ * as a surface that serves it. Add it here — metadata entry *and* a matching
+ * `COPILOT_CONTEXT_LIMITS` entry — only once Copilot is confirmed to offer it.
+ * Accounts that already have it still get it from the live `/copilot-models`
+ * endpoint, which overrides this fallback list.
  */
 const _COPILOT_MODEL_METADATA = {
   // Feb 2026 GA cohort — Copilot CLI default lineup

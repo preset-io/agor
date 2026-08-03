@@ -66,6 +66,20 @@ describe('curateModelOptions (Claude)', () => {
     expect(ids).toHaveLength(normalized.length);
   });
 
+  it('renders Opus 5 ahead of every older Opus', () => {
+    const ids = curateModelOptions('claude-code', normalized, DEFAULT_CLAUDE_MODEL).map(
+      (m) => m.id
+    );
+    const opus5 = ids.indexOf('claude-opus-5');
+    const olderOpus = ids.filter((id) => id.startsWith('claude-opus-4'));
+
+    expect(opus5).toBeGreaterThanOrEqual(0);
+    expect(olderOpus.length).toBeGreaterThan(0);
+    for (const id of olderOpus) {
+      expect(ids.indexOf(id)).toBeGreaterThan(opus5);
+    }
+  });
+
   it('surfaces the default/recommended model first', () => {
     const ids = curateModelOptions('claude-code', normalized, DEFAULT_CLAUDE_MODEL).map(
       (m) => m.id
