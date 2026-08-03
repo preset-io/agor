@@ -1,6 +1,6 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp } from 'antd';
+import { App as AntApp, ConfigProvider } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { UserSettingsModal } from './UserSettingsModal';
@@ -110,7 +110,17 @@ vi.mock('../MCPServerSelect', async () => {
 });
 
 function renderWithApp(children: ReactNode) {
-  return render(<AntApp>{children}</AntApp>);
+  // `hashed: false` drops AntD's per-class CSS-in-JS hash, which is the dominant
+  // cost of mounting this Form/Menu/Modal-heavy tree in jsdom (seconds per
+  // render otherwise). It only removes the `css-dev-only-*` hash suffix —
+  // semantic `.ant-*` classes and all component behaviour are unchanged — so it
+  // keeps these integration tests within the CI per-test timeout without
+  // altering what they exercise.
+  return render(
+    <ConfigProvider theme={{ hashed: false }}>
+      <AntApp>{children}</AntApp>
+    </ConfigProvider>
+  );
 }
 
 function makeUser(overrides: Partial<User> = {}): User {
