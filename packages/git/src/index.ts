@@ -565,7 +565,8 @@ export async function addSafeDirectoryBestEffort(path: string, logPrefix?: strin
 
 export interface CloneOptions {
   url: string;
-  targetDir?: string;
+  /** Caller-resolved destination; this package does not own application filesystem layout. */
+  targetDir: string;
   bare?: boolean;
   /**
    * Pin the working tree to a specific branch instead of the remote's HEAD.
@@ -605,9 +606,7 @@ export {
   stripGitUrlCredentials,
 } from './pure';
 
-/**
- * Clone a Git repository to ~/.agor/repos/<name>
- */
+/** Clone a Git repository to the caller-owned, explicitly resolved target directory. */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   const cloneUrl = stripGitUrlCredentials(options.url);
   if (cloneUrl !== options.url) {
