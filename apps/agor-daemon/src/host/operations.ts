@@ -25,26 +25,6 @@ export interface DaemonHostIdentityOperations {
     input: HostOperationOptions & { username: string; deleteHome: boolean }
   ): Promise<DaemonHostOperationResult>;
 }
-export interface DaemonHostMaintenanceOperations {
-  createHomeSymlink(
-    input: HostOperationOptions & {
-      username: string;
-      branchName: string;
-      branchPath: string;
-      homeBase?: string;
-    }
-  ): Promise<DaemonHostOperationResult>;
-  removeHomeSymlink(
-    input: HostOperationOptions & { username: string; branchName: string; homeBase?: string }
-  ): Promise<DaemonHostOperationResult>;
-  cleanupHomeSymlinks(
-    input: HostOperationOptions & { username: string; homeBase?: string }
-  ): Promise<DaemonHostOperationResult>;
-  scrubManagedGitRemotes(
-    input: HostOperationOptions & { write: boolean }
-  ): Promise<DaemonHostOperationResult>;
-}
 export interface DaemonHostOperations {
   identity: DaemonHostIdentityOperations;
-  maintenance: DaemonHostMaintenanceOperations;
 }

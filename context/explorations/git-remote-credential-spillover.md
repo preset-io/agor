@@ -39,15 +39,18 @@ agent/user git commands.
 - Branch creation/restore scrubs the base repo config before `fetch` /
   `worktree add`.
 - Clone-mode branch creation scrubs the new clone's `.git/config` after clone.
-- Daemon startup launches a best-effort post-start scrub for managed remote
-  repos/branches if they contain unsafe remote URLs. It repairs both persisted
-  repo `remote_url` rows and managed git config files. It runs after the API is
-  listening to avoid extending the boot critical path, so it is not a hard
-  pre-listen exposure barrier.
+- Daemon startup launches a best-effort post-start repair after the API is
+  listening. The daemon sanitizes Agor-owned persisted `repo.remote_url` rows;
+  an executor-owned `git.managed-credentials.reconcile` command repairs managed
+  repo/worktree git configs. In required-from-auth multi-tenancy, physical
+  reconciliation is deferred to the tenant storage authority because one
+  global executor cannot assume every tenant checkout is mounted.
 - CLI repair: `agor local scrub-git-remotes` scans registered repos/branches;
   add `--write` to remove userinfo from persisted repo rows and remote
   `url` / `pushurl` config entries. Unlike daemon startup repair, the explicit
-  admin command includes registered local repos/branches too.
+  offline command includes registered local repos/branches too. The remote
+  `agor admin scrub-git-remotes` command was removed because it granted the
+  daemon branch/Git filesystem maintenance authority.
 
 ## Operational guidance
 

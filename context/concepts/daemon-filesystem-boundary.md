@@ -11,7 +11,7 @@ Every observed direct I/O operation has an exact registry tuple (file, import, i
 - **C — tenant/user/session/branch violation that must move.** Workspace and user-home access is transitional and requires the same review metadata.
 - **D — ambiguous product decision.** The owning team must decide the durable boundary by the review date.
 
-Adapter placement under `apps/agor-daemon/src/host/local/` is necessary layering, **not an allowlist**. Local adapters need the same exact declarations as every other module. Privileged identity/group operations implement `DaemonHostIdentityOperations`; home-symlink and Git-repair maintenance use the separate `DaemonHostMaintenanceOperations` capability. Hosted mode does not register either service, and these operations must never be delegated to an ordinary user-impersonated executor.
+Adapter placement under `apps/agor-daemon/src/host/local/` is necessary layering, **not an allowlist**. Local adapters need the same exact declarations as every other module. Privileged identity/group operations implement `DaemonHostIdentityOperations`. User-home symlink maintenance and managed Git repair are deliberately absent from the daemon service/import graph: operators retain the offline `agor local` commands, while runtime managed Git reconciliation belongs to the executor. Hosted mode does not register daemon host identity operations.
 
 ## Checker and workflow
 

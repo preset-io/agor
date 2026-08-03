@@ -1,16 +1,12 @@
 import {
   addToBranchGroupAction,
-  cleanupBrokenSymlinksAction,
   createBranchGroupAction,
-  createBranchSymlinkAction,
   createBufferedReporter,
   deleteBranchGroupAction,
   deleteUnixUserAction,
   ensureUnixUserAction,
-  removeBranchSymlinkAction,
   removeFromBranchGroupAction,
-  scrubGitRemotesAction,
-} from '@agor/core/local-actions';
+} from '@agor/core/local-actions/identity';
 import type { DaemonHostOperations, HostOperationOptions } from '../operations.js';
 
 function invoke<T extends HostOperationOptions>(
@@ -29,12 +25,6 @@ export function createLocalDaemonHostOperations(): DaemonHostOperations {
       removeUserFromGroup: (input) => invoke(removeFromBranchGroupAction, input),
       ensureUser: (input) => invoke(ensureUnixUserAction, input),
       deleteUser: (input) => invoke(deleteUnixUserAction, input),
-    },
-    maintenance: {
-      createHomeSymlink: (input) => invoke(createBranchSymlinkAction, input),
-      removeHomeSymlink: (input) => invoke(removeBranchSymlinkAction, input),
-      cleanupHomeSymlinks: (input) => invoke(cleanupBrokenSymlinksAction, input),
-      scrubManagedGitRemotes: (input) => invoke(scrubGitRemotesAction, input),
     },
   };
 }

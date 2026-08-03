@@ -8,6 +8,12 @@
 
 ## TL;DR
 
+**Maintenance boundary update (2026-08):** daemon `/admin/local-actions` now
+contains only legitimate host Unix identity/group operations. User-home symlink
+create/remove/cleanup and managed Git remote scrubbing remain available only as
+offline `agor local` maintenance. Startup DB URL sanitation remains daemon-owned,
+and managed `.git/config` reconciliation remains executor-owned.
+
 **The daemon is much closer to FS-free than the prompt assumed, but the gap is concentrated in three places that all reduce to the same root: the daemon believes it shares a filesystem with the branches it manages.** That belief is encoded in (a) artifact landing, (b) upload handling, and (c) environment spawning — the third being the one that hits the ACL/`--watch` wall.
 
 **Recommended target: Option D — a hybrid where the daemon stays single-host FS-coupled for self-hosted / `unix_user_mode: simple`, and becomes FS-free in hosted multi-tenant deployments by treating branches as remote resources owned by per-branch executor pods.** Local watch-mode envs survive in self-hosted (single host, single uid namespace) and are explicitly _not supported_ on hosted — long-lived watch envs in hosted become **remote env pods that share the branch volume with the executor, not with the daemon**. This avoids the ACL coordination problem Max already hit, keeps the self-hosted UX intact, and gives hosted a clean horizontal scale story.

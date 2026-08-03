@@ -56,6 +56,7 @@ export default defineConfig({
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
     'local-actions/index': 'src/local-actions/index.ts', // Shared host-local admin actions
+    'local-actions/identity': 'src/local-actions/identity.ts', // Daemon host identity/group actions only
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)

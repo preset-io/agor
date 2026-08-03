@@ -18,6 +18,7 @@ const CAPABILITY_MANIFEST = {
   child_process: '*',
   '@agor/core/git/exec': '*',
   '@agor/core/local-actions': '*',
+  '@agor/core/local-actions/identity': '*',
   'simple-git': ['simpleGit'],
   multer: ['diskStorage'],
   express: ['static'],

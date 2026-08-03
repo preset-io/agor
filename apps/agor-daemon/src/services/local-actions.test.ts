@@ -14,12 +14,6 @@ function host(): DaemonHostOperations {
       ensureUser: vi.fn(result),
       deleteUser: vi.fn(result),
     },
-    maintenance: {
-      createHomeSymlink: vi.fn(result),
-      removeHomeSymlink: vi.fn(result),
-      cleanupHomeSymlinks: vi.fn(result),
-      scrubManagedGitRemotes: vi.fn(result),
-    },
   };
 }
 
@@ -42,12 +36,17 @@ describe('local daemon host operations service', () => {
     });
   });
 
-  it('keeps maintenance capabilities separate and validates managed homes', async () => {
+  it.each([
+    'unix.symlink.create',
+    'unix.symlink.remove',
+    'unix.symlink.cleanupBroken',
+    'git.remoteCredentials.scrubManaged',
+  ])('rejects removed maintenance action %s', async (action) => {
     const operations = host();
     const service = createLocalActionsService(operations);
     await expect(
       service.create({
-        action: 'unix.symlink.create',
+        action: action as never,
         params: {
           username: 'alice',
           branchName: 'x',
@@ -55,8 +54,7 @@ describe('local daemon host operations service', () => {
           homeBase: '/srv/home',
         },
       })
-    ).rejects.toThrow(/managed Agor home base/);
-    expect(operations.maintenance.createHomeSymlink).not.toHaveBeenCalled();
+    ).rejects.toThrow(/Unsupported local action/);
   });
 
   it('does not register local host operations in hosted mode', () => {

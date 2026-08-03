@@ -9,11 +9,7 @@ export type LocalActionName =
   | 'unix.group.addUser'
   | 'unix.group.removeUser'
   | 'unix.user.ensure'
-  | 'unix.user.delete'
-  | 'unix.symlink.create'
-  | 'unix.symlink.remove'
-  | 'unix.symlink.cleanupBroken'
-  | 'git.remoteCredentials.scrubManaged';
+  | 'unix.user.delete';
 export interface LocalActionRequest {
   action: LocalActionName;
   params?: Record<string, unknown>;
@@ -69,29 +65,6 @@ export function createLocalActionsService(host: DaemonHostOperations) {
             username: stringParam(p, 'username'),
             deleteHome: p.deleteHome === true,
           });
-        case 'unix.symlink.create':
-          return host.maintenance.createHomeSymlink({
-            ...options,
-            username: stringParam(p, 'username'),
-            branchName: stringParam(p, 'branchName'),
-            branchPath: stringParam(p, 'branchPath'),
-            homeBase: homeBase(p),
-          });
-        case 'unix.symlink.remove':
-          return host.maintenance.removeHomeSymlink({
-            ...options,
-            username: stringParam(p, 'username'),
-            branchName: stringParam(p, 'branchName'),
-            homeBase: homeBase(p),
-          });
-        case 'unix.symlink.cleanupBroken':
-          return host.maintenance.cleanupHomeSymlinks({
-            ...options,
-            username: stringParam(p, 'username'),
-            homeBase: homeBase(p),
-          });
-        case 'git.remoteCredentials.scrubManaged':
-          return host.maintenance.scrubManagedGitRemotes({ ...options, write: p.write === true });
         default:
           throw new BadRequest(
             `Unsupported local action: ${(data as { action?: unknown }).action}`
