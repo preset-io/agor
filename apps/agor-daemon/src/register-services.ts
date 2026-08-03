@@ -979,7 +979,6 @@ function createExecuteHandler(
 
     let localExecutorPid: number | undefined;
     spawnExecutor(executorPayload, {
-      cwd,
       asUser: executorUnixUser || undefined,
       preparedEnv: executorEnv,
       logPrefix,

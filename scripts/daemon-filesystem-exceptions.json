@@ -168,48 +168,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-014",
-    "class": "A",
-    "file": "packages/core/src/config/agor-yml.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "fs",
-    "operation": "call:fs.existsSync@parseAgorYml#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-015",
-    "class": "A",
-    "file": "packages/core/src/config/agor-yml.ts",
-    "import": "node:fs",
-    "symbol": "readFileSync",
-    "local": "fs",
-    "operation": "call:fs.readFileSync@parseAgorYml#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-016",
-    "class": "A",
-    "file": "packages/core/src/config/agor-yml.ts",
-    "import": "node:fs",
-    "symbol": "writeFileSync",
-    "local": "fs",
-    "operation": "call:fs.writeFileSync@writeAgorYml#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-017",
     "class": "A",
     "file": "packages/core/src/db/migrate.ts",
@@ -222,20 +180,6 @@
     "rationale": "Required by the local daemon host/operator implementation.",
     "reviewTarget": null,
     "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-018",
-    "class": "C",
-    "file": "packages/git/src/pure.ts",
-    "import": "node:fs",
-    "symbol": "readFileSync",
-    "local": "readFileSync",
-    "operation": "call:readFileSync@getDataHome#1",
-    "owner": "@agor/git maintainers",
-    "boundary": "tenant/user/session/branch violation",
-    "rationale": "Direct workspace or user-home access must move out of the daemon boundary.",
-    "reviewTarget": "Move the operation behind the owning tenant/workspace/credential capability.",
-    "reviewDate": "2026-09-01"
   },
   {
     "id": "DAEMON-FS-CAP-024",
@@ -658,20 +602,6 @@
     "reviewDate": "2026-09-01"
   },
   {
-    "id": "DAEMON-FS-CAP-054",
-    "class": "A",
-    "file": "packages/core/src/lib/validation.ts",
-    "import": "node:fs/promises",
-    "symbol": "stat",
-    "local": "fs",
-    "operation": "call:fs.stat@validateDirectory#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-055",
     "class": "A",
     "file": "packages/core/src/unix/command-executor.ts",
@@ -721,20 +651,6 @@
     "symbol": "execSync",
     "local": "execSync",
     "operation": "call:execSync@execSync#3",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-059",
-    "class": "A",
-    "file": "packages/core/src/unix/environment-command-spawn.ts",
-    "import": "node:child_process",
-    "symbol": "spawn",
-    "local": "spawn",
-    "operation": "call:spawn@spawnEnvironmentCommand#1",
     "owner": "daemon host/operator runtime",
     "boundary": "deployment-local host capability",
     "rationale": "Required by the local daemon host/operator implementation.",
@@ -1050,34 +966,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-082",
-    "class": "C",
-    "file": "apps/agor-daemon/src/utils/branch-workspace-path.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "fs",
-    "operation": "call:fs.existsSync@canonicalizeExistingPrefix#1",
-    "owner": "daemon branch/workspace boundary maintainers",
-    "boundary": "tenant/user/session/branch violation",
-    "rationale": "Direct workspace or user-home access must move out of the daemon boundary.",
-    "reviewTarget": "Move the operation behind the owning tenant/workspace/credential capability.",
-    "reviewDate": "2026-09-01"
-  },
-  {
-    "id": "DAEMON-FS-CAP-083",
-    "class": "C",
-    "file": "apps/agor-daemon/src/utils/branch-workspace-path.ts",
-    "import": "node:fs/promises",
-    "symbol": "realpath",
-    "local": "realpath",
-    "operation": "call:realpath@canonicalizeExistingPrefix#1",
-    "owner": "daemon branch/workspace boundary maintainers",
-    "boundary": "tenant/user/session/branch violation",
-    "rationale": "Direct workspace or user-home access must move out of the daemon boundary.",
-    "reviewTarget": "Move the operation behind the owning tenant/workspace/credential capability.",
-    "reviewDate": "2026-09-01"
-  },
-  {
     "id": "DAEMON-FS-CAP-084",
     "class": "A",
     "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
@@ -1106,20 +994,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-086",
-    "class": "A",
-    "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "existsSync",
-    "operation": "call:existsSync@spawnExecutorLocal#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-087",
     "class": "A",
     "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
@@ -1141,20 +1015,6 @@
     "symbol": "spawn",
     "local": "spawn",
     "operation": "call:spawn@spawnExecutorWithTemplate#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Required by the local daemon host/operator implementation.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-089",
-    "class": "A",
-    "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "existsSync",
-    "operation": "call:existsSync@runExecutorCommandLocal#1",
     "owner": "daemon host/operator runtime",
     "boundary": "deployment-local host capability",
     "rationale": "Required by the local daemon host/operator implementation.",

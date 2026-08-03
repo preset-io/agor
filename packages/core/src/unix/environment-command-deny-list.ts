@@ -88,9 +88,9 @@ export class EnvCommandDeniedError extends Error {
 /**
  * Throw if the given command matches any deny pattern.
  *
- * Called at spawn time from `spawnEnvironmentCommand` so it runs regardless
- * of how the command was authored (config template, .agor.yml import, direct
- * branch edit) and regardless of caller (REST, MCP, WebSocket).
+ * Called by the executor environment-command handler immediately before it
+ * launches the command, regardless of how the command was authored (config
+ * template, .agor.yml import, or direct branch edit).
  */
 export function assertEnvCommandAllowed(command: string, commandType: string): void {
   for (const entry of ENV_COMMAND_DENY_PATTERNS) {

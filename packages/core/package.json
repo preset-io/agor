@@ -76,6 +76,12 @@
       "import": "./dist/config/index.js",
       "require": "./dist/config/index.cjs"
     },
+    "./config/node": {
+      "source": "./src/config/agor-yml.ts",
+      "types": "./dist/config/agor-yml.d.ts",
+      "import": "./dist/config/agor-yml.js",
+      "require": "./dist/config/agor-yml.cjs"
+    },
     "./config/browser": {
       "source": "./src/config/browser.ts",
       "types": "./dist/config/browser.d.ts",
@@ -99,6 +105,12 @@
       "types": "./dist/lib/feathers-validation.d.ts",
       "import": "./dist/lib/feathers-validation.js",
       "require": "./dist/lib/feathers-validation.cjs"
+    },
+    "./lib/validation": {
+      "source": "./src/lib/validation.ts",
+      "types": "./dist/lib/validation.d.ts",
+      "import": "./dist/lib/validation.js",
+      "require": "./dist/lib/validation.cjs"
     },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",

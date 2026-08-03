@@ -5,7 +5,6 @@
  */
 
 export * from './agentic-tool-preset-resolver';
-export * from './agor-yml';
 export * from './config-manager';
 export * from './constants';
 export * from './env-blocklist';

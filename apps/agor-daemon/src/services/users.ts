@@ -5,7 +5,6 @@
  * Only active when authentication is enabled via config.
  */
 
-import { generateId } from '@agor/core';
 import {
   assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
@@ -24,6 +23,7 @@ import {
   deleteFrom,
   encryptApiKey,
   eq,
+  generateId,
   hash,
   insert,
   select,

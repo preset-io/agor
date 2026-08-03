@@ -20,7 +20,8 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { parseAgorYml, writeAgorYml } from '@agor/core/config';
+import { getReposDir } from '@agor/core/config';
+import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -36,7 +37,6 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
-  getReposDir,
   isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
@@ -853,7 +853,7 @@ export async function handleGitClone(
     );
     const cloneResult = await cloneRepo({
       url: safeCloneUrl,
-      targetDir: outputPath, // undefined = let cloneRepo compute path
+      targetDir: outputPath ?? join(reposDir, extractRepoName(safeCloneUrl)),
       bare: payload.params.bare,
       branch: pinnedBranch,
       env,

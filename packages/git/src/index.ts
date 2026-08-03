@@ -16,8 +16,6 @@ import {
   buildAuthHeaderEnv,
   buildGitConfigEnv,
   extractRepoName,
-  getBranchesDir,
-  getReposDir,
   gitUrlHasUserinfo,
   parseHostFromGitUrl,
   redactGitUrlCredentials,
@@ -600,9 +598,6 @@ export {
   buildGitConfigEnv,
   buildGitConfigParameters,
   extractRepoName,
-  getBranchesDir,
-  getBranchPath,
-  getReposDir,
   gitUrlHasUserinfo,
   isLikelyGitToken,
   parseHostFromGitUrl,
@@ -622,8 +617,10 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   const repoName = extractRepoName(cloneUrl);
-  const reposDir = getReposDir();
-  const targetPath = options.targetDir || join(reposDir, repoName);
+  if (!options.targetDir) {
+    throw new Error('cloneRepo requires an explicitly resolved targetDir');
+  }
+  const targetPath = options.targetDir;
 
   // Auth is delivered exclusively via the `http.<host>.extraheader` env-var
   // path configured by `createGit`. We deliberately do NOT splice the token
@@ -1735,7 +1732,7 @@ export async function getGitState(repoPath: string): Promise<string> {
  */
 export async function deleteRepoDirectory(
   repoPath: string,
-  allowedReposDir: string = getReposDir()
+  allowedReposDir: string
 ): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');
@@ -1780,7 +1777,7 @@ export async function deleteRepoDirectory(
  */
 export async function deleteBranchDirectory(
   branchPath: string,
-  allowedBranchesDir: string = getBranchesDir()
+  allowedBranchesDir: string
 ): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');

@@ -31,10 +31,14 @@ vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
   return {
     ...actual,
-    parseAgorYml: mocks.parseAgorYml,
-    writeAgorYml: mocks.writeAgorYml,
+    getReposDir: mocks.getReposDir,
   };
 });
+
+vi.mock('@agor/core/config/node', () => ({
+  parseAgorYml: mocks.parseAgorYml,
+  writeAgorYml: mocks.writeAgorYml,
+}));
 
 vi.mock('../git/index.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../git/index.js');
@@ -45,7 +49,6 @@ vi.mock('../git/index.js', async () => {
     createBranchAsClone: mocks.createBranchAsClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
-    getReposDir: mocks.getReposDir,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
     getRemoteUrl: mocks.getRemoteUrl,

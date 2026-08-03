@@ -959,16 +959,10 @@ importers:
 
   packages/git:
     dependencies:
-      js-yaml:
-        specifier: ^5.2.1
-        version: 5.2.1
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0(supports-color@8.1.1)
     devDependencies:
-      '@types/js-yaml':
-        specifier: ^4.0.9
-        version: 4.0.9
       '@types/node':
         specifier: ^24.6.0
         version: 24.10.0

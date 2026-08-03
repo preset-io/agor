@@ -506,3 +506,11 @@ Same as §1.1, presented in the table format the prompt requested:
 ---
 
 _End of analysis._
+
+## 2026-08-03 closure update
+
+The production daemon no longer reaches filesystem/config loading through `@agor/git/pure`, the root `@agor/core` barrel, the shared config barrel's Node-only `.agor.yml` reader/writer, or the obsolete core environment-command spawner. Local executor subprocesses now always start in the operator-owned executor package directory; branch cwd exists only in the executor payload. Short-lived local commands expose no caller-supplied cwd seam.
+
+Registry count moved from 120 (A 73 / B 9 / C 37 / D 1) to 112 (A 66 / B 9 / C 36 / D 1). The sole upload-specific blocker is the legacy gateway upload provenance keeping `DAEMON-FS-CAP-082/083` reachable. PR #2102 owns removing that provenance; after it lands, delete `canonicalizeExistingPrefix` and those entries rather than merging a duplicate upload-store implementation here.
+
+Residual semantic coupling not proven by the checker: the daemon still computes tenant layout/path strings and reads branch/repo paths from tenant-owned rows for authorization and executor payload construction. Executors, not daemon subprocess launch cwd, resolve and use those paths. Any future in-daemon consumer of those strings would reopen the boundary even if it used an API absent from the checker's finite manifest.

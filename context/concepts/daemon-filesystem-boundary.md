@@ -36,3 +36,16 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 - Workspace traversal uses checked-in package `source` exports and relative modules; it does not inspect external `node_modules` implementations.
 - Call identity uses the nearest named function/method plus an occurrence number. Refactors can require registry updates even when authority is unchanged.
 - The checker verifies declared syntactic capabilities, not path provenance, tenant scoping, authorization, cleanup correctness, TOCTOU safety, or command argument safety. Those require runtime design and negative tests at the owning boundary.
+
+## Closure status (2026-08-03)
+
+The daemon-reachable registry contains **112** exact capabilities (**66 A, 9 B, 36 C, 1 D**), down from **120** (**73 A, 9 B, 37 C, 1 D**) before this closure. The removed entries are 014–016, 018, 054, 059, 086, and 089; they represented incidental reachability of `.agor.yml` Node I/O, Git layout/config I/O, a dead validation helper, the obsolete environment-command spawner, and tenant-cwd checks in executor launching.
+
+Two C entries remain intentionally dependent on upload-store-boundary PR #2102:
+
+- `DAEMON-FS-CAP-082` — `existsSync` in `canonicalizeExistingPrefix`
+- `DAEMON-FS-CAP-083` — `realpath` in `canonicalizeExistingPrefix`
+
+Both are reachable only from legacy gateway upload handling through `branch-workspace-path.ts`. Do not reclassify them as host/operator authority. Once #2102 removes that runtime provenance, delete the path-capable canonicalization helper and both declarations. Pure lexical authorization remains separate from this compatibility path.
+
+The checker still cannot see semantic path authority. In particular, daemon services resolve tenant layout strings and carry branch/repo cwd values from tenant-owned database records into typed executor payloads. That is intentional routing data, not daemon I/O: local executor processes launch from the executor package directory, and only executor commands consume workspace cwd. Review payload schemas and executor command handlers when changing this contract, because a string passed into an unmanifested dependency or remote launcher can become filesystem authority without a syntactic daemon capability.
