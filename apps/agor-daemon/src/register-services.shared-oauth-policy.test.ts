@@ -15,11 +15,13 @@ describe('shared OAuth lifecycle registration', () => {
 
   it('admin-gates every shared pending flow at the central start boundary', () => {
     expect(flowStart).toContain("if (opts.oauthMode === 'shared')");
-    expect(flowStart).toContain("requireSharedOAuthAdministrator(opts.actorParams, 'start')");
+    expect(flowStart).toContain(
+      "requireSharedOAuthAdministrator(opts.sharedOAuthAuthorization, 'start')"
+    );
     expect(flowStart.indexOf('requireSharedOAuthAdministrator')).toBeLessThan(
       flowStart.indexOf('startMCPOAuthFlow(')
     );
-    expect(source.match(/actorParams: params/g)).toHaveLength(3);
+    expect(source.match(/sharedOAuthAuthorization:/g)).toHaveLength(4);
   });
 
   it('rejects cross-tenant manual completion before token exchange or state consumption', () => {

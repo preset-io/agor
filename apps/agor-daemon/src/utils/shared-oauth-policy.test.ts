@@ -7,11 +7,23 @@ const params = (role: 'member' | 'admin') =>
 
 describe('requireSharedOAuthAdministrator', () => {
   it('rejects an ordinary member mutating the tenant-wide identity', () => {
-    expect(() => requireSharedOAuthAdministrator(params('member'), 'refresh')).toThrow(Forbidden);
+    expect(() =>
+      requireSharedOAuthAdministrator({ kind: 'actor', params: params('member') }, 'refresh')
+    ).toThrow(Forbidden);
   });
 
-  it('allows administrators and trusted internal calls', () => {
-    expect(() => requireSharedOAuthAdministrator(params('admin'), 'disconnect')).not.toThrow();
-    expect(() => requireSharedOAuthAdministrator({} as never, 'start')).not.toThrow();
+  it('fails closed when actor context is missing', () => {
+    expect(() =>
+      requireSharedOAuthAdministrator({ kind: 'actor', params: undefined }, 'start')
+    ).toThrow('Authentication required');
+  });
+
+  it('allows administrators and explicitly trusted internal calls', () => {
+    expect(() =>
+      requireSharedOAuthAdministrator({ kind: 'actor', params: params('admin') }, 'disconnect')
+    ).not.toThrow();
+    expect(() =>
+      requireSharedOAuthAdministrator({ kind: 'trusted-internal' }, 'start')
+    ).not.toThrow();
   });
 });

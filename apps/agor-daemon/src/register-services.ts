@@ -144,6 +144,7 @@ import {
 import {
   auditSharedOAuthLifecycle,
   requireSharedOAuthAdministrator,
+  type SharedOAuthAuthorization,
 } from './utils/shared-oauth-policy.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
@@ -1239,8 +1240,8 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     socketId?: string;
-    /** Authenticated initiator. Required for every externally initiated shared grant. */
-    actorParams?: AuthenticatedParams;
+    /** Explicit authority for creating a shared pending grant. Never inferred from omission. */
+    sharedOAuthAuthorization: SharedOAuthAuthorization;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -1273,7 +1274,7 @@ async function registerMCPServices(
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
     if (opts.oauthMode === 'shared') {
-      requireSharedOAuthAdministrator(opts.actorParams, 'start');
+      requireSharedOAuthAdministrator(opts.sharedOAuthAuthorization, 'start');
     }
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
@@ -1757,7 +1758,10 @@ async function registerMCPServices(
                   clientId: data.client_id,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
-                  actorParams: params as AuthenticatedParams | undefined,
+                  sharedOAuthAuthorization: {
+                    kind: 'actor',
+                    params: params as AuthenticatedParams | undefined,
+                  },
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2092,7 +2096,7 @@ async function registerMCPServices(
             scope: scopeOverride,
             tenantId,
             socketId,
-            actorParams: params,
+            sharedOAuthAuthorization: { kind: 'actor', params },
           });
         } catch (err) {
           if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2149,7 +2153,7 @@ async function registerMCPServices(
         if (pendingFlow.oauthMode === 'shared') sharedFlowForAudit = pendingFlow;
 
         if (pendingFlow.oauthMode === 'shared') {
-          requireSharedOAuthAdministrator(params, 'complete');
+          requireSharedOAuthAdministrator({ kind: 'actor', params }, 'complete');
           if (pendingFlow.userId !== params?.user?.user_id) {
             throw new Forbidden('OAuth flow must be completed by the administrator who started it');
           }
@@ -2206,7 +2210,7 @@ async function registerMCPServices(
         new MCPServerRepository(db).findById(data.mcp_server_id)
       );
       if (server?.auth?.oauth_mode === 'shared') {
-        requireSharedOAuthAdministrator(params, 'disconnect');
+        requireSharedOAuthAdministrator({ kind: 'actor', params }, 'disconnect');
       }
       const { clearAuthCodeTokenCache } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
       const result = await performOAuthDisconnect({
@@ -2487,7 +2491,7 @@ async function registerMCPServices(
         const mode = server.auth.oauth_mode ?? 'per_user';
         if (mode === 'shared') {
           sharedRefresh = true;
-          requireSharedOAuthAdministrator(params, 'refresh');
+          requireSharedOAuthAdministrator({ kind: 'actor', params }, 'refresh');
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
@@ -2797,7 +2801,7 @@ async function registerMCPServices(
               oauthMode: 'shared',
               tenantId: tenantIdFromParams(params),
               socketId: connection?.id,
-              actorParams: params,
+              sharedOAuthAuthorization: { kind: 'actor', params },
             });
 
             const tokenResponse = await started.awaitToken();

@@ -3,18 +3,19 @@ import type { AuthenticatedParams } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type OAuthLifecycleAction = 'start' | 'complete' | 'refresh' | 'disconnect';
+export type SharedOAuthAuthorization =
+  | { kind: 'actor'; params: AuthenticatedParams | undefined }
+  | { kind: 'trusted-internal' };
 
 /** Shared grants are tenant-wide credentials and may only be mutated by administrators. */
 export function requireSharedOAuthAdministrator(
-  params: AuthenticatedParams | undefined,
+  authorization: SharedOAuthAuthorization,
   action: OAuthLifecycleAction
 ): void {
-  if (
-    !params?.provider ||
-    (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
-  )
-    return;
-  if (!params.user) throw new NotAuthenticated('Authentication required');
+  if (authorization.kind === 'trusted-internal') return;
+  const { params } = authorization;
+  if (!params?.user) throw new NotAuthenticated('Authentication required');
+  if ((params.user as { _isServiceAccount?: boolean })._isServiceAccount) return;
   if (!hasMinimumRole(params.user.role, ROLES.ADMIN)) {
     throw new Forbidden(`Administrator access is required to ${action} a shared OAuth identity`);
   }
