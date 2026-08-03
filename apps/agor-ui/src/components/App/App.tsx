@@ -1410,6 +1410,7 @@ export const App: React.FC<AppProps> = ({
   );
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
+  const stableOnCreateSession = useStableCallback(onCreateSession);
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1443,6 +1444,7 @@ export const App: React.FC<AppProps> = ({
           onUserClick={handleHeaderUserClick}
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
+          onCreateSession={stableOnCreateSession}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
