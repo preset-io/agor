@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 
 export function checkSupplyChainPolicy({ workflow, dockerfile, entrypoint }) {
   const failures = [];
-  const buildJob = workflow.match(/\n  build:\n([\s\S]*?)\n  release:\n/)?.[1] ?? '';
-  const releaseJob = workflow.match(/\n  release:\n([\s\S]*)$/)?.[1] ?? '';
+  const buildJob = workflow.match(/\n {2}build:\n([\s\S]*?)\n {2}release:\n/)?.[1] ?? '';
+  const releaseJob = workflow.match(/\n {2}release:\n([\s\S]*)$/)?.[1] ?? '';
 
   if (/\$\{\{\s*secrets\.|docker\/login-action|push:\s*true/.test(buildJob)) {
     failures.push('untrusted build job may not use secrets, registry login, or push');

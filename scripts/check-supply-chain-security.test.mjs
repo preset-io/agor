@@ -13,7 +13,11 @@ test('accepts separated trusted publishing and an unprivileged runtime', () => {
 });
 
 test('rejects PR-build credentials or publishing', () => {
-  for (const line of ['password: ${{ secrets.TOKEN }}', 'uses: docker/login-action@v4', 'push: true']) {
+  for (const line of [
+    `password: \${{ secrets.TOKEN }}`,
+    'uses: docker/login-action@v4',
+    'push: true',
+  ]) {
     const candidate = structuredClone(safe);
     candidate.workflow = candidate.workflow.replace('steps: []', `steps:\n      - ${line}`);
     assert.match(checkSupplyChainPolicy(candidate).join('\n'), /untrusted build job/);
@@ -25,7 +29,7 @@ test('rejects mutable or unprotected release inputs', () => {
   candidate.workflow = candidate.workflow
     .replace("if: github.event_name == 'push'", "if: github.event_name == 'pull_request'")
     .replace('environment: dockerhub-production', 'environment: preview')
-    .replace('ref: ${{ github.sha }}', 'ref: ${{ github.ref }}');
+    .replace(`ref: \${{ github.sha }}`, `ref: \${{ github.ref }}`);
   assert.equal(checkSupplyChainPolicy(candidate).length, 3);
 });
 
