@@ -5,8 +5,8 @@
  * Used by all SDK handlers (Claude, Gemini, Codex) to ensure consistent behavior.
  *
  * Scoping Rules:
- * - ALL global-scoped MCPs are included in every session (available to all users)
- * - PLUS any session-scoped MCPs that are explicitly assigned to this session
+ * - Only MCPs explicitly assigned to this session are included. `global` is a
+ *   catalog/administration scope, not an ambient execution capability.
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
@@ -134,24 +134,7 @@ export async function getMcpServersForSession(
         addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
       }
     } else {
-      // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
-      // Pass forUserId for per-user OAuth token injection
-      mcpDebug(`   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`);
-      const globalServers = await deps.mcpServerRepo.findAll(
-        {
-          scope: 'global',
-          enabled: true,
-        },
-        deps.forUserId
-      );
-
-      mcpDebug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
-
-      for (const server of globalServers ?? []) {
-        addServer(server, 'global');
-      }
-
-      // STEP 2: Get session-scoped MCP servers assigned to this specific session
+      // Legacy repository adapters still receive the same fail-closed policy.
       const sessionServers = await deps.sessionMCPRepo.listServers(sessionId, true); // enabledOnly
 
       mcpDebug(`   📍 Session-assigned: ${sessionServers.length} server(s)`);

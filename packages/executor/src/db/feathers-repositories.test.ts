@@ -88,7 +88,7 @@ describe('FeathersSessionMCPServersRepository', () => {
     await repo.listEffectiveServers('session-1' as SessionID, true, 'user-1');
 
     expect(find).toHaveBeenCalledWith({
-      query: { includeGlobal: true, enabledOnly: true, forUserId: 'user-1' },
+      query: { enabledOnly: true, forUserId: 'user-1' },
     });
   });
 

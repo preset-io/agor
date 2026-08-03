@@ -3617,8 +3617,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         await requireSessionScopedConfigOwnerOrAdmin(id, params);
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
-        const includeGlobal =
-          params.query?.includeGlobal === 'true' || params.query?.includeGlobal === true;
         const includeMetadata =
           params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
         const mcpService = app.service('mcp-servers');
@@ -3697,30 +3695,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           })
         );
-        const globalQuery = {
-          scope: 'global',
-          ...(enabledOnly ? { enabled: true } : {}),
-          ...(userId ? { forUserId: userId } : {}),
-          $limit: 1000,
-        };
-        const globalResult = includeGlobal
-          ? await mcpService.find({
-              ...params,
-              provider: undefined,
-              query: globalQuery,
-            })
-          : [];
-        const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = includeGlobal
-          ? [
-              ...new Map(
-                [...globalServers, ...sessionServers].map((server) => [
-                  server.mcp_server_id,
-                  server,
-                ])
-              ).values(),
-            ]
-          : sessionServers;
+        const servers = sessionServers;
         return shouldExposeMCPServerSecrets(params, {
           allowSessionToken: true,
           sessionId: id,

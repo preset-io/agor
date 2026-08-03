@@ -45,7 +45,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { ROLES, TaskStatus } from '@agor/core/types';
+import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -141,6 +141,10 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import {
+  auditSharedOAuthLifecycle,
+  requireSharedOAuthAdministrator,
+} from './utils/shared-oauth-policy.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -1987,6 +1991,16 @@ async function registerMCPServices(
             scopeOverride = server.auth.oauth_scope;
           }
         }
+        if (oauthMode === 'shared') {
+          requireSharedOAuthAdministrator(params, 'start');
+          auditSharedOAuthLifecycle({
+            action: 'start',
+            outcome: 'started',
+            serverId: data.mcp_server_id,
+            actorUserId: userId,
+            tenantId,
+          });
+        }
 
         let probeResponse = await fetch(data.mcp_url, {
           method: 'POST',
@@ -2074,7 +2088,10 @@ async function registerMCPServices(
 
   // OAuth complete endpoint
   app.use('/mcp-servers/oauth-complete', {
-    async create(data: { callback_url: string } | { code: string; state: string }) {
+    async create(
+      data: { callback_url: string } | { code: string; state: string },
+      params?: AuthenticatedParams
+    ) {
       try {
         const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
@@ -2097,6 +2114,15 @@ async function registerMCPServices(
             error: 'OAuth flow expired or not found. Please start the flow again.',
           };
 
+        if (pendingFlow.oauthMode === 'shared') {
+          requireSharedOAuthAdministrator(params, 'complete');
+          if (pendingFlow.userId !== params?.user?.user_id) {
+            throw new Forbidden('OAuth flow must be completed by the administrator who started it');
+          }
+        } else if (pendingFlow.userId && pendingFlow.userId !== params?.user?.user_id) {
+          throw new Forbidden('OAuth flow belongs to a different user');
+        }
+
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
@@ -2108,6 +2134,15 @@ async function registerMCPServices(
         }
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
+        if (pendingFlow.oauthMode === 'shared') {
+          auditSharedOAuthLifecycle({
+            action: 'complete',
+            outcome: 'succeeded',
+            serverId: pendingFlow.mcpServerId,
+            actorUserId: params?.user?.user_id,
+            tenantId: pendingFlow.tenantId,
+          });
+        }
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         console.error('[OAuth Complete] Error:', error);
@@ -2120,6 +2155,13 @@ async function registerMCPServices(
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
+      const tenantId = tenantIdFromParams(params);
+      const server = await runInOAuthTenantScope(db, tenantId, () =>
+        new MCPServerRepository(db).findById(data.mcp_server_id)
+      );
+      if (server?.auth?.oauth_mode === 'shared') {
+        requireSharedOAuthAdministrator(params, 'disconnect');
+      }
       const { clearAuthCodeTokenCache } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
       const result = await performOAuthDisconnect({
         userId: params?.user?.user_id,
@@ -2136,6 +2178,15 @@ async function registerMCPServices(
         app.io
           .to(userRoomName(params.user.user_id))
           .emit('oauth:disconnected', { mcp_server_id: data.mcp_server_id });
+      }
+      if (server?.auth?.oauth_mode === 'shared') {
+        auditSharedOAuthLifecycle({
+          action: 'disconnect',
+          outcome: result.success ? 'succeeded' : 'failed',
+          serverId: data.mcp_server_id,
+          actorUserId: params?.user?.user_id,
+          tenantId,
+        });
       }
 
       return result;
@@ -2155,7 +2206,22 @@ async function registerMCPServices(
         const authenticatedServerIds = tokens
           .filter((t) => !t.oauth_token_expires_at || t.oauth_token_expires_at > now)
           .map((t) => t.mcp_server_id);
-        return { authenticated_server_ids: authenticatedServerIds };
+        const sharedGrants =
+          params?.user && hasMinimumRole(params.user.role, ROLES.ADMIN)
+            ? (await userTokenRepo.listShared()).map((token) => ({
+                mcp_server_id: token.mcp_server_id,
+                connected_at: token.created_at,
+                updated_at: token.updated_at,
+                current_principal: {
+                  kind: 'instance_shared',
+                  display: 'Shared provider identity (provider principal not reported)',
+                },
+              }))
+            : undefined;
+        return {
+          authenticated_server_ids: authenticatedServerIds,
+          ...(sharedGrants ? { shared_grants: sharedGrants } : {}),
+        };
       } catch (error) {
         console.error('[OAuth Status] Error fetching user tokens:', error);
         return { authenticated_server_ids: [] };
@@ -2175,8 +2241,8 @@ async function registerMCPServices(
   // Access control:
   //   - per_user tokens are keyed on params.user.user_id — a caller cannot
   //     request another user's row (no forUserId override here).
-  //   - shared tokens (user_id = NULL) are returned to any authenticated
-  //     caller who can see the server, matching existing shared-mode semantics.
+  //   - shared tokens (user_id = NULL) are usable only when the server was
+  //     explicitly attached to the executor's session.
   //
   // The caller is expected to pass only the server IDs it already resolved
   // as in-scope for the session (see `getMcpServersForSession`).
@@ -2242,11 +2308,7 @@ async function registerMCPServices(
           executorSessionId as SessionID,
           true
         );
-        const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
-        const allowedServerIds = new Set([
-          ...globalServers.map((server) => server.mcp_server_id),
-          ...attachedServers.map((server) => server.mcp_server_id),
-        ]);
+        const allowedServerIds = new Set(attachedServers.map((server) => server.mcp_server_id));
         for (const serverId of serverIds) {
           if (!allowedServerIds.has(serverId as MCPServerID)) {
             headers[serverId] = { error: 'server_not_in_session_scope' };
@@ -2376,6 +2438,9 @@ async function registerMCPServices(
         if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
 
         const mode = server.auth.oauth_mode ?? 'per_user';
+        if (mode === 'shared') {
+          requireSharedOAuthAdministrator(params, 'refresh');
+        }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
         await refreshAndPersistToken({
@@ -2390,6 +2455,15 @@ async function registerMCPServices(
             ? fresh.oauth_token_expires_at.getTime()
             : undefined;
 
+        if (mode === 'shared') {
+          auditSharedOAuthLifecycle({
+            action: 'refresh',
+            outcome: 'succeeded',
+            serverId,
+            actorUserId: userId,
+            tenantId: tenantIdFromParams(params),
+          });
+        }
         return { success: true, expires_at: expiresAt };
       } catch (err) {
         if (err instanceof InvalidGrantError || err instanceof MissingRefreshTokenError) {
