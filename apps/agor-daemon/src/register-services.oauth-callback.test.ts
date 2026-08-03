@@ -71,6 +71,6 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\s*\(\s*\)/);
     expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
     expect(codeOnly).toMatch(/Missing tenant context for MCP OAuth callback/);
-    expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
+    expect(codeOnly).toMatch(/OAuth flow tenant context is missing or does not match/);
   });
 });
