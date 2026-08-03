@@ -141,7 +141,14 @@ describe('PermissionsTab', () => {
         canEdit
         allUsers={[makeUser()]}
         currentUser={makeUser()}
-        state={{ ...defaultState, permissionSource: 'override', othersCan: 'none' }}
+        allGroups={[{ group_id: 'group-1', name: 'Reviewers' } as never]}
+        state={{
+          ...defaultState,
+          permissionSource: 'override',
+          othersCan: 'none',
+          othersFsAccess: 'write',
+          groupGrants: [{ group_id: 'group-1', can: 'view' }],
+        }}
         setField={setField}
       />
     );
@@ -149,6 +156,9 @@ describe('PermissionsTab', () => {
     const selector = screen.getByRole('combobox', { name: 'Others Can' });
     expect(selector).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByText('None')).toBeInTheDocument();
+    expect(screen.getAllByText('Reviewers').length).toBeGreaterThan(0);
+    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
+    expect(screen.queryByText(/Owner-only access/)).not.toBeInTheDocument();
     fireEvent.mouseDown(selector);
     fireEvent.click(screen.getByText('View', { selector: '.ant-select-item-option-content' }));
     expect(setField).toHaveBeenCalledWith('othersCan', 'view');

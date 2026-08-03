@@ -241,7 +241,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
         ),
         slug: mcpOptionalString('slug', 'URL-friendly slug (optional)'),
-        accessMode: z.enum(['private', 'shared']).optional(),
         defaultOthersCan: z
           .enum(BRANCH_PERMISSION_LEVELS)
           .optional()
@@ -281,7 +280,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         metadataUpdates.background_color = args.backgroundColor;
       if (args.customCss !== undefined) metadataUpdates.custom_css = args.customCss;
       if (args.slug !== undefined) metadataUpdates.slug = args.slug;
-      if (args.accessMode !== undefined) metadataUpdates.access_mode = args.accessMode;
       if (args.defaultOthersCan !== undefined)
         metadataUpdates.default_others_can = args.defaultOthersCan;
       if (args.defaultOthersFsAccess !== undefined)
@@ -358,7 +356,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'customCss',
           'Custom CSS for board canvas animations (@keyframes, animation, etc.). Optional.'
         ),
-        accessMode: z.enum(['private', 'shared']).optional(),
         defaultOthersCan: z.enum(BRANCH_PERMISSION_LEVELS).optional(),
         defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
       }),
@@ -378,7 +375,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.backgroundColor !== undefined)
         boardData.background_color = coerceString(args.backgroundColor);
       if (args.customCss !== undefined) boardData.custom_css = coerceString(args.customCss);
-      if (args.accessMode !== undefined) boardData.access_mode = args.accessMode;
       if (args.defaultOthersCan !== undefined) boardData.default_others_can = args.defaultOthersCan;
       if (args.defaultOthersFsAccess !== undefined)
         boardData.default_others_fs_access = args.defaultOthersFsAccess;

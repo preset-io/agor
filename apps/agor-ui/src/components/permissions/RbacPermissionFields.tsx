@@ -49,8 +49,8 @@ interface RbacPermissionFieldsProps {
   othersCanLabel?: string;
   othersFsAccessLabel?: string;
   showLegacySessionSharing?: boolean;
-  /** Branches can leave owner/group grants intact while denying the public fallback. */
-  canEditOthersCanWhenPrivate?: boolean;
+  /** Boards expose private/shared visibility; branch overrides expose grants and fallback directly. */
+  showVisibility?: boolean;
 }
 
 const permissionLevelDescriptions: Record<BranchPermissionLevel, string> = {
@@ -97,7 +97,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   othersCanLabel = 'Others Can',
   othersFsAccessLabel = 'Filesystem Access',
   showLegacySessionSharing = true,
-  canEditOthersCanWhenPrivate = false,
+  showVisibility = true,
 }) => {
   const { showError } = useThemedMessage();
   const [selectKey, setSelectKey] = useState(0);
@@ -149,22 +149,24 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
         />
       )}
 
-      <Form.Item
-        label={visibilityLabel}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        help={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
-      >
-        <Radio.Group
-          value={value.visibility}
-          disabled={!canEdit}
-          onChange={(e) => handleVisibilityChange(e.target.value)}
-          options={[
-            { value: 'private', label: privateOwnerLabel },
-            { value: 'shared', label: 'Shared' },
-          ]}
-        />
-      </Form.Item>
+      {showVisibility && (
+        <Form.Item
+          label={visibilityLabel}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          help={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
+        >
+          <Radio.Group
+            value={value.visibility}
+            disabled={!canEdit}
+            onChange={(e) => handleVisibilityChange(e.target.value)}
+            options={[
+              { value: 'private', label: privateOwnerLabel },
+              { value: 'shared', label: 'Shared' },
+            ]}
+          />
+        </Form.Item>
+      )}
 
       {isShared && (
         <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
@@ -379,7 +381,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           virtual={false}
           value={value.othersCan}
           onChange={(othersCan) => onChange('othersCan', othersCan)}
-          disabled={!canEdit || (!isShared && !canEditOthersCanWhenPrivate)}
+          disabled={!canEdit || !isShared}
           options={[
             { value: 'none', label: 'None' },
             { value: 'view', label: 'View' },
