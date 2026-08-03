@@ -89,8 +89,13 @@ export async function authorizeMcpServerWrite(
   // moving it is not an edit — it hands that credential to someone else's
   // sessions. Nobody gets to do it through an ordinary write, admins included.
   if (request.method !== 'create' && request.method !== 'remove' && request.existing) {
+    // A shared server reads back as `undefined` and is written as `null`, so
+    // compare on absence rather than on which of the two arrived.
     const requestedOwner = request.data?.owner_user_id;
-    if (requestedOwner !== undefined && requestedOwner !== request.existing.owner_user_id) {
+    if (
+      requestedOwner !== undefined &&
+      (requestedOwner ?? null) !== (request.existing.owner_user_id ?? null)
+    ) {
       throw new Forbidden('MCP server ownership cannot be changed');
     }
   }

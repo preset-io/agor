@@ -2235,6 +2235,23 @@ async function registerMCPServices(
       params?: { connection?: { id?: string } }
     ) {
       try {
+        // Completing this flow writes a shared token onto the named row and
+        // backfills its token endpoint, so the same rule the other flow-start
+        // endpoints apply has to apply here. Testing a not-yet-created server
+        // passes no id and is unaffected.
+        if (data.mcp_server_id) {
+          await runInOAuthTenantScope(
+            db,
+            tenantIdFromParams(params as AuthenticatedParams | undefined),
+            () =>
+              loadMcpServerForCaller(
+                db,
+                data.mcp_server_id as string,
+                params as AuthenticatedParams | undefined
+              )
+          );
+        }
+
         console.log('[OAuth Test] Probing configured MCP server');
 
         let probeResponse: Response;

@@ -191,6 +191,18 @@ describe('authorizeMcpServerWrite', () => {
     }
   );
 
+  it('accepts a payload that echoes a shared server\u2019s absent owner', async () => {
+    resolveMcpMemberPolicy.mockResolvedValue('allow_crud');
+
+    await expect(
+      authorizeMcpServerWrite(db, paramsFor(ALICE, 'member'), {
+        method: 'patch',
+        existing: serverOwnedBy(undefined),
+        data: { ...remoteCreate, owner_user_id: null },
+      })
+    ).resolves.toEqual({});
+  });
+
   it('refuses to make a private server shared', async () => {
     await expect(
       authorizeMcpServerWrite(db, paramsFor(ALICE, 'admin'), {
