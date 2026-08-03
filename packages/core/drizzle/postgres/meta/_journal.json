@@ -547,6 +547,13 @@
       "when": 1786321000000,
       "tag": "0078_mcp_oauth_pending_flows",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1786400000000,
+      "tag": "0079_mcp_catalog_entries",
+      "breakpoints": true
     }
   ]
 }

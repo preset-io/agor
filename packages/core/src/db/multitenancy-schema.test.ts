@@ -248,7 +248,7 @@ describe('Postgres multitenancy schema coverage', () => {
   });
 
   it('opens the shared MCP catalog for reads but confines writes to an explicit capability', () => {
-    const migration = readRepoFile('packages/core/drizzle/postgres/0068_mcp_catalog_entries.sql');
+    const migration = readRepoFile('packages/core/drizzle/postgres/0079_mcp_catalog_entries.sql');
 
     // No tenant column, therefore no tenant isolation policy to write.
     expect(migration).not.toContain('"tenant_id"');
