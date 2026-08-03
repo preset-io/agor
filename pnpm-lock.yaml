@@ -663,8 +663,8 @@ importers:
         specifier: ^12.10.0
         version: 12.10.0(@types/node@26.1.1)
       js-yaml:
-        specifier: ^5.2.1
-        version: 5.2.1
+        specifier: ^5.2.2
+        version: 5.2.2
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -697,7 +697,7 @@ importers:
         version: 11.0.0
       simple-git:
         specifier: ^3.36.0
-        version: 3.36.0(supports-color@8.1.1)
+        version: 3.36.0
       slackify-markdown:
         specifier: ^5.0.0
         version: 5.0.0
@@ -738,8 +738,8 @@ importers:
         specifier: ^5.0.45
         version: 5.0.45
       js-yaml:
-        specifier: ^5.2.1
-        version: 5.2.1
+        specifier: ^5.2.2
+        version: 5.2.2
       socket.io-client:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
@@ -859,8 +859,8 @@ importers:
         specifier: ^17.0.0
         version: 17.0.0(emojibase@17.0.0)
       js-yaml:
-        specifier: ^5.2.1
-        version: 5.2.1
+        specifier: ^5.2.2
+        version: 5.2.2
       open:
         specifier: ^11.0.0
         version: 11.0.0
@@ -869,7 +869,7 @@ importers:
         version: 3.4.9
       simple-git:
         specifier: ^3.36.0
-        version: 3.36.0(supports-color@8.1.1)
+        version: 3.36.0
       slackify-markdown:
         specifier: ^5.0.0
         version: 5.0.0
@@ -961,7 +961,7 @@ importers:
     dependencies:
       simple-git:
         specifier: ^3.36.0
-        version: 3.36.0(supports-color@8.1.1)
+        version: 3.36.0
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -6901,8 +6901,8 @@ packages:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
     hasBin: true
 
-  js-yaml@5.2.1:
-    resolution: {integrity: sha512-zfLtNfQqxVqq3uaTqSkh4x4hZw3KHobGUA0fJUj4wawW8bsQLTVqpHdXSIzidh7o+4lEW36tANuAGdaFx6Zgnw==}
+  js-yaml@5.2.2:
+    resolution: {integrity: sha512-dayzUzKkJ1MkuUtZglSebU43utNXH0OWQByK9rKOOuYIO8M5TV1y+n8ALMdG0rdzBnfNkOmZEqrURepb0ejqBw==}
     hasBin: true
 
   jsdom@27.1.0:
@@ -11089,7 +11089,7 @@ snapshots:
       proper-lockfile: 4.1.2
       read-package-up: 11.0.0
       shell-quote: 1.8.4
-      simple-git: 3.36.0(supports-color@8.1.1)
+      simple-git: 3.36.0
       strip-ansi: 7.1.2
       strip-json-comments: 3.1.1
       systeminformation: 5.31.6
@@ -11697,7 +11697,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@kwsites/file-exists@1.1.1(supports-color@8.1.1)':
+  '@kwsites/file-exists@1.1.1':
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
     transitivePeerDependencies:
@@ -16649,7 +16649,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  js-yaml@5.2.1:
+  js-yaml@5.2.2:
     dependencies:
       argparse: 2.0.1
 
@@ -19108,9 +19108,9 @@ snapshots:
       simple-concat: 1.0.1
     optional: true
 
-  simple-git@3.36.0(supports-color@8.1.1):
+  simple-git@3.36.0:
     dependencies:
-      '@kwsites/file-exists': 1.1.1(supports-color@8.1.1)
+      '@kwsites/file-exists': 1.1.1
       '@kwsites/promise-deferred': 1.1.1
       '@simple-git/args-pathspec': 1.0.3
       '@simple-git/argv-parser': 1.1.0
