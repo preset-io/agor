@@ -140,13 +140,47 @@ describe('run-as-user', () => {
         // Script references ENVFILE from $1, not interpolated. Uses `set -eu`
         // so a failed source aborts BEFORE rm+exec (fail-closed).
         expect(result.args[5]).toBe(
-          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"'
         );
         // Positional args: separator, envFilePath, then the real command
         expect(result.args[6]).toBe('--');
         expect(result.args[7]).toBe('/tmp/agor-env-abc123');
         expect(result.args[8]).toBe('node');
         expect(result.args[9]).toBe('script.js');
+      });
+
+      it('REGRESSION: carries non-secret env through impersonation with an env file', () => {
+        const result = buildSpawnArgs('node', ['executor.js'], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-nonce',
+          env: {
+            LOG_LEVEL: 'info',
+            NODE_ENV: 'production',
+            GIT_CONFIG_PARAMETERS: "'protocol.file.allow'='never'",
+          },
+        });
+
+        expect(result.args.slice(8)).toEqual([
+          'LOG_LEVEL=info',
+          'NODE_ENV=production',
+          "GIT_CONFIG_PARAMETERS='protocol.file.allow'='never'",
+          'node',
+          'executor.js',
+        ]);
+        expect(result.args[5]).toContain('exec env "$@"');
+      });
+
+      it('keeps env-file secrets out of argv while carrying non-secret env', () => {
+        const secret = 'sk-ant-secret-must-not-appear';
+        const result = buildSpawnArgs('node', ['executor.js'], {
+          asUser: 'alice',
+          envFilePath: '/tmp/agor-env-containing-the-secret-on-disk',
+          env: { LOG_LEVEL: 'info' },
+        });
+
+        const argv = [result.cmd, ...result.args].join('\n');
+        expect(argv).toContain('LOG_LEVEL=info');
+        expect(argv).not.toContain(secret);
       });
 
       it('inner script is fail-closed (set -eu aborts before exec on source failure)', () => {
@@ -159,7 +193,7 @@ describe('run-as-user', () => {
         // missing secrets.
         const script = result.args[5];
         expect(script.indexOf('set -eu')).toBeLessThan(script.indexOf('. "$ENVFILE"'));
-        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec "$@"'));
+        expect(script.indexOf('. "$ENVFILE"')).toBeLessThan(script.indexOf('exec env "$@"'));
       });
 
       it('REGRESSION: does NOT contain any secret values in argv', () => {
@@ -328,7 +362,7 @@ describe('run-as-user', () => {
           envFilePath: '/tmp/agor-env-default',
         });
         expect(result.args[5]).toBe(
-          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"'
+          'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"'
         );
         expect(result.args.slice(8)).toEqual(['node', 'executor.js', '--stdin']);
       });

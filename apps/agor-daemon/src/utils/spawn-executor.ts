@@ -42,6 +42,11 @@ import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
 
+// Node >=22.12 (the repository minimum) supports targeted warning suppression.
+// Keep other deprecations visible while the legacy transitive punycode user is
+// removed upstream.
+const EXECUTOR_NODE_ARGS = ['--disable-warning=DEP0040'] as const;
+
 function resolveExecutorLogLevel(env: Record<string, string>): string {
   return env.LOG_LEVEL || getCurrentLogLevel();
 }
@@ -428,7 +433,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
       : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
     : { inlineEnv: undefined, envFilePath: undefined };
 
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+  const { cmd, args } = buildSpawnArgs('node', [...EXECUTOR_NODE_ARGS, executorPath, '--stdin'], {
     asUser,
     env: asUser ? prepared.inlineEnv : undefined, // Non-secret env only; secrets are sourced from envFilePath
     envFilePath: prepared.envFilePath,
@@ -690,7 +695,7 @@ function runExecutorCommandLocal(
       : prepareImpersonationEnv({ asUser, env: envWithDaemonUrl })
     : { inlineEnv: undefined, envFilePath: undefined };
 
-  const { cmd, args } = buildSpawnArgs('node', [executorPath, '--stdin'], {
+  const { cmd, args } = buildSpawnArgs('node', [...EXECUTOR_NODE_ARGS, executorPath, '--stdin'], {
     asUser,
     env: asUser ? prepared.inlineEnv : undefined,
     envFilePath: prepared.envFilePath,

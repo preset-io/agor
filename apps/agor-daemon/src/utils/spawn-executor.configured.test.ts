@@ -436,6 +436,13 @@ describe('configured executor spawning', () => {
       }
     );
 
+    const unix = await import('@agor/core/unix');
+    expect(unix.buildSpawnArgs).toHaveBeenCalledWith(
+      'node',
+      ['--disable-warning=DEP0040', expect.any(String), '--stdin'],
+      expect.any(Object)
+    );
+
     expect(spawnMock).toHaveBeenCalledWith(
       'node',
       ['executor', '--stdin'],

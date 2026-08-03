@@ -17,7 +17,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -180,6 +180,11 @@ export function attachEnvFileCleanup(
   const capturedPath = envFilePath;
   const capturedAsUser = asUser;
   const cleanup = () => {
+    // The normal launch wrapper removes the file before exec. Avoid a sudo
+    // round-trip on every successful child exit when there is nothing left to
+    // clean up; launch failures still leave an existing file for this safety
+    // net to remove.
+    if (!existsSync(capturedPath)) return;
     if (capturedAsUser) {
       tryUnlinkEnvFileAsUser(capturedAsUser, capturedPath);
     } else {

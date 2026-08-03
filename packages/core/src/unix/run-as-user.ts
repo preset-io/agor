@@ -317,13 +317,34 @@ export function buildSpawnArgs(
     //     launch the real process with missing secrets
     //   - source env into current shell (set -a auto-exports)
     //   - unlink file before exec so it does not linger on disk
-    //   - exec preserves env into the target process
+    //   - pass non-secret env as positional `env` arguments, rather than
+    //     interpolating values into the shell script
+    //   - exec preserves both sourced secrets and explicit env into the target
+    //     process
+    const envArgs = Object.entries(env ?? {}).map(([key, value]) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error(`buildSpawnArgs: invalid env var name: ${JSON.stringify(key)}`);
+      }
+      return `${key}=${value}`;
+    });
     const innerScript =
-      'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec "$@"';
+      'set -eu; ENVFILE="$1"; shift; set -a; . "$ENVFILE"; set +a; rm -f -- "$ENVFILE"; exec env "$@"';
 
     return {
       cmd: 'sudo',
-      args: ['-n', '-u', asUser, 'bash', '-c', innerScript, '--', envFilePath, command, ...args],
+      args: [
+        '-n',
+        '-u',
+        asUser,
+        'bash',
+        '-c',
+        innerScript,
+        '--',
+        envFilePath,
+        ...envArgs,
+        command,
+        ...args,
+      ],
     };
   }
 
