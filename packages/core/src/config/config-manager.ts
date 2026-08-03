@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
+import { deriveManagedBranchPath } from '../workspace-paths.js';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import {
@@ -1527,7 +1528,7 @@ export function getBranchesDir(tenantId?: string): string {
  * @returns Absolute path to the branch
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
-  return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+  return deriveManagedBranchPath(getBranchesDir(tenantId), repoSlug, branchName);
 }
 
 /**

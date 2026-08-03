@@ -1178,7 +1178,13 @@ export async function handleGitBranchAdd(
 
     // Get parameters
     const repoId = payload.params.repoId;
-    const branchPath = branchRecord.path;
+    const { assertManagedBranchPath } = await import('@agor/core/config');
+    const branchPath = await assertManagedBranchPath({
+      root: payload.params.branchesRoot,
+      repoSlug: repo.slug,
+      branchName: branchRecord.name,
+      storedPath: branchRecord.path,
+    });
     const repoPath = repo.local_path;
     const branchName = branchRecord.name;
     resolvedRepoPath = repoPath;

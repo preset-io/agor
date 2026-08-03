@@ -135,6 +135,7 @@ import { userRoomName } from './setup/socketio.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { resolveTrustedBranchWorkspace } from './utils/branch-workspace.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
 import {
@@ -827,7 +828,7 @@ function createExecuteHandler(
     if (session.branch_id) {
       const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
-        return branch?.path;
+        return branch ? resolveTrustedBranchWorkspace(tenantDb, branch, tenantId) : undefined;
       });
       if (!branchPath)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);

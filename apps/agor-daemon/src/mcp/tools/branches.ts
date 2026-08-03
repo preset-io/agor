@@ -496,7 +496,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'Slug name for the branch directory (lowercase letters, numbers, hyphens). ' +
             'If the name conflicts with an existing branch, a numeric suffix is auto-appended (e.g., "my-feature-2"). ' +
             'Set autoSuffix=false to get an error on conflict instead.'
-        ),
+        ).refine((value) => BRANCH_NAME_PATTERN.test(value), {
+          message: 'branchName must use lowercase letters, numbers, or hyphens',
+        }),
         boardId: mcpOptionalId(
           'boardId',
           'Board',

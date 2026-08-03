@@ -78,6 +78,12 @@ vi.mock('@agor/core/unix', () => ({
   validateResolvedUnixUser: () => undefined,
 }));
 
+vi.mock('../utils/branch-workspace.js', () => ({
+  resolveTrustedBranchWorkspace: vi.fn(
+    async (_db: unknown, branch: { path: string }) => branch.path
+  ),
+}));
+
 vi.mock('../utils/branch-authorization.js', () => ({
   hasBranchPermission: () => true,
 }));

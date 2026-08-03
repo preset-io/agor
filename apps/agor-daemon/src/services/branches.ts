@@ -104,6 +104,8 @@ export type BranchParams = QueryParams<{
     _include_sessions?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlBranchAccessUserId?: UUID;
+    /** Server-only capability set by ReposService after deriving the workspace path. */
+    _agorTrustedBranchCreate?: boolean;
   };
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
@@ -748,6 +750,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
   ): Promise<Branch | Branch[]> {
+    if (params?.provider && !params._agorTrustedBranchCreate) {
+      throw new BadRequest(
+        'Direct branch creation is unavailable; use the repository branch creation endpoint'
+      );
+    }
     const assertHasBoard = (item: Partial<Branch>) => {
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');
@@ -1069,6 +1076,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
+    if (Object.hasOwn(data, 'path') && data.path !== currentBranch.path) {
+      throw new BadRequest('Branch workspace paths are immutable and server-derived');
+    }
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
     this.assertTeammateKindIsStable(currentBranch, data);
 
@@ -1153,6 +1163,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
     const currentBranch = await super.get(id, params);
+    if (data.path !== currentBranch.path) {
+      throw new BadRequest('Branch workspace paths are immutable and server-derived');
+    }
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
     this.assertTeammateKindIsStable(currentBranch, data);
     if (

@@ -651,6 +651,19 @@ describe('branch MCP input schemas', () => {
     }
   });
 
+  it.each(['/tmp/branch', '../tenant-b', 'feature/../../tenant-b'])(
+    'rejects path-shaped branchName %s at the MCP schema boundary',
+    (branchName) => {
+      const config = registerAndCaptureConfig('agor_branches_create', {
+        app: {},
+        userId: 'user-1',
+      });
+      expect(
+        config.inputSchema?.safeParse({ repoId: 'repo-1', branchName, boardId: 'board-1' }).success
+      ).toBe(false);
+    }
+  );
+
   it('accepts a valid teammate object and rejects an empty teammate displayName', () => {
     const config = registerAndCaptureConfig('agor_branches_create', {
       app: {},

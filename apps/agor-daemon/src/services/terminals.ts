@@ -40,6 +40,7 @@ import {
 } from '@agor/core/unix';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { resolveTrustedBranchWorkspace } from '../utils/branch-workspace.js';
 import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils/spawn-executor.js';
 
 /**
@@ -458,7 +459,15 @@ export class TerminalsService {
               userId,
               action: 'create',
               tabName: branchTabName,
-              ...(unixUserMode === 'simple' ? { cwd: branch.path } : {}),
+              ...(unixUserMode === 'simple'
+                ? {
+                    cwd: await resolveTrustedBranchWorkspace(
+                      this.db,
+                      branch,
+                      params?.tenant?.tenant_id
+                    ),
+                  }
+                : {}),
             });
             this.dispatchTabFocus(userId, {
               focusTabName: data.focusTabName,

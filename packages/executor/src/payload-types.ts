@@ -264,6 +264,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 
+    /** Tenant-scoped root that must contain the derived workspace. */
+    branchesRoot: z.string().min(1),
+
     /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
     restoreMode: z.boolean().optional(),
 

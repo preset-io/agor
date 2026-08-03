@@ -84,6 +84,7 @@ function createClient(records: {
   branchPages?: Array<Array<Record<string, unknown>>>;
   branch?: Record<string, unknown>;
   patchedRepos?: Array<Record<string, unknown>>;
+  patchedBranches?: Array<Record<string, unknown>>;
 }) {
   const client = {
     io: { disconnect: vi.fn() },
@@ -142,10 +143,10 @@ function createClient(records: {
         return {
           get: vi.fn(async () => records.branch),
           find,
-          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => ({
-            ...(records.branch ?? {}),
-            ...data,
-          })),
+          patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
+            records.patchedBranches?.push(data);
+            return { ...(records.branch ?? {}), ...data };
+          }),
         };
       }
       throw new Error(`unexpected service ${name}`);
@@ -184,13 +185,14 @@ describe('managed executor git/fs commands', () => {
     createClient({
       repo: {
         repo_id: repoId,
+        slug: 'org/repo',
         local_path: '/trusted/repo',
         remote_url: 'https://user:secret@example.com/trusted/repo.git',
       },
       branch: {
         branch_id: branchId,
         repo_id: repoId,
-        path: '/trusted/branch',
+        path: '/trusted/worktrees/org/repo/feature',
         name: 'feature',
         ref: 'trusted-ref',
         base_ref: 'trusted-base',
@@ -208,6 +210,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          branchesRoot: '/trusted/worktrees',
           useReference: true,
         },
       },
@@ -242,12 +245,42 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          branchesRoot: '/other-tenant/worktrees',
         },
       },
       {}
     );
     expect(result).toMatchObject({ success: false, error: { message: 'Not found' } });
     expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  });
+
+  it('quarantines a cross-tenant stored workspace before materialization or fallback creation', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: { repo_id: repoId, slug: 'org/repo', local_path: '/safe/repo' },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        name: 'feature',
+        path: '/tenant-a/worktrees/org/repo/feature',
+      },
+      patchedBranches,
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-b-token',
+        params: { branchId, repoId, branchesRoot: '/tenant-b/worktrees' },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(false);
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual(
+      expect.objectContaining({ filesystem_status: 'failed' })
+    );
   });
 
   it('inspects local repository contents only inside the executor and returns sanitized metadata', async () => {

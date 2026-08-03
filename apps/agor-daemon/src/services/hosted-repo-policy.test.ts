@@ -31,6 +31,25 @@ describe('hosted repository storage policy canonical boundaries', () => {
     ).rejects.toThrow(/worktree.*unavailable in hosted multi-tenant mode/);
   });
 
+  it.each([
+    ['rest', '/tmp/caller-selected'],
+    ['socketio', '../../other-tenant/workspace'],
+  ])('rejects caller-controlled paths through the %s branches service', async (provider, path) => {
+    const create = vi.spyOn(DrizzleService.prototype, 'create');
+    const service = new BranchesService(
+      {} as never,
+      { service: vi.fn() } as unknown as Application
+    );
+
+    await expect(
+      service.create(
+        { board_id: '550e8400-e29b-41d4-a716-446655440000', path } as Partial<Branch>,
+        { provider } as never
+      )
+    ).rejects.toThrow(/Direct branch creation is unavailable/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('rejects bulk conversion to local repositories', async () => {
     const service = new ReposService({} as never, { service: vi.fn() } as unknown as Application);
 

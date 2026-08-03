@@ -812,7 +812,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         board_id: data.boardId,
         created_by: userId,
       },
-      params
+      { ...params, _agorTrustedBranchCreate: true } as never
     )) as Branch;
 
     // Add creating user as owner of the branch
@@ -954,6 +954,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           params: {
             branchId: branch.branch_id,
             repoId: repo.repo_id,
+            branchesRoot: getBranchesDir(tenantId),
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
