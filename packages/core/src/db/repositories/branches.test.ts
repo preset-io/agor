@@ -1055,6 +1055,64 @@ describe('BranchRepository permission_source', () => {
 
 describe('BranchRepository resolveUserAccess', () => {
   dbTest(
+    'enforces None for board defaults and branch overrides without granting access from board membership',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const boards = new BoardRepository(db);
+      const branches = new BranchRepository(db);
+      const owner = await users.create({ email: 'none-owner@example.com' });
+      const boardOwner = await users.create({ email: 'none-board-owner@example.com' });
+      const outsider = await users.create({ email: 'none-outsider@example.com' });
+      const repo = await repos.create(createRepoData({ slug: 'none-contract-repo' }));
+      const board = await boards.create({
+        board_id: generateId(),
+        name: 'Shared board with no public fallback',
+        created_by: owner.user_id,
+        access_mode: 'shared',
+        default_others_can: 'none',
+      });
+      await boards.addOwner(board.board_id, boardOwner.user_id as UUID);
+
+      const aligned = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          created_by: owner.user_id as UUID,
+          name: 'aligned-none',
+          branch_unique_id: 9198,
+          permission_source: 'board',
+        })
+      );
+      const overridden = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          created_by: owner.user_id as UUID,
+          name: 'override-none',
+          branch_unique_id: 9199,
+          permission_source: 'override',
+          others_can: 'none',
+        })
+      );
+      await branches.addOwner(aligned.branch_id, owner.user_id as UUID);
+      await branches.addOwner(overridden.branch_id, owner.user_id as UUID);
+
+      expect(await branches.resolveUserAccess(aligned, outsider.user_id as UUID)).toMatchObject({
+        can: 'none',
+        source: 'board',
+      });
+      expect(await branches.resolveUserAccess(aligned, owner.user_id as UUID)).toMatchObject({
+        can: 'all',
+        source: 'owner',
+      });
+      expect(
+        await branches.resolveUserAccess(overridden, boardOwner.user_id as UUID)
+      ).toMatchObject({ can: 'none', source: 'others' });
+    }
+  );
+
+  dbTest(
     'uses board session-sharing defaults for direct owners of board-aligned branches',
     async ({ db }) => {
       const repoRepo = new RepoRepository(db);

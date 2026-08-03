@@ -1,0 +1,108 @@
+---
+title: 'Is the IDE Obsolete?'
+description: 'The IDE was built around one human manipulating one codebase. Agentic software work now happens across parallel workstreams, conversations, and review surfaces.'
+author: 'Maxime Beauchemin'
+date: 2026-08-01
+image: '/images/blog/whos-still-using-an-ide.png'
+---
+
+I’m trying to remember the last time I wrote a line of code.
+
+Not *caused* a line of code to exist. I do that all day. I mean actually placed my cursor after a semicolon and typed the next thing myself.
+
+I honestly can’t remember.
+
+This is slightly embarrassing because I spent most of my career as a shell/tmux/Vim person. I was never really an IDE person. I liked the terminal’s simplicity and portability, and I had years of muscle memory baked into `Ctrl-R`, `ssh`, `git`, `grep`, and a small kit of regular and custom utilities. I barely customized anything because I wanted it to work everywhere. Even a slightly wrong Vim binding could bug the crap out of me. Too much muscle memory.
+
+Today Vim is mostly where I open `.zshrc` to copy an API key.
+
+Progress.
+
+## The IDE Won. Then the Interface Moved.
+
+I tried IDEs repeatedly. I understood the pitch. Put editing, navigation, autocomplete, refactoring, search, debugging, tests, a terminal, version control, and a project model into one coherent place. Make the machine hold more of the codebase in its head so the human doesn’t have to.
+
+That was enormously valuable. It still is, if the main act of programming is a human manipulating source files.
+
+So this isn’t an IDE guy gloating about his editor winning. My side lost too.
+
+But that is no longer the main act for me.
+
+The primary interface to software work has become conversation: describe the destination, supply context, constrain the route, inspect the result, redirect. Agents make essentially every edit. They search the tree, trace call sites, refactor across files, run tests, stare at logs, and come back with a diff and, on a good day, a coherent explanation.
+
+This is not autocomplete with better branding. Autocomplete assumes I am driving and the machine helps finish the sentence. Agentic work assumes I am setting intent and judging outcomes while the machine operates the tools.
+
+That shift makes a lot of the traditional IDE feel like a very elaborate cockpit for a plane I’m no longer manually flying.
+
+## The Honest Ledger
+
+They didn’t vanish. They moved up a level.
+
+A provocation deserves better than a straw man, so let’s take the IDE apart and ask what still wants to be direct manipulation.
+
+- **Editing and navigation.** Mostly delegation: “Find where branch permissions are enforced and make this invariant impossible to violate.” I inspect code, but rarely travel through it one definition at a time.
+- **Autocomplete.** It died of success. Finishing the next line mattered when I was the typist. Now the agent types the file.
+- **Refactoring.** The affordance survives; the UI doesn’t. A language-server rename still beats an agent freestyling regexes across forty files. I want the agent to invoke it.
+- **Search and terminals.** I still grep all day; I’m just no longer holding `grep`. The agent operates the shell, reads logs, and follows call sites.
+- **Debugging.** This is where I’m supposed to concede that the IDE still wins. But honestly, I haven’t stepped through a debugger in years. Agents reproduce failures, add instrumentation, inspect state, read logs, and bisect changes. Interactive debugging surely matters in some domains, but it is not evidence that the IDE should remain home for everyone else.
+- **Tests.** Agents write and run them. Humans decide what deserves testing and what “correct” means.
+- **Version control and diffs.** Agents produce the diff. Humans read it, often on GitHub rather than in an editor gutter.
+- **Project context and visualization.** Context now includes code, docs, history, conventions, decisions, credentials, and access. Spatial reasoning moved from “where is this function?” to “where is this workstream?”
+
+The capabilities survived. Their old container didn’t. The agent uses the language server, runs the tests, and holds the grep. None of this requires me to live inside an editor organized around files, tabs, and one active checkout.
+
+Even code review is moving. Here’s the provocative version: agents are already better than humans at a lot of coding, and at a surprising amount of code review. They don’t get tired on file 37. They can trace boring consistency problems across a repository. They will actually read the migration and the cleanup path.
+
+They also get gloriously, confidently lost. They lack context. They repeat the local bad pattern because five nearby files told them it was tradition. They solve the ticket and miss the product. They can be right about the code and wrong about the destination.
+
+Increasingly, supplying agency and context *is* the human job.
+
+Not “write this function,” but: What are we trying to make true? What tradeoff are we willing to accept? Which convention is intentional and which is historical scar tissue? Who gets hurt if this abstraction leaks? What should not be automated yet?
+
+The hard part did not disappear. It relocated.
+
+## Producing Code Is Not Reading Code
+
+This distinction matters.
+
+I rarely want to produce code directly anymore. I still want to read and judge it.
+
+GitHub remains important for exactly this reason. It is where I read code, review design docs and pull requests, and collaborate with builders, an increasingly broad category that includes product managers and designers who now ship real code. The pull request may turn out to be a remarkably durable human form factor for the agent era: a bounded proposal, an explicit diff, a place for discussion, checks, provenance, and approval.
+
+GitHub may also become the place for the review before the review. I often want to inspect and redirect an agent’s work before asking a coworker to spend attention on it. That can happen in a draft PR, a PR against my own fork, or a temporary review artifact. Some teams will expose that process; others will keep the noisy agent loop private and open the upstream PR only when the work is coherent. GitHub supports either choice while keeping the diff, checks, discussion, and history in one familiar interface.
+
+This raises a more consequential question: am I reviewing the agent’s change, or am I the producer asking another engineer for approval? Increasingly, I think reviewing the agent is part of producing the change. A second human review should depend on risk and the value of shared context, not on a ritual that every diff needs another pair of eyes. Review is already becoming the bottleneck. Agents should not create ten times more code only for us to preserve every review ceremony unchanged.
+
+For consequential architecture, security boundaries, migrations, or unfamiliar parts of the system, another human still serves a different purpose. Review distributes knowledge and responsibility. The point is not to remove it. The point is to make it risk-based rather than ritual-based.
+
+I don’t think code surfaces disappear. I think they collapse toward verification surfaces.
+
+Less workshop, more microscope: something you pull out when the result smells wrong, not the desk you sit at all day. Trust still requires verification; “the agent said the tests pass” is not a verification strategy.
+
+## The Layer Above the Editor
+
+Agor is my command center now: a board full of coding and AI sessions, usually ten to twenty active branches moving through build, review, verification, and release. Parallel work is not an edge case. It is the assumption.
+
+That changes the shape of the interface. I am not navigating files inside one workstream. I am hopping between sessions, checking intent here, progress there, a question on one branch, and a result ready for judgment on another. The primary object is no longer the open file. It is the workstream.
+
+It is also not just me talking to a collection of agents. Agents can investigate, delegate work to other agents, collect the findings, and bring back a recommendation. The coordination does not always terminate at the human. What I need is a place to see what is building, reviewing, blocked, waiting, or ready for me, without manually operating every step.
+
+And it is multiplayer. Branches, sessions, prompts, decisions, and artifacts are shared team objects, not private editor history trapped on one laptop. What one builder learns can become part of how the team works. Product managers and designers can participate in the same workstreams without pretending to be traditional IDE users.
+
+This does not mean people want a new air-traffic-control job. The workspace should get quiet when things are healthy and become legible when human judgment is needed. Sometimes I supervise from the board. Sometimes I talk to the same persistent teammate through Slack. That is not the workspace receding so much as the workspace escaping its own UI.
+
+Agor does not replace the IDE by becoming a better editor. It starts where the editor’s model runs out: many branches, persistent teammates, shared context, and work that continues when nobody is looking at a file.
+
+## So, Is the IDE Obsolete?
+
+As the primary form factor for software work, I think it is becoming obsolete.
+
+The capabilities are still useful. The container is wrong. The IDE bundles them around one human producing code, navigating files, and managing one active checkout. My job now is supplying intent and context, supervising parallel workstreams, and judging results. That work needs a different home.
+
+So, who’s still using an IDE!? I mean that as a provocation, not a victory lap. If you still live in one, why? What genuine affordance does it give you that conversation, delegation, and verification do not? Is it latency? Spatial reasoning? Debugging? Trust? The pleasure of direct craft?
+
+Or is it mostly habit, the inherited workflow of an era when producing software meant placing your hands on every line?
+
+I’m genuinely asking. We should preserve the affordances that matter.
+
+But maybe you’ll open your editor tomorrow and notice that you’re mostly watching someone else type.

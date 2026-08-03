@@ -5,12 +5,14 @@ export default {
     display: 'normal',
     theme: {
       breadcrumb: false,
+      copyPage: false,
     },
   },
   '*': {
     display: 'hidden',
     theme: {
       breadcrumb: false,
+      copyPage: false,
     },
   },
 };

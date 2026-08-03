@@ -1,6 +1,6 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-const workspaceSourceConditions = ['source', 'module', 'node', 'development|production'];
+const workspaceSourceConditions = ['source', 'node', 'development|production'];
 
 export default defineConfig({
   ssr: {

@@ -2,6 +2,7 @@ import type { AnalyticsInstance } from 'analytics';
 import { Analytics } from 'analytics';
 import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
 import type { AgorAnalyticsSettings, AgorConfig } from '../config/types.js';
+import { getCurrentTenantId } from '../db/tenant-context.js';
 import { isAnalyticsEventExcluded } from './filters.js';
 import { resolveAnalyticsPlugins } from './plugins.js';
 import type { AnalyticsLogger, AnalyticsProperties, AnalyticsTrackOptions } from './types.js';
@@ -65,7 +66,15 @@ export class AnalyticsPackageLogger implements AnalyticsLogger {
     if (isAnalyticsEventExcluded(event, this.excludeEvents)) return;
 
     const trackOptions: Record<string, unknown> = {};
-    if (options.context) trackOptions.context = options.context;
+    const tenantId = getCurrentTenantId();
+    if (options.context || tenantId) {
+      const callerContext = { ...options.context };
+      delete callerContext.tenant_id;
+      trackOptions.context = {
+        ...callerContext,
+        ...(tenantId ? { tenant_id: tenantId } : {}),
+      };
+    }
     if (options.userId) trackOptions.userId = options.userId;
     if (options.anonymousId) trackOptions.anonymousId = options.anonymousId;
 

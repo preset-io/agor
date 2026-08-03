@@ -118,6 +118,35 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('forwards a delegated read identity through a configured command template', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      {
+        executorCommandTemplate: 'launch --user {unix_user} -- {command}',
+        asUser: 'alice',
+      }
+    );
+
+    proc.stdout.emit(
+      'data',
+      Buffer.from('AGOR_EXECUTOR_RESULT {"success":true,"data":{"files":[]}}\n')
+    );
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: true,
+      data: { files: [] },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --user alice -- branch.files.browse'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+  });
+
   it('calls onExit for templated spawns', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -288,6 +317,47 @@ describe('configured executor spawning', () => {
     await expect(promise).resolves.toMatchObject({ success: true });
     expect(vi.mocked(console.log).mock.calls.flat().join(' ')).not.toContain(secret);
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
+  });
+
+  it('launches a local executor from its operator-owned package directory, not payload cwd', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+    const tenantBranchPath = '/tenant-a/worktrees/repo/feature';
+
+    spawnExecutor({ command: 'prompt', params: { cwd: tenantBranchPath } });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { cwd?: string };
+    expect(spawnOptions.cwd).toBeTruthy();
+    expect(spawnOptions.cwd).not.toBe(tenantBranchPath);
+    expect(spawnOptions.cwd).toMatch(/\/packages\/executor$/);
+    expect(JSON.parse(proc.written)).toMatchObject({ params: { cwd: tenantBranchPath } });
+  });
+
+  it('preserves the exit-0/no-result protocol failure diagnostic', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { runExecutorCommand } = await import('./spawn-executor');
+    const promise = runExecutorCommand(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch --user {unix_user} -- {command}' }
+    );
+
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESULT_MISSING',
+        message: 'Executor exited with code 0 but did not emit a JSON result',
+        details: {
+          command: 'branch.files.browse',
+          exitCode: 0,
+          stderr: '',
+        },
+      },
+    });
   });
 
   it('refuses every unscoped executor launch when tenant context is required', async () => {

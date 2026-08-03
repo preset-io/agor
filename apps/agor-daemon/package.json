@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./uploads-maintenance": {
+      "types": "./dist/uploads-maintenance.d.ts",
+      "import": "./dist/uploads-maintenance.js"
     }
   },
   "scripts": {
@@ -23,6 +27,8 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1101.0",
+    "@aws-sdk/lib-storage": "^3.1101.0",
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.29.0",

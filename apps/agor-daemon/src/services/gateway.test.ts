@@ -1181,7 +1181,17 @@ describe('GatewayService Slack attachment ingestion', () => {
 
   it('downloads image attachments and folds the stored paths into the prompt', async () => {
     vi.mocked(ingestInboundAttachments).mockResolvedValue({
-      paths: ['/home/agor/.agor/uploads/screenshot_1.png'],
+      uploads: [
+        {
+          ref: 'upl_00000000-0000-4000-8000-000000000001',
+          name: 'screenshot.png',
+          mimeType: 'image/png',
+          size: 2048,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-02T00:00:00.000Z',
+          provenance: 'gateway-slack',
+        },
+      ],
       failed: 0,
     });
     const { service, promptCreate } = makeGatewayHarness({
@@ -1205,9 +1215,12 @@ describe('GatewayService Slack attachment ingestion', () => {
       files: inboundFiles,
       botToken: 'xoxb-test',
       tenantId: 'tenant-channel',
+      sessionId: 'sess-1',
+      branchId: 'branch-1',
+      createdBy: 'user-1',
     });
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
-    expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/screenshot_1.png');
+    expect(prompt).toContain('upl_00000000-0000-4000-8000-000000000001');
     expect(prompt).toContain('what does this screenshot show?');
     expect(prompt).not.toContain('an attachment could not be fetched');
   });
@@ -1233,7 +1246,7 @@ describe('GatewayService Slack attachment ingestion', () => {
   });
 
   it('delivers the prompt with a degradation note when downloads fail', async () => {
-    vi.mocked(ingestInboundAttachments).mockResolvedValue({ paths: [], failed: 1 });
+    vi.mocked(ingestInboundAttachments).mockResolvedValue({ uploads: [], failed: 1 });
     const { service, promptCreate } = makeGatewayHarness({
       channel: ingestChannel,
       existingMapping: makeMapping({ thread_id: 'D123-100.000000' }),
@@ -1257,7 +1270,17 @@ describe('GatewayService Slack attachment ingestion', () => {
 
   it('folds successful paths and appends the note when only some downloads fail', async () => {
     vi.mocked(ingestInboundAttachments).mockResolvedValue({
-      paths: ['/home/agor/.agor/uploads/ok_1.png'],
+      uploads: [
+        {
+          ref: 'upl_00000000-0000-4000-8000-000000000002',
+          name: 'ok.png',
+          mimeType: 'image/png',
+          size: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-02T00:00:00.000Z',
+          provenance: 'gateway-slack',
+        },
+      ],
       failed: 1,
     });
     const { service, promptCreate } = makeGatewayHarness({
@@ -1275,7 +1298,7 @@ describe('GatewayService Slack attachment ingestion', () => {
     });
 
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
-    expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/ok_1.png');
+    expect(prompt).toContain('upl_00000000-0000-4000-8000-000000000002');
     expect(prompt).toContain('(an attachment could not be fetched)');
   });
 });

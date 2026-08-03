@@ -48,6 +48,15 @@ type PageProps = {
   params: Promise<{ mdxPath?: string[] }>;
 };
 
+function formatPostDate(date: string | number | Date): string {
+  return new Date(date).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 export async function generateMetadata(props: PageProps) {
   const params = await props.params;
   const { metadata } = await importPage(params.mdxPath);
@@ -85,6 +94,7 @@ export async function generateMetadata(props: PageProps) {
       description,
       images: [image],
     },
+    authors: frontMatter.author ? [{ name: frontMatter.author }] : undefined,
   };
 }
 
@@ -106,7 +116,10 @@ export default async function Page(props: PageProps) {
           datePublished: new Date(frontMatter.date).toISOString(),
           image: getSocialImage(frontMatter),
           url: getCanonicalUrl(pathname, frontMatter.canonical),
-          author: { '@type': 'Organization', name: 'Preset Inc.', url: 'https://preset.io' },
+          author: {
+            '@type': 'Person',
+            name: frontMatter.author || 'Maxime Beauchemin',
+          },
           publisher: { '@type': 'Organization', name: 'Preset Inc.', url: 'https://preset.io' },
         }
       : null;
@@ -137,11 +150,38 @@ export default async function Page(props: PageProps) {
           style={{
             width: '100%',
             borderRadius: '8px',
-            marginBottom: '1.5rem',
+            marginBottom: '1.75rem',
             aspectRatio: '16 / 9',
             objectFit: 'cover',
           }}
         />
+      ) : null}
+      {isBlogPost ? (
+        <header style={{ marginBottom: '2rem' }}>
+          <h1
+            style={{
+              fontSize: '2.25rem',
+              fontWeight: 700,
+              lineHeight: 1.2,
+              letterSpacing: '-0.025em',
+              margin: '0 0 0.625rem',
+            }}
+          >
+            {frontMatter.title}
+          </h1>
+          {frontMatter.author && frontMatter.date ? (
+            <p
+              style={{
+                color: 'inherit',
+                fontSize: '0.9rem',
+                margin: 0,
+                opacity: 0.65,
+              }}
+            >
+              By {frontMatter.author} · {formatPostDate(frontMatter.date)}
+            </p>
+          ) : null}
+        </header>
       ) : null}
       <MDXContent {...props} params={params} />
     </Wrapper>

@@ -25,9 +25,9 @@
     "format": "prettier --write .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck --filter='!@agor/docs'",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:shortid && pnpm check:multitenancy-boundaries && turbo run build --filter='!@agor/docs'",
-    "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && pnpm check:multitenancy-boundaries && turbo run build --filter='!@agor/docs'",
-    "check:clean": "turbo run typecheck build --filter='!@agor/docs' --force && pnpm lint && pnpm check:shortid",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:shortid && pnpm check:multitenancy-boundaries && pnpm check:daemon-filesystem-boundaries && turbo run build --filter='!@agor/docs'",
+    "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && pnpm check:multitenancy-boundaries && pnpm check:daemon-filesystem-boundaries && turbo run build --filter='!@agor/docs'",
+    "check:clean": "turbo run typecheck build --filter='!@agor/docs' --force && pnpm lint && pnpm check:shortid && pnpm check:daemon-filesystem-boundaries",
     "check:shortid": "node scripts/check-no-ad-hoc-shortid.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
     "prepare": "husky",
@@ -38,7 +38,9 @@
     "load:fixtures": "tsx scripts/load-fixtures.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
-    "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs"
+    "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
+    "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
+    "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",

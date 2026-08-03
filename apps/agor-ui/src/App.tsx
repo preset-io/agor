@@ -1013,7 +1013,7 @@ function AppContent() {
             });
             const finalPrompt = buildPromptWithAttachments(
               config.initialPrompt ?? '',
-              uploaded.files.map((file) => file.path)
+              uploaded.files
             );
             if (finalPrompt.trim()) {
               await handleSendPrompt(session.session_id, finalPrompt, config.permissionMode);
@@ -1875,6 +1875,7 @@ function AppContent() {
       instanceDescription={instanceConfig?.description}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
+      uploadPolicy={featuresConfig?.uploadPolicy}
       onRestartOnboarding={handleRestartOnboarding}
     />
   );

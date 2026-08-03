@@ -13,20 +13,27 @@
  * enforces.
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import { Readable } from 'node:stream';
 import type { InboundFile } from '@agor/core/gateway';
+import type {
+  BranchID,
+  SessionID,
+  TenantID,
+  UploadMetadata,
+  UploadStagingStore,
+  UserID,
+} from '@agor/core/types';
+import { buildUploadAttachmentPrompt } from '@agor/core/types';
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
-  buildUploadFilename,
-  getUploadDirectory,
-  MAX_UPLOAD_FILE_SIZE,
+  getUploadLimits,
   MAX_UPLOAD_FILES_PER_REQUEST,
 } from './upload.js';
+import { getUploadStagingStore } from './upload-staging.js';
 
 export interface AttachmentIngestResult {
-  /** Absolute paths of stored files, in the order the attachments arrived. */
-  paths: string[];
+  /** Opaque logical records, in the order the attachments arrived. */
+  uploads: UploadMetadata[];
   /** Ingestable attachments that could not be fetched or stored. */
   failed: number;
 }
@@ -69,25 +76,11 @@ export function isIngestableFile(file: InboundFile): boolean {
   return isAllowedIngestMime(file.mimetype);
 }
 
-/**
- * Fold stored attachment paths into a prompt.
- *
- * Server-side copy of the session composer's `buildPromptWithAttachments`
- * (`apps/agor-ui/src/components/SessionPanel/composerAttachments.ts`) — the
- * daemon must not import agor-ui. Keep the two in sync.
- */
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
-  const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
-
-  const attachmentBlock = [
-    'Attached files:',
-    ...attachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
-  ].join('\n');
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
+export function buildPromptWithAttachments(text: string, attachments: UploadMetadata[]): string {
+  return buildUploadAttachmentPrompt(
+    text,
+    attachments.map(({ ref, name, mimeType, size }) => ({ ref, filename: name, mimeType, size }))
+  );
 }
 
 /**
@@ -127,28 +120,9 @@ async function fetchFromAllowedHosts(
  * Content-Length can be absent or false, so the declared-size prechecks are
  * only cheap early-outs, never the bound.
  */
-async function readBodyWithLimit(response: Response, maxBytes: number): Promise<Buffer> {
-  if (!response.body) {
-    return Buffer.alloc(0);
-  }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  // Throwing inside for-await invokes the iterator's return(), which cancels
-  // the underlying stream — no bytes past the ceiling are buffered.
-  for await (const chunk of response.body) {
-    const buf = Buffer.from(chunk as Uint8Array);
-    total += buf.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`downloaded size exceeds per-file limit ${maxBytes}`);
-    }
-    chunks.push(buf);
-  }
-  return Buffer.concat(chunks);
-}
-
 /**
  * Download the ingestable attachments of one inbound message and store them
- * in the upload directory. Never throws: every attachment that cannot be
+ * in tenant-scoped staging. Never throws: every attachment that cannot be
  * fetched, validated, or written is counted in `failed` so the caller can
  * still deliver the prompt with a degradation note.
  */
@@ -156,14 +130,17 @@ export async function ingestInboundAttachments(args: {
   files: InboundFile[];
   botToken: string;
   fetchImpl?: typeof fetch;
-  uploadDir?: string;
-  tenantId?: string;
+  tenantId: TenantID;
+  sessionId: SessionID;
+  branchId: BranchID;
+  createdBy: UserID;
+  store?: UploadStagingStore;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
-  const uploadDir = args.uploadDir ?? getUploadDirectory(args.tenantId);
+  const store = args.store ?? getUploadStagingStore();
 
   const ingestable = args.files.filter(isIngestableFile);
-  const paths: string[] = [];
+  const uploads: UploadMetadata[] = [];
   let failed = 0;
 
   for (const [index, file] of ingestable.entries()) {
@@ -174,10 +151,11 @@ export async function ingestInboundAttachments(args: {
       );
       continue;
     }
-    if (file.size > MAX_UPLOAD_FILE_SIZE) {
+    const maxFileBytes = getUploadLimits().maxFileBytes;
+    if (file.size > maxFileBytes) {
       failed++;
       console.warn(
-        `[gateway] Skipping attachment "${file.name}": ${file.size} bytes exceeds per-file limit ${MAX_UPLOAD_FILE_SIZE}`
+        `[gateway] Skipping attachment "${file.name}": ${file.size} bytes exceeds per-file limit ${maxFileBytes}`
       );
       continue;
     }
@@ -207,23 +185,29 @@ export async function ingestInboundAttachments(args: {
         );
       }
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
+      if (Number.isFinite(declaredLength) && declaredLength > maxFileBytes) {
         throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
       }
-      const body = await readBodyWithLimit(response, MAX_UPLOAD_FILE_SIZE);
-
-      await fs.mkdir(uploadDir, { recursive: true });
-      // Slack names every pasted screenshot "image.png"; prefix the unique
-      // Slack file ID so same-millisecond downloads can never overwrite each
-      // other (the timestamp in buildUploadFilename is not unique enough).
-      const filePath = path.join(uploadDir, buildUploadFilename(`${file.id}_${file.name}`));
-      await fs.writeFile(filePath, body);
-      paths.push(filePath);
+      if (!response.body) throw new Error('download response has no body');
+      const staged = await store.stage({
+        owner: {
+          tenantId: args.tenantId,
+          sessionId: args.sessionId,
+          branchId: args.branchId,
+          createdBy: args.createdBy,
+        },
+        name: `${file.id}_${file.name}`,
+        mimeType: contentType.split(';')[0].trim().toLowerCase(),
+        provenance: 'gateway-slack',
+        body: Readable.fromWeb(response.body as never),
+        sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
+      });
+      uploads.push(staged);
     } catch (error) {
       failed++;
       console.warn(`[gateway] Failed to ingest attachment "${file.name}":`, error);
     }
   }
 
-  return { paths, failed };
+  return { uploads, failed };
 }

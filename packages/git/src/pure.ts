@@ -4,48 +4,8 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { readFileSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import * as yaml from 'js-yaml';
 
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
-
-function expandHomePath(input: string): string {
-  if (!input) return input;
-  if (input.startsWith('~/')) return path.join(os.homedir(), input.slice(2));
-  return input;
-}
-
-function getAgorHome(): string {
-  return path.join(os.homedir(), '.agor');
-}
-
-function getDataHome(): string {
-  if (process.env.AGOR_DATA_HOME) return expandHomePath(process.env.AGOR_DATA_HOME);
-  try {
-    const raw = readFileSync(path.join(getAgorHome(), 'config.yaml'), 'utf-8');
-    const config = (yaml.load(raw) ?? {}) as { paths?: { data_home?: string } };
-    if (config.paths?.data_home) return expandHomePath(config.paths.data_home);
-  } catch {
-    // Fall through to AGOR_HOME when config is absent or unreadable. This mirrors
-    // the git helper's historical best-effort path behavior without depending on
-    // @agor/core's full config loader.
-  }
-  return getAgorHome();
-}
-
-export function getReposDir(): string {
-  return path.join(getDataHome(), 'repos');
-}
-
-export function getBranchesDir(): string {
-  return path.join(getDataHome(), 'worktrees');
-}
-
-export function getBranchPath(repoSlug: string, branchName: string): string {
-  return path.join(getBranchesDir(), repoSlug, branchName);
-}
 
 function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;

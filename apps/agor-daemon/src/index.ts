@@ -74,6 +74,7 @@ import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-t
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
+import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
@@ -582,6 +583,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
   });
+  configureUploadStagingStoreFromConfig(config, undefined, db);
 
   // --------------------------------------------------------------------------
   // RBAC flags

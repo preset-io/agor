@@ -1,5 +1,5 @@
 import type { SessionID } from '@agor/core/types';
-import { buildGitConfigParameters } from '../../git/index.js';
+import { appendGitConfigParameterPairs } from '../../git/config-parameters.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 type BranchForSafeDirectory = {
@@ -19,14 +19,6 @@ function gitSafeDirectoryDebug(...args: unknown[]): void {
   if (DEBUG_GIT_SAFE_DIRECTORY) {
     console.debug(...args);
   }
-}
-
-function appendGitConfigParameterPairs(pairs: readonly string[]): void {
-  const encoded = buildGitConfigParameters(pairs);
-  if (!encoded) return;
-
-  const existing = process.env.GIT_CONFIG_PARAMETERS?.trim();
-  process.env.GIT_CONFIG_PARAMETERS = existing ? `${existing} ${encoded}` : encoded;
 }
 
 /**

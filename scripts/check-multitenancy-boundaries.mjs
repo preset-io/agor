@@ -126,6 +126,10 @@ const checks = [
       // the supported no-tenant path for guarded proxies.
       'apps/agor-daemon/src/health/db-probe.ts': 1,
       'apps/agor-daemon/src/health/routes.ts': 1,
+      // Deployment-local maintenance accepts the raw runtime handle from the
+      // CLI, uses system scope only for tenant-ID discovery, and re-enters
+      // ordinary tenant scope before reading or deleting upload rows.
+      'apps/agor-daemon/src/uploads-maintenance.ts': 1,
       // Widget renderer accepts both tenant-aware and repository-compatible database shapes.
       'apps/agor-daemon/src/widgets/env-vars/index.ts': 1,
     },

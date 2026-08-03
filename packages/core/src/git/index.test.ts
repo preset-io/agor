@@ -17,15 +17,12 @@ import {
   createBranch,
   createBranchAsClone,
   extractRepoName,
-  getBranchesDir,
-  getBranchPath,
   getCurrentBranch,
   getCurrentSha,
   getDefaultBranch,
   getGitState,
   getRemoteBranches,
   getRemoteUrl,
-  getReposDir,
   hasRemoteBranch,
   isClean,
   isGitRepo,
@@ -125,44 +122,6 @@ describe('extractRepoName', () => {
     expect(extractRepoName('https://github.com/org/repo_with_underscores.git')).toBe(
       'repo_with_underscores'
     );
-  });
-});
-
-describe('getReposDir', () => {
-  it('should return repos path under data home (defaults to ~/.agor/repos)', () => {
-    const reposDir = getReposDir();
-    // Default behavior: data_home = agor_home = ~/.agor
-    // Tests may override AGOR_DATA_HOME or config, but default should be ~/.agor/repos
-    expect(reposDir).toContain('repos');
-    // Path should end with /repos
-    expect(reposDir).toMatch(/repos$/);
-  });
-});
-
-describe('getBranchesDir', () => {
-  it('should return branches path under data home (defaults to ~/.agor/worktrees)', () => {
-    // On-disk dir name stays `worktrees/` for backwards compatibility with
-    // existing installs — see getBranchesDir() JSDoc.
-    const branchesDir = getBranchesDir();
-    expect(branchesDir).toContain('worktrees');
-    expect(branchesDir).toMatch(/worktrees$/);
-  });
-});
-
-describe('getBranchPath', () => {
-  it('should construct branch path from repo slug and name', () => {
-    const branchPath = getBranchPath('org/repo', 'feature-1');
-    // Should contain branches directory (still `worktrees/` on disk for
-    // backwards compatibility), repo slug, and branch name.
-    expect(branchPath).toContain('worktrees');
-    expect(branchPath).toContain('org/repo');
-    expect(branchPath).toContain('feature-1');
-  });
-
-  it('should handle repo slugs with special characters', () => {
-    const branchPath = getBranchPath('org/repo-name', 'branch-name');
-    expect(branchPath).toContain('org/repo-name');
-    expect(branchPath).toContain('branch-name');
   });
 });
 
@@ -1055,7 +1014,7 @@ describe('cloneRepo', () => {
     vi.restoreAllMocks();
   });
 
-  it('should clone repository to default location', async () => {
+  it('should clone repository to an explicitly resolved layout path', async () => {
     await createBareRepo(remoteDir);
 
     // Create a commit in remote (bare repos need content pushed to them)
@@ -1065,7 +1024,10 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    const result = await cloneRepo({ url: remoteDir });
+    const result = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
 
     expect(result.path).toContain('.agor/repos');
     expect(result.repoName).toBe(path.basename(remoteDir));
@@ -1114,8 +1076,14 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    const result1 = await cloneRepo({ url: remoteDir });
-    const result2 = await cloneRepo({ url: remoteDir });
+    const result1 = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
+    const result2 = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
 
     expect(result1.path).toBe(result2.path);
     expect(result1.repoName).toBe(result2.repoName);
@@ -1140,7 +1108,11 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    const result = await cloneRepo({ url: remoteDir, bare: true });
+    const result = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+      bare: true,
+    });
 
     // Note: isGitRepo uses 'git status' which fails on bare repos
     // Verify bare clone by checking for no working directory files
@@ -1179,7 +1151,11 @@ describe('cloneRepo', () => {
     await git.push('origin', 'main');
     await git.push('origin', 'feature/x');
 
-    const result = await cloneRepo({ url: remoteDir, branch: 'feature/x' });
+    const result = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+      branch: 'feature/x',
+    });
 
     expect(result.defaultBranch).toBe('feature/x');
     // Working tree is on the pinned branch — marker file is checked out.
@@ -1203,7 +1179,10 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    const result = await cloneRepo({ url: remoteDir });
+    const result = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
 
     expect(result.defaultBranch).toBe('main');
   });
@@ -1218,7 +1197,13 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+    await expect(
+      cloneRepo({
+        url: remoteDir,
+        targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+        branch: 'does-not-exist',
+      })
+    ).rejects.toThrow();
   });
 
   // Existing-repo early-return path: if the repo dir is already present
@@ -1240,12 +1225,19 @@ describe('cloneRepo', () => {
     await git.push('origin', 'feature/x');
 
     // First clone unpinned — leaves the working tree on `main`.
-    const first = await cloneRepo({ url: remoteDir });
+    const first = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
     expect(first.defaultBranch).toBe('main');
 
     // Second call to the SAME target with a pin — must check out the pin
     // before returning.
-    const second = await cloneRepo({ url: remoteDir, branch: 'feature/x' });
+    const second = await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+      branch: 'feature/x',
+    });
     expect(second.path).toBe(first.path);
     expect(second.defaultBranch).toBe('feature/x');
     const cloned = simpleGit(second.path);
@@ -1269,9 +1261,18 @@ describe('cloneRepo', () => {
     await git.addRemote('origin', remoteDir);
     await git.push('origin', 'main');
 
-    await cloneRepo({ url: remoteDir });
+    await cloneRepo({
+      url: remoteDir,
+      targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+    });
 
-    await expect(cloneRepo({ url: remoteDir, branch: 'does-not-exist' })).rejects.toThrow();
+    await expect(
+      cloneRepo({
+        url: remoteDir,
+        targetDir: path.join(tempDir, '.agor', 'repos', path.basename(remoteDir)),
+        branch: 'does-not-exist',
+      })
+    ).rejects.toThrow();
   });
 });
 

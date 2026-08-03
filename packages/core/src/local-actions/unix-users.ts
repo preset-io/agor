@@ -1,9 +1,5 @@
-import {
-  AGOR_HOME_BASE,
-  createAdminExecutor,
-  isValidUnixUsername,
-  UnixUserCommands,
-} from '../unix/index.js';
+import { createAdminExecutor } from '../unix/command-executor.js';
+import { AGOR_HOME_BASE, isValidUnixUsername, UnixUserCommands } from '../unix/user-manager.js';
 import { getReporter, type LocalActionOptions } from './types.js';
 
 export interface EnsureUnixUserParams extends LocalActionOptions {

@@ -1496,7 +1496,7 @@ export class SlackConnector implements GatewayConnector {
   async uploadFile(req: {
     channel: string;
     threadTs?: string;
-    file: Buffer;
+    file: NodeJS.ReadableStream | Buffer;
     filename: string;
     comment?: string;
   }): Promise<{ id: string; permalink: string | null; name: string }> {
