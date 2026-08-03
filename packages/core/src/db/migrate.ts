@@ -282,10 +282,7 @@ export async function runMigrations(db: Database): Promise<void> {
     console.log('✅ Migrations complete');
   } catch (error) {
     console.error('❌ Migration failed:', sanitizeDbError(error));
-    throw new MigrationError(
-      `Migration failed: ${error instanceof Error ? error.message : String(error)}`,
-      error
-    );
+    throw new MigrationError('Migration failed', error);
   }
 }
 

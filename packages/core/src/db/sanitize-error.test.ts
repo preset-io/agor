@@ -58,4 +58,20 @@ describe('sanitizeDbError', () => {
     expect(output).toContain('Database operation failed');
     expect(output).toContain('22P02');
   });
+
+  it('only includes strictly validated database metadata', () => {
+    const output = inspect(
+      sanitizeDbError({
+        name: 'SECRET_SENTINEL',
+        code: 'SECRET_SENTINEL',
+        constraint: 'SECRET_SENTINEL\nforged-log-line',
+      })
+    );
+
+    expect(output).not.toContain('SECRET_SENTINEL');
+    expect(output).not.toContain('forged-log-line');
+    expect(output).toContain("name: 'DatabaseError'");
+    expect(output).not.toContain('code:');
+    expect(output).not.toContain('constraint:');
+  });
 });

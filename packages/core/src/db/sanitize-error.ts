@@ -13,6 +13,10 @@ export interface SanitizedDbError {
 
 type ErrorRecord = Record<string, unknown>;
 
+const POSTGRES_SQLSTATE = /^[0-9A-Z]{5}$/;
+const SQLITE_ERROR_CODE = /^SQLITE_[A-Z0-9_]{1,64}$/;
+const DATABASE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]{0,62}$/;
+
 function asRecord(value: unknown): ErrorRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as ErrorRecord) : undefined;
 }
@@ -25,12 +29,6 @@ function asRecord(value: unknown): ErrorRecord | undefined {
  * such as detail, query and params are intentionally ignored.
  */
 export function sanitizeDbError(error: unknown): SanitizedDbError {
-  const root = asRecord(error);
-  const name =
-    (typeof root?.name === 'string' && root.name) ||
-    (error instanceof Error && error.name) ||
-    'DatabaseError';
-
   let code: string | undefined;
   let constraint: string | undefined;
   let current: unknown = error;
@@ -39,9 +37,21 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
     const record = asRecord(current);
-    if (!code && typeof record?.code === 'string') code = record.code;
+    if (
+      !code &&
+      typeof record?.code === 'string' &&
+      (POSTGRES_SQLSTATE.test(record.code) || SQLITE_ERROR_CODE.test(record.code))
+    ) {
+      code = record.code;
+    }
     const candidateConstraint = record?.constraint_name ?? record?.constraint;
-    if (!constraint && typeof candidateConstraint === 'string') constraint = candidateConstraint;
+    if (
+      !constraint &&
+      typeof candidateConstraint === 'string' &&
+      DATABASE_IDENTIFIER.test(candidateConstraint)
+    ) {
+      constraint = candidateConstraint;
+    }
 
     current = record?.cause;
   }
@@ -54,7 +64,7 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     ? 'Database constraint violation'
     : 'Database operation failed';
   return {
-    name,
+    name: 'DatabaseError',
     message,
     ...(code ? { code } : {}),
     ...(constraint ? { constraint } : {}),
