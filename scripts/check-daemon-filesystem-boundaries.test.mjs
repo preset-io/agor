@@ -66,6 +66,14 @@ test('tracks simple assignments and destructuring from privileged bindings', () 
   assert.match(errors.join('\n'), /node:fs#readFileSync capability call:read@load#1/);
   assert.match(errors.join('\n'), /node:fs#rm capability call:rm@load#1/);
 });
+test('tracks privileged capabilities through promisify, assignment, and pass-through aliases', () => {
+  const errors = run({
+    'apps/agor-daemon/src/index.ts': `import {exec} from 'node:child_process'; import {open,write,close,unlink} from 'node:fs'; import {promisify} from 'node:util'; const execAsync=promisify(exec); const openAsync=promisify(open); const writeAsync=promisify(write); const closeAsync=promisify(close); const unlinkAsync=promisify(unlink); const passthrough=x=>x; const hidden=passthrough(execAsync); let assigned; assigned=hidden; async function mutate(){await assigned('chmod 777 tenant');await openAsync('tenant','w');await writeAsync(1,'x');await closeAsync(1);await unlinkAsync('tenant')}`,
+  }).join('\n');
+  for (const capability of ['exec', 'open', 'write', 'close', 'unlink'])
+    assert.match(errors, new RegExp(`node:(?:child_process|fs)#${capability} capability`));
+  assert.match(errors, /call:assigned@mutate#1/);
+});
 test('numbers repeated non-literal imports and requires independently', () => {
   const errors = run({
     'apps/agor-daemon/src/index.ts': `async function load(a,b){await import(a);await import(b);require(a);require(b)}`,

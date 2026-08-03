@@ -420,11 +420,11 @@ export interface MessagesService extends AgorService<Message> {
  */
 export interface ReposService extends AgorService<Repo> {
   /**
-   * Initialize Unix group for a repo (daemon-side privileged operation).
-   * Called by executor after cloning.
+   * Ask the daemon to synchronously dispatch the capability-scoped operator
+   * executor which resolves this repo's trusted path and applies Unix access.
    */
-  initializeUnixGroup(
-    data: { repoId: string; userId?: string },
+  handoffCloneUnixPermissions(
+    data: { repoId: string },
     params?: Params
   ): Promise<{ unixGroup: string }>;
 
@@ -568,11 +568,11 @@ export interface UsersService extends AgorService<User> {
  */
 export interface BranchesService extends AgorService<Branch> {
   /**
-   * Initialize Unix group for a branch (daemon-side privileged operation).
-   * Called by executor after creating the git branch.
+   * Ask the daemon to synchronously dispatch the capability-scoped operator
+   * executor which resolves this branch's trusted path and applies Unix access.
    */
-  initializeUnixGroup(
-    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
+  handoffBranchUnixPermissions(
+    data: { branchId: string },
     params?: Params
   ): Promise<{ unixGroup: string }>;
 
@@ -948,7 +948,7 @@ function extendReposService(client: AgorClient): void {
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
   if (typeof reposService.methods === 'function') {
-    reposService.methods('initializeUnixGroup');
+    reposService.methods('handoffCloneUnixPermissions');
   }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
@@ -962,7 +962,7 @@ function extendBranchesService(client: AgorClient): void {
   if (typeof branchesService.methods === 'function') {
     branchesService.methods(
       'updateEnvironment',
-      'initializeUnixGroup',
+      'handoffBranchUnixPermissions',
       'ensureTeammateKnowledgeNamespace'
     );
   }

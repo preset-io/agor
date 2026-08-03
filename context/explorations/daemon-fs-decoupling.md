@@ -30,6 +30,19 @@ type-safe built-in registry: `stdout` and HTTP batch. Existing configuration con
 it is never loaded or silently ignored. The capability was removed from
 `scripts/daemon-filesystem-exceptions.json`.
 
+**2026-08-03 final stretch:** Runtime Unix permission initialization is now
+executor-owned. `git.clone` and `git.branch.add` synchronously hand off only a
+trusted tenant-scoped record ID; the daemon dispatches the existing
+`unix.sync-repo` / `unix.sync-branch` capability to the configured operator
+executor and never dereferences or shells with the resolved path. The old
+`repos.initializeUnixGroup`, `branches.initializeUnixGroup`, and daemon
+`utils/unix-group-init.ts` implementation are removed. Initialization remains
+best-effort (as before), idempotent, and ordered before lifecycle `ready` state.
+Hosted templates receive the trusted tenant ID for the correct mount; local
+strict/insulated deployments still perform group/ACL setup. SDK session data
+and user-home persistence owned by executor runtimes remain a separate
+architecture concern and are not a daemon-boundary blocker.
+
 ---
 
 ## 1. Today's reality

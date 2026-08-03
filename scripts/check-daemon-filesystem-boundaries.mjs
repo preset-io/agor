@@ -172,7 +172,30 @@ function bindingsFor(sf) {
                   element.propertyName?.getText(sf) ?? element.name.text
                 );
         }
+      } else if (ts.isIdentifier(node.name) && ts.isCallExpression(call)) {
+        // Higher-order wrappers such as promisify(exec), bind(exec), or a
+        // project-local pass-through helper must not erase the authority of
+        // the imported capability. Track the returned binding by the exact
+        // imported capability; operationsFor will register the eventual use,
+        // rather than broadly classifying the wrapper itself.
+        for (const argument of call.arguments) {
+          if (!ts.isIdentifier(argument)) continue;
+          const original = bindings.get(argument.text);
+          if (original) {
+            bind(node.name.text, original.source, original.symbol);
+            break;
+          }
+        }
       }
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left) &&
+      ts.isIdentifier(node.right)
+    ) {
+      const original = bindings.get(node.right.text);
+      if (original) bind(node.left.text, original.source, original.symbol);
     }
     ts.forEachChild(node, visit);
   }

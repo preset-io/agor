@@ -73,6 +73,10 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
+import {
+  assertOperatorUnixHandoff,
+  dispatchOperatorUnixHandoff,
+} from '../utils/operator-unix-capability.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
@@ -706,38 +710,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return withDefaults;
   }
 
-  /**
-   * Custom method: Initialize Unix group for a branch (daemon-side privileged operation).
-   *
-   * Called by the executor via Feathers RPC after creating the git branch on
-   * disk, so that groupadd/chgrp/setfacl run with daemon sudo privileges
-   * regardless of executor impersonation mode.
-   *
-   * Auth: only service accounts (executor JWTs) may invoke this externally.
-   * Internal calls (no `provider`) pass through.
-   */
-  async initializeUnixGroup(
-    data: { branchId: string; othersAccess?: 'none' | 'read' | 'write' },
+  /** Synchronously route post-materialization access setup to the operator executor. */
+  async handoffBranchUnixPermissions(
+    data: { branchId: string },
     params?: BranchParams
   ): Promise<{ unixGroup: string }> {
-    if (params?.provider) {
-      const caller = (params as AuthenticatedParams | undefined)?.user;
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService) {
-        throw new Forbidden('Only the executor service account may initialize Unix groups');
-      }
-    }
-
-    const { initializeBranchUnixGroup } = await import('../utils/unix-group-init.js');
-    const unixGroup = await initializeBranchUnixGroup(
-      this.db,
-      this.app,
-      data.branchId,
-      data.othersAccess || 'read'
-    );
+    assertOperatorUnixHandoff(params as AuthenticatedParams | undefined, {
+      command: 'git.branch.add',
+      branchId: data.branchId,
+    });
+    await this.get(data.branchId as BranchID, params);
+    const unixGroup = await dispatchOperatorUnixHandoff({
+      app: this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      target: { command: 'unix.sync-branch', branchId: data.branchId },
+      daemonUser: loadConfigSync().daemon?.unix_user,
+    });
     return { unixGroup };
   }
 
@@ -1694,7 +1681,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
         const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } }
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
         );
         spawnExecutor(
           {

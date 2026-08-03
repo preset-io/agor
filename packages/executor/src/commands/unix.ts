@@ -222,8 +222,10 @@ export async function handleUnixSyncRepo(
       console.log(`[unix.sync-repo] Created group ${groupName}`);
     }
 
-    // Set permissions on .git/ directory
-    const gitPath = `${repo.local_path}/.git`;
+    // Initial clone setup owns the complete managed repo directory. Later
+    // reconciliation needs only Git metadata. Both paths come exclusively
+    // from the tenant-scoped repo record fetched above.
+    const gitPath = payload.params.initialize ? repo.local_path : `${repo.local_path}/.git`;
     const permCommands = UnixGroupCommands.setDirectoryGroup(
       gitPath,
       groupName,
@@ -260,6 +262,22 @@ export async function handleUnixSyncRepo(
     const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data;
 
     const addedUsers = new Set<string>();
+    if (payload.params.creatorUserId) {
+      try {
+        const creator = await client.service('users').get(payload.params.creatorUserId);
+        if (creator.unix_username) {
+          const inGroup = await checkCommand(
+            UnixGroupCommands.isUserInGroup(creator.unix_username, groupName)
+          );
+          if (!inGroup) {
+            await runCommand(UnixGroupCommands.addUserToGroup(creator.unix_username, groupName));
+          }
+          addedUsers.add(creator.unix_username);
+        }
+      } catch {
+        console.log('[unix.sync-repo] Could not add clone creator to repo group');
+      }
+    }
     for (const wt of branches) {
       // Get owners for this branch
       try {
@@ -964,11 +982,12 @@ export async function handleUnixSyncUser(
 // ============================================================
 //
 // Privileged group/ACL setup for newly cloned repos and freshly created
-// branches lives in the daemon (apps/agor-daemon/src/utils/unix-group-init.ts)
-// and is invoked via Feathers RPC: `repos.initializeUnixGroup` and
-// `branches.initializeUnixGroup`. This keeps the privileged work running with
-// daemon sudo regardless of executor impersonation mode. The executor only
-// retains the basic-mode chmod helper below for non-RBAC paths.
+// branches is invoked through the capability-scoped operator executor via
+// `repos.handoffCloneUnixPermissions` and
+// `branches.handoffBranchUnixPermissions`. This keeps
+// privileged work on the tenant-mounted operator runtime, independent of the
+// Git executor's user identity. The executor retains the basic-mode chmod
+// helper below for non-RBAC paths.
 
 /**
  * Fix permissions on branch's .git/worktrees/<name>/ directory without RBAC

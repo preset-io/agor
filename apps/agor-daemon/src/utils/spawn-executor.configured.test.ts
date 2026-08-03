@@ -335,6 +335,71 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('dispatches Unix permission sync through the configured operator and tenant mount', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const timeoutSpy = vi.spyOn(global, 'setTimeout');
+    const { runWithTenantContext } = await import('@agor/core/db');
+    const {
+      configureExecutor,
+      OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS,
+      runOperatorUnixPermissionCommand,
+    } = await import('./spawn-executor');
+    configureExecutor({
+      executor_command_template:
+        'operator-launch --tenant {tenant_id} --identity {unix_user} -- {command}',
+      executor_unix_user: 'agor_operator',
+    });
+    const promise = runWithTenantContext('tenant-a', () =>
+      runOperatorUnixPermissionCommand({
+        command: 'unix.sync-branch',
+        sessionToken: 'scoped',
+        daemonUrl: 'http://daemon',
+        params: { branchId: '00000000-0000-4000-8000-000000000001' },
+      })
+    );
+    proc.stdout.emit('data', Buffer.from('{"success":true,"data":{"groupName":"g"}}\n'));
+    proc.emit('exit', 0);
+    await expect(promise).resolves.toMatchObject({ success: true });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', "operator-launch --tenant 'tenant-a' --identity agor_operator -- unix.sync-branch"],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    );
+    expect(timeoutSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS
+    );
+    timeoutSpy.mockRestore();
+  });
+
+  it('rejects paths, cwd, and unrelated commands at the operator capability boundary', async () => {
+    const { runOperatorUnixPermissionCommand } = await import('./spawn-executor');
+    expect(() =>
+      runOperatorUnixPermissionCommand({
+        command: 'unix.sync-branch',
+        sessionToken: 'scoped',
+        daemonUrl: 'http://daemon',
+        params: {
+          branchId: '00000000-0000-4000-8000-000000000001',
+          cwd: '/tenant-a/worktrees/repo/feature',
+        },
+      } as never)
+    ).toThrow(/Invalid unix\.sync-branch operator capability payload/);
+    expect(() =>
+      runOperatorUnixPermissionCommand(
+        {
+          command: 'unix.sync-branch',
+          sessionToken: 'scoped',
+          daemonUrl: 'http://daemon',
+          params: { branchId: '00000000-0000-4000-8000-000000000001' },
+        },
+        { cwd: '/tenant-a/worktrees/repo/feature' } as never
+      )
+    ).toThrow(/Invalid unix\.sync-branch operator capability options/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['local', undefined],
     ['configured-template', 'launch {command}'],
