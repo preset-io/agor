@@ -16,9 +16,11 @@ import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import type { NewSessionConfig } from '../NewSessionModal';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
+import { NavbarComposeButton } from './NavbarComposeButton';
 import { SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
@@ -53,6 +55,8 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Session-creation seam behind the navbar compose affordance. */
+  onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -114,6 +118,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onUserClick,
   instanceLabel,
   instanceDescription,
+  onCreateSession,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -253,6 +258,17 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
+        {onCreateSession && (
+          <>
+            <NavbarComposeButton
+              client={presenceClient}
+              currentUser={user}
+              currentBoardId={currentBoardId}
+              onCreateSession={onCreateSession}
+            />
+            <Divider orientation="vertical" style={{ height: 32, margin: '0 4px' }} />
+          </>
+        )}
         <ConnectionStatus
           connected={connected}
           connecting={connecting}

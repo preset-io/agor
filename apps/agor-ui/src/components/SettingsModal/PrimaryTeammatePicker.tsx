@@ -9,6 +9,10 @@ import { selectBoardById, selectBranchById, selectRepoById } from '../../store/s
 
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
+  /** Drop the heading/description chrome for embedding in a tight surface (e.g. a popover). */
+  compact?: boolean;
+  /** Fired after a successful pick so an embedder can continue an in-flight action. */
+  onPicked?: (branch: Branch) => void;
 }
 
 interface TeammateOption {
@@ -39,7 +43,11 @@ function teammateContext(
  * `users.getPrimaryTeammate` / `users.setPrimaryTeammate` RPCs; no assumptions
  * about the surrounding modal so it can be relocated by moving its mount point.
  */
-export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({ client }) => {
+export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
+  client,
+  compact = false,
+  onPicked,
+}) => {
   const { message } = AntApp.useApp();
   const branchById = useAgorStore(selectBranchById);
   const boardById = useAgorStore(selectBoardById);
@@ -100,6 +108,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({ cl
       const branch = await client.service('users').setPrimaryTeammate({ branchId });
       setCurrent(branch);
       message.success('Primary assistant updated');
+      if (branch) onPicked?.(branch);
     } catch (error) {
       message.error(
         `Failed to update primary assistant: ${error instanceof Error ? error.message : String(error)}`
@@ -111,14 +120,16 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({ cl
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <div>
-        <Typography.Title level={5} style={{ marginBottom: 4 }}>
-          Primary assistant
-        </Typography.Title>
-        <Typography.Text type="secondary">
-          Your default teammate for personal, ambient work. Change it anytime.
-        </Typography.Text>
-      </div>
+      {!compact && (
+        <div>
+          <Typography.Title level={5} style={{ marginBottom: 4 }}>
+            Primary assistant
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Your default teammate for personal, ambient work. Change it anytime.
+          </Typography.Text>
+        </div>
+      )}
 
       {loading ? (
         <Spin />
