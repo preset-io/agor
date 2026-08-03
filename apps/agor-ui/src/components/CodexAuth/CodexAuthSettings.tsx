@@ -315,7 +315,7 @@ export function CodexAuthSettings({
         {allowChatgptLogin && (
           <FieldRow
             label="Sign-in method"
-            help="Choose one — Agor uses whichever is selected, the other is ignored."
+            help="Switching here only changes which option is shown. Your active method updates when you save an API key or finish a ChatGPT sign-in or import."
             style={{ marginBottom: 0 }}
           >
             <Radio.Group
