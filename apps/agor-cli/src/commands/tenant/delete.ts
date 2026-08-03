@@ -11,42 +11,26 @@
 import {
   assertValidTenantId,
   createDatabase,
-  deleteTenantData,
-  deleteTenantFilesystemTree,
+  deleteTenant,
   getDatabaseUrl,
   InvalidTenantIdError,
-  summarizeTenantFilesystem,
   TenantDeletionUnsupportedError,
   TenantDeletionVerificationError,
+  TenantFilesystemDeletionPendingError,
 } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
-import { resolveTenantFilesystem } from '../../lib/tenant-portability.js';
+import {
+  EXIT_FAILURE,
+  EXIT_INVALID_INPUT,
+  flushStderr,
+  portabilityErrorMessage,
+  resolveTenantFilesystem,
+  writeStdoutJson,
+} from '../../lib/tenant-portability.js';
 
-/** Exit code for a rejected / invalid `--tenant-id`. */
-const EXIT_INVALID_INPUT = 2;
-/** Exit code for any failure after input validation. */
-const EXIT_FAILURE = 1;
-
-/**
- * Best-effort redaction of connection-string credentials from an error message
- * before it is written to stderr, so an audit log never leaks a DB password.
- */
-function redactSecrets(message: string): string {
-  return message.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, '$1[redacted]@');
-}
-
-/** Convert any thrown value to a secret-safe stderr message. */
-export function tenantDeleteErrorMessage(error: unknown): string {
-  return redactSecrets(error instanceof Error ? error.message : String(error));
-}
-
-/** Wait until every stderr write queued so far has completed. */
-function flushStderr(): Promise<void> {
-  return new Promise((resolve) => {
-    process.stderr.write('', () => resolve());
-  });
-}
+/** Backward-compatible named helper retained for focused CLI unit coverage. */
+export const tenantDeleteErrorMessage = portabilityErrorMessage;
 
 export default class TenantDelete extends Command {
   static override description =
@@ -80,43 +64,6 @@ export default class TenantDelete extends Command {
     }),
   };
 
-  /**
-   * Delete (or, in dry-run, report) the tenant's configured filesystem tree.
-   * Returns a bounded, secret-free outcome describing what was done. When
-   * filesystem isolation is disabled, the tenant has no isolated filesystem root
-   * and nothing is touched.
-   */
-  private async handleFilesystem(
-    tenantId: string,
-    dryRun: boolean,
-    databaseOnly: boolean
-  ): Promise<{ isolationEnabled: boolean; present: boolean; deleted: boolean }> {
-    if (databaseOnly) {
-      return { isolationEnabled: false, present: false, deleted: false };
-    }
-    const resolved = await resolveTenantFilesystem(tenantId);
-    if (!resolved) {
-      this.logToStderr(
-        chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')
-      );
-      return { isolationEnabled: false, present: false, deleted: false };
-    }
-    const inventory = await summarizeTenantFilesystem(resolved.root);
-    if (dryRun) {
-      if (inventory.present) {
-        this.logToStderr(
-          chalk.dim(
-            `  would delete tenant filesystem tree (${inventory.fileCount} file(s), ${inventory.totalBytes} byte(s))`
-          )
-        );
-      }
-      return { isolationEnabled: true, present: inventory.present, deleted: false };
-    }
-    const { deleted } = await deleteTenantFilesystemTree(resolved.root, resolved.base);
-    if (deleted) this.logToStderr(chalk.dim('  deleted tenant filesystem tree'));
-    return { isolationEnabled: true, present: inventory.present, deleted };
-  }
-
   async run(): Promise<void> {
     const { flags } = await this.parse(TenantDelete);
     const tenantId = flags['tenant-id'];
@@ -141,31 +88,31 @@ export default class TenantDelete extends Command {
         )
       );
 
+      const filesystem = flags['database-only'] ? null : await resolveTenantFilesystem(tenantId);
+      if (!flags['database-only'] && !filesystem) {
+        this.logToStderr(
+          chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')
+        );
+      }
+
       const db = createDatabase({ url: getDatabaseUrl() });
-      const result = await deleteTenantData(db, tenantId, {
+      const result = await deleteTenant(db, tenantId, {
         dryRun,
+        databaseOnly: flags['database-only'],
+        filesystem,
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
         ...(flags['assert-gate-generation']
           ? { assertGateGeneration: flags['assert-gate-generation'] }
           : {}),
       });
 
-      // Extend the generic deletion contract to the configured tenant filesystem
-      // tree. Filesystem data is tenant-owned only when isolation is enabled;
-      // otherwise the configured root is the shared data home and must be left
-      // untouched (preserving the historical database-only behavior).
-      const filesystem = await this.handleFilesystem(tenantId, dryRun, flags['database-only']);
+      // Stable combined database + filesystem proof on stdout. Await the write
+      // before process.exit so a piped caller always receives the full object.
+      await writeStdoutJson(result);
 
-      // Stable machine-readable contract on stdout — the only thing on stdout.
-      // The database result keys are preserved; the filesystem outcome is added
-      // as a nested object so existing database automation keeps working.
-      // Await the write so the payload is fully flushed to a pipe before the
-      // process.exit(0) below (needed to terminate the lingering postgres-js
-      // pool); process.exit can otherwise truncate an in-flight async write.
-      const json = `${JSON.stringify({ ...result, filesystem })}\n`;
-      await new Promise<void>((resolve, reject) => {
-        process.stdout.write(json, (err) => (err ? reject(err) : resolve()));
-      });
+      if (result.filesystem.status === 'deleted') {
+        this.logToStderr(chalk.dim('  deleted tenant filesystem tree'));
+      }
 
       const totalRows = Object.values(result.rowCounts).reduce((sum, value) => sum + value, 0);
       this.logToStderr(
@@ -177,6 +124,12 @@ export default class TenantDelete extends Command {
       process.exit(0);
     } catch (error) {
       const message = tenantDeleteErrorMessage(error);
+      if (error instanceof TenantFilesystemDeletionPendingError) {
+        // The database is already committed. Emit bounded recovery state even
+        // though the command exits non-zero, so automation can distinguish this
+        // retryable DB-done/files-pending tail from a pre-commit failure.
+        await writeStdoutJson(error.result);
+      }
       this.logToStderr(chalk.red(`✗ ${message}`));
       if (error instanceof TenantDeletionVerificationError) {
         this.logToStderr(chalk.red(`  Remaining tables: ${error.tables.join(', ')}`));

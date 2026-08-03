@@ -357,8 +357,10 @@ async function rootExists(root: string): Promise<boolean> {
   let info: Awaited<ReturnType<typeof lstat>>;
   try {
     info = await lstat(root);
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    // Permission, I/O, and malformed-path failures are not absence proof.
+    throw error;
   }
   // lstat, not stat: a symlinked root must never be followed. Following it would
   // let a link resolve the "tenant root" to an unrelated tree and export or
@@ -570,8 +572,12 @@ export async function deleteTenantFilesystemTree(
   let info: Awaited<ReturnType<typeof lstat>>;
   try {
     info = await lstat(tenantRoot);
-  } catch {
-    return { deleted: false };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { deleted: false };
+    }
+    // Fail closed: an unreadable path must never be reported as already absent.
+    throw error;
   }
   if (info.isSymbolicLink()) {
     throw new UnsafeArchivePathError(

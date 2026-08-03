@@ -55,6 +55,7 @@ export * from './tenant-archive';
 export * from './tenant-catalog';
 export * from './tenant-database-io';
 // Tenant deletion (permanent, audited, idempotent per-tenant erasure)
+export * from './tenant-delete';
 export * from './tenant-deletion';
 export * from './tenant-deletion-manifest';
 export * from './tenant-export';

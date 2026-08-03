@@ -127,6 +127,41 @@ agor tenant delete --tenant-id acme-corp --dry-run
 agor tenant delete --tenant-id acme-corp --database-only
 ```
 
+On success, stdout contains a combined, bounded proof for both phases. Existing
+database result fields remain at the top level; the additional fields make the
+commit state and filesystem postcondition explicit:
+
+```json
+{
+  "tenantDataDeleted": true,
+  "schemaVersion": "0042_example",
+  "rowCounts": { "sessions": 3 },
+  "tenantId": "acme-corp",
+  "tenantDeletionComplete": true,
+  "databaseCommitted": true,
+  "filesPending": false,
+  "filesystem": {
+    "requested": true,
+    "isolationEnabled": true,
+    "present": true,
+    "deleted": true,
+    "verifiedAbsent": true,
+    "status": "deleted"
+  }
+}
+```
+
+Automation that requires full database-and-filesystem erasure should require
+`tenantDeletionComplete`, `databaseCommitted`, and
+`filesystem.verifiedAbsent` to all be `true`, and `filesPending` to be `false`.
+`filesystem.deleted` says that this particular invocation removed a tree;
+`verifiedAbsent` is the postcondition proof and remains `true` on an idempotent
+retry when the tree was already absent (`status: "already-absent"`). When
+filesystem isolation is disabled, the status is `"not-configured"`; with
+`--database-only`, it is `"not-requested"`. Those outcomes deliberately do not
+claim filesystem absence, so a caller that expects an isolated runtime root can
+fail closed on missing configuration or a missing mount.
+
 ## Freezing a tenant: the write gate
 
 Export, verify, and delete all want the tenant's data to hold still. The write
@@ -204,6 +239,15 @@ leaves the tenant in a DB-done / FS-pending state. A retry to finish the
 filesystem removal must be run **without** `--assert-gate-generation` — the gate
 generation no longer exists, so re-asserting it would abort. (The database phase
 on retry deletes zero rows and still reports success.)
+
+A filesystem-tail failure exits non-zero but still emits a bounded recovery
+object on stdout with `databaseCommitted: true`, `filesPending: true`,
+`tenantDeletionComplete: false`, and `filesystem.status: "pending"`. Treat that
+as proof that the database phase already committed, not as deletion success.
+After fixing the filesystem access or mount, retry without the gate assertion
+and require the full-success proof above. The retry's database row counts will
+be zero, while `filesystem.verifiedAbsent` proves that the configured tenant
+root is gone.
 
 ## Preconditions and guarantees
 

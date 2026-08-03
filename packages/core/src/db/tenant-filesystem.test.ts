@@ -4,7 +4,7 @@
  * idempotent deletion. Uses real temp directories; no database required.
  */
 
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -241,4 +241,24 @@ describe('deleteTenantFilesystemTree', () => {
     // The link's target tree is untouched.
     expect((await stat(join(realTree, 'top.txt'))).isFile()).toBe(true);
   });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'fails closed instead of treating an unreadable tenant root as absent',
+    async () => {
+      const base = join(scratch, 'tenants');
+      const tenantRoot = join(base, 'tenant-a');
+      await seedTree(tenantRoot);
+      await chmod(base, 0o000);
+      try {
+        await expect(summarizeTenantFilesystem(tenantRoot)).rejects.toMatchObject({
+          code: 'EACCES',
+        });
+        await expect(deleteTenantFilesystemTree(tenantRoot, base)).rejects.toMatchObject({
+          code: 'EACCES',
+        });
+      } finally {
+        await chmod(base, 0o700);
+      }
+    }
+  );
 });
