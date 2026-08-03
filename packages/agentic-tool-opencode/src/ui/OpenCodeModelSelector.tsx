@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/client';
-import type { OpenCodeModelCatalog } from '@agor/core/types';
+import type { OpenCodeProviderSettings } from '@agor/core/types';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -19,7 +19,7 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
+import { useOpenCodeConfiguration } from './useOpenCodeConfiguration';
 
 const { Text } = Typography;
 
@@ -48,14 +48,14 @@ export interface OpenCodeModelSelectorProps {
 
 function compactWarning(
   catalogEnabled: boolean,
-  refreshFailed: boolean,
+  loadFailed: boolean,
   storedCatalogState: StoredCatalogState
 ): string | undefined {
   if (!catalogEnabled) {
     return 'Provider availability is private to the session owner. Their stored exact pair remains usable.';
   }
-  if (refreshFailed) {
-    return 'Known models could not be refreshed. The stored selection was not changed.';
+  if (loadFailed) {
+    return 'Providers and models could not be loaded. The stored selection was not changed.';
   }
   if (storedCatalogState === 'unavailable') {
     return 'The stored known provider is not currently available.';
@@ -67,12 +67,12 @@ const modelPairValue = (providerId: string, modelId: string) =>
   JSON.stringify([providerId, modelId]);
 
 function compactModelOptions(
-  catalog: OpenCodeModelCatalog | null,
+  configuration: OpenCodeProviderSettings | null,
   value: OpenCodeModelConfig | undefined,
   storedUnavailable: boolean
 ) {
   const groups =
-    catalog?.providers.map((provider) => ({
+    configuration?.providers.map((provider) => ({
       label: provider.runtimeAvailable ? provider.name : `${provider.name} · unavailable`,
       options: provider.models.map((model) => ({
         value: modelPairValue(provider.id, model.id),
@@ -105,38 +105,38 @@ function compactModelOptions(
 
 interface CompactOpenCodeModelSelectorProps {
   value?: OpenCodeModelConfig;
-  catalog: OpenCodeModelCatalog | null;
+  configuration: OpenCodeProviderSettings | null;
   catalogEnabled: boolean;
   client?: AgorClient | null;
   loading: boolean;
-  refreshFailed: boolean;
+  loadFailed: boolean;
   storedCatalogState: StoredCatalogState;
   manualFields: React.ReactNode;
   manualOpen: boolean;
   setManualOpen: (open: boolean) => void;
-  refresh: () => Promise<void>;
+  retry: () => Promise<void>;
   selectPair: (provider: string, model: string) => void;
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }
 
 function CompactOpenCodeModelSelector({
   value,
-  catalog,
+  configuration,
   catalogEnabled,
   client,
   loading,
-  refreshFailed,
+  loadFailed,
   storedCatalogState,
   manualFields,
   manualOpen,
   setManualOpen,
-  refresh,
+  retry,
   selectPair,
   getPopupContainer,
 }: CompactOpenCodeModelSelectorProps) {
   const storedUnavailable = storedCatalogState === 'unavailable';
-  const { groups, selectedValue } = compactModelOptions(catalog, value, storedUnavailable);
-  const warning = compactWarning(catalogEnabled, refreshFailed, storedCatalogState);
+  const { groups, selectedValue } = compactModelOptions(configuration, value, storedUnavailable);
+  const warning = compactWarning(catalogEnabled, loadFailed, storedCatalogState);
 
   return (
     <Flex align="center" gap={2} style={{ width: '100%', minWidth: 0 }}>
@@ -158,15 +158,15 @@ function CompactOpenCodeModelSelector({
         }}
         style={{ flex: 1, minWidth: 0 }}
       />
-      {catalogEnabled && client && (
-        <Tooltip title="Refresh known models">
+      {catalogEnabled && client && loadFailed && (
+        <Tooltip title="Retry loading OpenCode providers and models">
           <Button
-            aria-label="Refresh known models"
+            aria-label="Retry loading OpenCode providers and models"
             type="text"
             size="small"
             icon={<ReloadOutlined />}
             loading={loading}
-            onClick={() => void refresh()}
+            onClick={() => void retry()}
           />
         </Tooltip>
       )}
@@ -198,8 +198,8 @@ function CompactOpenCodeModelSelector({
 }
 
 /**
- * OpenCode model selection from a protected known-model read. Manual exact
- * entry remains usable for providers or models outside the curated list.
+ * OpenCode model selection from a protected runtime configuration snapshot.
+ * Manual exact entry remains usable for providers or models outside discovery.
  */
 export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
@@ -215,9 +215,10 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
   const [compactManualOpen, setCompactManualOpen] = useState(false);
   const appliedSuggestionRef = useRef<string | null>(null);
-  const { catalog, loading, refreshFailed, refresh } = useOpenCodeModelCatalog({
+  const { configuration, loading, loadFailed, retry } = useOpenCodeConfiguration({
     client,
-    catalogEnabled,
+    branchId,
+    enabled: catalogEnabled,
   });
 
   useEffect(() => {
@@ -230,23 +231,23 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   }, [catalogEnabled, compact]);
 
   const storedCatalogState = useMemo<StoredCatalogState>(() => {
-    if (!value || !catalog) return 'unknown';
-    const storedProvider = catalog.providers.find((entry) => entry.id === value.provider);
+    if (!value || !configuration) return 'unknown';
+    const storedProvider = configuration.providers.find((entry) => entry.id === value.provider);
     if (!storedProvider?.models.some((candidate) => candidate.id === value.model)) {
       return 'unlisted';
     }
     return storedProvider.runtimeAvailable ? 'available' : 'unavailable';
-  }, [catalog, value]);
+  }, [configuration, value]);
 
   useEffect(() => {
     if (
       !compact &&
-      catalog &&
+      configuration &&
       (storedCatalogState === 'unavailable' || storedCatalogState === 'unlisted')
     ) {
       setManualOpen(true);
     }
-  }, [catalog, compact, storedCatalogState]);
+  }, [configuration, compact, storedCatalogState]);
 
   const selectPair = (nextProvider: string, nextModel: string) => {
     setProvider(nextProvider);
@@ -257,8 +258,8 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   };
 
   useEffect(() => {
-    if (value || !catalog?.suggestedSelection) return;
-    const { providerId, modelId } = catalog.suggestedSelection;
+    if (value || !configuration?.suggestedSelection) return;
+    const { providerId, modelId } = configuration.suggestedSelection;
     const suggestionKey = `${branchId ?? ''}\0${providerId}\0${modelId}`;
     if (appliedSuggestionRef.current === suggestionKey) return;
     appliedSuggestionRef.current = suggestionKey;
@@ -267,11 +268,11 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     setManualOpen(false);
     setCompactManualOpen(false);
     onChange?.({ provider: providerId, model: modelId });
-  }, [branchId, catalog?.suggestedSelection, onChange, value]);
+  }, [branchId, configuration?.suggestedSelection, onChange, value]);
 
-  const selectedCatalogProvider = catalog?.providers.find((entry) => entry.id === provider);
+  const selectedCatalogProvider = configuration?.providers.find((entry) => entry.id === provider);
   const providerOptions =
-    catalog?.providers.map((entry) => ({
+    configuration?.providers.map((entry) => ({
       value: entry.id,
       label: entry.runtimeAvailable ? entry.name : `${entry.name} · unavailable`,
       disabled: !entry.runtimeAvailable,
@@ -331,16 +332,16 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     return (
       <CompactOpenCodeModelSelector
         value={value}
-        catalog={catalog}
+        configuration={configuration}
         catalogEnabled={catalogEnabled}
         client={client}
         loading={loading}
-        refreshFailed={refreshFailed}
+        loadFailed={loadFailed}
         storedCatalogState={storedCatalogState}
         manualFields={manualFields}
         manualOpen={compactManualOpen}
         setManualOpen={setCompactManualOpen}
-        refresh={refresh}
+        retry={retry}
         selectPair={selectPair}
         getPopupContainer={getPopupContainer}
       />
@@ -349,19 +350,6 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
 
   return (
     <Space orientation="vertical" size={10} style={{ width: '100%' }}>
-      <Flex gap={8} wrap="wrap">
-        {catalogEnabled && client && (
-          <Button
-            aria-label="Refresh known models"
-            icon={<ReloadOutlined />}
-            loading={loading}
-            onClick={() => void refresh()}
-          >
-            Refresh
-          </Button>
-        )}
-      </Flex>
-
       {!catalogEnabled && (
         <Alert
           type="info"
@@ -371,29 +359,34 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         />
       )}
 
-      {refreshFailed && (
+      {loadFailed && (
         <Alert
           type="warning"
           showIcon
-          title="Could not refresh the known model catalog"
-          description="The stored selection was not changed. Enter an exact provider/model pair manually if needed."
+          title="Could not load OpenCode providers and models"
+          description="The stored selection was not changed. Retry discovery or enter an exact provider/model pair manually."
+          action={
+            <Button size="small" loading={loading} onClick={() => void retry()}>
+              Retry
+            </Button>
+          }
         />
       )}
 
-      {loading && !catalog && (
+      {loading && !configuration && (
         <Flex gap={8} align="center">
           <Spin size="small" />
-          <Text type="secondary">Loading known OpenCode models…</Text>
+          <Text type="secondary">Loading OpenCode providers and models…</Text>
         </Flex>
       )}
 
-      {catalog && (
+      {configuration && (
         <Space orientation="vertical" size={8} style={{ width: '100%' }}>
           <Select
             aria-label="OpenCode provider"
             showSearch
             value={provider || undefined}
-            placeholder="Select a known provider"
+            placeholder="Select a provider"
             options={providerOptions}
             optionFilterProp="searchText"
             getPopupContainer={getPopupContainer}
@@ -420,21 +413,21 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         </Space>
       )}
 
-      {value && catalog && storedCatalogState === 'unavailable' && (
+      {value && configuration && storedCatalogState === 'unavailable' && (
         <Alert
           type="warning"
           showIcon
           icon={<WarningOutlined />}
           title={`${value.provider}/${value.model} is not currently available`}
-          description="The stored pair is preserved. Connect the provider, choose an available known model, or edit the exact IDs below."
+          description="The stored pair is preserved. Connect the provider, choose an available model, or edit the exact IDs below."
         />
       )}
 
-      {value && catalog && storedCatalogState === 'unlisted' && (
+      {value && configuration && storedCatalogState === 'unlisted' && (
         <Alert
           type="info"
           showIcon
-          title={`${value.provider}/${value.model} is outside the known model catalog`}
+          title={`${value.provider}/${value.model} is not in the discovered configuration`}
           description="The exact pair is preserved and will be validated by the task runtime. Edit the IDs below if needed."
         />
       )}

@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor/core/client';
 import type { OpenCodeOAuthAttempt, OpenCodeProviderSettings as Settings } from '@agor/core/types';
-import { Alert, List, Select, Space, Typography } from 'antd';
+import { Alert, Button, List, Select, Space, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   isActiveOAuthAttempt,
@@ -8,6 +8,7 @@ import {
   preferredOAuthMethodIndex,
   visibleAuthPrompts,
 } from './OpenCodeProviderListItem';
+import { publishOpenCodeConfiguration, useOpenCodeConfiguration } from './useOpenCodeConfiguration';
 
 interface ProviderAction {
   generation: number;
@@ -70,7 +71,12 @@ function pollOAuthAttempt(input: {
 }
 
 export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const {
+    configuration: settings,
+    loading,
+    loadFailed,
+    retry,
+  } = useOpenCodeConfiguration({ client, enabled: true });
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
   const [apiKey, setApiKey] = useState('');
   const [selectedMethodIndex, setSelectedMethodIndex] = useState<number>();
@@ -82,6 +88,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   const [busyProvider, setBusyProvider] = useState<string>();
   const [error, setError] = useState<string>();
   const actionIdRef = useRef(0);
+  const mountedRef = useRef(false);
   const selectedProviderRef = useRef<string | undefined>(undefined);
   const selectionGenerationRef = useRef(0);
   const scopeRef = useRef({ client, generation: 0 });
@@ -92,8 +99,15 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     };
   }
   const scopeGeneration = scopeRef.current.generation;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      actionIdRef.current += 1;
+    };
+  }, []);
   const isCurrentScope = useCallback(
-    (generation: number) => scopeRef.current.generation === generation,
+    (generation: number) => mountedRef.current && scopeRef.current.generation === generation,
     []
   );
   const beginAction = useCallback((providerId: string, generation: number): ProviderAction => {
@@ -142,8 +156,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
   );
 
   useEffect(() => {
-    const generation = scopeGeneration;
-    setSettings(null);
+    if (!isCurrentScope(scopeGeneration)) return;
     updateSelectedProvider(undefined);
     clearFormState();
     oauthAttemptsRef.current = {};
@@ -151,18 +164,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
     cancellingAttemptsRef.current.clear();
     setBusyProvider(undefined);
     setError(undefined);
-    void client
-      .service('opencode-auth')
-      .find()
-      .then((next) => {
-        if (isCurrentScope(generation)) setSettings(next);
-      })
-      .catch(() => {
-        if (isCurrentScope(generation)) {
-          setError('OpenCode provider settings could not be loaded.');
-        }
-      });
-  }, [clearFormState, client, isCurrentScope, scopeGeneration, updateSelectedProvider]);
+  }, [clearFormState, isCurrentScope, scopeGeneration, updateSelectedProvider]);
 
   useEffect(() => {
     const generation = scopeGeneration;
@@ -183,7 +185,9 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       isCancelling: () => cancellingAttemptsRef.current.has(attempt.attemptId),
       onResult: (next) => {
         storeAttempt(selectedProviderId, next, generation);
-        if (next.phase === 'configured' && next.settings) setSettings(next.settings);
+        if (next.phase === 'configured' && next.settings) {
+          publishOpenCodeConfiguration(client, next.settings);
+        }
       },
       onError: () => setError('OpenCode authorization status could not be refreshed.'),
     });
@@ -276,7 +280,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
           ...(Object.keys(metadata).length ? { metadata } : {}),
         }) as Promise<Settings>,
       (next) => {
-        setSettings(next);
+        publishOpenCodeConfiguration(client, next);
         setApiKey('');
         setPromptValues({});
       }
@@ -306,7 +310,9 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
         }) as Promise<OpenCodeOAuthAttempt>,
       (attempt, generation) => {
         if (!storeAttempt(providerId, attempt, generation)) return;
-        if (attempt.phase === 'configured' && attempt.settings) setSettings(attempt.settings);
+        if (attempt.phase === 'configured' && attempt.settings) {
+          publishOpenCodeConfiguration(client, attempt.settings);
+        }
       }
     );
   };
@@ -353,7 +359,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
       providerId,
       'OpenCode could not disconnect that provider.',
       () => client.service('opencode-auth').remove(providerId),
-      (next) => setSettings(next)
+      (next) => publishOpenCodeConfiguration(client, next)
     );
   };
 
@@ -379,7 +385,22 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
           }
         />
       )}
-      {error && <Alert type="error" showIcon title={error} />}
+      {(error || loadFailed) && (
+        <Alert
+          type="error"
+          showIcon
+          title={error ?? 'OpenCode provider settings could not be loaded.'}
+          {...(!error && loadFailed
+            ? {
+                action: (
+                  <Button size="small" onClick={() => void retry()}>
+                    Retry
+                  </Button>
+                ),
+              }
+            : {})}
+        />
+      )}
       <Select
         allowClear
         showSearch
@@ -396,9 +417,11 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
         style={{ width: '100%' }}
       />
       <List
-        loading={!settings && !error}
+        loading={loading && !settings}
         dataSource={visibleProviders}
-        locale={{ emptyText: providerListEmptyText(settings, error) }}
+        locale={{
+          emptyText: providerListEmptyText(settings, error ?? (loadFailed ? 'failed' : undefined)),
+        }}
         renderItem={(provider) => (
           <OpenCodeProviderListItem
             provider={provider}

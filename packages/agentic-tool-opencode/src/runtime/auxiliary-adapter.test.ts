@@ -4,14 +4,17 @@ import { OPENCODE_AUXILIARY_ADAPTER } from './auxiliary-adapter.js';
 const context = { dataHome: '/home/alice/.local/share/agor/opencode/opaque' };
 
 describe('OpenCode auxiliary adapter', () => {
-  it('rejects obsolete branch-scoped catalog input behind the generic envelope', async () => {
+  it('accepts authorized branch-scoped configuration discovery behind the generic envelope', async () => {
     await expect(
       OPENCODE_AUXILIARY_ADAPTER.execute({
         context,
-        request: { operation: 'discover-models', directory: '/worktrees/private' },
+        request: { operation: 'discover', directory: '/worktrees/authorized' },
         dryRun: true,
       })
-    ).rejects.toThrow();
+    ).resolves.toEqual({
+      success: true,
+      data: { dryRun: true, operation: 'discover' },
+    });
   });
 
   it('runs bounded non-Task operations from opaque context', async () => {

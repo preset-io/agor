@@ -1,3 +1,5 @@
+import type { OpenCodeCatalogModel, OpenCodeModelPair } from './opencode-models';
+
 export type OpenCodeProviderAuthPrompt =
   | {
       type: 'text';
@@ -69,11 +71,15 @@ export interface OpenCodeProviderConnection {
   runtimeAvailable: boolean;
   credentialPresence: OpenCodeCredentialPresence;
   authMethods: OpenCodeProviderAuthMethod[];
+  suggestedModel?: string;
+  models: OpenCodeCatalogModel[];
 }
 
 export interface OpenCodeProviderDiscovery {
   runtime: 'available';
   runtimeVersion: string;
+  projectConfigured?: OpenCodeModelPair;
+  suggestedSelection?: OpenCodeModelPair;
   providers: OpenCodeProviderConnection[];
 }
 

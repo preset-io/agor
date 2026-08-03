@@ -128,10 +128,10 @@ precedence rules.
 
 When configured sources still cannot produce a required model selection during
 session creation, the host may ask the selected integration for a create-time
-fallback. OpenCode derives that fallback from its authenticated user-scoped
-known-model catalog: prefer the first curated provider with confirmed saved
-credentials, then the first curated provider available without credentials,
-and use its curated active default model. The returned pair is fed through the
+fallback. OpenCode derives that fallback from its authenticated, branch-aware
+configuration snapshot: prefer the first runtime-available provider with
+confirmed saved credentials and an active native default, then the first
+runtime-available provider with an active native default. The returned pair is fed through the
 same generic resolver as the lowest-precedence source and is persisted on the
 new Session.
 
@@ -170,7 +170,7 @@ The existing executor `ToolRegistry` is the runtime composition point. Extend
 it; do not add a second runtime registry.
 
 The same registry optionally exposes bounded auxiliary operations such as
-authentication and protected known-model reads. Those operations reuse the
+authentication and protected configuration reads. Those operations reuse the
 executor's generic subprocess transport but are not Task executions: they do
 not create Tasks, report Task lifecycle outcomes, or introduce another durable
 lifecycle. The daemon supplies authorized context, the selected adapter parses
@@ -187,12 +187,16 @@ patched terminal inside the OpenCode adapter.
 
 The host authorizes the caller, selects the tenant-scoped credential namespace,
 and exposes generic transport. The integration owns OpenCode's provider
-discovery, OAuth/API-key protocol, curated model definitions, credential-
+discovery, OAuth/API-key protocol, native model normalization, credential-
 evidence mapping, and tool-specific errors. After validating the native-data
-boundary, the known-model read inspects only saved provider IDs and never starts
-an OpenCode server. Unlisted providers and models remain available through
-exact manual configuration; the task runtime is authoritative for every
-selected pair.
+boundary, one managed server reads provider, authentication, model, and project
+configuration into a normalized secret-safe snapshot. Authentication mutations
+return a refreshed snapshot from their existing managed server before cleanup.
+The OpenCode UI shares each caller-and-branch snapshot briefly so Providers and
+Defaults do not duplicate discovery work; unconditional refresh controls are
+replaced by failure-only retry. Providers and models outside discovery remain
+available through exact manual configuration, and the task runtime remains
+authoritative for every selected pair.
 
 Secrets never enter browser registry metadata. UI contributions receive only
 authorized host clients and non-secret state.

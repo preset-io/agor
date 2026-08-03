@@ -105,13 +105,13 @@ describe('AgenticToolInvokePayloadSchema', () => {
         agenticToolContext: { dataHome: '/opaque/data-home' },
         params: {
           tool: 'opencode',
-          request: { operation: 'discover-models', directory: '/authorized/branch' },
+          request: { operation: 'discover', directory: '/authorized/branch' },
         },
       })
     ).toMatchObject({
       params: {
         tool: 'opencode',
-        request: { operation: 'discover-models', directory: '/authorized/branch' },
+        request: { operation: 'discover', directory: '/authorized/branch' },
       },
     });
   });

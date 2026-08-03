@@ -173,47 +173,50 @@ export async function SyntheticOAuthPlugin() {
   );
   const { startManagedOpenCodeServer } = await import('../src/runtime/managed-server.ts');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2');
-  const modelCatalog = await expectSuccess(
-    await handleOpenCodeAuth(payload({ operation: 'discover-models' }), {})
+  const discovered = await expectSuccess(
+    await handleOpenCodeAuth(payload({ operation: 'discover', directory: branchDirectory }), {})
   );
-  const knownKimi = modelCatalog.providers.find((provider) => provider.id === 'kimi-for-coding');
-  const knownZen = modelCatalog.providers.find((provider) => provider.id === 'opencode');
-  assert(knownKimi, 'The curated model catalog did not expose Kimi for Coding');
-  assert(knownZen, 'The curated model catalog did not expose OpenCode Zen');
-  assert.deepEqual(modelCatalog.suggestedSelection, {
-    providerId: 'opencode',
-    modelId: 'big-pickle',
+  const configuredProvider = discovered.providers.find(
+    (provider) => provider.id === 'agor-catalog'
+  );
+  assert(configuredProvider, 'Branch-local OpenCode provider was not discovered');
+  assert.deepEqual(discovered.projectConfigured, {
+    providerId: 'agor-catalog',
+    modelId: 'proof-model',
   });
-  assert(knownKimi.models.some((model) => model.id === 'k3'));
-  assert(knownZen.models.some((model) => model.id === 'big-pickle'));
-  assert.equal(
-    modelCatalog.providers.some((provider) => provider.id === 'agor-catalog'),
-    false,
-    'Branch-local providers must be entered exactly instead of expanding model enumeration'
+  assert(
+    configuredProvider.models.some(
+      (model) => model.id === 'proof-model' && model.name === 'Proof Model'
+    )
   );
   assert(
-    modelCatalog.providers.every((provider) =>
+    discovered.providers.every((provider) =>
       Object.keys(provider).every((key) =>
-        ['id', 'name', 'runtimeAvailable', 'suggestedModel', 'models'].includes(key)
+        [
+          'id',
+          'name',
+          'runtimeAvailable',
+          'credentialPresence',
+          'authMethods',
+          'suggestedModel',
+          'models',
+        ].includes(key)
       )
     )
   );
   assert(
-    modelCatalog.providers.every((provider) =>
+    discovered.providers.every((provider) =>
       provider.models.every((model) =>
         Object.keys(model).every((key) => ['id', 'name', 'status'].includes(key))
       )
     )
   );
-  const serializedCatalog = JSON.stringify(modelCatalog);
-  assert(!serializedCatalog.includes(root));
-  assert(!serializedCatalog.includes(synthetic.catalog));
-  assert(!serializedCatalog.includes('baseURL'));
-  assert(!serializedCatalog.includes('apiKey'));
+  const serializedConfiguration = JSON.stringify(discovered);
+  assert(!serializedConfiguration.includes(root));
+  assert(!serializedConfiguration.includes(synthetic.catalog));
+  assert(!serializedConfiguration.includes('baseURL'));
+  assert(!serializedConfiguration.includes('apiKey'));
 
-  const discovered = await expectSuccess(
-    await handleOpenCodeAuth(payload({ operation: 'discover' }), {})
-  );
   const findProvider = (pattern) =>
     discovered.providers.find((provider) => pattern.test(`${provider.id} ${provider.name}`));
   const kimi = findProvider(/kimi|moonshot/i);
@@ -381,7 +384,9 @@ export async function SyntheticOAuthPlugin() {
     assert(taskProviderResponse.data?.connected.includes(kimi.id));
     assert(taskProviderResponse.data?.connected.includes(glm.id));
     assert(taskProviderResponse.data?.all.some((provider) => provider.id === 'agor-catalog'));
-    for (const knownProvider of modelCatalog.providers) {
+    for (const knownProvider of discovered.providers.filter(
+      (provider) => provider.models.length > 0
+    )) {
       const nativeProvider = taskCatalogResponse.data?.providers.find(
         (provider) => provider.id === knownProvider.id
       );
@@ -397,11 +402,11 @@ export async function SyntheticOAuthPlugin() {
       const disconnected = await expectSuccess(
         await handleOpenCodeAuth(payload({ operation: 'disconnect', providerId: provider.id }), {})
       );
-      assert.equal(
-        disconnected.providers.find((candidate) => candidate.id === provider.id)
-          ?.credentialPresence,
-        'absent'
-      );
+      const connection = disconnected.providers.find((candidate) => candidate.id === provider.id);
+      assert.equal(connection?.credentialPresence, 'absent');
+      if (provider === kimi || provider === glm) {
+        assert.equal(connection?.runtimeAvailable, false);
+      }
     }
   }
 
@@ -413,12 +418,12 @@ export async function SyntheticOAuthPlugin() {
     oauthCodeTransitions: codeEvents.map((event) => event.type),
     nativeFailurePreservesPriorConnection: true,
     boundedCodeCallback: true,
-    oauthFreshDisconnect: !strictQaDataHome,
-    freshStatusAfterMutation: true,
+    oauthDisconnect: !strictQaDataHome,
+    statusFromMutationRuntime: true,
     credentialPresenceIsEvidenceBased: true,
     freshTaskShapedRead: true,
-    curatedModelCatalog: true,
-    curatedProvidersMatchPinnedRuntime: true,
+    dynamicConfigurationSnapshot: true,
+    branchProviderDiscovered: true,
     branchConfiguredProviderAvailableAtTaskRuntime: true,
     authMode: '0600',
     syntheticOnly: true,

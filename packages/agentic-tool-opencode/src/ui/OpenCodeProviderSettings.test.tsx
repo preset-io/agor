@@ -5,6 +5,7 @@ import type { OpenCodeProviderSettings as Settings } from '@agor/core/types';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
+import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
 import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
 
 const initial: Settings = {
@@ -17,6 +18,7 @@ const initial: Settings = {
       name: 'Kimi',
       runtimeAvailable: false,
       credentialPresence: 'absent',
+      models: [],
       authMethods: [
         {
           index: 0,
@@ -44,6 +46,7 @@ const initial: Settings = {
       name: 'GLM',
       runtimeAvailable: true,
       credentialPresence: 'present',
+      models: [],
       authMethods: [],
     },
   ],
@@ -98,6 +101,7 @@ function singleProviderSettings(
         name,
         runtimeAvailable: false,
         credentialPresence: 'absent',
+        models: [],
         authMethods,
       },
     ],
@@ -114,6 +118,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OpenCode Zen',
           runtimeAvailable: true,
           credentialPresence: 'unknown',
+          models: [],
           authMethods: [],
         },
         {
@@ -121,6 +126,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'Kimi for Coding',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: [],
         },
       ],
@@ -157,6 +163,7 @@ describe('OpenCodeProviderSettings', () => {
           name: `Provider ${index}`,
           runtimeAvailable: false,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [],
         })),
         ...initial.providers,
@@ -203,6 +210,7 @@ describe('OpenCodeProviderSettings', () => {
           name,
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: [],
         },
       ],
@@ -321,6 +329,55 @@ describe('OpenCodeProviderSettings', () => {
     expect(screen.getAllByText('Provider B')).not.toHaveLength(0);
   });
 
+  it('does not publish a deferred connect result after provider settings unmounts', async () => {
+    const providerId = 'shared-provider';
+    const before = singleProviderSettings(providerId, 'Provider before');
+    before.providers[0].models = [{ id: 'model', name: 'Before model', status: 'active' }];
+    const after: Settings = {
+      ...before,
+      providers: [
+        {
+          ...before.providers[0],
+          name: 'Provider after',
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+          models: [{ id: 'model', name: 'After model', status: 'active' }],
+        },
+      ],
+    };
+    const connect = deferred<Settings>();
+    const service = createAuthService({
+      find: vi.fn().mockResolvedValue(before),
+      create: vi.fn().mockReturnValue(connect.promise),
+    });
+    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+    const { unmount } = render(
+      <AntApp>
+        <OpenCodeProviderSettings client={client} />
+      </AntApp>
+    );
+
+    fireEvent.change(await screen.findByLabelText('Provider before API key'), {
+      target: { value: 'scope-a-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(service.create).toHaveBeenCalledOnce());
+    unmount();
+
+    connect.resolve(after);
+    await act(async () => connect.promise);
+    render(
+      <OpenCodeModelSelector
+        client={client}
+        compact
+        value={{ provider: providerId, model: 'model' }}
+      />
+    );
+
+    expect(await screen.findByText(/Before model/)).toBeInTheDocument();
+    expect(screen.queryByText(/After model/)).not.toBeInTheDocument();
+  });
+
   it('does not store a deferred OAuth attempt from a previous authenticated client scope', async () => {
     const providerId = 'oauth-provider';
     const oauthMethods = [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }];
@@ -398,6 +455,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'Provider A',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: [],
         },
         {
@@ -405,6 +463,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'Provider B',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: [],
         },
       ],
@@ -477,6 +536,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth A',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: oauthMethods,
         },
         {
@@ -484,6 +544,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth B',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: oauthMethods,
         },
       ],
@@ -599,6 +660,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'GLM',
           runtimeAvailable: false,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [],
         },
       ],
@@ -667,6 +729,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OpenCode Zen',
           runtimeAvailable: true,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [],
         },
       ],
@@ -690,6 +753,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'Unknown Provider',
           runtimeAvailable: true,
           credentialPresence: 'unknown' as const,
+          models: [],
           authMethods: [],
         },
       ],
@@ -712,6 +776,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth Provider',
           runtimeAvailable: false,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [
             {
               index: 0,
@@ -794,6 +859,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth Provider',
           runtimeAvailable: false,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [
             {
               index: 0,
@@ -918,6 +984,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth Provider',
           runtimeAvailable: false,
           credentialPresence: 'absent',
+          models: [],
           authMethods: [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }],
         },
         {
@@ -925,6 +992,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'Configured Provider',
           runtimeAvailable: true,
           credentialPresence: 'present',
+          models: [],
           authMethods: [],
         },
       ],
@@ -1025,6 +1093,7 @@ describe('OpenCodeProviderSettings', () => {
           name: 'OAuth Provider',
           runtimeAvailable: false,
           credentialPresence: 'absent' as const,
+          models: [],
           authMethods: [{ index: 0, type: 'oauth' as const, label: 'Browser flow' }],
         },
       ],

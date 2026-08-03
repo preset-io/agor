@@ -7,7 +7,6 @@ export {
   type OpenCodeModelSelectorProps,
 } from './OpenCodeModelSelector.js';
 export { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
-export { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog.js';
 
 export const OPENCODE_UI_CONTRIBUTION = {
   name: 'opencode',

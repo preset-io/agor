@@ -1,8 +1,13 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext, UsersRepository } from '@agor/core/db';
+import {
+  BranchRepository,
+  requireCurrentTenantId,
+  runWithTenantContext,
+  UsersRepository,
+} from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
-import { createOpenCodeAuthService } from './auth-service';
+import { createOpenCodeAuthService, resolveOpenCodeCreateModelFallback } from './auth-service';
 import { startOpenCodeOAuthExecutor } from './oauth-executor.js';
 
 vi.mock('@agor/core/config', async () => {
@@ -16,7 +21,7 @@ vi.mock('@agor/core/config', async () => {
 
 vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
-  return { ...actual, UsersRepository: vi.fn() };
+  return { ...actual, BranchRepository: vi.fn(), UsersRepository: vi.fn() };
 });
 
 vi.mock('@agor/core/unix', async () => {
@@ -40,6 +45,7 @@ const runCommand = vi.mocked(runExecutorCommand);
 const startOAuth = vi.mocked(startOpenCodeOAuthExecutor);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
+const branchRepository = vi.mocked(BranchRepository);
 const usersRepository = vi.mocked(UsersRepository);
 const db = { run: vi.fn() } as never;
 const params = {
@@ -56,6 +62,7 @@ const discovery = {
       runtimeAvailable: false,
       credentialPresence: 'absent',
       authMethods: [],
+      models: [],
     },
   ],
 };
@@ -70,6 +77,12 @@ beforeEach(() => {
   loadConfig.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
   usersRepository.mockImplementation(function repository() {
     return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
+  } as never);
+  branchRepository.mockImplementation(function repository() {
+    return {
+      findById: vi.fn(async () => ({ id: 'branch-1', path: '/worktrees/branch-1' })),
+      resolveUserAccess: vi.fn(async () => ({ can: 'view', fs_access: 'read' })),
+    };
   } as never);
   runCommand.mockResolvedValue({ success: true, data: discovery });
 });
@@ -98,6 +111,103 @@ describe('OpenCode provider auth service', () => {
       if (originalClaudeToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = originalClaudeToken;
     }
+  });
+
+  it('authorizes branch-aware discovery and forwards only the resolved directory', async () => {
+    loadConfig.mockReturnValue({
+      execution: { unix_user_mode: 'simple', branch_rbac: true },
+    } as never);
+
+    await runWithTenantContext('tenant-a', () =>
+      service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
+    );
+
+    expect(runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: {
+          tool: 'opencode',
+          request: { operation: 'discover', directory: '/worktrees/branch-1' },
+        },
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('uses the same branch-aware snapshot for the exact create-time fallback', async () => {
+    loadConfig.mockReturnValue({
+      execution: { unix_user_mode: 'simple', branch_rbac: true },
+    } as never);
+    runCommand.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...discovery,
+        suggestedSelection: { providerId: 'openai', modelId: 'gpt-next' },
+      },
+    });
+
+    const fallback = await runWithTenantContext('tenant-a', () =>
+      resolveOpenCodeCreateModelFallback(db, params, 'branch-1')
+    );
+
+    expect(fallback).toEqual({ mode: 'exact', provider: 'openai', model: 'gpt-next' });
+    expect(runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: {
+          tool: 'opencode',
+          request: { operation: 'discover', directory: '/worktrees/branch-1' },
+        },
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('rejects unsupported discovery scope and branch access before executor activity', async () => {
+    loadConfig.mockReturnValue({
+      execution: { unix_user_mode: 'simple', branch_rbac: true },
+    } as never);
+    branchRepository.mockImplementationOnce(function repository() {
+      return {
+        findById: vi.fn(async () => ({ id: 'branch-1', path: '/worktrees/branch-1' })),
+        resolveUserAccess: vi.fn(async () => ({ can: 'none', fs_access: 'none' })),
+      };
+    } as never);
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(
+        service().find({ ...params, query: { user_id: 'other' } } as never)
+      ).rejects.toThrow(/only an optional branch ID/i);
+      await expect(
+        service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
+      ).rejects.toThrow(/not authorized/i);
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve another tenant branch with the same identifier', async () => {
+    loadConfig.mockReturnValue({
+      execution: { unix_user_mode: 'simple', branch_rbac: false },
+    } as never);
+    branchRepository.mockImplementation(function repository() {
+      return {
+        findById: vi.fn(async () =>
+          requireCurrentTenantId() === 'tenant-a'
+            ? { id: 'shared-id', path: '/worktrees/tenant-a' }
+            : undefined
+        ),
+      };
+    } as never);
+
+    await runWithTenantContext('tenant-a', () =>
+      service().find({ ...params, query: { branch_id: 'shared-id' } } as never)
+    );
+    await runWithTenantContext('tenant-b', async () => {
+      await expect(
+        service().find({ ...params, query: { branch_id: 'shared-id' } } as never)
+      ).rejects.toThrow(/not authorized/i);
+    });
+
+    expect(runCommand).toHaveBeenCalledOnce();
   });
 
   it('derives the subject from the authenticated caller and rejects target identity fields', async () => {
@@ -226,37 +336,34 @@ describe('OpenCode provider auth service', () => {
       service().remove('kimi-for-coding', params)
     );
 
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
     releaseFirst();
     await Promise.all([first, second, independent]);
-    expect(runCommand).toHaveBeenCalledTimes(5);
+    expect(runCommand).toHaveBeenCalledTimes(3);
   });
 
-  it('refuses removal unless discovery proves a saved credential is present', async () => {
+  it('returns a safe error when the runtime cannot prove a saved credential exists', async () => {
     runCommand.mockResolvedValueOnce({
-      success: true,
-      data: {
-        ...discovery,
-        providers: [
-          {
-            ...discovery.providers[0],
-            runtimeAvailable: true,
-            credentialPresence: 'unknown',
-          },
-        ],
+      success: false,
+      error: {
+        code: 'OPENCODE_AUTH_FAILED',
+        message: 'OpenCode provider operation failed without exposing credential details.',
       },
     });
 
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().remove('kimi-for-coding', params)).rejects.toThrow(
-        /saved credential.*not known/i
+        /provider operation failed/i
       );
     });
 
     expect(runCommand).toHaveBeenCalledOnce();
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: { tool: 'opencode', request: { operation: 'discover' } },
+        params: {
+          tool: 'opencode',
+          request: { operation: 'disconnect', providerId: 'kimi-for-coding' },
+        },
       }),
       expect.any(Object)
     );
@@ -284,16 +391,13 @@ describe('OpenCode provider auth service', () => {
         },
       ],
     };
-    runCommand
-      .mockResolvedValueOnce({ success: true, data: present })
-      .mockResolvedValueOnce({ success: true, data: removed });
+    runCommand.mockResolvedValueOnce({ success: true, data: removed });
 
     const result = await runWithTenantContext('tenant-a', () =>
       service().remove('opencode', params)
     );
 
     expect(runCommand.mock.calls.map(([payload]) => payload.params.request)).toEqual([
-      { operation: 'discover' },
       { operation: 'disconnect', providerId: 'opencode' },
     ]);
     expect(result.providers[0]).toMatchObject({
@@ -437,9 +541,8 @@ describe('OpenCode provider auth service', () => {
     const independent = runWithTenantContext('tenant-b', () =>
       authService.remove('kimi-for-coding', params)
     );
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
     expect(runCommand.mock.calls.map(([payload]) => payload.params.request)).toEqual([
-      { operation: 'discover' },
       { operation: 'disconnect', providerId: 'kimi-for-coding' },
     ]);
 
@@ -448,7 +551,7 @@ describe('OpenCode provider auth service', () => {
       error: { code: 'OPENCODE_AUTH_FAILED', message: 'safe' },
     });
     await Promise.all([blocked, independent]);
-    expect(runCommand).toHaveBeenCalledTimes(3);
+    expect(runCommand).toHaveBeenCalledTimes(2);
   });
 
   it('isolates attempts by tenant and subject and cancels the full executor handle', async () => {

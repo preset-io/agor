@@ -1,3 +1,4 @@
+import { loadConfigSync } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
@@ -9,6 +10,7 @@ import type {
   OpenCodeProviderSettings,
 } from '@agor/core/types';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
+import { resolveOpenCodeConfigurationDirectory } from './configuration-scope.js';
 import {
   type AuthenticatedOpenCodeSubjectContext,
   resolveAuthenticatedOpenCodeSubjectContext,
@@ -142,7 +144,7 @@ export class OpenCodeAuthService {
   private async execute(
     context: AuthenticatedOpenCodeSubjectContext,
     params:
-      | { operation: 'discover' }
+      | { operation: 'discover'; directory?: string }
       | {
           operation: 'connect-api-key';
           providerId: string;
@@ -171,9 +173,7 @@ export class OpenCodeAuthService {
     discovery: OpenCodeProviderDiscovery
   ): OpenCodeProviderSettings {
     return {
-      runtime: discovery.runtime,
-      runtimeVersion: discovery.runtimeVersion,
-      providers: discovery.providers,
+      ...discovery,
       isolation: {
         mode: context.mode,
         boundary: context.mode === 'strict' ? 'os' : 'logical',
@@ -181,9 +181,21 @@ export class OpenCodeAuthService {
     };
   }
 
-  async find(params?: AuthenticatedParams): Promise<OpenCodeProviderSettings> {
-    const context = await this.credentialContext(params);
-    const result = await this.execute(context, { operation: 'discover' });
+  async find(
+    params?: AuthenticatedParams & { query?: { branch_id?: unknown } }
+  ): Promise<OpenCodeProviderSettings> {
+    const config = loadConfigSync();
+    const context = await resolveAuthenticatedOpenCodeSubjectContext(this.db, params, config);
+    const directory = await resolveOpenCodeConfigurationDirectory({
+      db: this.db,
+      context,
+      config,
+      params,
+    });
+    const result = await this.execute(context, {
+      operation: 'discover',
+      ...(directory ? { directory } : {}),
+    });
     return this.settings(context, result);
   }
 
@@ -411,20 +423,28 @@ export class OpenCodeAuthService {
     const providerId = id?.trim();
     if (!providerId) throw new BadRequest('Provider is required.');
     const context = await this.credentialContext(params);
-    const result = await inMutationSlot(context.namespaceKey, async () => {
-      const discovery = await this.execute(context, { operation: 'discover' });
-      const provider = discovery.providers.find((candidate) => candidate.id === providerId);
-      if (provider?.credentialPresence !== 'present') {
-        throw new BadRequest(
-          'Saved credential presence is not known for this provider; nothing was removed.'
-        );
-      }
-      return this.execute(context, { operation: 'disconnect', providerId });
-    });
+    const result = await inMutationSlot(context.namespaceKey, () =>
+      this.execute(context, { operation: 'disconnect', providerId })
+    );
     return this.settings(context, result);
   }
 }
 
 export function createOpenCodeAuthService(db: TenantScopeAwareDatabase) {
   return new OpenCodeAuthService(db);
+}
+
+export async function resolveOpenCodeCreateModelFallback(
+  db: TenantScopeAwareDatabase,
+  params: AuthenticatedParams,
+  branchId: string
+) {
+  const settings = await createOpenCodeAuthService(db).find({
+    ...params,
+    query: { branch_id: branchId },
+  });
+  const suggestion = settings.suggestedSelection;
+  return suggestion
+    ? { mode: 'exact' as const, provider: suggestion.providerId, model: suggestion.modelId }
+    : undefined;
 }

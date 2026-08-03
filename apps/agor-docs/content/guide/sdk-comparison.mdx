@@ -863,7 +863,8 @@ modes remain logical isolation.
 OpenCode provider settings discover native API-key and OAuth methods using a
 disposable managed server. A native OAuth attempt keeps authorize and callback
 on the same auth server, stops the complete auth process path on completion or
-cancellation, and verifies saved-credential presence with a fresh discovery.
+cancellation, and returns an updated configuration snapshot before that server
+closes.
 The settings surface reports runtime availability separately from credential
 presence (`present`, `absent`, or `unknown`). Built-in availability, including
 Zen, is not proof of a removable credential; removal is offered only when
@@ -871,13 +872,16 @@ presence is `present`. Neither state makes a paid or provider-validation
 request. Failed or cancelled callbacks leave credential contents under
 OpenCode's native ownership rather than using an Agor rollback.
 
-The model selector uses a protected read-only adapter and an Agor-curated list
-of common OpenCode provider/model pairs. After validating the caller's private
-native-data boundary, the read inspects saved provider IDs so configured known
-providers can be suggested, but it does not start an OpenCode server. OpenCode
-Zen is available without a saved API key. Providers or models outside the
-curated list can still be entered as an exact pair; the task runtime validates
-that pair against the caller's branch configuration and credentials.
+Provider settings and model defaults use the same protected, secret-safe
+configuration snapshot. One disposable server reads OpenCode's provider,
+authentication, model, and branch configuration APIs; Agor exposes only IDs,
+names, availability, authentication methods, credential presence, and model
+status. A short-lived browser cache lets the Providers and Defaults tabs reuse
+that snapshot instead of starting duplicate discovery servers. OpenCode Zen
+does not require a saved API key when OpenCode reports it as available.
+Providers or models outside discovery can still be entered as an exact pair;
+the task runtime validates that pair against the caller's branch configuration
+and credentials.
 
 Multiple task servers for the same subject may run concurrently against
 OpenCode's native state. Credential changes and OAuth attempts are serialized,
@@ -887,13 +891,14 @@ for servers started after the mutation.
 Every runnable OpenCode session stores one exact Agor provider/model pair.
 Resolution is session override, then preset or workspace default, then the
 session owner's personal Agor default. If none supplies a complete pair during
-session creation, Agor uses the first curated provider with saved credentials,
-or the first curated provider available without credentials. That create-time
-fallback is persisted and never replaces an explicit or existing selection. If
-a stored pair later falls outside the known list or loses credential evidence,
-it remains stored and visible until the user replaces or edits it. The same
+session creation, Agor uses the first discovered provider with saved
+credentials and an active OpenCode default model, or the first available
+provider with an active default. That create-time fallback is persisted and
+never replaces an explicit or existing selection. If a stored pair later falls
+outside discovery or loses credential evidence, it remains stored and visible
+until the user replaces or edits it. The same
 task-scoped server rejects an unavailable exact pair before OpenCode session
-creation, prompt submission, or model-provider traffic. Catalog availability is
+creation, prompt submission, or model-provider traffic. Discovery availability is
 not proof that a remote provider will accept a request.
 
 Collaborators configuring a session owned by somebody else do not receive that
