@@ -14,22 +14,25 @@ export interface OpenCodeCatalogModel {
 export interface OpenCodeCatalogProvider {
   id: string;
   name: string;
+  /**
+   * The known provider is selectable without credentials or Agor found saved
+   * credential evidence. Task execution remains the authoritative check.
+   */
   runtimeAvailable: boolean;
   suggestedModel?: string;
   models: OpenCodeCatalogModel[];
 }
 
 /**
- * Secret-safe configured model catalog returned by the protected daemon
- * adapter. Raw OpenCode provider objects never cross this boundary.
+ * Secret-safe curated model catalog returned by the protected daemon adapter.
+ * Raw OpenCode provider objects and credentials never cross this boundary.
  */
 export interface OpenCodeModelCatalog {
   runtimeVersion: string;
-  projectConfigured?: OpenCodeModelPair;
   /**
-   * Safe empty-state suggestion. Prefers the first configured provider, then
-   * the first other runtime-available provider, whose active native default is
-   * in this catalog. It is advisory; execution still requires a stored pair.
+   * Safe empty-state suggestion. Prefers the first known provider with saved
+   * credentials, then the first known provider available without credentials.
+   * It is advisory; execution still requires and validates a stored pair.
    */
   suggestedSelection?: OpenCodeModelPair;
   providers: OpenCodeCatalogProvider[];

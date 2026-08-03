@@ -13,19 +13,19 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 <ScrollTable>
 
-| Feature                     | Claude Code         | Codex                     | Gemini              | Copilot                   | OpenCode                  | Notes                                                                                       |
-| --------------------------- | ------------------- | ------------------------- | ------------------- | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Text + tools     | ⚠️ Tools only             | ✅ Text + tools     | ✅ Text + tools           | ✅ Text + tools           | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
-| **Stop mid-execution**      | ✅ Yes              | ⚠️ Limited                | ⚠️ Limited          | ⚠️ Limited                | ⚠️ Limited                | Claude has `interrupt()`, others may lose partial work                                      |
-| **Session import/export**   | ✅ Yes              | ❌ No                     | ❌ No               | ❌ No                     | ❌ No                     | Only Claude Code stores sessions as JSONL transcripts                                       |
-| **Session forkable**        | ✅ SDK-native       | ✅ App Server fork        | ❌ Not yet          | ❌ Not yet                | ❌ Not yet                | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar  |
-| **MCP integration**         | ✅ Native           | ✅ Native                  | ✅ Native           | ✅ Native                 | ✅ Native                 | All agents support MCP with Agor's built-in self-access server                              |
-| **Permission requests**     | ✅ Rich             | ⚠️ Basic                  | ⚠️ Basic            | ✅ Interactive             | ✅ Interactive           | OpenCode routes permission events through Agor and supports remembered stable patterns      |
-| **Project instructions**    | ✅ CLAUDE.md        | ✅ AGENTS.md               | ⚠️ Manual           | ⚠️ Manual                 | ✅ opencode.json          | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md             |
-| **Tool execution**          | ✅ Rich widgets     | ⚠️ Basic                  | ⚠️ Basic            | ✅ Rich events            | ✅ Rich events            | OpenCode streams tool parts with state tracking (pending/running/completed)                  |
-| **Session continuity**      | ✅ SDK-managed      | ✅ History-based          | ✅ History-based    | ✅ SDK-managed            | ✅ SDK-managed            | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history            |
-| **Token usage tracking**    | ✅ Full             | ✅ Full                   | ❌ No               | ⚠️ Via events             | ⚠️ Captured              | OpenCode cost, token, and cache metrics are retained from `step-finish` parts                |
-| **Context window tracking** | 🟡 Estimated        | 🟡 Estimated              | ❌ No               | 🟡 Estimated              | ❌ Not aggregated         | OpenCode per-step metrics are not yet converted into a context-window occupancy snapshot     |
+| Feature                     | Claude Code     | Codex              | Gemini           | Copilot         | OpenCode          | Notes                                                                                         |
+| --------------------------- | --------------- | ------------------ | ---------------- | --------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| **Streaming responses**     | ✅ Text + tools | ⚠️ Tools only      | ✅ Text + tools  | ✅ Text + tools | ✅ Text + tools   | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
+| **Stop mid-execution**      | ✅ Yes          | ⚠️ Limited         | ⚠️ Limited       | ⚠️ Limited      | ⚠️ Limited        | Claude has `interrupt()`, others may lose partial work                                        |
+| **Session import/export**   | ✅ Yes          | ❌ No              | ❌ No            | ❌ No           | ❌ No             | Only Claude Code stores sessions as JSONL transcripts                                         |
+| **Session forkable**        | ✅ SDK-native   | ✅ App Server fork | ❌ Not yet       | ❌ Not yet      | ❌ Not yet        | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar    |
+| **MCP integration**         | ✅ Native       | ✅ Native          | ✅ Native        | ✅ Native       | ✅ Native         | All agents support MCP with Agor's built-in self-access server                                |
+| **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ⚠️ Basic         | ✅ Interactive  | ✅ Interactive    | OpenCode routes permission events through Agor and supports remembered stable patterns        |
+| **Project instructions**    | ✅ CLAUDE.md    | ✅ AGENTS.md       | ⚠️ Manual        | ⚠️ Manual       | ✅ opencode.json  | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md               |
+| **Tool execution**          | ✅ Rich widgets | ⚠️ Basic           | ⚠️ Basic         | ✅ Rich events  | ✅ Rich events    | OpenCode streams tool parts with state tracking (pending/running/completed)                   |
+| **Session continuity**      | ✅ SDK-managed  | ✅ History-based   | ✅ History-based | ✅ SDK-managed  | ✅ SDK-managed    | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history              |
+| **Token usage tracking**    | ✅ Full         | ✅ Full            | ❌ No            | ⚠️ Via events   | ⚠️ Captured       | OpenCode cost, token, and cache metrics are retained from `step-finish` parts                 |
+| **Context window tracking** | 🟡 Estimated    | 🟡 Estimated       | ❌ No            | 🟡 Estimated    | ❌ Not aggregated | OpenCode per-step metrics are not yet converted into a context-window occupancy snapshot      |
 
 </ScrollTable>
 
@@ -871,30 +871,30 @@ presence is `present`. Neither state makes a paid or provider-validation
 request. Failed or cancelled callbacks leave credential contents under
 OpenCode's native ownership rather than using an Agor rollback.
 
-The model selector uses a protected read-only adapter. Each discovery starts a
-fresh managed OpenCode `1.14.33` server in the authenticated caller's credential
-namespace, optionally scopes it to a server-authorized branch directory, reads
-`config.providers()`, `config.get()`, and native runtime availability, returns
-only provider/model display metadata and availability, then stops the server.
-Agor keeps no provider registry, model cache, server pool, or persistent
-OpenCode server.
+The model selector uses a protected read-only adapter and an Agor-curated list
+of common OpenCode provider/model pairs. After validating the caller's private
+native-data boundary, the read inspects saved provider IDs so configured known
+providers can be suggested, but it does not start an OpenCode server. OpenCode
+Zen is available without a saved API key. Providers or models outside the
+curated list can still be entered as an exact pair; the task runtime validates
+that pair against the caller's branch configuration and credentials.
 
-Task and catalog servers for the same subject may run concurrently against
+Multiple task servers for the same subject may run concurrently against
 OpenCode's native state. Credential changes and OAuth attempts are serialized,
 but are not coordinated with an already-running turn; the change is guaranteed
 for servers started after the mutation.
 
 Every runnable OpenCode session stores one exact Agor provider/model pair.
 Resolution is session override, then preset or workspace default, then the
-session owner's personal Agor default. If none supplies a complete pair, Agor
-returns an actionable error instead of delegating to an OpenCode default. A
-provider's suggested model and a project-configured pair are selection context,
-not an automatic default. If a stored pair later disappears, a refresh marks it
-unavailable without replacing it; it remains stored and visible until the user
-replaces or edits it. The same task-scoped server rejects an unavailable exact
-pair before OpenCode session creation, prompt submission, or model-provider
-traffic. A configured catalog is not proof that a remote provider will accept a
-request.
+session owner's personal Agor default. If none supplies a complete pair during
+session creation, Agor uses the first curated provider with saved credentials,
+or the first curated provider available without credentials. That create-time
+fallback is persisted and never replaces an explicit or existing selection. If
+a stored pair later falls outside the known list or loses credential evidence,
+it remains stored and visible until the user replaces or edits it. The same
+task-scoped server rejects an unavailable exact pair before OpenCode session
+creation, prompt submission, or model-provider traffic. Catalog availability is
+not proof that a remote provider will accept a request.
 
 Collaborators configuring a session owned by somebody else do not receive that
 owner's private catalog. They can preserve the stored pair or enter exact IDs
@@ -936,6 +936,7 @@ Completed transcripts are read back from OpenCode rather than trusted from the p
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
 - **Session import/export** not available
 - **Permissions** follow the session's Agor policy, including interactive approval when required
+
 ---
 
 ## Future Improvements

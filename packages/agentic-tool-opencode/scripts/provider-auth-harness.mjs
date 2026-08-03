@@ -174,18 +174,23 @@ export async function SyntheticOAuthPlugin() {
   const { startManagedOpenCodeServer } = await import('../src/runtime/managed-server.ts');
   const { createOpencodeClient } = await import('@opencode-ai/sdk/v2');
   const modelCatalog = await expectSuccess(
-    await handleOpenCodeAuth(
-      payload({ operation: 'discover-models', directory: branchDirectory }),
-      {}
-    )
+    await handleOpenCodeAuth(payload({ operation: 'discover-models' }), {})
   );
-  const catalogProvider = modelCatalog.providers.find((provider) => provider.id === 'agor-catalog');
-  assert(catalogProvider, 'The branch-scoped configured provider was not discovered');
-  assert.deepEqual(modelCatalog.projectConfigured, {
-    providerId: 'agor-catalog',
-    modelId: 'proof-model',
+  const knownKimi = modelCatalog.providers.find((provider) => provider.id === 'kimi-for-coding');
+  const knownZen = modelCatalog.providers.find((provider) => provider.id === 'opencode');
+  assert(knownKimi, 'The curated model catalog did not expose Kimi for Coding');
+  assert(knownZen, 'The curated model catalog did not expose OpenCode Zen');
+  assert.deepEqual(modelCatalog.suggestedSelection, {
+    providerId: 'opencode',
+    modelId: 'big-pickle',
   });
-  assert(catalogProvider.models.some((model) => model.id === 'proof-model'));
+  assert(knownKimi.models.some((model) => model.id === 'k3'));
+  assert(knownZen.models.some((model) => model.id === 'big-pickle'));
+  assert.equal(
+    modelCatalog.providers.some((provider) => provider.id === 'agor-catalog'),
+    false,
+    'Branch-local providers must be entered exactly instead of expanding model enumeration'
+  );
   assert(
     modelCatalog.providers.every((provider) =>
       Object.keys(provider).every((key) =>
@@ -205,14 +210,6 @@ export async function SyntheticOAuthPlugin() {
   assert(!serializedCatalog.includes(synthetic.catalog));
   assert(!serializedCatalog.includes('baseURL'));
   assert(!serializedCatalog.includes('apiKey'));
-  const unscopedCatalog = await expectSuccess(
-    await handleOpenCodeAuth(payload({ operation: 'discover-models' }), {})
-  );
-  assert.equal(
-    unscopedCatalog.providers.some((provider) => provider.id === 'agor-catalog'),
-    false
-  );
-  assert.notDeepEqual(unscopedCatalog.projectConfigured, modelCatalog.projectConfigured);
 
   const discovered = await expectSuccess(
     await handleOpenCodeAuth(payload({ operation: 'discover' }), {})
@@ -373,11 +370,23 @@ export async function SyntheticOAuthPlugin() {
     headers: { Authorization: taskServer.authorization },
   });
   let taskProviderResponse;
+  let taskCatalogResponse;
   try {
-    taskProviderResponse = await taskClient.provider.list({ directory: branchDirectory });
+    [taskProviderResponse, taskCatalogResponse] = await Promise.all([
+      taskClient.provider.list({ directory: branchDirectory }),
+      taskClient.config.providers({ directory: branchDirectory }),
+    ]);
     assert.equal(taskProviderResponse.error, undefined);
+    assert.equal(taskCatalogResponse.error, undefined);
     assert(taskProviderResponse.data?.connected.includes(kimi.id));
     assert(taskProviderResponse.data?.connected.includes(glm.id));
+    assert(taskProviderResponse.data?.all.some((provider) => provider.id === 'agor-catalog'));
+    for (const knownProvider of modelCatalog.providers) {
+      const nativeProvider = taskCatalogResponse.data?.providers.find(
+        (provider) => provider.id === knownProvider.id
+      );
+      assert(nativeProvider, `Pinned OpenCode no longer exposes ${knownProvider.id}`);
+    }
     await taskClient.instance.dispose({ directory: branchDirectory });
   } finally {
     await taskServer.close();
@@ -408,8 +417,9 @@ export async function SyntheticOAuthPlugin() {
     freshStatusAfterMutation: true,
     credentialPresenceIsEvidenceBased: true,
     freshTaskShapedRead: true,
-    branchScopedSafeModelCatalog: true,
-    projectConfiguredPairIsContextOnly: true,
+    curatedModelCatalog: true,
+    curatedProvidersMatchPinnedRuntime: true,
+    branchConfiguredProviderAvailableAtTaskRuntime: true,
     authMode: '0600',
     syntheticOnly: true,
     strictQaFixtureRetained: Boolean(strictQaDataHome),

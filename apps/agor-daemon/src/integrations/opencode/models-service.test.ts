@@ -1,5 +1,5 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { BranchRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { createOpenCodeModelsService, resolveOpenCodeCreateModelFallback } from './models-service';
@@ -17,7 +17,6 @@ vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
   return {
     ...actual,
-    BranchRepository: vi.fn(),
     UsersRepository: vi.fn(),
   };
 });
@@ -39,7 +38,6 @@ const runCommand = vi.mocked(runExecutorCommand);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
 const usersRepository = vi.mocked(UsersRepository);
-const branchesRepository = vi.mocked(BranchRepository);
 const db = { run: vi.fn() } as never;
 const params = {
   user: { user_id: 'same-user', email: 'user@example.com', role: 'member' },
@@ -70,23 +68,11 @@ beforeEach(() => {
   usersRepository.mockImplementation(function repository() {
     return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
   } as never);
-  branchesRepository.mockImplementation(function repository() {
-    return {
-      findById: vi.fn(async () => ({
-        branch_id: 'branch-1',
-        path: '/worktrees/authorized-branch',
-        others_can: 'view',
-        others_fs_access: 'read',
-      })),
-      resolveUserPermission: vi.fn(async () => 'view'),
-      resolveUserAccess: vi.fn(async () => ({ can: 'view', fs_access: 'read' })),
-    };
-  } as never);
   runCommand.mockResolvedValue({ success: true, data: catalog });
 });
 
 describe('OpenCode model catalog service', () => {
-  it('requires the authenticated subject and accepts no target identity or path', async () => {
+  it('requires the authenticated subject and accepts no target identity or scope', async () => {
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().find()).rejects.toThrow(/sign in/i);
       await expect(
@@ -94,16 +80,14 @@ describe('OpenCode model catalog service', () => {
           ...params,
           query: { user_id: 'another-user', path: '/private', branch_id: 'branch-1' },
         } as never)
-      ).rejects.toThrow(/only an optional branch id/i);
+      ).rejects.toThrow(/does not accept query parameters/i);
     });
 
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it('resolves an authorized branch ID to its trusted server-side directory', async () => {
-    const result = await runWithTenantContext('tenant-a', () =>
-      service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
-    );
+  it('requests the user-scoped known catalog without branch or credential data', async () => {
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
     expect(result).toEqual(catalog);
     expect(runCommand).toHaveBeenCalledWith(
@@ -113,7 +97,6 @@ describe('OpenCode model catalog service', () => {
           tool: 'opencode',
           request: {
             operation: 'discover-models',
-            directory: '/worktrees/authorized-branch',
           },
         },
       }),
@@ -131,92 +114,10 @@ describe('OpenCode model catalog service', () => {
     });
 
     const fallback = await runWithTenantContext('tenant-a', () =>
-      resolveOpenCodeCreateModelFallback(db, params, 'branch-1')
+      resolveOpenCodeCreateModelFallback(db, params)
     );
 
     expect(fallback).toEqual({ mode: 'exact', provider: 'openai', model: 'gpt-5' });
-  });
-
-  it('rejects an unauthorized or missing branch before executor activity', async () => {
-    branchesRepository.mockImplementation(function repository() {
-      return {
-        findById: vi.fn(async () => ({
-          branch_id: 'branch-1',
-          path: '/worktrees/private-branch',
-          others_can: 'none',
-        })),
-        resolveUserPermission: vi.fn(async () => 'none'),
-        resolveUserAccess: vi.fn(async () => ({ can: 'none', fs_access: 'none' })),
-      };
-    } as never);
-
-    await runWithTenantContext('tenant-a', async () => {
-      await expect(
-        service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
-      ).rejects.toThrow(/not authorized/i);
-    });
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it('rejects app view access without filesystem read access before executor activity', async () => {
-    branchesRepository.mockImplementation(function repository() {
-      return {
-        findById: vi.fn(async () => ({
-          branch_id: 'branch-1',
-          path: '/worktrees/fs-private-branch',
-          others_can: 'view',
-          others_fs_access: 'none',
-        })),
-        resolveUserPermission: vi.fn(async () => 'view'),
-        resolveUserAccess: vi.fn(async () => ({ can: 'view', fs_access: 'none' })),
-      };
-    } as never);
-
-    await runWithTenantContext('tenant-a', async () => {
-      await expect(
-        service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
-      ).rejects.toThrow(/not authorized/i);
-    });
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it('rejects malformed branch IDs and honors open-access mode without accepting a path', async () => {
-    await runWithTenantContext('tenant-a', async () => {
-      await expect(
-        service().find({ ...params, query: { branch_id: ['branch-1'] } } as never)
-      ).rejects.toThrow(/branch id must be a string/i);
-    });
-    expect(runCommand).not.toHaveBeenCalled();
-
-    loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'simple', branch_rbac: false },
-    } as never);
-    branchesRepository.mockImplementation(function repository() {
-      return {
-        findById: vi.fn(async () => ({
-          branch_id: 'branch-1',
-          path: '/worktrees/server-owned-path',
-          others_can: 'none',
-        })),
-        resolveUserPermission: vi.fn(),
-        resolveUserAccess: vi.fn(),
-      };
-    } as never);
-    await runWithTenantContext('tenant-a', () =>
-      service().find({ ...params, query: { branch_id: 'branch-1' } } as never)
-    );
-    expect(runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          tool: 'opencode',
-          request: {
-            operation: 'discover-models',
-            directory: '/worktrees/server-owned-path',
-          },
-        },
-      }),
-      expect.any(Object)
-    );
   });
 
   it('routes identical user IDs in different tenants to isolated opaque namespaces', async () => {

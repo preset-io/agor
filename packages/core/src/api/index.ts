@@ -346,7 +346,7 @@ export interface OpenCodeAuthService {
 }
 
 export interface OpenCodeModelsService {
-  find(params?: Params & { query?: { branch_id?: string } }): Promise<OpenCodeModelCatalog>;
+  find(params?: Params): Promise<OpenCodeModelCatalog>;
 }
 
 /**

@@ -25,7 +25,7 @@ export const OPENCODE_DAEMON_INTEGRATION = {
     params: AuthenticatedParams;
   }) {
     if (input.params.user?.user_id !== input.executionOwnerId) return Promise.resolve(undefined);
-    return resolveOpenCodeCreateModelFallback(input.db, input.params, input.branchId);
+    return resolveOpenCodeCreateModelFallback(input.db, input.params);
   },
   registerServices(ctx: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>) {
     ctx.app.use('/opencode-auth', createOpenCodeAuthService(ctx.db));

@@ -2,10 +2,7 @@ import { z } from 'zod';
 
 export const OpenCodeAuthParamsSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('discover') }),
-  z.object({
-    operation: z.literal('discover-models'),
-    directory: z.string().min(1).optional(),
-  }),
+  z.object({ operation: z.literal('discover-models') }).strict(),
   z.object({
     operation: z.literal('connect-api-key'),
     providerId: z.string().trim().min(1).max(200),

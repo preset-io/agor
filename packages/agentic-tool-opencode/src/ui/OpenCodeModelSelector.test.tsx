@@ -7,7 +7,6 @@ import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
 
 const catalog = {
   runtimeVersion: '1.14.33',
-  projectConfigured: { providerId: 'openai', modelId: 'gpt-5' },
   providers: [
     {
       id: 'openai',
@@ -57,7 +56,7 @@ function deferred<T>() {
 }
 
 describe('OpenCodeModelSelector', () => {
-  it('loads the authenticated branch catalog and selects an exact pair', async () => {
+  it('loads the authenticated known catalog and selects an exact pair', async () => {
     const onChange = vi.fn();
     const { client, find } = clientWithCatalog();
     render(
@@ -65,7 +64,7 @@ describe('OpenCodeModelSelector', () => {
     );
 
     const providerSelect = await screen.findByLabelText('OpenCode provider');
-    expect(find).toHaveBeenCalledWith({ query: { branch_id: 'branch-1' } });
+    expect(find).toHaveBeenCalledWith();
 
     fireEvent.mouseDown(providerSelect);
     fireEvent.click(await screen.findByText('OpenAI'));
@@ -103,16 +102,7 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
-  it('does not treat project configuration as an automatic selection', async () => {
-    const onChange = vi.fn();
-    const { client } = clientWithCatalog(catalog);
-    render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
-
-    expect(await screen.findByText(/project configuration currently names/i)).toBeInTheDocument();
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it('distinguishes and disables catalog-only providers in normal selection', async () => {
+  it('distinguishes and disables unavailable known providers in normal selection', async () => {
     const onChange = vi.fn();
     const { client } = clientWithCatalog({
       ...catalog,
@@ -208,10 +198,8 @@ describe('OpenCodeModelSelector', () => {
     expect(screen.queryByText(/\(unavailable\)/i)).not.toBeInTheDocument();
   });
 
-  it('drops a prior catalog claim synchronously when compact discovery scope resets', async () => {
-    const branchB = deferred<typeof catalog>();
-    const find = vi.fn().mockResolvedValueOnce(catalog).mockReturnValueOnce(branchB.promise);
-    const client = { service: vi.fn(() => ({ find })) };
+  it('does not refetch the user-scoped catalog when only the branch changes', async () => {
+    const { client, find } = clientWithCatalog();
     const { rerender } = render(
       <OpenCodeModelSelector
         value={{ provider: 'openai', model: 'gpt-5' }}
@@ -231,11 +219,11 @@ describe('OpenCodeModelSelector', () => {
       />
     );
 
-    expect(screen.getByText('openai/gpt-5')).toBeInTheDocument();
-    expect(screen.queryByText(/\(unavailable\)/i)).not.toBeInTheDocument();
+    expect(screen.getByText('GPT-5')).toBeInTheDocument();
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
-  it('labels a stored compact pair unavailable only after matching discovery confirms it', async () => {
+  it('does not call an unlisted stored exact pair unavailable', async () => {
     const { client } = clientWithCatalog();
 
     render(
@@ -246,7 +234,30 @@ describe('OpenCodeModelSelector', () => {
       />
     );
 
-    expect(await screen.findByText('legacy/removed (unavailable)')).toBeInTheDocument();
+    expect(await screen.findByText('legacy/removed')).toBeInTheDocument();
+    expect(screen.queryByText(/legacy\/removed \(unavailable\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('OpenCode model warning')).not.toBeInTheDocument();
+  });
+
+  it('labels a known stored pair unavailable when its provider is not configured', async () => {
+    const { client } = clientWithCatalog({
+      ...catalog,
+      providers: catalog.providers.map((provider) => ({
+        ...provider,
+        runtimeAvailable: false,
+      })),
+    });
+
+    render(
+      <OpenCodeModelSelector
+        value={{ provider: 'openai', model: 'gpt-5' }}
+        client={client as never}
+        compact
+      />
+    );
+
+    expect(await screen.findByText('GPT-5 · provider unavailable')).toBeInTheDocument();
+    expect(screen.getByLabelText('OpenCode model warning')).toBeInTheDocument();
   });
 
   it('keeps manual exact entry available without an automatic default when refresh fails', async () => {
@@ -255,7 +266,7 @@ describe('OpenCodeModelSelector', () => {
     const client = { service: vi.fn(() => ({ find })) };
     render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
 
-    expect(await screen.findByText(/could not refresh the configured model catalog/i)).toBeTruthy();
+    expect(await screen.findByText(/could not refresh the known model catalog/i)).toBeTruthy();
     expect(screen.queryByText(/private path|secret/i)).toBeNull();
 
     expect(screen.queryByRole('button', { name: /use opencode default/i })).toBeNull();
@@ -272,6 +283,27 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
   });
 
+  it('accepts an exact provider and model outside the known catalog', async () => {
+    const onChange = vi.fn();
+    const { client } = clientWithCatalog();
+    render(<OpenCodeModelSelector client={client as never} onChange={onChange} />);
+
+    await screen.findByLabelText('OpenCode provider');
+    fireEvent.click(screen.getByRole('button', { name: /enter exact ids manually/i }));
+    fireEvent.change(screen.getByLabelText('OpenCode provider ID'), {
+      target: { value: 'custom-provider' },
+    });
+    fireEvent.change(screen.getByLabelText('OpenCode model ID'), {
+      target: { value: 'custom-model' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /use exact ids/i }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      provider: 'custom-provider',
+      model: 'custom-model',
+    });
+  });
+
   it('refreshes explicitly and preserves an unavailable stored pair visibly', async () => {
     const onChange = vi.fn();
     const { client, find } = clientWithCatalog();
@@ -284,13 +316,13 @@ describe('OpenCodeModelSelector', () => {
     );
 
     expect(
-      await screen.findByText(/legacy\/removed is not in the current configured catalog/i)
+      await screen.findByText(/legacy\/removed is outside the known model catalog/i)
     ).toBeTruthy();
     expect(screen.getByDisplayValue('legacy')).toBeTruthy();
     expect(screen.getByDisplayValue('removed')).toBeTruthy();
     expect(onChange).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /refresh configured models/i }));
+    fireEvent.click(screen.getByRole('button', { name: /refresh known models/i }));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -313,29 +345,30 @@ describe('OpenCodeModelSelector', () => {
     expect(screen.getByLabelText('OpenCode provider ID')).toBeTruthy();
   });
 
-  it('does not render a prior branch catalog during the branch-switch commit', async () => {
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce(catalog)
-      .mockRejectedValueOnce(new Error('branch B unavailable'));
-    const client = { service: vi.fn(() => ({ find })) };
+  it('does not render a prior user catalog during a client-switch commit', async () => {
+    const first = clientWithCatalog();
+    const secondFind = vi.fn().mockRejectedValue(new Error('next user unavailable'));
+    const second = {
+      find: secondFind,
+      client: { service: vi.fn(() => ({ find: secondFind })) },
+    };
     const staleCatalogSeenDuringCommit: boolean[] = [];
 
     const Harness = () => {
-      const [branchId, setBranchId] = useState('branch-a');
+      const [client, setClient] = useState(first.client);
       useLayoutEffect(() => {
-        if (branchId === 'branch-b') {
+        if (client === second.client) {
           staleCatalogSeenDuringCommit.push(
             document.body.querySelector('[aria-label="OpenCode provider"]') !== null
           );
         }
-      }, [branchId]);
+      }, [client]);
       return (
         <>
-          <button type="button" onClick={() => setBranchId('branch-b')}>
-            Switch branch
+          <button type="button" onClick={() => setClient(second.client)}>
+            Switch user
           </button>
-          <OpenCodeModelSelector client={client as never} branchId={branchId} />
+          <OpenCodeModelSelector client={client as never} />
         </>
       );
     };
@@ -343,11 +376,12 @@ describe('OpenCodeModelSelector', () => {
     render(<Harness />);
     expect(await screen.findByLabelText('OpenCode provider')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /switch branch/i }));
+    fireEvent.click(screen.getByRole('button', { name: /switch user/i }));
 
     expect(staleCatalogSeenDuringCommit).toEqual([false]);
-    expect(await screen.findByText(/could not refresh the configured model catalog/i)).toBeTruthy();
-    expect(find).toHaveBeenLastCalledWith({ query: { branch_id: 'branch-b' } });
+    expect(await screen.findByText(/could not refresh the known model catalog/i)).toBeTruthy();
+    expect(first.find).toHaveBeenCalledTimes(1);
+    expect(second.find).toHaveBeenCalledTimes(1);
   });
 
   it('does not render an owner catalog during the owner-to-foreign commit', async () => {

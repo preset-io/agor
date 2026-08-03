@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const runtime = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
   close: vi.fn(async () => undefined),
+  ensureDataHome: vi.fn(async () => undefined),
   readAuthFile: vi.fn(),
   start: vi.fn(),
   verifyAuthFileBoundary: vi.fn(async () => undefined),
@@ -30,6 +31,7 @@ import {
 } from './auth-handler.js';
 
 const runtimeDependencies = {
+  ensureOpenCodeDataHome: runtime.ensureDataHome,
   startManagedOpenCodeServer: runtime.start,
   verifyOpenCodeAuthFileBoundary: runtime.verifyAuthFileBoundary,
 };
@@ -84,54 +86,6 @@ function client(
   };
 }
 
-function modelCatalogClient() {
-  return {
-    provider: {
-      list: vi.fn(async () => providerList(['openai'])),
-    },
-    config: {
-      providers: vi.fn(async () => ({
-        data: {
-          providers: [
-            {
-              id: 'openai',
-              name: 'OpenAI',
-              source: 'config',
-              env: ['OPENAI_API_KEY'],
-              key: 'must-not-cross',
-              options: { apiKey: 'must-not-cross', baseURL: 'https://example.invalid' },
-              models: {
-                'gpt-5': {
-                  id: 'gpt-5',
-                  providerID: 'openai',
-                  name: 'GPT-5',
-                  status: 'active',
-                  headers: { Authorization: 'Bearer must-not-cross' },
-                  options: { secret: 'must-not-cross' },
-                },
-                'gpt-4-deprecated': {
-                  id: 'gpt-4-deprecated',
-                  providerID: 'openai',
-                  name: 'GPT-4 (deprecated)',
-                  status: 'deprecated',
-                },
-              },
-            },
-          ],
-          default: { openai: 'gpt-5' },
-        },
-      })),
-      get: vi.fn(async () => ({
-        data: {
-          model: 'openai/gpt-5',
-          provider: { openai: { options: { apiKey: 'must-not-cross' } } },
-        },
-      })),
-    },
-    instance: { dispose: vi.fn(async () => ({ data: true })) },
-  };
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.clients = [];
@@ -148,94 +102,10 @@ beforeEach(() => {
 });
 
 describe('opencode.auth executor command', () => {
-  it('discovers a branch-scoped safe model catalog from pinned config APIs', async () => {
-    const discoveryClient = modelCatalogClient();
-    runtime.clients.push(discoveryClient);
-
-    const result = await executeCommand({
-      command: 'opencode.auth',
-      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
-      params: {
-        operation: 'discover-models',
-        directory: '/worktrees/authorized-branch',
-      },
-    } as never);
-
-    expect(discoveryClient.config.providers).toHaveBeenCalledWith({
-      directory: '/worktrees/authorized-branch',
-    });
-    expect(discoveryClient.config.get).toHaveBeenCalledWith({
-      directory: '/worktrees/authorized-branch',
-    });
-    expect(discoveryClient.provider.list).toHaveBeenCalledWith({
-      directory: '/worktrees/authorized-branch',
-    });
-    expect(runtime.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        directory: '/worktrees/authorized-branch',
-        dataHome: '/home/alice/.local/share/agor/opencode/opaque',
-      })
-    );
-    expect(result).toEqual({
-      success: true,
-      data: {
-        runtimeVersion: '1.14.33',
-        projectConfigured: { providerId: 'openai', modelId: 'gpt-5' },
-        suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
-        providers: [
-          {
-            id: 'openai',
-            name: 'OpenAI',
-            runtimeAvailable: true,
-            suggestedModel: 'gpt-5',
-            models: [
-              { id: 'gpt-4-deprecated', name: 'GPT-4 (deprecated)', status: 'deprecated' },
-              { id: 'gpt-5', name: 'GPT-5', status: 'active' },
-            ],
-          },
-        ],
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain('must-not-cross');
-    expect(JSON.stringify(result)).not.toContain('/home/alice');
-    expect(runtime.close).toHaveBeenCalledOnce();
-  });
-
-  it('suggests the active native default for the only credentialed available provider', async () => {
+  it('returns known models without starting an OpenCode server', async () => {
     runtime.readAuthFile.mockResolvedValue(
       JSON.stringify({ 'kimi-for-coding': { type: 'api', key: 'must-not-cross' } })
     );
-    const discoveryClient = {
-      provider: {
-        list: vi.fn(async () => providerList(['kimi-for-coding', 'opencode'])),
-      },
-      config: {
-        providers: vi.fn(async () => ({
-          data: {
-            providers: [
-              {
-                id: 'kimi-for-coding',
-                name: 'Kimi for Coding',
-                models: {
-                  k3: { id: 'k3', name: 'Kimi K3', status: 'active' },
-                },
-              },
-              {
-                id: 'opencode',
-                name: 'OpenCode Zen',
-                models: {
-                  zen: { id: 'zen', name: 'Zen', status: 'active' },
-                },
-              },
-            ],
-            default: { 'kimi-for-coding': 'k3', opencode: 'zen' },
-          },
-        })),
-        get: vi.fn(async () => ({ data: {} })),
-      },
-      instance: { dispose: vi.fn(async () => ({ data: true })) },
-    };
-    runtime.clients.push(discoveryClient);
 
     const result = await executeCommand({
       command: 'opencode.auth',
@@ -243,117 +113,88 @@ describe('opencode.auth executor command', () => {
       params: { operation: 'discover-models' },
     } as never);
 
-    expect(result).toEqual({
-      success: true,
-      data: expect.objectContaining({
-        suggestedSelection: { providerId: 'kimi-for-coding', modelId: 'k3' },
-      }),
-    });
-    expect(JSON.stringify(result)).not.toContain('must-not-cross');
-  });
-
-  it('deterministically suggests the first configured provider when several are available', async () => {
-    runtime.readAuthFile.mockResolvedValue(
-      JSON.stringify({
-        'kimi-for-coding': { type: 'api', key: 'must-not-cross' },
-        opencode: { type: 'api', key: 'must-not-cross-either' },
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          runtimeVersion: '1.14.33',
+          suggestedSelection: { providerId: 'kimi-for-coding', modelId: 'k3' },
+          providers: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'kimi-for-coding',
+              runtimeAvailable: true,
+              models: expect.arrayContaining([{ id: 'k3', name: 'Kimi K3', status: 'active' }]),
+            }),
+            expect.objectContaining({
+              id: 'opencode',
+              runtimeAvailable: true,
+              suggestedModel: 'big-pickle',
+            }),
+          ]),
+        }),
       })
     );
-    const discoveryClient = {
-      provider: {
-        list: vi.fn(async () => providerList(['kimi-for-coding', 'opencode'])),
-      },
-      config: {
-        providers: vi.fn(async () => ({
-          data: {
-            providers: [
-              {
-                id: 'kimi-for-coding',
-                name: 'Kimi for Coding',
-                models: { k3: { id: 'k3', name: 'Kimi K3', status: 'active' } },
-              },
-              {
-                id: 'opencode',
-                name: 'OpenCode Zen',
-                models: { zen: { id: 'zen', name: 'Zen', status: 'active' } },
-              },
-            ],
-            default: { 'kimi-for-coding': 'k3', opencode: 'zen' },
-          },
-        })),
-        get: vi.fn(async () => ({ data: {} })),
-      },
-      instance: { dispose: vi.fn(async () => ({ data: true })) },
-    };
-    runtime.clients.push(discoveryClient);
-
-    const result = await executeCommand({
-      command: 'opencode.auth',
-      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
-      params: { operation: 'discover-models' },
-    } as never);
-
-    expect(result).toEqual({
-      success: true,
-      data: expect.objectContaining({
-        suggestedSelection: { providerId: 'kimi-for-coding', modelId: 'k3' },
-      }),
-    });
-  });
-
-  it('falls back to the first runtime-available provider without saved credentials', async () => {
-    runtime.readAuthFile.mockResolvedValue('{}');
-    const discoveryClient = {
-      provider: {
-        list: vi.fn(async () => providerList(['opencode'])),
-      },
-      config: {
-        providers: vi.fn(async () => ({
-          data: {
-            providers: [
-              {
-                id: 'opencode',
-                name: 'OpenCode Zen',
-                models: { zen: { id: 'zen', name: 'Zen', status: 'active' } },
-              },
-            ],
-            default: { opencode: 'zen' },
-          },
-        })),
-        get: vi.fn(async () => ({ data: {} })),
-      },
-      instance: { dispose: vi.fn(async () => ({ data: true })) },
-    };
-    runtime.clients.push(discoveryClient);
-
-    const result = await executeCommand({
-      command: 'opencode.auth',
-      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
-      params: { operation: 'discover-models' },
-    } as never);
-
-    expect(result).toEqual({
-      success: true,
-      data: expect.objectContaining({
-        suggestedSelection: { providerId: 'opencode', modelId: 'zen' },
-      }),
-    });
-  });
-
-  it('cleans up failed model discovery and returns no secret or path detail', async () => {
-    const discoveryClient = modelCatalogClient();
-    discoveryClient.config.providers.mockRejectedValue(
-      new Error('must-not-cross at /worktrees/authorized-branch')
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runtime.close).not.toHaveBeenCalled();
+    expect(runtime.ensureDataHome).toHaveBeenCalledWith(
+      '/home/alice/.local/share/agor/opencode/opaque'
     );
-    runtime.clients.push(discoveryClient);
+    expect(runtime.verifyAuthFileBoundary).toHaveBeenCalledWith(
+      '/home/alice/.local/share/agor/opencode/opaque',
+      { allowMissing: true }
+    );
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
+  });
+
+  it('falls back to credentialless Zen when no known provider credential is saved', async () => {
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover-models' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        suggestedSelection: { providerId: 'opencode', modelId: 'big-pickle' },
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: 'kimi-for-coding', runtimeAvailable: false }),
+          expect.objectContaining({ id: 'opencode', runtimeAvailable: true }),
+        ]),
+      }),
+    });
+    expect(runtime.start).not.toHaveBeenCalled();
+  });
+
+  it('does not leak native credential-read failures or start a server', async () => {
+    runtime.readAuthFile.mockRejectedValue(new Error('must-not-cross at /home/alice/private'));
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover-models' },
+    } as never);
+
+    expect(result).toEqual({
+      success: true,
+      data: expect.objectContaining({
+        suggestedSelection: { providerId: 'opencode', modelId: 'big-pickle' },
+      }),
+    });
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+    expect(JSON.stringify(result)).not.toContain('/home/alice');
+  });
+
+  it('fails closed when the native data boundary is unsafe', async () => {
+    runtime.ensureDataHome.mockRejectedValueOnce(
+      new Error('must-not-cross unsafe path /home/alice/private')
+    );
 
     const result = await executeCommand({
       command: 'opencode.auth',
       dataHome: '/home/alice/.local/share/agor/opencode/opaque',
-      params: {
-        operation: 'discover-models',
-        directory: '/worktrees/authorized-branch',
-      },
+      params: { operation: 'discover-models' },
     } as never);
 
     expect(result).toEqual({
@@ -363,12 +204,8 @@ describe('opencode.auth executor command', () => {
         message: 'OpenCode provider operation failed without exposing credential details.',
       },
     });
-    expect(discoveryClient.instance.dispose).toHaveBeenCalledWith({
-      directory: '/worktrees/authorized-branch',
-    });
-    expect(runtime.close).toHaveBeenCalledOnce();
-    expect(JSON.stringify(result)).not.toMatch(/must-not-cross|authorized-branch/);
-    expect(JSON.stringify(result)).not.toContain('/home/alice');
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toMatch(/must-not-cross|\/home\/alice/);
   });
 
   it('separates runtime availability from saved credential presence, including Zen', async () => {

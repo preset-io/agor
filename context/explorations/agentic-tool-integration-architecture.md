@@ -127,13 +127,13 @@ inherits from its execution owner's configuration through the ordinary host
 precedence rules.
 
 When configured sources still cannot produce a required model selection during
-session creation, the host may ask the selected integration for a dynamic
-create-time fallback. OpenCode derives that fallback from the authenticated,
-branch-aware catalog: prefer the first deterministically ordered provider with
-confirmed saved credentials, then the first other runtime-available provider,
-and use only an active native default model. The returned pair is fed through
-the same generic resolver as the lowest-precedence source and is persisted on
-the new Session.
+session creation, the host may ask the selected integration for a create-time
+fallback. OpenCode derives that fallback from its authenticated user-scoped
+known-model catalog: prefer the first curated provider with confirmed saved
+credentials, then the first curated provider available without credentials,
+and use its curated active default model. The returned pair is fed through the
+same generic resolver as the lowest-precedence source and is persisted on the
+new Session.
 
 This fallback never overwrites explicit, preset, parent, personal, workspace,
 or stale selections. It is not consulted while executing or resuming an
@@ -170,7 +170,7 @@ The existing executor `ToolRegistry` is the runtime composition point. Extend
 it; do not add a second runtime registry.
 
 The same registry optionally exposes bounded auxiliary operations such as
-authentication and model-catalog discovery. Those operations reuse the
+authentication and protected known-model reads. Those operations reuse the
 executor's generic subprocess transport but are not Task executions: they do
 not create Tasks, report Task lifecycle outcomes, or introduce another durable
 lifecycle. The daemon supplies authorized context, the selected adapter parses
@@ -187,7 +187,12 @@ patched terminal inside the OpenCode adapter.
 
 The host authorizes the caller, selects the tenant-scoped credential namespace,
 and exposes generic transport. The integration owns OpenCode's provider
-discovery, OAuth/API-key protocol, catalog parsing, and tool-specific errors.
+discovery, OAuth/API-key protocol, curated model definitions, credential-
+evidence mapping, and tool-specific errors. After validating the native-data
+boundary, the known-model read inspects only saved provider IDs and never starts
+an OpenCode server. Unlisted providers and models remain available through
+exact manual configuration; the task runtime is authoritative for every
+selected pair.
 
 Secrets never enter browser registry metadata. UI contributions receive only
 authorized host clients and non-secret state.
@@ -281,8 +286,8 @@ The host-provided subject and Unix identity remain authoritative. This is an
 OS-enforced boundary only in strict mode; shared-UID modes provide logical
 separation, not protection from another same-UID process.
 
-OpenCode's native database supports simultaneous task and catalog servers for
-the same subject. Credential mutations and OAuth attempts are serialized by
+OpenCode's native database supports simultaneous task servers for the same
+subject. Credential mutations and OAuth attempts are serialized by
 namespace in the daemon. Those mutations are not coordinated with an
 already-running turn; a connect or disconnect is guaranteed only for later
 server starts. If OpenCode adds a native cross-process locking requirement, the

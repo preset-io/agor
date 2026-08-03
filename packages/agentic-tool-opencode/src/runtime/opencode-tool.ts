@@ -733,7 +733,7 @@ export class OpenCodeTool {
     }
     if (!available) {
       throw new Error(
-        'The selected OpenCode provider/model is not available for this session owner and branch configuration; refresh configured models or enter an available exact pair'
+        'The selected OpenCode provider/model is not available for this session owner and branch configuration; refresh known models or enter an available exact pair'
       );
     }
   }

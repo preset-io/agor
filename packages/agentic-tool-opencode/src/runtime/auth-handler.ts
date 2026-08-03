@@ -8,8 +8,10 @@ import type {
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
 import {
+  ensureOpenCodeDataHome as defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer as defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary as defaultVerifyOpenCodeAuthFileBoundary,
   OPENCODE_VERSION,
@@ -22,11 +24,13 @@ export interface OpenCodeCommandOptions {
 }
 
 export interface OpenCodeAuthRuntimeDependencies {
+  ensureOpenCodeDataHome: typeof defaultEnsureOpenCodeDataHome;
   startManagedOpenCodeServer: typeof defaultStartManagedOpenCodeServer;
   verifyOpenCodeAuthFileBoundary: typeof defaultVerifyOpenCodeAuthFileBoundary;
 }
 
 const DEFAULT_AUTH_RUNTIME: OpenCodeAuthRuntimeDependencies = {
+  ensureOpenCodeDataHome: defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer: defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary: defaultVerifyOpenCodeAuthFileBoundary,
 };
@@ -131,16 +135,6 @@ async function withFreshClient<T>(
   return result as T;
 }
 
-function configuredPair(model: string | undefined): OpenCodeModelCatalog['projectConfigured'] {
-  if (!model) return undefined;
-  const separator = model.indexOf('/');
-  if (separator <= 0 || separator === model.length - 1) return undefined;
-  return {
-    providerId: model.slice(0, separator),
-    modelId: model.slice(separator + 1),
-  };
-}
-
 async function savedCredentialProviderIds(dataHome: string): Promise<Set<string> | null> {
   try {
     const parsed = JSON.parse(
@@ -155,83 +149,14 @@ async function savedCredentialProviderIds(dataHome: string): Promise<Set<string>
 
 async function discoverModels(
   dataHome: string,
-  directory = dataHome,
   runtime = DEFAULT_AUTH_RUNTIME
 ): Promise<OpenCodeModelCatalog> {
-  return withFreshClient(
-    dataHome,
-    [],
-    async (client) => {
-      const [providersResponse, configResponse, runtimeProvidersResponse, credentialProviderIds] =
-        await Promise.all([
-          client.config.providers({ directory }),
-          client.config.get({ directory }),
-          client.provider.list({ directory }),
-          savedCredentialProviderIds(dataHome),
-        ]);
-      if (
-        providersResponse.error ||
-        !providersResponse.data ||
-        configResponse.error ||
-        !configResponse.data ||
-        runtimeProvidersResponse.error ||
-        !runtimeProvidersResponse.data
-      ) {
-        throw new Error('OpenCode configured model discovery failed');
-      }
-      const runtimeAvailable = new Set(runtimeProvidersResponse.data.connected);
-      const providers = providersResponse.data.providers
-        .map((provider) => ({
-          id: provider.id,
-          name: provider.name,
-          runtimeAvailable: runtimeAvailable.has(provider.id),
-          ...(providersResponse.data.default[provider.id]
-            ? { suggestedModel: providersResponse.data.default[provider.id] }
-            : {}),
-          models: Object.values(provider.models)
-            .map((model) => ({
-              id: model.id,
-              name: model.name,
-              status: model.status,
-            }))
-            .sort((left, right) => left.id.localeCompare(right.id)),
-        }))
-        .sort((left, right) => left.id.localeCompare(right.id));
-      const projectConfigured = configuredPair(configResponse.data.model);
-      const credentialedProviders = credentialProviderIds
-        ? providers.filter(
-            (provider) => provider.runtimeAvailable && credentialProviderIds.has(provider.id)
-          )
-        : [];
-      const suggestedProvider = [
-        ...credentialedProviders,
-        ...providers.filter(
-          (provider) =>
-            provider.runtimeAvailable && !credentialedProviders.some(({ id }) => id === provider.id)
-        ),
-      ].find((provider) =>
-        provider.models.some(
-          (candidate) => candidate.id === provider.suggestedModel && candidate.status === 'active'
-        )
-      );
-      const suggestedModel = suggestedProvider?.suggestedModel;
-      const suggestedSelection =
-        suggestedModel &&
-        suggestedProvider.models.some(
-          (candidate) => candidate.id === suggestedModel && candidate.status === 'active'
-        )
-          ? { providerId: suggestedProvider.id, modelId: suggestedModel }
-          : undefined;
-      return {
-        runtimeVersion: OPENCODE_VERSION,
-        ...(projectConfigured ? { projectConfigured } : {}),
-        ...(suggestedSelection ? { suggestedSelection } : {}),
-        providers,
-      };
-    },
-    directory,
-    runtime
-  );
+  await runtime.ensureOpenCodeDataHome(dataHome);
+  await runtime.verifyOpenCodeAuthFileBoundary(dataHome, { allowMissing: true });
+  return {
+    runtimeVersion: OPENCODE_VERSION,
+    ...createOpenCodeKnownModelCatalog(await savedCredentialProviderIds(dataHome)),
+  };
 }
 
 async function discover(
@@ -283,7 +208,7 @@ export async function handleOpenCodeAuth(
     if (payload.params.operation === 'discover-models') {
       return {
         success: true,
-        data: await discoverModels(payload.dataHome, payload.params.directory, runtime),
+        data: await discoverModels(payload.dataHome, runtime),
       };
     }
 

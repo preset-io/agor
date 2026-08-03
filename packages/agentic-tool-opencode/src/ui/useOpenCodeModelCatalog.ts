@@ -5,25 +5,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 type CatalogScope = {
   catalog: OpenCodeModelCatalog;
   client: AgorClient;
-  branchId?: string;
   catalogEnabled: boolean;
 };
 
 export function useOpenCodeModelCatalog(input: {
   client?: AgorClient | null;
-  branchId?: string;
   catalogEnabled: boolean;
 }) {
-  const { client, branchId, catalogEnabled } = input;
+  const { client, catalogEnabled } = input;
   const [catalogScope, setCatalogScope] = useState<CatalogScope | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const requestSequence = useRef(0);
   const catalog =
-    catalogScope &&
-    catalogScope.client === client &&
-    catalogScope.branchId === branchId &&
-    catalogScope.catalogEnabled === catalogEnabled
+    catalogScope && catalogScope.client === client && catalogScope.catalogEnabled === catalogEnabled
       ? catalogScope.catalog
       : null;
 
@@ -33,18 +28,16 @@ export function useOpenCodeModelCatalog(input: {
     setLoading(true);
     setRefreshFailed(false);
     try {
-      const next = await client
-        .service('opencode-models')
-        .find(branchId ? { query: { branch_id: branchId } } : undefined);
+      const next = await client.service('opencode-models').find();
       if (requestSequence.current !== sequence) return;
-      setCatalogScope({ catalog: next, client, branchId, catalogEnabled });
+      setCatalogScope({ catalog: next, client, catalogEnabled });
     } catch {
       if (requestSequence.current !== sequence) return;
       setRefreshFailed(true);
     } finally {
       if (requestSequence.current === sequence) setLoading(false);
     }
-  }, [branchId, catalogEnabled, client]);
+  }, [catalogEnabled, client]);
 
   useEffect(() => {
     if (!catalogEnabled) {
@@ -54,8 +47,8 @@ export function useOpenCodeModelCatalog(input: {
       setLoading(false);
       return;
     }
-    // A catalog is valid only for the client/branch/enabled tuple that produced it.
-    // Dependency-driven scope changes must not retain a prior branch result;
+    // A catalog is valid only for the client/enabled tuple that produced it.
+    // Dependency-driven scope changes must not retain a prior user's result;
     // the explicit Refresh action can preserve the current scoped result.
     setCatalogScope(null);
     setRefreshFailed(false);
