@@ -314,6 +314,9 @@ export const tasks = pgTable(
     executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
+    runtime_owner_daemon_id: varchar('runtime_owner_daemon_id', { length: 36 }),
+    runtime_owner_fence: varchar('runtime_owner_fence', { length: 36 }),
+    runtime_lease_expires_at: t.timestamp('runtime_lease_expires_at'),
     status: text('status', {
       enum: [
         'queued',
@@ -375,7 +378,6 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
-        runtime_owner?: Task['runtime_owner'];
       }>()
       .notNull(),
   },

@@ -5,6 +5,17 @@ import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
 
 describe('Postgres migrations', () => {
+  it('adds durable task runtime ownership after the artifact consent migration', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0071_task_runtime_ownership.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain('"runtime_owner_daemon_id" varchar(36)');
+    expect(migration).toContain('"runtime_owner_fence" varchar(36)');
+    expect(migration).toContain('"runtime_lease_expires_at" timestamp with time zone');
+  });
+
   it('keeps Knowledge pgvector storage out of required base migrations', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0043_kb_embeddings.sql', import.meta.url),
@@ -36,6 +47,48 @@ describe('Postgres migrations', () => {
       /ALTER COLUMN "last_executor_heartbeat_at" TYPE timestamp with time zone/i
     );
     expect(heartbeatMigration).toMatch(/AT TIME ZONE 'UTC'/i);
+  });
+});
+
+describe('Task runtime ownership migrations', () => {
+  it('upgrades an existing SQLite tasks table without changing existing rows', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-runtime-owner-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      await client.execute(`CREATE TABLE tasks (task_id text PRIMARY KEY NOT NULL, data text)`);
+      await client.execute(`INSERT INTO tasks (task_id, data) VALUES ('legacy-task', '{}')`);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0075_task_runtime_ownership.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA table_info(tasks)');
+      expect(columns.rows.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          'runtime_owner_daemon_id',
+          'runtime_owner_fence',
+          'runtime_lease_expires_at',
+        ])
+      );
+      expect(await client.execute('SELECT * FROM tasks')).toMatchObject({
+        rows: [
+          {
+            task_id: 'legacy-task',
+            data: '{}',
+            runtime_owner_daemon_id: null,
+            runtime_owner_fence: null,
+            runtime_lease_expires_at: null,
+          },
+        ],
+      });
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

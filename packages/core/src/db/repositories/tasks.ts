@@ -186,6 +186,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         : undefined,
       created_by: row.created_by,
       ...row.data,
+      runtime_owner:
+        row.runtime_owner_daemon_id && row.runtime_owner_fence && row.runtime_lease_expires_at
+          ? {
+              daemon_id: row.runtime_owner_daemon_id,
+              fence: row.runtime_owner_fence,
+              lease_expires_at: new Date(row.runtime_lease_expires_at).toISOString(),
+            }
+          : undefined,
     };
   }
 
@@ -224,6 +232,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       last_executor_heartbeat_at: task.last_executor_heartbeat_at
         ? new Date(task.last_executor_heartbeat_at)
         : undefined,
+      runtime_owner_daemon_id: task.runtime_owner?.daemon_id,
+      runtime_owner_fence: task.runtime_owner?.fence,
+      runtime_lease_expires_at: task.runtime_owner
+        ? new Date(task.runtime_owner.lease_expires_at)
+        : undefined,
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
@@ -252,7 +265,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         sdk_failure: task.sdk_failure,
         termination_request: task.termination_request,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
-        runtime_owner: task.runtime_owner,
       },
     };
   }
@@ -572,25 +584,24 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         pulse && (!previous || pulse.sequence > previous.sequence)
           ? { ...pulse, observed_at: observedAt.toISOString() }
           : previous;
-      const data = {
-        ...row.data,
-        latest_executor_pulse: latest,
-        ...(row.data.runtime_owner
-          ? {
-              runtime_owner: {
-                ...row.data.runtime_owner,
-                lease_expires_at: new Date(
-                  observedAt.getTime() + TASK_RUNTIME_LEASE_MS
-                ).toISOString(),
-              },
-            }
-          : {}),
-      };
+      const data = { ...row.data, latest_executor_pulse: latest };
+      const runtimeLeaseExpiresAt = row.runtime_owner_daemon_id
+        ? new Date(observedAt.getTime() + TASK_RUNTIME_LEASE_MS)
+        : row.runtime_lease_expires_at;
       await update(txDb, tasks)
-        .set({ last_executor_heartbeat_at: observedAt, data })
+        .set({
+          last_executor_heartbeat_at: observedAt,
+          runtime_lease_expires_at: runtimeLeaseExpiresAt,
+          data,
+        })
         .where(eq(tasks.task_id, fullId))
         .run();
-      return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+      return this.rowToTask({
+        ...row,
+        last_executor_heartbeat_at: observedAt,
+        runtime_lease_expires_at: runtimeLeaseExpiresAt,
+        data,
+      });
     });
   }
 
@@ -603,16 +614,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   ): Promise<boolean> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       if (isTerminalTaskStatus(row.status)) return false;
-      const owner = row.data.runtime_owner;
-      if (!owner || owner.daemon_id !== daemonId || owner.fence !== fence) return false;
-      const data = {
-        ...row.data,
-        runtime_owner: {
-          ...owner,
-          lease_expires_at: new Date(now.getTime() + TASK_RUNTIME_LEASE_MS).toISOString(),
-        },
-      };
-      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      if (row.runtime_owner_daemon_id !== daemonId || row.runtime_owner_fence !== fence)
+        return false;
+      await update(txDb, tasks)
+        .set({ runtime_lease_expires_at: new Date(now.getTime() + TASK_RUNTIME_LEASE_MS) })
+        .where(eq(tasks.task_id, fullId))
+        .run();
       return true;
     });
   }
@@ -922,6 +929,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             executor_connected_at: insertData.executor_connected_at,
             completed_at: insertData.completed_at,
             last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+            runtime_owner_daemon_id: insertData.runtime_owner_daemon_id,
+            runtime_owner_fence: insertData.runtime_owner_fence,
+            runtime_lease_expires_at: insertData.runtime_lease_expires_at,
             data: insertData.data,
           })
           .where(eq(tasks.task_id, fullId))
