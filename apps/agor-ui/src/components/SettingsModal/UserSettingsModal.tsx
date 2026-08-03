@@ -161,6 +161,8 @@ interface SettingIndexEntry {
   panelKey: string;
   /** 'page' = a nav tab/panel itself; 'setting' = a control within a panel. */
   kind: 'page' | 'setting';
+  /** For provider settings, the sub-tab the hit should open (auth vs defaults). */
+  subtab?: ProviderSubtab;
 }
 
 // Single source of truth for each static (non-provider) panel: the nav label,
@@ -241,14 +243,36 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   );
 
   const [form] = Form.useForm();
-  const [activeKey, setActiveKey] = useState<string>(() => normalizeInitialKey(initialTab));
+  const [rawActiveKey, setActiveKey] = useState<string>(() => normalizeInitialKey(initialTab));
   const [search, setSearch] = useState('');
   const [providerSubtab, setProviderSubtab] = useState<ProviderSubtab>('auth');
   const [savingModal, setSavingModal] = useState(false);
   const initializedUserIdRef = useRef<string | null>(null);
+  // A search hit for a provider setting requests the sub-tab it lives on; the
+  // provider-subtab reset effect consumes this so the hit lands on the right
+  // sub-tab instead of the default Authentication view.
+  const pendingProviderSubtabRef = useRef<ProviderSubtab | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
+
+  // Authorize the active panel SYNCHRONOUSLY during render (never correct it in
+  // an effect): a stale/unauthorized key must resolve to Profile before any
+  // content mounts, so the caller-scoped tokens/uploads panels can't start
+  // loading the CALLER's data under the edited user's identity, and a
+  // tenant-disabled provider deep link can't render its credential controls.
+  // Mirrors the permission gating that builds `navGroups`.
+  const activeKey = ((): string => {
+    if (rawActiveKey.startsWith(PROVIDER_KEY_PREFIX)) {
+      return visibleAgenticToolTabs.includes(toolFromProviderKey(rawActiveKey))
+        ? rawActiveKey
+        : 'profile';
+    }
+    if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
+      return 'profile';
+    if (rawActiveKey === 'access' && !isAdmin) return 'profile';
+    return rawActiveKey;
+  })();
 
   // Separate forms for each agentic tool tab
   const [claudeForm] = Form.useForm();
@@ -416,8 +440,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // they land there directly.
   useEffect(() => {
     if (!activeTool) return;
+    // A pending sub-tab from a search hit wins over the default; consume it once.
+    const requested = pendingProviderSubtabRef.current;
+    pendingProviderSubtabRef.current = null;
     const hasAuth = (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0;
-    setProviderSubtab(hasAuth ? 'auth' : 'defaults');
+    setProviderSubtab(requested ?? (hasAuth ? 'auth' : 'defaults'));
   }, [activeTool]);
 
   // Hydrate tab-specific forms only after that tab has rendered its
@@ -454,7 +481,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       return;
     }
 
-    if (activeKey === 'preferences') {
+    // Seed the audio form from persisted values only while it is still
+    // pristine. Once the user has edited Preferences, navigating away and back
+    // must preserve the in-progress draft rather than reverting to the saved
+    // values — the same draft-preservation contract as the agentic config above
+    // (and the #1769 revert). `dirtyMainPanels` is intentionally read via the
+    // fresh closure, not a dependency, so it never re-triggers hydration.
+    if (activeKey === 'preferences' && !dirtyMainPanels.has('preferences')) {
       const audioPrefs = user.preferences?.audio;
       audioForm.setFieldsValue({
         enabled: audioPrefs?.enabled ?? DEFAULT_AUDIO_PREFERENCES.enabled,
@@ -965,17 +998,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     return groups;
   }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
 
-  // Authorization must gate the CONTENT, not just the nav. A stale/unauthorized
-  // deep-link (e.g. `access` for a non-admin, or `tokens` while editing another
-  // user — which would show the CALLER's tokens under the target's heading) is
-  // redirected to Profile. Provider keys are skipped: they legitimately populate
-  // asynchronously as tenant tool settings load, and carry no cross-user data.
-  useEffect(() => {
-    if (!open || activeKey.startsWith(PROVIDER_KEY_PREFIX)) return;
-    const validKeys = new Set(navGroups.flatMap((group) => group.children.map((c) => c.key)));
-    if (!validKeys.has(activeKey)) setActiveKey('profile');
-  }, [open, navGroups, activeKey]);
-
   const menuItems: MenuProps['items'] = useMemo(
     () =>
       navGroups.map((group) => ({
@@ -1116,6 +1138,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           kind: 'setting',
           keywords: kw('api key credentials sign in oauth'),
           panelKey: providerKey,
+          subtab: 'auth',
         });
         for (const field of toolFields) {
           entries.push({
@@ -1123,6 +1146,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             kind: 'setting',
             keywords: kw('credentials'),
             panelKey: providerKey,
+            subtab: 'auth',
           });
         }
       }
@@ -1133,26 +1157,42 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           kind: 'setting',
           keywords: kw('permission mode model mcp effort preset'),
           panelKey: providerKey,
+          subtab: 'defaults',
         },
         {
           label: 'Default for new configurations',
           kind: 'setting',
           keywords: kw('workspace preset inline strategy'),
           panelKey: providerKey,
+          subtab: 'defaults',
         },
-        { label: 'MCP servers', kind: 'setting', keywords: kw('tools'), panelKey: providerKey },
-        { label: 'Preset', kind: 'setting', keywords: kw('configuration'), panelKey: providerKey },
+        {
+          label: 'MCP servers',
+          kind: 'setting',
+          keywords: kw('tools'),
+          panelKey: providerKey,
+          subtab: 'defaults',
+        },
+        {
+          label: 'Preset',
+          kind: 'setting',
+          keywords: kw('configuration'),
+          panelKey: providerKey,
+          subtab: 'defaults',
+        },
         {
           label: modelLabelForTool(tool),
           kind: 'setting',
           keywords: kw('alias'),
           panelKey: providerKey,
+          subtab: 'defaults',
         },
         {
           label: 'Permission Mode',
           kind: 'setting',
           keywords: kw('approval'),
           panelKey: providerKey,
+          subtab: 'defaults',
         }
       );
       if (AGENTIC_TOOL_CAPABILITIES[tool]?.reasoningEffortLevels) {
@@ -1161,6 +1201,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           kind: 'setting',
           keywords: kw('thinking'),
           panelKey: providerKey,
+          subtab: 'defaults',
         });
       }
       if (tool === 'codex') {
@@ -1170,18 +1211,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             kind: 'setting',
             keywords: kw('filesystem'),
             panelKey: providerKey,
+            subtab: 'defaults',
           },
           {
             label: 'Approval Policy',
             kind: 'setting',
             keywords: kw('commands'),
             panelKey: providerKey,
+            subtab: 'defaults',
           },
           {
             label: 'Network Access',
             kind: 'setting',
             keywords: kw('http outbound'),
             panelKey: providerKey,
+            subtab: 'defaults',
           }
         );
       }
@@ -1279,6 +1323,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleSearchResultClick = (key: string) => {
     const entry = searchResults[Number(key)];
     if (!entry) return;
+    // Provider hits carry the sub-tab they live on so a "Session defaults"
+    // result opens the defaults pane, not the default Authentication view.
+    if (entry.subtab) {
+      pendingProviderSubtabRef.current = entry.subtab;
+      setProviderSubtab(entry.subtab);
+    }
     setActiveKey(entry.panelKey);
     setSearch('');
   };
@@ -1818,6 +1868,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <Modal
       open={open}
       onCancel={handleClose}
+      // The header bar is hidden (styles.header), but the dialog still needs an
+      // accessible name: this `title` becomes rc-dialog's `aria-labelledby`
+      // target (its text is used for the name even though the header is
+      // `display: none`), so screen readers announce the dialog.
+      title="User Settings"
       footer={footer}
       closable
       closeIcon={<CloseOutlined />}

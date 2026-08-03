@@ -1,8 +1,9 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp, ConfigProvider } from 'antd';
+import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
 import { type ReactNode, useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
 
 vi.mock('../ApiKeyFields', () => ({
@@ -105,6 +106,32 @@ vi.mock('../MCPServerSelect', async () => {
       <Form.Item name="mcpServerIds" label="MCP servers">
         <McpControl />
       </Form.Item>
+    ),
+  };
+});
+
+// The real AudioSettingsTab renders an AntD Slider whose CSS-var `border`
+// shorthand crashes jsdom's cssstyle normaliser on re-render. This faithful
+// stand-in drives the SAME shared audio form (the `enabled` field the parent
+// hydrates and saves), so the parent's audio draft-preservation logic is
+// exercised without the environment crash.
+vi.mock('./AudioSettingsTab', async () => {
+  const { Form } = await import('antd');
+  // A plain checkbox (no AntD Wave/border rules) avoids the cssstyle crash while
+  // still binding to the shared audio form's `enabled` field.
+  return {
+    AudioSettingsTab: ({
+      form,
+      onValuesChange,
+    }: {
+      form: FormInstance;
+      onValuesChange?: () => void;
+    }) => (
+      <Form form={form} onValuesChange={onValuesChange}>
+        <Form.Item name="enabled" valuePropName="checked">
+          <input type="checkbox" aria-label="Enable chimes" />
+        </Form.Item>
+      </Form>
     ),
   };
 });
@@ -747,4 +774,159 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.queryByRole('heading', { name: 'Groups & access' })).not.toBeInTheDocument();
     expect(screen.queryByText('Force password change on next login')).not.toBeInTheDocument();
   });
+
+  it('never loads the caller API keys when an admin opens tokens while editing another user', async () => {
+    // A Feathers stub that records which services are touched. If the
+    // caller-scoped tokens panel ever mounts, PersonalApiKeysTab fetches the
+    // CALLER's keys under the edited user's identity — the leak we must prevent.
+    const services: string[] = [];
+    const client = {
+      service: (name: string) => {
+        services.push(name);
+        return {
+          findAll: vi.fn(async () => []),
+          find: vi.fn(async () => ({ data: [] })),
+          create: vi.fn(async () => ({})),
+          remove: vi.fn(async () => ({})),
+        };
+      },
+    } as unknown as AgorClient;
+
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="personal-api-keys"
+      />
+    );
+
+    // The deep link resolves to Profile synchronously — the tokens panel never
+    // mounts, so the api-keys service is never contacted.
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'API tokens' })).not.toBeInTheDocument();
+    expect(services).not.toContain('api/v1/user/api-keys');
+  });
+
+  it('falls back to Profile for a deep link to a tenant-disabled provider', async () => {
+    // Gemini is disabled for the tenant, so `provider:gemini` is not a visible
+    // panel; a stale deep link to it must not render its credential controls.
+    // Minimal seed — the modal only reads `.enabled` to decide visibility, and a
+    // disabled tool is filtered out before any other field is touched.
+    agorStore.getState().setAgenticToolSettings([{ tool: 'gemini', enabled: false }] as never);
+    const user = makeUser();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+        initialTab="gemini"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Gemini' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /gemini/i })).not.toBeInTheDocument();
+  });
+
+  it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="preferences"
+      />
+    );
+
+    // Enable chimes on Preferences (audio defaults to disabled), then leave and
+    // return: the draft must survive rather than reverting to persisted values.
+    // Queried via querySelector to avoid jsdom `getComputedStyle` (cssstyle
+    // 5.3.2 throws on AntD v6's `border: var()` rules).
+    const enableChimes = () =>
+      document.querySelector<HTMLInputElement>('input[aria-label="Enable chimes"]');
+    await waitFor(() => expect(enableChimes()).not.toBeNull());
+    expect(enableChimes()).not.toBeChecked();
+    fireEvent.click(enableChimes() as HTMLInputElement);
+    expect(enableChimes()).toBeChecked();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+    // Draft survived the round trip rather than reverting to disabled.
+    expect(enableChimes()).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => {
+      const patch = onUpdate.mock.calls.find(([, p]) => p?.preferences?.audio)?.[1];
+      expect(patch?.preferences?.audio?.enabled).toBe(true);
+    }, ASYNC);
+  });
+
+  it('opens a provider search hit on its own sub-tab (Session defaults, not Authentication)', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // 'Sandbox Mode' is a Codex Session-defaults control; its search hit must
+    // land on the Session defaults sub-tab, not the default Authentication view.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'Sandbox Mode' },
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Sandbox Mode/i }));
+
+    await screen.findByRole('heading', { name: 'Codex' });
+    expect(screen.getByRole('tab', { name: 'Session defaults' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('gives the dialog an accessible name even with the header hidden', () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('dialog', { name: 'User Settings' })).toBeInTheDocument();
+  });
+});
+
+// The tenant tool-settings store is module-global; clear any per-test seeding so
+// provider visibility doesn't leak between tests.
+afterEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
 });
