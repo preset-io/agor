@@ -220,6 +220,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
   }),
 });
 
@@ -269,6 +272,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
 
     /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
     fixBasicPermissions: z.boolean().optional().default(false),

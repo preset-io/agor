@@ -10,9 +10,10 @@
  * The executor handles the complete transaction:
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
- * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
- *    (`repos.handoffCloneUnixPermissions`, `branches.handoffBranchUnixPermissions`) which
- *    synchronously dispatch a tenant-mounted operator executor.
+ * 3. Privileged Unix group/ACL setup runs in this same tenant-mounted Git
+ *    lifecycle executor, before the resource is marked ready. This avoids a
+ *    nested executor-capacity dependency while keeping tenant paths out of the
+ *    daemon process.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
@@ -63,7 +64,11 @@ import type {
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
-import { fixBranchGitDirPermissionsBasic } from './unix.js';
+import {
+  fixBranchGitDirPermissionsBasic,
+  handleUnixSyncBranch,
+  handleUnixSyncRepo,
+} from './unix.js';
 
 /**
  * Self-hosted compatibility operation. The daemon authorizes the request and
@@ -942,23 +947,31 @@ export async function handleGitClone(
         console.log(`[git.clone] Repo record created: ${repoId}`);
       }
 
-      // Synchronize Unix isolation through the tenant-mounted operator
-      // executor. Failure remains best-effort (the historical contract), but
-      // the awaited handoff prevents clients observing `ready` before the
-      // permission attempt has completed.
+      // Apply Unix isolation in this tenant-mounted lifecycle executor. Do not
+      // dispatch a nested executor: bounded hosted pools can deadlock when all
+      // outer Git jobs wait for inner permission jobs. Isolation is required
+      // in insulated/strict mode, so failure must prevent `ready`.
       if (payload.params.initUnixGroup && repoId) {
-        try {
-          console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
-          const result = await client.service('repos').handoffCloneUnixPermissions({ repoId });
-          unixGroup = result.unixGroup;
-          console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
-        } catch (error) {
-          // Log but don't fail the entire operation
-          console.error(
-            `[git.clone] Failed to initialize Unix group:`,
-            error instanceof Error ? error.message : String(error)
-          );
+        console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
+        const result = await handleUnixSyncRepo(
+          {
+            ...payload,
+            command: 'unix.sync-repo',
+            params: {
+              repoId,
+              daemonUser: payload.params.daemonUser,
+              initialize: true,
+              ...(payload.params.userId ? { creatorUserId: payload.params.userId } : {}),
+            },
+          },
+          options
+        );
+        if (!result.success) {
+          throw new Error(result.error?.message ?? 'Unix repository permission sync failed');
         }
+        unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
+        if (!unixGroup) throw new Error('Unix repository permission sync returned no group');
+        console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
       }
 
       if (repoId) {
@@ -1268,22 +1281,28 @@ export async function handleGitBranchAdd(
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Synchronize Unix isolation through a capability-scoped operator executor.
-    // This call is synchronous so the branch cannot become ready first.
+    // Apply Unix isolation in this same tenant-mounted lifecycle executor.
+    // This is awaited and fail-closed so the branch cannot become ready first.
     let unixGroup: string | undefined;
     if (payload.params.initUnixGroup && branchId) {
-      try {
-        console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
-        const result = await client.service('branches').handoffBranchUnixPermissions({ branchId });
-        unixGroup = result.unixGroup;
-        console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
-      } catch (error) {
-        // Log but don't fail the entire operation
-        console.error(
-          `[git.branch.add] Failed to initialize Unix group:`,
-          error instanceof Error ? error.message : String(error)
-        );
+      console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
+      const result = await handleUnixSyncBranch(
+        {
+          ...payload,
+          command: 'unix.sync-branch',
+          params: {
+            branchId,
+            daemonUser: payload.params.daemonUser,
+          },
+        },
+        options
+      );
+      if (!result.success) {
+        throw new Error(result.error?.message ?? 'Unix branch permission sync failed');
       }
+      unixGroup = (result.data as { groupName?: string } | undefined)?.groupName;
+      if (!unixGroup) throw new Error('Unix branch permission sync returned no group');
+      console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
     } else if (payload.params.fixBasicPermissions && storageMode === 'worktree') {
       // RBAC is explicitly disabled — set basic permissions for the base
       // repo's .git/worktrees/<name>/ entry so git operations work even
@@ -1394,11 +1413,24 @@ export async function handleGitBranchAdd(
         }
       }
 
-      // Step 2: synchronously dispatch idempotent operator repair, even when a
-      // prior attempt already created the directory.
+      // Step 2: synchronously run idempotent repair in this lifecycle
+      // executor, even when a prior attempt already created the directory.
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          await client.service('branches').handoffBranchUnixPermissions({ branchId });
+          const result = await handleUnixSyncBranch(
+            {
+              ...payload,
+              command: 'unix.sync-branch',
+              params: {
+                branchId,
+                daemonUser: payload.params.daemonUser,
+              },
+            },
+            options
+          );
+          if (!result.success) {
+            throw new Error(result.error?.message ?? 'Unix branch permission repair failed');
+          }
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {

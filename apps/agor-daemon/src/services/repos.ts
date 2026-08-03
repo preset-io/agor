@@ -51,10 +51,6 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
-  assertOperatorUnixHandoff,
-  dispatchOperatorUnixHandoff,
-} from '../utils/operator-unix-capability.js';
-import {
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
@@ -308,7 +304,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
     // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
-    // Unix permissions are applied synchronously by a tenant-mounted operator executor.
+    // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
     // Capture the Feathers service so the `onExit` safety net (below) writes
     // through the same service layer the executor uses — that way clients
@@ -331,6 +327,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           createDbRecord: true,
           userId: userId as string | undefined,
           initUnixGroup,
+          ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
         },
       },
       {
@@ -401,26 +398,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Return immediately - callers can poll `agor_repos_get(repoId)` for
     // `clone_status: 'ready' | 'failed'` to discover the final outcome.
     return { status: 'pending', slug, repo_id: repoId };
-  }
-
-  /** Synchronously route post-clone access setup to the operator executor. */
-  async handoffCloneUnixPermissions(
-    data: { repoId: string },
-    params?: RepoParams
-  ): Promise<{ unixGroup: string }> {
-    assertOperatorUnixHandoff(params as AuthenticatedParams | undefined, {
-      command: 'git.clone',
-      repoId: data.repoId,
-    });
-    await this.get(data.repoId, params);
-    const gitPayload = params?.authentication?.payload as { user_id?: unknown } | undefined;
-    const creatorUserId = typeof gitPayload?.user_id === 'string' ? gitPayload.user_id : undefined;
-    const unixGroup = await dispatchOperatorUnixHandoff({
-      app: this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      target: { command: 'unix.sync-repo', repoId: data.repoId, creatorUserId },
-      daemonUser: loadConfigSync().daemon?.unix_user,
-    });
-    return { unixGroup };
   }
 
   /**
@@ -922,7 +899,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix permissions: capability-scoped operator executor dispatch.
+    // Unix permissions: fail-closed inside the tenant-mounted lifecycle executor.
     try {
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
@@ -952,6 +929,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             userId: userId as string | undefined,
             // Unix group isolation (only when unix_user_mode is non-simple)
             initUnixGroup,
+            ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
             fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
               storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),

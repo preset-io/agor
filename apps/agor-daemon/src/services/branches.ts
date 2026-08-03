@@ -73,10 +73,6 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
-import {
-  assertOperatorUnixHandoff,
-  dispatchOperatorUnixHandoff,
-} from '../utils/operator-unix-capability.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
@@ -708,24 +704,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withDefaults;
-  }
-
-  /** Synchronously route post-materialization access setup to the operator executor. */
-  async handoffBranchUnixPermissions(
-    data: { branchId: string },
-    params?: BranchParams
-  ): Promise<{ unixGroup: string }> {
-    assertOperatorUnixHandoff(params as AuthenticatedParams | undefined, {
-      command: 'git.branch.add',
-      branchId: data.branchId,
-    });
-    await this.get(data.branchId as BranchID, params);
-    const unixGroup = await dispatchOperatorUnixHandoff({
-      app: this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      target: { command: 'unix.sync-branch', branchId: data.branchId },
-      daemonUser: loadConfigSync().daemon?.unix_user,
-    });
-    return { unixGroup };
   }
 
   /**
@@ -1699,6 +1677,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               restoreMode: true,
               // Unix group isolation
               initUnixGroup,
+              ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
               fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
               useReference:
                 storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),

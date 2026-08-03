@@ -982,12 +982,8 @@ export async function handleUnixSyncUser(
 // ============================================================
 //
 // Privileged group/ACL setup for newly cloned repos and freshly created
-// branches is invoked through the capability-scoped operator executor via
-// `repos.handoffCloneUnixPermissions` and
-// `branches.handoffBranchUnixPermissions`. This keeps
-// privileged work on the tenant-mounted operator runtime, independent of the
-// Git executor's user identity. The executor retains the basic-mode chmod
-// helper below for non-RBAC paths.
+// branches is invoked directly by the tenant-mounted Git lifecycle executor.
+// The executor retains the basic-mode chmod helper below for non-RBAC paths.
 
 /**
  * Fix permissions on branch's .git/worktrees/<name>/ directory without RBAC
