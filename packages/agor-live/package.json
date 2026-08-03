@@ -86,7 +86,7 @@
     "cors": "^2.8.6",
     "cron-parser": "^5.6.1",
     "cronstrue": "^3.24.0",
-    "diff": "^7.0.0",
+    "diff": "^8.0.3",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",

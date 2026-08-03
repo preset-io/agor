@@ -41,7 +41,7 @@
     "antd": "^6.5.0",
     "cronstrue": "^3.24.0",
     "d3-force": "^3.0.0",
-    "diff": "^7.0.0",
+    "diff": "^8.0.3",
     "emoji-picker-react": "^4.19.1",
     "emojibase": "^17.0.0",
     "emojibase-data": "^17.0.0",
