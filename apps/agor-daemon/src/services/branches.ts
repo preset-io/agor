@@ -28,6 +28,7 @@ import {
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  UserPrimaryTeammateRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
@@ -143,6 +144,7 @@ interface ManagedProcess {
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
+  private primaryTeammateRepo: UserPrimaryTeammateRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
@@ -171,6 +173,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     this.branchRepo = branchRepo;
     this.boardRepo = new BoardRepository(db);
+    this.primaryTeammateRepo = new UserPrimaryTeammateRepository(db);
     this.db = db;
     this.app = app;
   }
@@ -766,6 +769,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await Promise.all(
         readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch, params))
       );
+      await Promise.all(
+        readyBranches.map((branch) => this.maybeSetUserPrimaryTeammate(branch, params))
+      );
       for (const branch of readyBranches) {
         this.trackBranchCreated(branch);
       }
@@ -776,6 +782,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const created = (await super.create(withDefaults, params)) as Branch;
     const readyBranch = await this.maybeEnsureTeammateKnowledgeNamespace(created, params);
     await this.maybeSetBoardPrimaryTeammate(readyBranch, params);
+    await this.maybeSetUserPrimaryTeammate(readyBranch, params);
     this.trackBranchCreated(readyBranch);
     return readyBranch;
   }
@@ -806,6 +813,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     } catch (error) {
       console.warn(
         `⚠️ Failed to set primary teammate for board ${branch.board_id}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  /**
+   * Designate a freshly onboarded teammate as its creator's primary teammate.
+   * Only fires for the onboarding path (`createdViaOnboarding`) and never
+   * clobbers an existing assignment, so a re-run or a later explicit pick wins.
+   */
+  private async maybeSetUserPrimaryTeammate(branch: Branch, params?: BranchParams): Promise<void> {
+    if (!getTeammateConfig(branch)?.createdViaOnboarding) return;
+    const userId = (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID);
+    if (!userId) return;
+
+    try {
+      if (await this.primaryTeammateRepo.getBranchId(userId)) return;
+      await this.primaryTeammateRepo.setPrimaryTeammate(userId, branch.branch_id, {
+        source: 'default',
+        updatedBy: userId,
+      });
+    } catch (error) {
+      console.warn(
+        `⚠️ Failed to set primary teammate for user ${userId}:`,
         error instanceof Error ? error.message : String(error)
       );
     }

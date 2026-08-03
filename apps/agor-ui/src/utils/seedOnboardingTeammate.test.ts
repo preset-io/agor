@@ -80,6 +80,9 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('Rusty');
     expect(initialPrompt).toContain('developer');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
+    expect(initialPrompt).toContain(
+      "- Role: you are this user's primary Agor assistant, on a private board only they can see"
+    );
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 

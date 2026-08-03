@@ -93,6 +93,8 @@ export async function seedOnboardingTeammate(
           userEmail: input.user?.email,
           persona: input.user?.persona,
           suggestedIntegrations: input.suggestedIntegrations,
+          isPrimaryTeammate: true,
+          boardIsPrivate: true,
         }),
       },
       onCreateSession: input.onCreateSession,

@@ -81,6 +81,24 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(absent).not.toContain('Suggested integrations');
   });
 
+  it('adds a primary-assistant + private-board role line only when the onboarding flags are set', () => {
+    const onboarding = buildTeammateBootstrapPrompt({
+      displayName: 'Rusty',
+      isPrimaryTeammate: true,
+      boardIsPrivate: true,
+    });
+    expect(onboarding).toContain(
+      "- Role: you are this user's primary Agor assistant, on a private board only they can see"
+    );
+
+    // Board "+" button and Settings > Teammates pass no flags — no role line.
+    const otherPaths = buildTeammateBootstrapPrompt({ displayName: 'Board Bot' });
+    expect(otherPaths).not.toContain('- Role:');
+    expect(buildTeammateBootstrapPromptContext({ displayName: 'Board Bot' })).not.toHaveProperty(
+      'isPrimaryTeammate'
+    );
+  });
+
   it('adds a persona line with the id (plus title when known) and dumps unknown ids raw', () => {
     const known = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', persona: 'developer' });
     expect(known).toContain('- User persona: developer (I write code)');

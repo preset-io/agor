@@ -8,7 +8,7 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
-import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
+import type { Application, BoardID, BranchID, UserID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
@@ -1046,6 +1046,93 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 
     expect(boardRepo.setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
     expect(boardsEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('BranchesService onboarding user primary teammate wiring', () => {
+  const onboardingContext = {
+    teammate: { kind: 'teammate', displayName: 'Teammate', createdViaOnboarding: true },
+  };
+
+  function createUserTeammateHarness(existingBranchId: string | null = null) {
+    const app = { service: vi.fn() } as unknown as Application;
+    const primaryTeammateRepo = {
+      getBranchId: vi.fn(async () => existingBranchId),
+      setPrimaryTeammate: vi.fn(async () => undefined),
+    };
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    (
+      service as unknown as { primaryTeammateRepo: typeof primaryTeammateRepo }
+    ).primaryTeammateRepo = primaryTeammateRepo;
+    const invoke = (branch: Record<string, unknown>, params?: unknown) =>
+      (
+        service as unknown as {
+          maybeSetUserPrimaryTeammate: (b: unknown, p?: unknown) => Promise<void>;
+        }
+      ).maybeSetUserPrimaryTeammate(branch, params);
+    return { primaryTeammateRepo, invoke };
+  }
+
+  it("sets the creator's primary teammate for an onboarding teammate branch", async () => {
+    const { primaryTeammateRepo, invoke } = createUserTeammateHarness();
+
+    await invoke({
+      branch_id: 'teammate-new' as BranchID,
+      board_id: 'board-a' as BoardID,
+      created_by: 'user-1' as UserID,
+      custom_context: onboardingContext,
+    });
+
+    expect(primaryTeammateRepo.setPrimaryTeammate).toHaveBeenCalledWith('user-1', 'teammate-new', {
+      source: 'default',
+      updatedBy: 'user-1',
+    });
+  });
+
+  it('prefers the authenticated actor over created_by as the target user', async () => {
+    const { primaryTeammateRepo, invoke } = createUserTeammateHarness();
+
+    await invoke(
+      {
+        branch_id: 'teammate-new' as BranchID,
+        board_id: 'board-a' as BoardID,
+        created_by: 'user-1' as UserID,
+        custom_context: onboardingContext,
+      },
+      { user: { user_id: 'actor-2' as UserID } }
+    );
+
+    expect(primaryTeammateRepo.setPrimaryTeammate).toHaveBeenCalledWith('actor-2', 'teammate-new', {
+      source: 'default',
+      updatedBy: 'actor-2',
+    });
+  });
+
+  it('never clobbers an existing primary teammate assignment', async () => {
+    const { primaryTeammateRepo, invoke } = createUserTeammateHarness('teammate-existing');
+
+    await invoke({
+      branch_id: 'teammate-new' as BranchID,
+      board_id: 'board-a' as BoardID,
+      created_by: 'user-1' as UserID,
+      custom_context: onboardingContext,
+    });
+
+    expect(primaryTeammateRepo.setPrimaryTeammate).not.toHaveBeenCalled();
+  });
+
+  it('ignores teammates not created via onboarding', async () => {
+    const { primaryTeammateRepo, invoke } = createUserTeammateHarness();
+
+    await invoke({
+      branch_id: 'teammate-new' as BranchID,
+      board_id: 'board-a' as BoardID,
+      created_by: 'user-1' as UserID,
+      custom_context: teammateContext,
+    });
+
+    expect(primaryTeammateRepo.getBranchId).not.toHaveBeenCalled();
+    expect(primaryTeammateRepo.setPrimaryTeammate).not.toHaveBeenCalled();
   });
 });
 
