@@ -62,6 +62,7 @@ import type {
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { assertCanonicalWorkspaceContainment } from '../workspace-paths.js';
 import type { CommandOptions } from './index.js';
 import { fixBranchGitDirPermissionsBasic } from './unix.js';
 
@@ -1185,6 +1186,7 @@ export async function handleGitBranchAdd(
       branchName: branchRecord.name,
       storedPath: branchRecord.path,
     });
+    await assertCanonicalWorkspaceContainment(payload.params.branchesRoot, branchPath);
     const repoPath = repo.local_path;
     const branchName = branchRecord.name;
     resolvedRepoPath = repoPath;
