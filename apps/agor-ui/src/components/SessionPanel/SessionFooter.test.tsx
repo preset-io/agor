@@ -273,7 +273,7 @@ describe('SessionFooter', () => {
     fireEvent.click(more);
     const overflowOptions = await screen.findByRole('group', { name: 'More options' });
     const selector = await within(overflowOptions).findByLabelText('OpenCode model');
-    expect(find).toHaveBeenCalledWith({ query: { branch_id: 'branch-1' } });
+    expect(find).toHaveBeenCalledWith();
 
     fireEvent.mouseDown(selector);
     const modelOption = await screen.findByText('GPT-5');

@@ -119,6 +119,7 @@ export interface ExecutorSpawnContext {
 }
 
 export interface SpawnExecutorOptions {
+  cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
   /** When set, spawns via `sudo -n -u $asUser`. Secrets go through a 0600 env-file. */
@@ -356,9 +357,21 @@ export function spawnExecutor(
  * stdout/stderr are inherited so logs appear in daemon output.
  */
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
-  const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
-    prepareLocalExecutorSpawn(options, '--stdin');
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
   const logPrefix = options.logPrefix ?? '[Executor]';
+  if (cwdFailure) {
+    console.error(
+      `${logPrefix} ${cwdFailure.error?.message}. ` +
+        `This usually means the branch or repo directory was deleted out-of-band. ` +
+        `Verify that the volume backing the working directory persists across restarts.`
+    );
+    options.onExit?.(127, { mode: 'local' });
+    return;
+  }
+
+  const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
+    prepareLocalExecutorSpawn(options, '--stdin', location);
 
   if (asUser) {
     // Safe summary only — never log secret values or their key names.
@@ -521,14 +534,27 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
 
 const INTERACTIVE_EXECUTOR_EVENT_PREFIX = 'AGOR_EXECUTOR_INTERACTIVE_EVENT ';
 
-function resolveLocalExecutorLocation() {
+function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'> = {}) {
   const executorPath = findExecutorPath();
   return {
     executorPath,
     // Default to the executor package directory for proper module resolution.
     // ESM imports resolve relative to the file location, and pnpm's node_modules
     // structure requires running from the package directory.
-    cwd: path.dirname(path.dirname(executorPath)),
+    cwd: options.cwd ?? path.dirname(path.dirname(executorPath)),
+  };
+}
+
+function resolveLocalExecutorCwdFailure(
+  location: ReturnType<typeof resolveLocalExecutorLocation>
+): ExecutorCommandResult | undefined {
+  if (!location.cwd || existsSync(location.cwd)) return undefined;
+  return {
+    success: false,
+    error: {
+      code: 'EXECUTOR_CWD_MISSING',
+      message: `Refusing to spawn: cwd does not exist on disk: ${location.cwd}`,
+    },
   };
 }
 
@@ -580,7 +606,7 @@ function prepareLocalExecutorImpersonation(
 function prepareLocalExecutorSpawn(
   options: SpawnExecutorOptions,
   mode: '--stdin' | '--interactive-command',
-  location = resolveLocalExecutorLocation()
+  location = resolveLocalExecutorLocation(options)
 ) {
   const { executorPath, cwd } = location;
   const asUser = options.asUser || undefined;
@@ -740,7 +766,14 @@ export function startInteractiveExecutor(
       : configuredExecutorDefaults.asUser || undefined;
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
-  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--interactive-command');
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
+  if (cwdFailure) return failedInteractiveExecutorHandle(cwdFailure);
+  const prepared = prepareLocalExecutorSpawn(
+    { ...options, asUser },
+    '--interactive-command',
+    location
+  );
   const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
   const child = spawn(cmd, args, {
     cwd,
@@ -908,7 +941,10 @@ function runExecutorCommandLocal(
   const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
   const rawAsUser = options.asUser;
   const asUser = rawAsUser || undefined;
-  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin');
+  const location = resolveLocalExecutorLocation(options);
+  const cwdFailure = resolveLocalExecutorCwdFailure(location);
+  if (cwdFailure) return Promise.resolve(cwdFailure);
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin', location);
   const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);

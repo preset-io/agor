@@ -1300,5 +1300,33 @@
     "rationale": "The self-hosted local adapter persists opaque tenant/session/branch-owned upload bytes beneath the configured upload root; application callers use UploadStagingStore handles and bounded streams, never physical paths.",
     "reviewTarget": "Reassess local staging lifecycle and confinement while keeping hosted deployments on the object-store adapter.",
     "reviewDate": "2027-02-01"
+  },
+  {
+    "id": "DAEMON-FS-CAP-170",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@resolveLocalExecutorCwdFailure#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Validates the local executor working directory before creating impersonation state or spawning.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-171",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
+    "import": "node:child_process",
+    "symbol": "spawn",
+    "local": "spawn",
+    "operation": "call:spawn@startInteractiveExecutor#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Starts the bounded interactive executor transport whose process-group containment and framing remain daemon-owned.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]
