@@ -210,6 +210,8 @@ export interface ContextUsageSnapshot {
   percentage: number;
 }
 
+export const TASK_RUNTIME_LEASE_MS = 10 * 60_000;
+
 export interface Task {
   /** Unique task identifier (UUIDv7) */
   task_id: TaskID;
@@ -344,6 +346,15 @@ export interface Task {
   last_executor_heartbeat_at?: string; // UTC ISO string
   /** Immutable launch-mode snapshot used to classify launcher exit safely. */
   executor_mode?: ExecutorMode;
+  /**
+   * Daemon dispatch ownership. The random fence changes for every dispatch;
+   * lease expiry is renewed by both the owner daemon and executor heartbeats.
+   */
+  runtime_owner?: {
+    daemon_id: string;
+    fence: string;
+    lease_expires_at: string;
+  };
   /** Latest bounded SDK activity fact; this is not an event history. */
   latest_executor_pulse?: ExecutorPulse;
   /** Bounded SDK/process health diagnosis. */

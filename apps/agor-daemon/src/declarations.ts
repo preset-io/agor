@@ -161,6 +161,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
+  renewRuntimeLease(taskId: string, daemonId: string, fence: string): Promise<boolean>;
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
   claimTermination(
     input: TerminationClaimInput,

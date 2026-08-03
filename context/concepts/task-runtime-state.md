@@ -109,6 +109,7 @@ Queue materialization and draining are documented separately in
 | `latest_executor_pulse`      | What bounded SDK activity fact was most recently accepted?             | Complete history or task ownership       |
 | `sdk_failure`                | What runtime-health diagnosis was observed or enforced?                | Proof that execution stopped             |
 | `termination_request`        | Which termination cause owns containment, and for which request epoch? | Final containment outcome by itself      |
+| `runtime_owner`              | Which daemon dispatch generation owns the task, and until when?        | Executor health or exactly-once effects  |
 
 An executor pulse contains a monotonically increasing executor-local sequence,
 a bounded kind/detail, and a daemon-authored observation time. The repository
@@ -237,6 +238,8 @@ Preserve these invariants:
    rollouts are unsupported.
 10. Supervision does not imply automatic retry, prompt replay, or exactly-once
     external effects.
+11. Startup recovery only settles expired fenced ownership. A replica never
+    resets live work or queued prompts owned by another replica.
 
 ## Code map
 

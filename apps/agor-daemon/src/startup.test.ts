@@ -48,7 +48,10 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       return task;
     }),
     patch: vi.fn(),
-    settleTermination: vi.fn(),
+    settleTermination: vi.fn(async (input: { taskId: string }) => ({
+      outcome: 'transitioned',
+      task: fixtures.orphanedTasks?.find((task) => task.task_id === input.taskId),
+    })),
   };
   const sessionsService = {
     find: vi.fn(
@@ -112,6 +115,11 @@ function makeTask(overrides: Partial<Task>): Task {
     session_id: 'session-1',
     status: TaskStatus.RUNNING,
     created_at: '2026-07-01T00:00:00.000Z',
+    runtime_owner: {
+      daemon_id: 'stale-replica',
+      fence: 'stale-generation',
+      lease_expires_at: '2026-07-01T00:10:00.000Z',
+    },
     ...overrides,
   } as Task;
 }
@@ -172,7 +180,7 @@ describe('startup tenant database scope', () => {
     expect(baseDb.marker).not.toHaveBeenCalled();
   });
 
-  it('cleans every queued task when recovery spans multiple pages', async () => {
+  it('preserves queued work because it has no executor owner', async () => {
     const queuedTasks = Array.from({ length: 1001 }, (_, index) =>
       makeTask({ task_id: `queued-${index}`, status: TaskStatus.QUEUED })
     );
@@ -180,10 +188,43 @@ describe('startup tenant database scope', () => {
 
     await cleanupOrphanStatuses(ctx);
 
-    expect(tasksService.patch).toHaveBeenCalledTimes(queuedTasks.length);
-    expect(tasksService.find).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ $skip: 1000 }) })
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ status: TaskStatus.QUEUED }) })
     );
+  });
+
+  it('does not let replica B settle replica A live work during a rolling deploy', async () => {
+    const task = makeTask({
+      runtime_owner: {
+        daemon_id: 'replica-a',
+        fence: 'generation-a',
+        lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+    const { ctx, tasksService, sessionsService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+    });
+
+    const result = await cleanupOrphanStatuses(ctx);
+
+    expect(result.orphanedTasks).toEqual([]);
+    expect(tasksService.settleTermination).not.toHaveBeenCalled();
+    expect(sessionsService.patch).not.toHaveBeenCalled();
+  });
+
+  it('preserves unfenced work from a pre-lease replica during the first rolling deploy', async () => {
+    const legacyTask = makeTask({
+      started_at: '2020-01-01T00:00:00.000Z',
+      runtime_owner: undefined,
+    });
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [legacyTask],
+    });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(tasksService.settleTermination).not.toHaveBeenCalled();
   });
 });
 

@@ -1176,6 +1176,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.findOrphaned();
   }
 
+  async renewRuntimeLease(taskId: string, daemonId: string, fence: string): Promise<boolean> {
+    return this.taskRepo.renewRuntimeLease(taskId, daemonId, fence);
+  }
+
   async findByIdForScopeCheck(taskId: TaskID): Promise<Task | null> {
     return this.taskRepo.findById(taskId);
   }

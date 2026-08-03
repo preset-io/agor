@@ -15,11 +15,13 @@ export function classifyExecutorExit(input: {
 
 export function buildTaskLaunchState(
   startedAt: string,
-  executorMode: ExecutorMode = 'local'
-): Pick<Task, 'status' | 'started_at' | 'executor_mode'> {
+  executorMode: ExecutorMode = 'local',
+  runtimeOwner?: Task['runtime_owner']
+): Pick<Task, 'status' | 'started_at' | 'executor_mode' | 'runtime_owner'> {
   return {
     status: TaskStatus.DISPATCHING,
     started_at: startedAt,
     executor_mode: executorMode,
+    runtime_owner: runtimeOwner,
   };
 }

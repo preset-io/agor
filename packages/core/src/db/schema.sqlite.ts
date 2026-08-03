@@ -354,6 +354,7 @@ export const tasks = sqliteTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        runtime_owner?: Task['runtime_owner'];
       }>()
       .notNull(),
   },

@@ -14,7 +14,7 @@ import type {
   TerminationCause,
   UUID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TASK_RUNTIME_LEASE_MS, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -117,6 +117,8 @@ export interface TerminationSettlementInput {
   errorMessage?: string;
   sdkFailure?: SdkFailure;
   now?: Date;
+  /** Required fence for replica startup takeover. */
+  expectedRuntimeOwner?: Task['runtime_owner'];
 }
 
 export interface TerminationSettlementResult {
@@ -190,7 +192,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   /**
    * Convert Task to database insert format
    */
-  private taskToInsert(task: Partial<Task>): TaskInsert {
+  private taskToInsert(task: Partial<Task>, allowRuntimeOwner = false): TaskInsert {
     const now = Date.now();
     const taskId = task.task_id ?? generateId();
 
@@ -199,6 +201,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
     if (!task.created_by) {
       throw new RepositoryError('created_by is required when creating a task');
+    }
+    if (task.runtime_owner !== undefined && !allowRuntimeOwner) {
+      throw new RepositoryError('runtime ownership is daemon-dispatch managed');
     }
 
     // Ensure git_state always has required fields
@@ -247,6 +252,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         sdk_failure: task.sdk_failure,
         termination_request: task.termination_request,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
+        runtime_owner: task.runtime_owner,
       },
     };
   }
@@ -566,12 +572,48 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         pulse && (!previous || pulse.sequence > previous.sequence)
           ? { ...pulse, observed_at: observedAt.toISOString() }
           : previous;
-      const data = { ...row.data, latest_executor_pulse: latest };
+      const data = {
+        ...row.data,
+        latest_executor_pulse: latest,
+        ...(row.data.runtime_owner
+          ? {
+              runtime_owner: {
+                ...row.data.runtime_owner,
+                lease_expires_at: new Date(
+                  observedAt.getTime() + TASK_RUNTIME_LEASE_MS
+                ).toISOString(),
+              },
+            }
+          : {}),
+      };
       await update(txDb, tasks)
         .set({ last_executor_heartbeat_at: observedAt, data })
         .where(eq(tasks.task_id, fullId))
         .run();
       return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+    });
+  }
+
+  /** Renew only the exact dispatch generation owned by this daemon. */
+  async renewRuntimeLease(
+    id: string,
+    daemonId: string,
+    fence: string,
+    now = new Date()
+  ): Promise<boolean> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (isTerminalTaskStatus(row.status)) return false;
+      const owner = row.data.runtime_owner;
+      if (!owner || owner.daemon_id !== daemonId || owner.fence !== fence) return false;
+      const data = {
+        ...row.data,
+        runtime_owner: {
+          ...owner,
+          lease_expires_at: new Date(now.getTime() + TASK_RUNTIME_LEASE_MS).toISOString(),
+        },
+      };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return true;
     });
   }
 
@@ -686,6 +728,21 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const current = this.rowToTask(row);
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
       const restartRelease = input.outcome === 'restart_unverified';
+      if (restartRelease) {
+        const expected = input.expectedRuntimeOwner;
+        const owner = current.runtime_owner;
+        const sameGeneration = expected
+          ? owner?.daemon_id === expected.daemon_id &&
+            owner.fence === expected.fence &&
+            owner.lease_expires_at === expected.lease_expires_at
+          : !owner;
+        const leaseExpired = owner
+          ? Date.parse(owner.lease_expires_at) <= (input.now ?? new Date()).getTime()
+          : true;
+        if (!sameGeneration || !leaseExpired) {
+          return { outcome: 'condition_changed', task: current };
+        }
+      }
       if (
         !restartRelease &&
         (current.status !== TaskStatus.STOPPING || !current.termination_request)
@@ -829,6 +886,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           throw new RepositoryError('stopping tasks must be claimed through claimTermination');
         }
         if (
+          updates.runtime_owner !== undefined &&
+          !(
+            (current.status === TaskStatus.CREATED || current.status === TaskStatus.QUEUED) &&
+            updates.status === TaskStatus.DISPATCHING
+          )
+        ) {
+          throw new RepositoryError('runtime ownership is daemon-dispatch managed');
+        }
+        if (
           current.status === TaskStatus.STOPPING &&
           current.termination_request &&
           updates.status !== undefined &&
@@ -846,7 +912,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           created_by: current.created_by,
           created_at: current.created_at,
         };
-        const insertData = this.taskToInsert(merged);
+        const insertData = this.taskToInsert(merged, true);
 
         await update(txDb, tasks)
           .set({

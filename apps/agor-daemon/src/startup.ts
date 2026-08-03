@@ -23,9 +23,10 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { containAllTrackedExecutors } from './executor-tracking.js';
+import { daemonRuntimeId, isStaleRuntimeOwner } from './runtime-ownership.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -186,12 +187,18 @@ async function cleanupOrphanStatusesInTenantScope(
   const wasGraceful = await readAndClearSentinel();
 
   // Find all orphaned executor-owned tasks (dispatching, running, stopping, awaiting_permission, awaiting_input)
-  const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
+  const activeTasks = await tasksService.getOrphaned(startupParams as never);
+  const staleCandidates = activeTasks.filter((task) => isStaleRuntimeOwner(task));
+  const orphanedTasks: Task[] = [];
 
-  if (orphanedTasks.length > 0) {
-    for (const task of orphanedTasks) {
+  if (staleCandidates.length > 0) {
+    for (const task of staleCandidates) {
+      console.warn(
+        `[SECURITY][runtime-takeover] daemon=${daemonRuntimeId} task=${shortId(task.task_id)} ` +
+          `stale_owner=${task.runtime_owner?.daemon_id ?? 'legacy'} fence=${task.runtime_owner?.fence ?? 'none'}`
+      );
       const session = await sessionsService.get(task.session_id, startupParams as never);
-      await tasksService.settleTermination(
+      const settlement = await tasksService.settleTermination(
         {
           taskId: task.task_id,
           outcome: 'restart_unverified',
@@ -205,57 +212,40 @@ async function cleanupOrphanStatusesInTenantScope(
                 termination: 'unverified',
               },
           errorMessage: 'Daemon restart released this Task without verifying executor termination.',
+          expectedRuntimeOwner: task.runtime_owner,
         },
         { ...startupParams, suppressTerminalQueueProcessing: true } as never
       );
+      if (settlement.outcome !== 'transitioned') {
+        startupDebug(
+          `[startup] skipped stale-owner takeover for ${shortId(task.task_id)}: ownership changed`
+        );
+        continue;
+      }
+      orphanedTasks.push(settlement.task);
       startupDebug(
         `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
       );
     }
   }
 
-  // Wipe the queue BEFORE making any session promptable. Running tasks are marked STOPPED above,
-  // which invalidates the ordering premise of anything waiting behind them — a queued prompt
-  // typically depends on whatever was running first. Wiping here prevents the session after-patch
-  // hook (triggered below) from draining queued tasks that should be discarded.
-  const queuedTasks = await collectAllPages<Task>(
-    (skip) =>
-      tasksService.find({
-        query: { status: TaskStatus.QUEUED, $limit: 1000, $skip: skip },
-        ...startupParams,
-      }) as Promise<Task[] | Paginated<Task>>
-  );
-
-  if (queuedTasks.length > 0) {
-    for (const task of queuedTasks) {
-      await tasksService.patch(
-        task.task_id,
-        {
-          status: TaskStatus.STOPPED,
-        },
-        startupParams as never
-      );
-    }
-  }
+  // Queued tasks are durable work, not executor-owned work. They must never be
+  // globally wiped by replica startup. Once a stale active owner is settled,
+  // the normal session queue hook decides whether the next prompt may drain.
+  const queuedTasks: Task[] = [];
 
   // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT)
   const orphanedSessions: Session[] = [];
-  for (const status of [
-    SessionStatus.RUNNING,
-    SessionStatus.STOPPING,
-    SessionStatus.AWAITING_PERMISSION,
-    SessionStatus.AWAITING_INPUT,
-    SessionStatus.TIMED_OUT,
-  ]) {
-    orphanedSessions.push(
-      ...(await collectAllPages<Session>(
-        (skip) =>
-          sessionsService.find({
-            query: { status, $limit: 1000, $skip: skip },
-            ...startupParams,
-          }) as Promise<Session[] | Paginated<Session>>
-      ))
-    );
+  for (const sessionId of new Set(orphanedTasks.map((task) => task.session_id))) {
+    const session = await sessionsService.get(sessionId, startupParams as never);
+    if (
+      session.status === SessionStatus.RUNNING ||
+      session.status === SessionStatus.STOPPING ||
+      session.status === SessionStatus.AWAITING_PERMISSION ||
+      session.status === SessionStatus.AWAITING_INPUT ||
+      session.status === SessionStatus.TIMED_OUT
+    )
+      orphanedSessions.push(session);
   }
 
   if (orphanedSessions.length > 0) {

@@ -974,6 +974,24 @@ describe('TaskRepository.recordSdkHealthObservation', () => {
 // ============================================================================
 
 describe('TaskRepository.update', () => {
+  dbTest('does not let generic updates replace a dispatch owner fence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    await expect(
+      taskRepo.update(created.task_id, {
+        runtime_owner: {
+          daemon_id: 'attacker',
+          fence: 'replacement',
+          lease_expires_at: '2099-01-01T00:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('runtime ownership is daemon-dispatch managed');
+  });
+
   dbTest('does not let generic updates claim a dispatching task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -1341,6 +1359,46 @@ describe('TaskRepository.update', () => {
       });
     }
   );
+
+  dbTest('fences restart takeover when the live owner renews its lease', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const expiredOwner = {
+      daemon_id: 'replica-a',
+      fence: 'generation-a',
+      lease_expires_at: '2026-08-03T11:59:00.000Z',
+    };
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.CREATED })
+    );
+    const task = await taskRepo.update(created.task_id, {
+      status: TaskStatus.DISPATCHING,
+      runtime_owner: expiredOwner,
+    });
+    await taskRepo.renewRuntimeLease(
+      task.task_id,
+      expiredOwner.daemon_id,
+      expiredOwner.fence,
+      new Date('2026-08-03T12:00:00.000Z')
+    );
+
+    const result = await taskRepo.settleTermination({
+      taskId: task.task_id,
+      outcome: 'restart_unverified',
+      expectedRuntimeOwner: expiredOwner,
+      now: new Date('2026-08-03T12:00:00.000Z'),
+      errorMessage: 'Daemon restarted',
+      sdkFailure: {
+        reason: 'termination_unverified',
+        detected_at: '2026-08-03T12:00:00.000Z',
+        tool: 'codex',
+        termination: 'unverified',
+      },
+    });
+
+    expect(result.outcome).toBe('condition_changed');
+    expect(result.task.status).toBe(TaskStatus.DISPATCHING);
+  });
 
   dbTest('reserves termination-owned terminality for settlement', async ({ db }) => {
     const taskRepo = new TaskRepository(db);

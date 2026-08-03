@@ -94,6 +94,7 @@ import {
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import { newRuntimeOwner } from './runtime-ownership.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -1045,7 +1046,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     const launchState = buildTaskLaunchState(
       startTimestamp,
-      config.execution?.executor_command_template ? 'templated' : 'local'
+      config.execution?.executor_command_template ? 'templated' : 'local',
+      newRuntimeOwner(new Date(startTimestamp))
     );
 
     // Patch task: queued/created → launch status, with real ranges. queue_position
