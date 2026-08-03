@@ -495,10 +495,6 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly({ status: 'idle', ready_for_prompt: true })).toBe(true);
     });
 
-    it('accepts the executor git-SHA capture shape', () => {
-      // packages/executor/src/handlers/sdk/base-executor.ts patches current SHA
-    });
-
     it('accepts the executor opencode init shape', () => {
       // packages/executor/src/handlers/sdk/opencode.ts patches the SDK session handle
       expect(isPromptFlowPatchOnly({ sdk_session_id: 'opencode-sess-123' })).toBe(true);

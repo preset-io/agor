@@ -388,7 +388,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current_context',
     {
       description:
-        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, git state, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
@@ -427,6 +427,28 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         user_email: user.email,
         user_role: user.role,
       };
+
+      const latestTaskId = session.tasks?.at(-1);
+      if (latestTaskId) {
+        try {
+          const latestTask = await ctx.app
+            .service('tasks')
+            .get(latestTaskId, ctx.baseServiceParams);
+          const gitState = latestTask.git_state;
+          result.latest_task_git_start = {
+            ref: gitState.ref_at_start,
+            sha: gitState.sha_at_start,
+          };
+          result.latest_task_git_end = gitState.sha_at_end
+            ? {
+                ref: gitState.ref_at_end ?? null,
+                sha: gitState.sha_at_end,
+              }
+            : null;
+        } catch {
+          // The latest task may have been removed or be outside the caller's tenant scope.
+        }
+      }
 
       // Creator info only when different from authenticated user
       if (session.created_by && session.created_by !== ctx.userId) {

@@ -189,6 +189,47 @@ describe('sessionless MCP context', () => {
   });
 });
 
+describe('agor_sessions_get_current_context', () => {
+  it('returns coherent latest-task Git boundary snapshots', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        get: async () => ({
+          session_id: 'sess-current',
+          status: 'idle',
+          agentic_tool: 'codex',
+          tasks: ['task-1'],
+          genealogy: { children: [] },
+        }),
+      },
+      users: {
+        get: async () => ({ name: 'Alice', email: 'alice@example.com', role: 'member' }),
+      },
+      tasks: {
+        get: async () => ({
+          git_state: {
+            ref_at_start: 'main',
+            sha_at_start: 'start-sha',
+            ref_at_end: 'feature',
+            sha_at_end: 'end-sha',
+          },
+        }),
+      },
+    });
+    const tools = await registerAndCaptureTools(
+      { app, userId: 'user-1', sessionId: 'sess-current' },
+      ['agor_sessions_get_current_context']
+    );
+
+    const response = await tools.agor_sessions_get_current_context.cb({
+      includeSiblings: false,
+    });
+    const result = JSON.parse(response.content[0].text);
+
+    expect(result.latest_task_git_start).toEqual({ ref: 'main', sha: 'start-sha' });
+    expect(result.latest_task_git_end).toEqual({ ref: 'feature', sha: 'end-sha' });
+  });
+});
+
 describe('agor_sessions_list', () => {
   afterEach(() => {
     vi.resetModules();

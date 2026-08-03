@@ -292,9 +292,8 @@ async function captureGitStateForSession(
 export async function captureGitStateAtTaskEnd(
   client: AgorClient,
   sessionId: SessionID
-): Promise<string | undefined> {
-  const gitState = await captureGitStateForSession(client, sessionId, 'end');
-  return gitState?.sha;
+): Promise<CapturedGitState | undefined> {
+  return captureGitStateForSession(client, sessionId, 'end');
 }
 
 export async function stampGitStateAtTaskStart(
@@ -542,6 +541,7 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }

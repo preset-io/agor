@@ -81,7 +81,13 @@ const SessionCard = ({
   const isSpawned = !!session.genealogy.parent_session_id;
 
   const latestGitState = tasks.at(-1)?.git_state;
-  const latestSha = latestGitState?.sha_at_end ?? latestGitState?.sha_at_start;
+  const hasCompleteEndSnapshot = !!latestGitState?.ref_at_end && !!latestGitState.sha_at_end;
+  const latestRef = hasCompleteEndSnapshot
+    ? latestGitState.ref_at_end
+    : latestGitState?.ref_at_start;
+  const latestSha = hasCompleteEndSnapshot
+    ? latestGitState.sha_at_end
+    : latestGitState?.sha_at_start;
   const { cleanSha, isDirty } = parseGitStateSha(latestSha);
 
   // Task list collapse header (just the "Tasks" label)
@@ -273,7 +279,7 @@ const SessionCard = ({
           <div style={{ marginBottom: 8 }}>
             <Space size={4}>
               <Typography.Text type="secondary">
-                📍 {latestGitState.ref_at_start} @ {cleanSha.substring(0, 7)}
+                📍 {latestRef} @ {cleanSha.substring(0, 7)}
               </Typography.Text>
               {isDirty && (
                 <Tag icon={<EditOutlined />} color="orange" style={{ fontSize: 11 }}>

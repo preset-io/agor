@@ -255,6 +255,7 @@ export interface Task {
   git_state: {
     ref_at_start: string; // Branch name at task start (required)
     sha_at_start: string; // SHA at task start (required)
+    ref_at_end?: string; // Branch name at task end (optional)
     sha_at_end?: string; // SHA at task end (optional)
     commit_message?: string; // Commit message if task resulted in a commit (optional)
   };
