@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
   sqlite3 \
   git \
   curl \
+  gosu \
   sudo \
   vim \
   procps \
@@ -85,9 +86,6 @@ RUN set -eux; \
       groupmod -n agor -g "${GID}" node; \
     fi; \
     usermod -g agor agor; \
-    # Grant passwordless sudo for fixing volume permissions and executor spawning
-    echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
-    chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
     mkdir -p /home/agor/.agor; \
     chown -R agor:agor /home/agor
@@ -119,6 +117,14 @@ USER agor
 # Stage 2: Development (hot-reload for daemon and UI)
 # ============================================================================
 FROM base AS development
+
+# Development containers need broad sudo for bind-mount setup and local
+# multi-user isolation exercises. Production targets explicitly remove sudo;
+# this grant must never cross the runtime boundary.
+USER root
+RUN echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor \
+  && chmod 0440 /etc/sudoers.d/agor
+USER agor
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -163,13 +169,13 @@ USER root
 # This installs both the CLI and daemon binaries
 RUN npm install -g agor-live@latest
 
-# Switch back to agor user
-USER agor
-
 # Copy production entrypoint script
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
-RUN sudo chmod +x /usr/local/bin/docker-entrypoint-prod.sh && \
-    sudo chown agor:agor /usr/local/bin/docker-entrypoint-prod.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-prod.sh \
+  && rm -f /etc/sudoers.d/agor \
+  && apt-get purge -y sudo \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
 
 # Expose daemon port (UI will be served via static files by daemon)
 EXPOSE ${DAEMON_PORT:-3030}
@@ -256,8 +262,12 @@ RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint-prod.sh
 
-# Drop back to the unprivileged runtime user.
-USER agor
+# The entrypoint performs one fixed-path ownership repair as root, then
+# permanently re-execs itself as the unprivileged runtime user via gosu.
+RUN rm -f /etc/sudoers.d/agor \
+  && apt-get purge -y sudo \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
 
 EXPOSE ${DAEMON_PORT:-3030}
 ENTRYPOINT ["docker-entrypoint-prod.sh"]

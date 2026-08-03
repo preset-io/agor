@@ -7,15 +7,14 @@
 # packages/agor-live/build.sh), so the image is pinned to the built commit
 # rather than `agor-live@latest` on npm.
 #
-# Publish model: the :<full-sha> image is built and pushed on pushes to
-# main, v* tags, AND every in-repository PR commit (tagged by the PR *head*
-# SHA, with :pr-<n> re-pointed on each update), so trusted commits are
-# deployable by their own SHA. Fork and Dependabot PRs still build and run the
-# boot smoke test, but cannot publish because GitHub intentionally withholds
-# repository secrets from them. Plus a branch tag, and `latest` on main only.
+# Trust model: pull requests build and smoke-test without registry credentials.
+# Publishing happens only in the release job for an immutable push SHA from a
+# protected main branch or protected v* tag, behind the dockerhub-production
+# GitHub Environment. Configure required reviewers and keep Docker Hub secrets
+# on that environment, never as broadly available repository secrets.
 #
-# Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
-# (Settings → Secrets and variables → Actions):
+# Pushes to Docker Hub (docker.io/preset/agor). Required environment secrets
+# (dockerhub-production → Environment secrets):
 #   DOCKERHUB_USERNAME — Docker Hub account with push access to `preset`
 #   DOCKERHUB_TOKEN    — Docker Hub access token (Read/Write) for that account
 name: Build image
@@ -26,7 +25,6 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -45,7 +43,7 @@ env:
 
 jobs:
   build:
-    name: Build & push
+    name: Build & smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -59,20 +57,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Check release and image privilege policy
+        run: node scripts/check-supply-chain-security.mjs
+
       # Fork and Dependabot PRs cannot access repository secrets. Keep their
       # build and smoke test useful without authenticating or publishing.
-      - name: Log in to Docker Hub
-        if: >-
-          github.event_name != 'pull_request' ||
-          (
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.event.pull_request.user.login != 'dependabot[bot]'
-          )
-        uses: docker/login-action@v4.5.2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -124,6 +113,8 @@ jobs:
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:3030/health > /dev/null 2>&1; then
               echo "Daemon healthy."
+              docker exec agor-smoke sh -c 'test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = "$(id -u agor)"'
+              docker exec -u agor agor-smoke sh -c '! command -v sudo >/dev/null && ! sudo -n true 2>/dev/null'
               docker rm -f agor-smoke
               exit 0
             fi
@@ -133,15 +124,53 @@ jobs:
           docker logs agor-smoke
           exit 1
 
-      # Publish trusted events after the smoke test. Fork and Dependabot PRs
-      # stop here after validating the same production image locally.
-      - name: Push image
-        if: >-
-          github.event_name != 'pull_request' ||
-          (
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.event.pull_request.user.login != 'dependabot[bot]'
-          )
+
+  release:
+    name: Publish trusted image
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dockerhub-production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify immutable checkout
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4.5.2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=agor
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and publish immutable release commit
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -149,7 +178,7 @@ jobs:
           target: production-source
           platforms: linux/amd64
           build-args: |
-            AGOR_BUILD_SHA=${{ env.IMAGE_REVISION }}
+            AGOR_BUILD_SHA=${{ github.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

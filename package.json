@@ -40,7 +40,9 @@
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
     "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
     "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
-    "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs"
+    "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
+    "check:supply-chain-security": "node scripts/check-supply-chain-security.mjs",
+    "test:supply-chain-security": "node --test scripts/check-supply-chain-security.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",

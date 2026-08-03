@@ -3,10 +3,20 @@ set -e
 
 echo "🚀 Starting Agor production environment..."
 
-# Fix volume permissions (volumes may be created with wrong ownership)
-# Only chown .agor directory (not .ssh which is mounted read-only)
-mkdir -p /home/agor/.agor
-sudo -n chown -R agor:agor /home/agor/.agor
+# The image starts as root only for this fixed, non-configurable volume path.
+# Never run Agor code, migrations, or user-controlled commands before dropping
+# privilege. -xdev prevents crossing into nested mounts and -h does not follow
+# symlink targets.
+if [ "$(id -u)" -eq 0 ]; then
+  install -d -o agor -g agor -m 0700 /home/agor/.agor
+  find /home/agor/.agor -xdev -exec chown -h agor:agor {} +
+  exec gosu agor "$0" "$@"
+fi
+
+if [ "$(id -u)" -ne "$(id -u agor)" ]; then
+  echo "Production entrypoint must run as root or agor" >&2
+  exit 1
+fi
 
 # Initialize database and configure daemon settings
 # --skip-if-exists: Idempotent, won't overwrite existing database
