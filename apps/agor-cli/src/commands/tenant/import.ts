@@ -20,7 +20,7 @@ import chalk from 'chalk';
 import {
   EXIT_FAILURE,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   resolveTenantFilesystem,
   writeStdoutJson,
 } from '../../lib/tenant-portability.js';
@@ -86,7 +86,7 @@ export default class TenantImport extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      this.logToStderr(chalk.red(`✗ ${portabilityErrorMessage(error)}`));
+      this.logToStderr(formatPortabilityError(error));
       if (error instanceof MalformedArchiveError || error instanceof UnsafeArchivePathError) {
         this.logToStderr(chalk.dim('  The archive was rejected before any data was modified.'));
       }

@@ -23,13 +23,13 @@ import {
   EXIT_FAILURE,
   EXIT_INVALID_INPUT,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   resolveTenantFilesystem,
   writeStdoutJson,
 } from '../../lib/tenant-portability.js';
 
-/** Backward-compatible named helper retained for focused CLI unit coverage. */
-export const tenantDeleteErrorMessage = portabilityErrorMessage;
+/** Named export retained for focused CLI contract coverage. */
+export const tenantDeleteErrorMarker = formatPortabilityError;
 
 export default class TenantDelete extends Command {
   static override description =
@@ -73,7 +73,7 @@ export default class TenantDelete extends Command {
       assertValidTenantId(tenantId);
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
-        this.logToStderr(chalk.red(`✗ ${error.message}`));
+        this.logToStderr(formatPortabilityError(error));
         await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
@@ -122,16 +122,16 @@ export default class TenantDelete extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      const message = tenantDeleteErrorMessage(error);
+      const marker = tenantDeleteErrorMarker(error);
       if (error instanceof TenantFilesystemDeletionPendingError) {
         // The database is already committed. Emit bounded recovery state even
         // though the command exits non-zero, so automation can distinguish this
         // retryable DB-done/files-pending tail from a pre-commit failure.
         await writeStdoutJson(error.result);
       }
-      this.logToStderr(chalk.red(`✗ ${message}`));
+      this.logToStderr(marker);
       if (error instanceof TenantDeletionVerificationError) {
-        this.logToStderr(chalk.red(`  Remaining tables: ${error.tables.join(', ')}`));
+        this.logToStderr(chalk.red('  Deletion verification did not prove tenant absence.'));
       }
       if (error instanceof TenantDeletionUnsupportedError) {
         this.logToStderr(

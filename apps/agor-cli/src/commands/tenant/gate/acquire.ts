@@ -21,7 +21,7 @@ import {
   EXIT_FAILURE,
   EXIT_INVALID_INPUT,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   writeStdoutJson,
 } from '../../../lib/tenant-portability.js';
 
@@ -57,7 +57,7 @@ export default class TenantGateAcquire extends Command {
       assertValidTenantId(tenantId);
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
-        this.logToStderr(chalk.red(`✗ ${error.message}`));
+        this.logToStderr(formatPortabilityError(error));
         await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
@@ -80,12 +80,10 @@ export default class TenantGateAcquire extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      this.logToStderr(chalk.red(`✗ ${portabilityErrorMessage(error)}`));
+      this.logToStderr(formatPortabilityError(error));
       if (error instanceof TenantWriteGateHeldError) {
         this.logToStderr(
-          chalk.dim(
-            `  A gate is already held (generation ${error.generation}); use --force to replace it.`
-          )
+          chalk.dim('  A gate is already held; use --force to replace it with a new generation.')
         );
         await flushStderr();
         process.exit(EXIT_ALREADY_HELD);

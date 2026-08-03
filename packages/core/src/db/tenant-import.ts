@@ -13,9 +13,9 @@
  *      and identity are evaluated per portion (database, filesystem) so a run
  *      interrupted between the two can be re-run to completion, and a fully
  *      applied import is a no-op success — idempotency by operation.
- *   3. Restore the database transactionally: all rows are inserted parent-first
- *      inside one tenant-scoped transaction that commits atomically or rolls
- *      back.
+ *   3. Restore the database transactionally: rows are inserted in deterministic
+ *      parent-first order with movable PostgreSQL FKs deferred, inside one
+ *      tenant-scoped transaction that commits atomically or rolls back.
  *   4. Restore the filesystem through staging plus atomic publication: the tree
  *      is materialised in a staging directory and published to the tenant root
  *      with a single atomic rename, preserving safe file modes.
@@ -27,7 +27,9 @@
 
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { sql } from 'drizzle-orm';
 import type { Database } from './client';
+import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import {
   filesDir,
   MalformedArchiveError,
@@ -142,6 +144,13 @@ async function restoreDatabase(
   const insertOrder = buildTenantInsertOrder();
   const archivedByName = new Map(manifest.database.tables.map((table) => [table.name, table]));
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    // The portability FK migration leaves normal transactions initially
+    // immediate. Only the import transaction opts into commit-time checking so
+    // complete, valid cycles can be inserted atomically and invalid archives
+    // still roll the whole tenant restore back at commit.
+    if (isPostgresDatabase(db)) {
+      await executeRaw(scoped, sql`SET CONSTRAINTS ALL DEFERRED`);
+    }
     let inserted = 0;
     for (const table of insertOrder) {
       const archived = archivedByName.get(table.name);

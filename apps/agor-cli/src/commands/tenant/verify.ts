@@ -19,7 +19,7 @@ import chalk from 'chalk';
 import {
   EXIT_FAILURE,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   resolveTenantFilesystem,
   writeStdoutJson,
 } from '../../lib/tenant-portability.js';
@@ -89,7 +89,7 @@ export default class TenantVerify extends Command {
       await flushStderr();
       process.exit(EXIT_MISMATCH);
     } catch (error) {
-      this.logToStderr(chalk.red(`✗ ${portabilityErrorMessage(error)}`));
+      this.logToStderr(formatPortabilityError(error));
       if (error instanceof MalformedArchiveError) {
         this.logToStderr(chalk.dim('  The archive could not be read or is malformed.'));
       }

@@ -33,8 +33,39 @@ snapshotting, or mounting the archive directory is your deployment's concern.
   untouched.
 
 Every command runs non-interactively, prints a single stable JSON object to
-stdout for automation, writes human-readable audit lines to stderr, redacts
-connection-string credentials, and **never prints row or file contents**.
+stdout for automation, and writes human-readable audit lines to stderr. Failure
+causes are reduced to a bounded JSON marker rather than printed as free-form
+error text, and row or file contents are **never printed**.
+
+### Machine-readable failures
+
+Every caught command failure writes one JSON line to stderr with this versioned
+shape (the PostgreSQL fields are optional):
+
+```json
+{
+  "marker": "agor.tenant-portability.error",
+  "version": 1,
+  "category": "database_constraint",
+  "sqlstate": "23503",
+  "constraint": "branches_board_id_boards_board_id_fk",
+  "table": "branches",
+  "column": "board_id"
+}
+```
+
+Strict consumers should parse stderr one line at a time and accept only an
+object whose `marker` and `version` match exactly. `category` is one of
+`archive_invalid`, `catalog_invariant`, `database_constraint`, `database_error`,
+`filesystem_deletion_pending`, `filesystem_error`, `invalid_input`, `unknown`,
+`unsafe_archive_path`, `unsupported_runtime`, `verification_failed`, or
+`write_gate`. `sqlstate` is present only for a validated five-character
+SQLSTATE; `constraint`, `table`, and `column` are present only for bounded,
+validated PostgreSQL identifiers. The marker never includes an exception
+message, query text, parameters, row data, PostgreSQL detail/hint text,
+filesystem paths, arbitrary cause strings, or credentials. Existing stdout
+success and deletion-recovery objects, flags, exit codes, and audit lines remain
+separate from this marker.
 
 ## Commands
 
@@ -82,7 +113,11 @@ mutation**: its hashes are re-checked, and the live database's migration ledger
 and tenant-table identity must match the archive exactly. The database is
 restored inside a single transaction (atomic commit or rollback); the filesystem
 tree is materialised in a staging directory and published to the tenant root with
-a single atomic rename.
+a single atomic rename. PostgreSQL foreign keys between movable tenant tables are
+initially immediate for normal application transactions, but the import
+transaction defers them until commit so valid mutually-referencing rows can be
+restored atomically. An invalid reference fails the commit and rolls back every
+insert from the import.
 
 ```bash
 agor tenant import --archive /path/to/archive

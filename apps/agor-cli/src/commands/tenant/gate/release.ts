@@ -20,7 +20,7 @@ import {
   EXIT_FAILURE,
   EXIT_INVALID_INPUT,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   writeStdoutJson,
 } from '../../../lib/tenant-portability.js';
 
@@ -57,7 +57,7 @@ export default class TenantGateRelease extends Command {
       assertValidTenantId(tenantId);
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
-        this.logToStderr(chalk.red(`✗ ${error.message}`));
+        this.logToStderr(formatPortabilityError(error));
         await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
@@ -79,12 +79,10 @@ export default class TenantGateRelease extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      this.logToStderr(chalk.red(`✗ ${portabilityErrorMessage(error)}`));
+      this.logToStderr(formatPortabilityError(error));
       if (error instanceof TenantWriteGateGenerationError) {
         this.logToStderr(
-          chalk.dim(
-            `  Live generation ${error.actual ?? '(none)'} does not match; use --force to override.`
-          )
+          chalk.dim('  The live generation does not match; use --force to override.')
         );
         await flushStderr();
         process.exit(EXIT_GENERATION_MISMATCH);

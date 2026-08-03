@@ -18,7 +18,7 @@ import {
   EXIT_FAILURE,
   EXIT_INVALID_INPUT,
   flushStderr,
-  portabilityErrorMessage,
+  formatPortabilityError,
   resolveTenantFilesystem,
   writeStdoutJson,
 } from '../../lib/tenant-portability.js';
@@ -53,7 +53,7 @@ export default class TenantInspect extends Command {
       assertValidTenantId(tenantId);
     } catch (error) {
       if (error instanceof InvalidTenantIdError) {
-        this.logToStderr(chalk.red(`✗ ${error.message}`));
+        this.logToStderr(formatPortabilityError(error));
         await flushStderr();
         process.exit(EXIT_INVALID_INPUT);
       }
@@ -84,7 +84,7 @@ export default class TenantInspect extends Command {
       await flushStderr();
       process.exit(0);
     } catch (error) {
-      this.logToStderr(chalk.red(`✗ ${portabilityErrorMessage(error)}`));
+      this.logToStderr(formatPortabilityError(error));
       if (error instanceof TenantPortabilityUnsupportedError) {
         this.logToStderr(
           chalk.dim(
