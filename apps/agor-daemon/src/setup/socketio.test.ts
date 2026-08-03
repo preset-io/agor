@@ -169,12 +169,13 @@ function makeIO(): FakeIO {
 
 function makeApp(): Application {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
-  // app.on('login'), and app.emit for the terminal:ready/error relay. Tests
-  // don't exercise the login event path.
+  // app.on('login'), and app.emit for the terminal:ready/error relay.
+  const eventHandlers = new Map<string, (...args: any[]) => void>();
   return {
     service: () => ({ get: async () => ({ user_id: 'u' }) }),
-    on: () => {},
+    on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
+    eventHandlers,
   } as any;
 }
 
@@ -283,6 +284,71 @@ describe('Socket.IO transport ceiling', () => {
     expect(config.serverOptions).toMatchObject({
       maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     });
+  });
+});
+
+describe('Socket.IO lifecycle logging', () => {
+  let debugSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    debugSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs post-connect authentication once at info with only the short user ID', () => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('alice-sock');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE, email: 'alice@example.com' } },
+      { connection }
+    );
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+  });
+
+  it.each(['transport close', 'client namespace disconnect'])(
+    'demotes benign disconnect reason %s below info',
+    (reason) => {
+      const { io } = buildHarness();
+      const socket = makeSocket('browser-sock');
+      connect(io, socket);
+
+      socket.handlers.get('disconnect')?.(reason);
+
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining(`reason: ${reason}`));
+    }
+  );
+
+  it('warns on transport errors while retaining ping timeouts at info', () => {
+    const { io } = buildHarness();
+    const transportErrorSocket = makeSocket('transport-error');
+    const pingTimeoutSocket = makeSocket('ping-timeout');
+    connect(io, transportErrorSocket);
+    connect(io, pingTimeoutSocket);
+
+    transportErrorSocket.handlers.get('disconnect')?.('transport error');
+    pingTimeoutSocket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
   });
 });
 

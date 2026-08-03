@@ -342,9 +342,8 @@ export function createSocketIOConfig(
     // Store Socket.io server instance for shutdown
     socketServer = io;
 
-    // Track active connections for debugging
+    // Track active connections for periodic operational metrics.
     let activeConnections = 0;
-    let lastLoggedCount = 0;
 
     // SECURITY: Add authentication middleware for WebSocket connections
     io.use(async (socket, next) => {
@@ -363,7 +362,6 @@ export function createSocketIOConfig(
           // enforce authentication on every protected endpoint, so an
           // unauthenticated socket can't read or write anything until it
           // authenticates.
-          console.log(`🔓 WebSocket connection without auth (for login flow): ${socket.id}`);
           return next();
         }
 
@@ -465,8 +463,8 @@ export function createSocketIOConfig(
     io.on('connection', (socket) => {
       activeConnections++;
       const user = (socket as FeathersSocket).feathers?.user;
-      console.log(
-        `🔌 Socket.io connection established: ${socket.id} (user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
+      console.debug(
+        `🔌 Socket.io connection established: ${socket.id} (auth: ${user ? 'handshake' : 'anonymous'}, user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
       );
 
       // Welcome event: ship the daemon's build identity so UI tabs can spot
@@ -493,15 +491,6 @@ export function createSocketIOConfig(
           `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
         );
       }
-
-      // Log connection lifespan after 5 seconds to identify long-lived connections
-      setTimeout(() => {
-        if (socket.connected) {
-          console.log(
-            `⏱️  Socket ${socket.id} still connected after 5s (likely persistent connection)`
-          );
-        }
-      }, 5000);
 
       // Helper to get user ID from socket's Feathers connection
       const getUserId = () => {
@@ -874,9 +863,15 @@ export function createSocketIOConfig(
       // Track disconnections
       socket.on('disconnect', (reason) => {
         activeConnections--;
-        console.log(
-          `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`
-        );
+        const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;
+        if (reason === 'transport error') {
+          console.warn(message);
+        } else if (reason === 'transport close' || reason === 'client namespace disconnect') {
+          console.debug(message);
+        } else {
+          // Keep ping timeouts (and unexpected/rare reasons) visible at info.
+          console.log(message);
+        }
       });
 
       // Handle socket errors
@@ -895,29 +890,28 @@ export function createSocketIOConfig(
       const result = authResult as { user?: { user_id?: string } };
       const userId = result.user?.user_id;
       if (!userId) return;
-      // Terminal-executor identities get no user room (see connection handler).
-      if (isTerminalExecutorIdentity(result.user)) return;
 
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          socket.join(userRoomName(userId));
-          console.debug(
-            `🏠 Socket ${socket.id} joined user room after login: user:${shortId(userId)}`
-          );
+          console.log(`socket authenticated: ${socket.id} user:${shortId(userId)}`);
+          // Terminal-executor identities get no user room (see connection handler).
+          if (!isTerminalExecutorIdentity(result.user)) {
+            socket.join(userRoomName(userId));
+          }
           break;
         }
       }
     });
 
-    // Log connection metrics only when count changes (every 30 seconds)
-    // FIX: Store interval handle to prevent memory leak
-    const metricsInterval = setInterval(() => {
-      if (activeConnections !== lastLoggedCount) {
-        console.log(`📊 Active WebSocket connections: ${activeConnections}`);
-        lastLoggedCount = activeConnections;
-      }
-    }, 30000);
+    // Emit a fixed-key gauge on a steady cadence so log collectors can parse it
+    // and periods with no connection churn remain observable.
+    const metricsInterval = setInterval(
+      () => {
+        console.log(`ws_active_connections=${activeConnections}`);
+      },
+      5 * 60 * 1000
+    );
 
     // Ensure interval is cleared on shutdown
     process.once('beforeExit', () => clearInterval(metricsInterval));
@@ -965,8 +959,6 @@ export function configureChannels(
         authentication?: { payload?: unknown };
         task_id?: string;
       };
-      console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
-
       // Authentication can be replaced on an already-open socket. Remove any
       // prior executor capability before considering the new signed claims, so
       // a socket can never accumulate control rooms across Tasks.
