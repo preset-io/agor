@@ -6,4 +6,4 @@
 # creates a non-superuser application role for the daemon/CLI to use.
 FROM pgvector/pgvector:0.8.2-pg16-trixie
 
-COPY docker/postgres-init-app-user.sql /docker-entrypoint-initdb.d/10-agor-app-user.sql
+COPY --chmod=0644 docker/postgres-init-app-user.sql /docker-entrypoint-initdb.d/10-agor-app-user.sql
