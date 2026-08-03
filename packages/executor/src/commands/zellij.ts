@@ -395,6 +395,17 @@ export async function handleZellijAttach(
       process.exit(exitCode || 0);
     });
 
+    // Daemon retires a duplicate executor: disconnect first so pty.onExit can't
+    // relay a spurious terminal:exit to the browser, then exit (no reconnect).
+    socket.on('terminal:shutdown', (data: { userId: string }) => {
+      if (data.userId !== userId) return;
+      graceController?.cancel();
+      feathersClient?.io.disconnect();
+      feathersClient = null;
+      ptyProcess?.kill();
+      process.exit(0);
+    });
+
     // Listen for input from browser via channel
     socket.on('terminal:input', (data: { userId: string; input: string }) => {
       if (data.userId === userId && ptyProcess) {

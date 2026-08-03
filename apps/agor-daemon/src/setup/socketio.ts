@@ -461,6 +461,9 @@ export function createSocketIOConfig(
       }
     });
 
+    // One input-target executor socket per user; keeps keystrokes off orphans.
+    const activeTerminalExecutorByUser = new Map<string, string>();
+
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
@@ -748,6 +751,11 @@ export function createSocketIOConfig(
         }
         console.log(`🖥️  Socket ${socket.id} joining terminal channel: ${channel}`);
         socket.join(channel);
+        if (auth.isService && auth.terminalUserId === target) {
+          const prev = activeTerminalExecutorByUser.get(target);
+          if (prev && prev !== socket.id) io.to(prev).emit('terminal:shutdown', { userId: target });
+          activeTerminalExecutorByUser.set(target, socket.id);
+        }
       });
 
       // Handle explicit channel leaves. Same scoping as join: a terminal
@@ -781,6 +789,12 @@ export function createSocketIOConfig(
         socket.leave(channel);
       });
 
+      socket.on('disconnect', () => {
+        for (const [uid, sid] of activeTerminalExecutorByUser) {
+          if (sid === socket.id) activeTerminalExecutorByUser.delete(uid);
+        }
+      });
+
       // Route terminal output from executor to browser.
       // Executor emits: terminal:output { userId, data } → broadcast to channel
       // ONLY service sockets may emit this — otherwise a member could spoof
@@ -812,7 +826,8 @@ export function createSocketIOConfig(
         // never see attacker-controlled strings even if the check above is
         // ever weakened.
         const channel = `user/${userId}/terminal`;
-        io.to(channel).emit('terminal:input', { userId, input: data.input });
+        const executor = activeTerminalExecutorByUser.get(userId);
+        io.to(executor ?? channel).emit('terminal:input', { userId, input: data.input });
       });
 
       // Route terminal resize events. Same auth model as terminal:input —
@@ -823,7 +838,12 @@ export function createSocketIOConfig(
         const userId = requireUserForOwnUserId('terminal:resize', data?.userId);
         if (!userId) return;
         const channel = `user/${userId}/terminal`;
-        io.to(channel).emit('terminal:resize', { userId, cols: data.cols, rows: data.rows });
+        const executor = activeTerminalExecutorByUser.get(userId);
+        io.to(executor ?? channel).emit('terminal:resize', {
+          userId,
+          cols: data.cols,
+          rows: data.rows,
+        });
       });
 
       // Route terminal tab commands. The daemon emits this server-side via
