@@ -26,6 +26,7 @@ import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
 import { insert, isPostgresDatabase, isSQLiteDatabase, select } from './database-wrapper';
+import { type SanitizedDbError, sanitizeDbError, sanitizeDbErrorMessage } from './sanitize-error';
 import { boards } from './schema';
 import { getCurrentTenantId } from './tenant-scope';
 
@@ -33,12 +34,12 @@ import { getCurrentTenantId } from './tenant-scope';
  * Error thrown when migration fails
  */
 export class MigrationError extends Error {
-  constructor(
-    message: string,
-    public readonly cause?: unknown
-  ) {
-    super(message);
+  public readonly cause?: SanitizedDbError;
+
+  constructor(message: string, cause?: unknown) {
+    super(sanitizeDbErrorMessage(message));
     this.name = 'MigrationError';
+    this.cause = cause === undefined ? undefined : sanitizeDbError(cause);
   }
 }
 
@@ -280,26 +281,7 @@ export async function runMigrations(db: Database): Promise<void> {
 
     console.log('✅ Migrations complete');
   } catch (error) {
-    console.error('❌ Migration error details:');
-    console.error('  Error type:', error?.constructor?.name);
-    console.error('  Error message:', error instanceof Error ? error.message : String(error));
-    console.error('  Error stack:', error instanceof Error ? error.stack : 'N/A');
-    if (error && typeof error === 'object') {
-      console.error('  Error keys:', Object.keys(error));
-      // Check for cause (nested error)
-      if ('cause' in error) {
-        console.error('  Cause error:', error.cause);
-        if (error.cause && typeof error.cause === 'object') {
-          console.error('  Cause type:', error.cause.constructor?.name);
-          console.error(
-            '  Cause message:',
-            error.cause instanceof Error ? error.cause.message : String(error.cause)
-          );
-          console.error('  Cause keys:', Object.keys(error.cause));
-        }
-      }
-      console.error('  Full error object:', JSON.stringify(error, null, 2));
-    }
+    console.error('❌ Migration failed:', sanitizeDbError(error));
     throw new MigrationError(
       `Migration failed: ${error instanceof Error ? error.message : String(error)}`,
       error

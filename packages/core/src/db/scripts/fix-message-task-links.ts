@@ -11,6 +11,7 @@ import { createClient } from '@libsql/client';
 import { and, count, eq, gte, isNull, lte } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { shortId } from '../../lib/ids';
+import { sanitizeDbError } from '../sanitize-error';
 import { messages, tasks } from '../schema';
 
 const AGOR_DB_PATH = process.env.AGOR_DB_PATH || resolve(homedir(), '.agor/agor.db');
@@ -102,6 +103,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('❌ Error:', error);
+  console.error('❌ Error:', sanitizeDbError(error));
   process.exit(1);
 });

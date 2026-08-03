@@ -47,6 +47,7 @@ export * from './migrate';
 export * from './pending-migrations';
 // Repositories
 export * from './repositories';
+export * from './sanitize-error';
 export * from './schema';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';

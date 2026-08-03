@@ -7,6 +7,7 @@
 
 import { isValidUUID } from '../../lib/ids';
 import { prefixToLikePattern } from '../../types/id';
+import { type SanitizedDbError, sanitizeDbError, sanitizeDbErrorMessage } from '../sanitize-error';
 import { getCurrentTenantId } from '../tenant-context';
 
 /**
@@ -43,12 +44,12 @@ export interface BaseRepository<T, TInsert = T> {
  * Base repository error
  */
 export class RepositoryError extends Error {
-  constructor(
-    message: string,
-    public readonly cause?: unknown
-  ) {
-    super(message);
+  public readonly cause?: SanitizedDbError;
+
+  constructor(message: string, cause?: unknown) {
+    super(sanitizeDbErrorMessage(message));
     this.name = 'RepositoryError';
+    this.cause = cause === undefined ? undefined : sanitizeDbError(cause);
   }
 }
 

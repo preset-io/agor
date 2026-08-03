@@ -24,6 +24,7 @@ import {
   SessionRepository,
   TaskRepository,
 } from '../repositories';
+import { sanitizeDbError } from '../sanitize-error';
 
 // Test database path
 const TEST_DB_PATH = 'file:/tmp/agor-test.db';
@@ -376,11 +377,7 @@ async function main() {
 
     process.exit(0);
   } catch (error) {
-    console.error('\n❌ Test failed:', error instanceof Error ? error.message : String(error));
-    if (error instanceof Error && error.stack) {
-      console.error('\nStack trace:');
-      console.error(error.stack);
-    }
+    console.error('\n❌ Test failed:', sanitizeDbError(error));
     process.exit(1);
   }
 }
