@@ -16,10 +16,23 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
   }) as MCPServer;
 
 describe('getMcpServersForSession', () => {
-  it('uses session-scoped effective config retrieval when available', async () => {
+  it('does not automatically grant catalog-global servers to a session', async () => {
     const globalServer = makeServer('global-server', 'global');
+    const findAll = vi.fn().mockResolvedValue([globalServer]);
+    const listServers = vi.fn().mockResolvedValue([]);
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll } as never,
+      sessionMCPRepo: { listServers } as never,
+    });
+
+    expect(findAll).not.toHaveBeenCalled();
+    expect(servers).toEqual([]);
+  });
+
+  it('uses session-scoped effective config retrieval when available', async () => {
     const sessionServer = makeServer('session-server', 'session');
-    const listEffectiveServers = vi.fn().mockResolvedValue([globalServer, sessionServer]);
+    const listEffectiveServers = vi.fn().mockResolvedValue([sessionServer]);
     const findAll = vi.fn();
     const listServers = vi.fn();
 
@@ -32,10 +45,7 @@ describe('getMcpServersForSession', () => {
     expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true, 'user-a');
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
-    expect(servers).toEqual([
-      { server: globalServer, source: 'global' },
-      { server: sessionServer, source: 'session-assigned' },
-    ]);
+    expect(servers).toEqual([{ server: sessionServer, source: 'session-assigned' }]);
   });
 
   it('returns deterministic effective ordering', async () => {

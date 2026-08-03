@@ -204,7 +204,7 @@ export class FeathersSessionMCPServersRepository {
   }
 
   /**
-   * List the effective MCP servers for a session (global + session-assigned).
+   * List MCP servers explicitly granted to a session.
    * Executors use the session-scoped route so session-token callers can receive
    * the raw config needed to launch only their own session's MCP servers.
    */
@@ -214,7 +214,7 @@ export class FeathersSessionMCPServersRepository {
     forUserId?: string
   ): Promise<MCPServer[]> {
     const service = this.client.service(`/sessions/${sessionId}/mcp-servers`);
-    const query: Record<string, unknown> = { includeGlobal: true };
+    const query: Record<string, unknown> = {};
 
     if (enabledOnly) {
       query.enabledOnly = true;

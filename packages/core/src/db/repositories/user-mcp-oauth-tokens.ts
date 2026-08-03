@@ -279,6 +279,22 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
+  /** Inventory instance-shared grants. Callers must enforce tenant-admin policy. */
+  async listShared(): Promise<UserMCPOAuthToken[]> {
+    try {
+      const rows = await select(this.db)
+        .from(userMcpOauthTokens)
+        .where(isNull(userMcpOauthTokens.user_id))
+        .all();
+      return rows.map(rowToToken);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list shared OAuth tokens: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   async hasValidToken(userId: UserID | null, serverId: MCPServerID): Promise<boolean> {
     const token = await this.getValidToken(userId, serverId);
     return token !== undefined;
