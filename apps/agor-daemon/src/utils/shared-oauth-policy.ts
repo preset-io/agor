@@ -28,5 +28,5 @@ export function auditSharedOAuthLifecycle(input: {
   tenantId?: string;
 }): void {
   // Deliberately structured and secret-free for operator log ingestion.
-  console.info('[SECURITY] shared_oauth_lifecycle', JSON.stringify(input));
+  console.info('[SECURITY] shared_oauth_lifecycle', input);
 }

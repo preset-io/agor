@@ -54,7 +54,8 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
     expect(authHeadersBlock).toContain('trusted executor paths');
     expect(authHeadersBlock).toContain('shouldExposeMCPServerSecretsForSessionToken');
     expect(authHeadersBlock).toContain('SessionMCPServerRepository');
-    expect(authHeadersBlock).toContain("scope: 'global'");
+    expect(authHeadersBlock).not.toContain("scope: 'global'");
+    expect(authHeadersBlock).toContain('attachedServers.map');
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
   });

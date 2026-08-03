@@ -1239,6 +1239,8 @@ async function registerMCPServices(
     tokenUrlOverride?: string;
     scope?: string;
     socketId?: string;
+    /** Authenticated initiator. Required for every externally initiated shared grant. */
+    actorParams?: AuthenticatedParams;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -1270,6 +1272,9 @@ async function registerMCPServices(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
+    if (opts.oauthMode === 'shared') {
+      requireSharedOAuthAdministrator(opts.actorParams, 'start');
+    }
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
@@ -1344,6 +1349,15 @@ async function registerMCPServices(
       tokenResolve,
       tokenReject,
     });
+    if (opts.oauthMode === 'shared') {
+      auditSharedOAuthLifecycle({
+        action: 'start',
+        outcome: 'started',
+        serverId: opts.mcpServerId,
+        actorUserId: opts.userId,
+        tenantId: opts.tenantId,
+      });
+    }
 
     if (app.io) {
       const payload = { authUrl: context.authorizationUrl };
@@ -1425,6 +1439,15 @@ async function registerMCPServices(
         // caller (discover / test-oauth) can surface the failure.
         if (state) {
           const pending = pendingOAuthFlows.get(state);
+          if (pending?.oauthMode === 'shared') {
+            auditSharedOAuthLifecycle({
+              action: 'complete',
+              outcome: 'failed',
+              serverId: pending.mcpServerId,
+              actorUserId: pending.userId,
+              tenantId: pending.tenantId,
+            });
+          }
           pending?.tokenReject?.(new Error(`Authorization failed: ${errorDescription}`));
           pendingOAuthFlows.delete(state);
         }
@@ -1461,6 +1484,15 @@ async function registerMCPServices(
         pendingOAuthFlows.delete(state);
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
+        if (pendingFlow.oauthMode === 'shared') {
+          auditSharedOAuthLifecycle({
+            action: 'complete',
+            outcome: 'succeeded',
+            serverId: pendingFlow.mcpServerId,
+            actorUserId: pendingFlow.userId,
+            tenantId: pendingFlow.tenantId,
+          });
+        }
 
         if (app.io) {
           const oauthEvent = {
@@ -1509,6 +1541,15 @@ async function registerMCPServices(
         pendingFlow.tokenReject?.(
           innerErr instanceof Error ? innerErr : new Error(String(innerErr))
         );
+        if (pendingFlow.oauthMode === 'shared') {
+          auditSharedOAuthLifecycle({
+            action: 'complete',
+            outcome: 'failed',
+            serverId: pendingFlow.mcpServerId,
+            actorUserId: pendingFlow.userId,
+            tenantId: pendingFlow.tenantId,
+          });
+        }
         throw innerErr;
       }
     } catch (err) {
@@ -1716,6 +1757,7 @@ async function registerMCPServices(
                   clientId: data.client_id,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
+                  actorParams: params as AuthenticatedParams | undefined,
                 });
               } catch (err) {
                 if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -1991,17 +2033,6 @@ async function registerMCPServices(
             scopeOverride = server.auth.oauth_scope;
           }
         }
-        if (oauthMode === 'shared') {
-          requireSharedOAuthAdministrator(params, 'start');
-          auditSharedOAuthLifecycle({
-            action: 'start',
-            outcome: 'started',
-            serverId: data.mcp_server_id,
-            actorUserId: userId,
-            tenantId,
-          });
-        }
-
         let probeResponse = await fetch(data.mcp_url, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -2061,6 +2092,7 @@ async function registerMCPServices(
             scope: scopeOverride,
             tenantId,
             socketId,
+            actorParams: params,
           });
         } catch (err) {
           if (err instanceof PublicBaseUrlNotConfiguredError) {
@@ -2092,6 +2124,7 @@ async function registerMCPServices(
       data: { callback_url: string } | { code: string; state: string },
       params?: AuthenticatedParams
     ) {
+      let sharedFlowForAudit: PendingOAuthFlow | undefined;
       try {
         const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
@@ -2113,6 +2146,7 @@ async function registerMCPServices(
             success: false,
             error: 'OAuth flow expired or not found. Please start the flow again.',
           };
+        if (pendingFlow.oauthMode === 'shared') sharedFlowForAudit = pendingFlow;
 
         if (pendingFlow.oauthMode === 'shared') {
           requireSharedOAuthAdministrator(params, 'complete');
@@ -2123,15 +2157,18 @@ async function registerMCPServices(
           throw new Forbidden('OAuth flow belongs to a different user');
         }
 
-        const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
-        pendingOAuthFlows.delete(state);
-
         const activeTenantId = getCurrentTenantId();
-        if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
+        if (
+          (isPostgresDatabase(db) && (!pendingFlow.tenantId || !activeTenantId)) ||
+          (pendingFlow.tenantId !== activeTenantId && !!(pendingFlow.tenantId || activeTenantId))
+        ) {
           throw new Error(
-            'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+            'OAuth flow tenant context is missing or does not match. Please restart the OAuth flow.'
           );
         }
+
+        const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
+        pendingOAuthFlows.delete(state);
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         if (pendingFlow.oauthMode === 'shared') {
@@ -2145,6 +2182,15 @@ async function registerMCPServices(
         }
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
+        if (sharedFlowForAudit) {
+          auditSharedOAuthLifecycle({
+            action: 'complete',
+            outcome: 'failed',
+            serverId: sharedFlowForAudit.mcpServerId,
+            actorUserId: params?.user?.user_id,
+            tenantId: sharedFlowForAudit.tenantId,
+          });
+        }
         console.error('[OAuth Complete] Error:', error);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
@@ -2432,6 +2478,7 @@ async function registerMCPServices(
         MissingClientIdError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
+      let sharedRefresh = false;
       try {
         const server = await mcpServerRepo.findById(serverId);
         if (!server) return { success: false, error: 'server_not_found' };
@@ -2439,6 +2486,7 @@ async function registerMCPServices(
 
         const mode = server.auth.oauth_mode ?? 'per_user';
         if (mode === 'shared') {
+          sharedRefresh = true;
           requireSharedOAuthAdministrator(params, 'refresh');
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
@@ -2466,6 +2514,15 @@ async function registerMCPServices(
         }
         return { success: true, expires_at: expiresAt };
       } catch (err) {
+        if (sharedRefresh) {
+          auditSharedOAuthLifecycle({
+            action: 'refresh',
+            outcome: 'failed',
+            serverId,
+            actorUserId: userId,
+            tenantId: tenantIdFromParams(params),
+          });
+        }
         if (err instanceof InvalidGrantError || err instanceof MissingRefreshTokenError) {
           return { success: false, error: 'needs_reauth' };
         }
@@ -2740,6 +2797,7 @@ async function registerMCPServices(
               oauthMode: 'shared',
               tenantId: tenantIdFromParams(params),
               socketId: connection?.id,
+              actorParams: params,
             });
 
             const tokenResponse = await started.awaitToken();
