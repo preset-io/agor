@@ -157,7 +157,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
               {board ? (
                 <Descriptions size="small" column={1} bordered style={{ width: '100%' }}>
                   <Descriptions.Item label="Visibility">
-                    {board.access_mode === 'private' ? 'Private' : 'Shared'}
+                    {board.access_mode === 'private' ? 'Private' : 'Public'}
                   </Descriptions.Item>
                   <Descriptions.Item label="Owners">
                     {boardDefaultsLoading

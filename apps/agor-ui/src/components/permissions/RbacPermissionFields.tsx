@@ -155,7 +155,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           onChange={(e) => handleVisibilityChange(e.target.value)}
           options={[
             { value: 'private', label: privateOwnerLabel },
-            { value: 'shared', label: 'Shared' },
+            { value: 'shared', label: 'Public' },
           ]}
         />
       </Form.Item>
