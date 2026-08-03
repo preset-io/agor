@@ -3,6 +3,8 @@
  * Respects LOG_LEVEL env var (debug/info/warn/error).
  */
 
+import { format } from 'node:util';
+
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 interface ConsoleWithOriginals extends Console {
@@ -20,6 +22,13 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   info: 1,
   warn: 2,
   error: 3,
+};
+
+const JOURNAL_PRIORITIES: Record<LogLevel, string> = {
+  debug: '<7>',
+  info: '<6>',
+  warn: '<4>',
+  error: '<3>',
 };
 
 export function getCurrentLogLevel(): LogLevel {
@@ -44,6 +53,19 @@ function shouldLog(level: LogLevel): boolean {
   return LOG_LEVELS[level] >= LOG_LEVELS[currentLevel];
 }
 
+function write(original: (...args: unknown[]) => void, level: LogLevel, args: unknown[]) {
+  if (!shouldLog(level)) return;
+  if (!process.env.JOURNAL_STREAM) {
+    original(...args);
+    return;
+  }
+
+  // Format the complete console call first so embedded newlines in any
+  // argument (notably Error stacks and object dumps) are all classified.
+  const priority = JOURNAL_PRIORITIES[level];
+  original(format(...args).replace(/^/gm, priority));
+}
+
 export function patchConsole() {
   const originalDebug = console.debug;
   const originalLog = console.log;
@@ -52,23 +74,23 @@ export function patchConsole() {
   const originalError = console.error;
 
   console.debug = (...args: unknown[]) => {
-    if (shouldLog('debug')) originalDebug(...args);
+    write(originalDebug, 'debug', args);
   };
 
   console.log = (...args: unknown[]) => {
-    if (shouldLog('info')) originalLog(...args);
+    write(originalLog, 'info', args);
   };
 
   console.info = (...args: unknown[]) => {
-    if (shouldLog('info')) originalInfo(...args);
+    write(originalInfo, 'info', args);
   };
 
   console.warn = (...args: unknown[]) => {
-    if (shouldLog('warn')) originalWarn(...args);
+    write(originalWarn, 'warn', args);
   };
 
   console.error = (...args: unknown[]) => {
-    if (shouldLog('error')) originalError(...args);
+    write(originalError, 'error', args);
   };
 
   (console as ConsoleWithOriginals).__originalMethods = {
