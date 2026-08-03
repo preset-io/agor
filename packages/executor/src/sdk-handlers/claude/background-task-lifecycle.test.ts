@@ -29,29 +29,27 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(lifecycle.activeTaskCount).toBe(0);
   });
 
-  it.each([
-    'completed',
-    'failed',
-    'stopped',
-  ] as const)('allows a terminal continuation after a %s task notification', (status) => {
-    const lifecycle = new ClaudeBackgroundTaskLifecycle();
-    lifecycle.observe(started('agent-1'));
-    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
-    lifecycle.observe(settled('agent-1', status));
-    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
-  });
+  it.each(['completed', 'failed', 'stopped'] as const)(
+    'allows a terminal continuation after a %s task notification',
+    (status) => {
+      const lifecycle = new ClaudeBackgroundTaskLifecycle();
+      lifecycle.observe(started('agent-1'));
+      expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
+      lifecycle.observe(settled('agent-1', status));
+      expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+    }
+  );
 
-  it.each([
-    'completed',
-    'failed',
-    'stopped',
-  ] as const)('settles a task from a terminal task_updated patch when no notification follows (%s)', (status) => {
-    const lifecycle = new ClaudeBackgroundTaskLifecycle();
-    lifecycle.observe(started('bash-1'));
-    expect(lifecycle.observe(updated('bash-1', status)).taskTransition).toBe('settled');
-    expect(lifecycle.activeTaskCount).toBe(0);
-    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
-  });
+  it.each(['completed', 'failed', 'stopped'] as const)(
+    'settles a task from a terminal task_updated patch when no notification follows (%s)',
+    (status) => {
+      const lifecycle = new ClaudeBackgroundTaskLifecycle();
+      lifecycle.observe(started('bash-1'));
+      expect(lifecycle.observe(updated('bash-1', status)).taskTransition).toBe('settled');
+      expect(lifecycle.activeTaskCount).toBe(0);
+      expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+    }
+  );
 
   it('deduplicates task_updated followed by task_notification and ignores non-terminal patches', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();

@@ -223,21 +223,17 @@ describe('loadConfig', () => {
     );
   });
 
-  it.each([
-    'resources',
-    'services',
-    'credentials',
-    'opencode',
-    'codex',
-    'knowledge',
-  ])('rejects the removed %s config surface', async (key) => {
-    const agorDir = path.join(tempDir, '.agor');
-    const configPath = path.join(agorDir, 'config.yaml');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
+  it.each(['resources', 'services', 'credentials', 'opencode', 'codex', 'knowledge'])(
+    'rejects the removed %s config surface',
+    async (key) => {
+      const agorDir = path.join(tempDir, '.agor');
+      const configPath = path.join(agorDir, 'config.yaml');
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
 
-    await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
-  });
+      await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
+    }
+  );
 
   it('rejects the removed execution.cursor_sdk_enabled flag', async () => {
     const agorDir = path.join(tempDir, '.agor');

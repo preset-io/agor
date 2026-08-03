@@ -71,32 +71,31 @@ describe('FileService executor failures', () => {
         },
       },
     },
-  ])('passes the resolved execution-substrate identity through file $operation', async ({
-    invoke,
-    command,
-    data,
-  }) => {
-    impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue('alice');
-    vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
-    const service = new FileService(
-      { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-      null as never,
-      { settings: { authentication: { secret: 'test' } } } as never
-    );
-    const params = {
-      query: { branch_id: 'branch-1' },
-      user: {
-        user_id: 'user-1',
-        email: 'member@example.com',
-        role: 'member' as const,
-      },
-    };
+  ])(
+    'passes the resolved execution-substrate identity through file $operation',
+    async ({ invoke, command, data }) => {
+      impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue('alice');
+      vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
+      const service = new FileService(
+        { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
+        null as never,
+        { settings: { authentication: { secret: 'test' } } } as never
+      );
+      const params = {
+        query: { branch_id: 'branch-1' },
+        user: {
+          user_id: 'user-1',
+          email: 'member@example.com',
+          role: 'member' as const,
+        },
+      };
 
-    await invoke(service, params);
+      await invoke(service, params);
 
-    expect(runExecutorCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ command }),
-      expect.objectContaining({ asUser: 'alice' })
-    );
-  });
+      expect(runExecutorCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ command }),
+        expect.objectContaining({ asUser: 'alice' })
+      );
+    }
+  );
 });

@@ -708,64 +708,64 @@ describe('POST /mcp with personal API keys', () => {
       tenantHeaders: ['tenant-a', 'tenant-a'],
       errorMessage: 'Invalid trusted tenant header x-agor-tenant-id',
     },
-  ])('rejects $label duplicate on-wire trusted tenant headers before API-key lookup', async ({
-    tenantHeaders,
-    errorMessage,
-  }) => {
-    const { UserApiKeysRepository } = await import('@agor/core/db');
-    const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+  ])(
+    'rejects $label duplicate on-wire trusted tenant headers before API-key lookup',
+    async ({ tenantHeaders, errorMessage }) => {
+      const { UserApiKeysRepository } = await import('@agor/core/db');
+      const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
 
-    await withMcpServer(
-      {},
-      async (baseUrl) => {
-        const requestBody = JSON.stringify({
-          jsonrpc: '2.0',
-          id: 24,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
-        });
-        const response = await new Promise<{ status: number | undefined; body: string }>(
-          (resolve, reject) => {
-            const req = httpRequest(
-              `${baseUrl}/mcp`,
-              {
-                method: 'POST',
-                headers: {
-                  Accept: 'application/json, text/event-stream',
-                  'Content-Type': 'application/json',
-                  'Content-Length': Buffer.byteLength(requestBody),
-                  'X-API-Key': 'agor_sk_valid',
-                  'X-Agor-Tenant-Id': tenantHeaders,
+      await withMcpServer(
+        {},
+        async (baseUrl) => {
+          const requestBody = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 24,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          });
+          const response = await new Promise<{ status: number | undefined; body: string }>(
+            (resolve, reject) => {
+              const req = httpRequest(
+                `${baseUrl}/mcp`,
+                {
+                  method: 'POST',
+                  headers: {
+                    Accept: 'application/json, text/event-stream',
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(requestBody),
+                    'X-API-Key': 'agor_sk_valid',
+                    'X-Agor-Tenant-Id': tenantHeaders,
+                  },
                 },
-              },
-              (res) => {
-                let body = '';
-                res.setEncoding('utf8');
-                res.on('data', (chunk: string) => {
-                  body += chunk;
-                });
-                res.on('end', () => resolve({ status: res.statusCode, body }));
-              }
-            );
-            req.on('error', reject);
-            req.end(requestBody);
-          }
-        );
+                (res) => {
+                  let body = '';
+                  res.setEncoding('utf8');
+                  res.on('data', (chunk: string) => {
+                    body += chunk;
+                  });
+                  res.on('end', () => resolve({ status: res.statusCode, body }));
+                }
+              );
+              req.on('error', reject);
+              req.end(requestBody);
+            }
+          );
 
-        expect(response.status, response.body).toBe(401);
-        expect(JSON.parse(response.body)).toMatchObject({
-          error: { message: errorMessage },
-        });
-        expect(verifyKey).not.toHaveBeenCalled();
-      },
-      {
-        multi_tenancy: {
-          mode: 'required_from_auth',
-          trusted_header: 'x-agor-tenant-id',
+          expect(response.status, response.body).toBe(401);
+          expect(JSON.parse(response.body)).toMatchObject({
+            error: { message: errorMessage },
+          });
+          expect(verifyKey).not.toHaveBeenCalled();
         },
-      }
-    );
-  });
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        }
+      );
+    }
+  );
 
   it('accepts a valid personal API key session context from ?sessionId=', async () => {
     await mockPersonalApiKeyUser();
