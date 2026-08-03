@@ -73,13 +73,15 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
-import { assertOperatorUnixHandoff } from '../utils/operator-unix-capability.js';
+import {
+  assertOperatorUnixHandoff,
+  dispatchOperatorUnixHandoff,
+} from '../utils/operator-unix-capability.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
-  runOperatorUnixPermissionCommand,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
@@ -709,7 +711,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /** Synchronously route post-materialization access setup to the operator executor. */
-  async syncUnixPermissions(
+  async handoffBranchUnixPermissions(
     data: { branchId: string },
     params?: BranchParams
   ): Promise<{ unixGroup: string }> {
@@ -718,22 +720,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       branchId: data.branchId,
     });
     await this.get(data.branchId as BranchID, params);
-    const token = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      { command: 'unix.sync-branch', branch_id: data.branchId }
-    );
-    const result = await runOperatorUnixPermissionCommand(
-      {
-        command: 'unix.sync-branch',
-        sessionToken: token,
-        daemonUrl: getDaemonUrl(),
-        params: { branchId: data.branchId, daemonUser: loadConfigSync().daemon?.unix_user },
-      },
-      { logPrefix: `[operator/unix.sync-branch ${data.branchId}]` }
-    );
-    if (!result.success) throw new Error(result.error?.message ?? 'Operator branch sync failed');
-    const unixGroup = (result.data as { groupName?: unknown } | undefined)?.groupName;
-    if (typeof unixGroup !== 'string') throw new Error('Operator branch sync returned no group');
+    const unixGroup = await dispatchOperatorUnixHandoff({
+      app: this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      target: { command: 'unix.sync-branch', branchId: data.branchId },
+      daemonUser: loadConfigSync().daemon?.unix_user,
+    });
     return { unixGroup };
   }
 

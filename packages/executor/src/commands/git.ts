@@ -11,7 +11,7 @@
  * 1. Filesystem operations (git clone, git worktree add/remove)
  * 2. Database record creation via Feathers services
  * 3. Privileged Unix group/ACL setup is delegated to the daemon via Feathers RPC
- *    (`repos.syncUnixPermissions`, `branches.syncUnixPermissions`) which
+ *    (`repos.handoffCloneUnixPermissions`, `branches.handoffBranchUnixPermissions`) which
  *    synchronously dispatch a tenant-mounted operator executor.
  *
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
@@ -949,7 +949,7 @@ export async function handleGitClone(
       if (payload.params.initUnixGroup && repoId) {
         try {
           console.log(`[git.clone] Initializing Unix group for repo ${shortId(repoId)}`);
-          const result = await client.service('repos').syncUnixPermissions({ repoId });
+          const result = await client.service('repos').handoffCloneUnixPermissions({ repoId });
           unixGroup = result.unixGroup;
           console.log(`[git.clone] Unix group initialized: ${unixGroup}`);
         } catch (error) {
@@ -1274,7 +1274,7 @@ export async function handleGitBranchAdd(
     if (payload.params.initUnixGroup && branchId) {
       try {
         console.log(`[git.branch.add] Initializing Unix group for branch ${shortId(branchId)}`);
-        const result = await client.service('branches').syncUnixPermissions({ branchId });
+        const result = await client.service('branches').handoffBranchUnixPermissions({ branchId });
         unixGroup = result.unixGroup;
         console.log(`[git.branch.add] Unix group initialized: ${unixGroup}`);
       } catch (error) {
@@ -1398,7 +1398,7 @@ export async function handleGitBranchAdd(
       // prior attempt already created the directory.
       if (existsSync(fallbackPath) && payload.params.initUnixGroup && branchId && client) {
         try {
-          await client.service('branches').syncUnixPermissions({ branchId });
+          await client.service('branches').handoffBranchUnixPermissions({ branchId });
           console.log(`[git.branch.add] Fallback: applied Unix group permissions`);
           fallbackPermissionsApplied = true;
         } catch (permError) {

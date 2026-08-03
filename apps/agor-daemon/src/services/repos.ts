@@ -50,12 +50,14 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
-import { assertOperatorUnixHandoff } from '../utils/operator-unix-capability.js';
+import {
+  assertOperatorUnixHandoff,
+  dispatchOperatorUnixHandoff,
+} from '../utils/operator-unix-capability.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
-  runOperatorUnixPermissionCommand,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -402,7 +404,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /** Synchronously route post-clone access setup to the operator executor. */
-  async syncUnixPermissions(
+  async handoffCloneUnixPermissions(
     data: { repoId: string },
     params?: RepoParams
   ): Promise<{ unixGroup: string }> {
@@ -413,27 +415,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     await this.get(data.repoId, params);
     const gitPayload = params?.authentication?.payload as { user_id?: unknown } | undefined;
     const creatorUserId = typeof gitPayload?.user_id === 'string' ? gitPayload.user_id : undefined;
-    const token = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      { command: 'unix.sync-repo', repo_id: data.repoId, user_id: creatorUserId }
-    );
-    const result = await runOperatorUnixPermissionCommand(
-      {
-        command: 'unix.sync-repo',
-        sessionToken: token,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          repoId: data.repoId,
-          daemonUser: loadConfigSync().daemon?.unix_user,
-          initialize: true,
-          ...(creatorUserId ? { creatorUserId } : {}),
-        },
-      },
-      { logPrefix: `[operator/unix.sync-repo ${data.repoId}]` }
-    );
-    if (!result.success) throw new Error(result.error?.message ?? 'Operator repo sync failed');
-    const unixGroup = (result.data as { groupName?: unknown } | undefined)?.groupName;
-    if (typeof unixGroup !== 'string') throw new Error('Operator repo sync returned no group');
+    const unixGroup = await dispatchOperatorUnixHandoff({
+      app: this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      target: { command: 'unix.sync-repo', repoId: data.repoId, creatorUserId },
+      daemonUser: loadConfigSync().daemon?.unix_user,
+    });
     return { unixGroup };
   }
 

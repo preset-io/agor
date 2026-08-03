@@ -296,10 +296,13 @@ describe('configured executor spawning', () => {
   it('dispatches Unix permission sync through the configured operator and tenant mount', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
+    const timeoutSpy = vi.spyOn(global, 'setTimeout');
     const { runWithTenantContext } = await import('@agor/core/db');
-    const { configureExecutor, runOperatorUnixPermissionCommand } = await import(
-      './spawn-executor'
-    );
+    const {
+      configureExecutor,
+      OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS,
+      runOperatorUnixPermissionCommand,
+    } = await import('./spawn-executor');
     configureExecutor({
       executor_command_template:
         'operator-launch --tenant {tenant_id} --identity {unix_user} -- {command}',
@@ -321,6 +324,11 @@ describe('configured executor spawning', () => {
       ['-c', "operator-launch --tenant 'tenant-a' --identity agor_operator -- unix.sync-branch"],
       expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
     );
+    expect(timeoutSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS
+    );
+    timeoutSpy.mockRestore();
   });
 
   it('rejects paths, cwd, and unrelated commands at the operator capability boundary', async () => {

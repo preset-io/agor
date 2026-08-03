@@ -152,6 +152,7 @@ export interface RunExecutorCommandOptions
 }
 
 type OperatorUnixCommand = 'unix.sync-repo' | 'unix.sync-branch';
+export const OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Run a narrowly-scoped operator-runtime filesystem capability.
@@ -191,7 +192,10 @@ export function runOperatorUnixPermissionCommand(
   ) {
     throw new Error(`Invalid ${payload.command} operator capability payload`);
   }
-  return runExecutorCommand(payload, options);
+  return runExecutorCommand(payload, {
+    timeoutMs: OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS,
+    ...options,
+  });
 }
 
 /**

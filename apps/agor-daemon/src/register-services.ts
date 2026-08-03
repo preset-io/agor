@@ -386,7 +386,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'patch',
       'remove',
       'updateEnvironment',
-      'syncUnixPermissions',
+      'handoffCloneUnixPermissions',
       'ensureTeammateKnowledgeNamespace',
     ],
   });
@@ -430,7 +430,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   }
 
   app.use('/repos', createReposService(db, app), {
-    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'syncUnixPermissions'],
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'handoffBranchUnixPermissions'],
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.

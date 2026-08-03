@@ -109,7 +109,7 @@ function createClient(records: {
             return { ...(records.repo ?? {}), ...data };
           }),
           create: vi.fn(async (data: Record<string, unknown>) => data),
-          syncUnixPermissions: vi.fn(async () => ({ unixGroup: 'agor_repo_test' })),
+          handoffCloneUnixPermissions: vi.fn(async () => ({ unixGroup: 'agor_repo_test' })),
           find,
         };
       }

@@ -615,12 +615,12 @@ describe('createClient', () => {
       );
     });
 
-    it('registers repos.syncUnixPermissions custom method on client', () => {
+    it('registers repos.handoffCloneUnixPermissions custom method on client', () => {
       const client = createClient();
       const reposService = client.service('repos') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
-      expect(reposService.methods).toHaveBeenCalledWith('syncUnixPermissions');
+      expect(reposService.methods).toHaveBeenCalledWith('handoffCloneUnixPermissions');
     });
 
     it('registers branches custom methods on client', () => {
@@ -630,7 +630,7 @@ describe('createClient', () => {
       };
       expect(branchesService.methods).toHaveBeenCalledWith(
         'updateEnvironment',
-        'syncUnixPermissions',
+        'handoffBranchUnixPermissions',
         'ensureTeammateKnowledgeNamespace'
       );
     });
