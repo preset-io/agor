@@ -80,6 +80,7 @@ import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import {
   createFreshTenantWriteDatabaseRunner,
   deferWithTenantContext,
+  resolveTenantIdForDeferredScope,
 } from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
@@ -657,6 +658,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<void> {
     try {
+      // Run EVERY call here as a trusted INTERNAL daemon operation, NOT with the
+      // completing caller's identity. A task that finished via the executor
+      // carries an executor-scoped token that is (correctly) not valid for the
+      // branch/repo/sync endpoints — passing it through fails with "Executor
+      // token is not valid for this endpoint". Fresh params with only the tenant
+      // (resolved from the deferred tenant scope) and no `provider` mark it a
+      // trusted server call, the shape the daemon's other background ops use.
+      const tenantId = resolveTenantIdForDeferredScope(params);
+      const internalParams = {
+        tenant: tenantId ? { tenant_id: tenantId } : undefined,
+      } as TaskParams;
+
       const branchesService = this.app.service('branches') as unknown as {
         get: (
           id: string,
@@ -664,14 +677,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         ) => Promise<{
           repo_id: string;
           environment_variant?: string | null;
-          environment_instance?: { status?: string; tenant?: { tenant_id?: string } };
+          environment_instance?: { status?: string };
         }>;
         syncEnvironment: (id: string, p?: unknown) => Promise<unknown>;
       };
-      const branch = await branchesService.get(branchId, params);
+      const branch = await branchesService.get(branchId, internalParams);
       if (branch.environment_instance?.status !== 'running') return;
 
-      const repo = (await this.app.service('repos').get(branch.repo_id, params)) as {
+      const repo = (await this.app.service('repos').get(branch.repo_id, internalParams)) as {
         environment?: {
           default?: string;
           variants?: Record<string, { sync?: string; extends?: string }>;
@@ -685,20 +698,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const hasSync = !!(v?.sync || (v?.extends && variants[v.extends]?.sync));
       if (!hasSync) return;
 
-      // Carry an explicit tenant so the executor spawn (deferred, off the request
-      // scope) can resolve one — a fire-and-forget call has lost the ambient
-      // tenant context by the time the environment executor is dispatched.
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id ??
-        branch.environment_instance?.tenant?.tenant_id;
-      const syncParams = tenantId
-        ? ({ ...(params ?? {}), tenant: { tenant_id: tenantId } } as TaskParams)
-        : params;
-
       console.log(
         `🔄 [TasksService] Auto-syncing remote environment for branch ${shortId(branchId)} after task completion`
       );
-      await branchesService.syncEnvironment(branchId, syncParams);
+      await branchesService.syncEnvironment(branchId, internalParams);
     } catch (err) {
       console.warn(
         `⚠️  [TasksService] Auto-sync after task failed for branch ${shortId(branchId)}: ${
