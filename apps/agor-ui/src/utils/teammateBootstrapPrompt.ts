@@ -10,6 +10,10 @@ export interface TeammateBootstrapPromptInput {
   persona?: string | null;
   /** Persona-tailored MCP integration names surfaced in the onboarding wizard. */
   suggestedIntegrations?: string[] | null;
+  /** Onboarding path only: this teammate is the user's designated primary assistant. */
+  isPrimaryTeammate?: boolean;
+  /** Onboarding path only: the teammate's board is private to the user. */
+  boardIsPrivate?: boolean;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -24,6 +28,8 @@ export interface TeammateBootstrapPromptContext {
   };
   persona?: { id: string; title?: string };
   suggestedIntegrations?: string[];
+  isPrimaryTeammate?: boolean;
+  boardIsPrivate?: boolean;
   firstSession: true;
 }
 
@@ -63,6 +69,13 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     lines.push(`- Suggested integrations: ${context.suggestedIntegrations.join(', ')}`);
   }
 
+  if (context.isPrimaryTeammate || context.boardIsPrivate) {
+    const roleFacts: string[] = [];
+    if (context.isPrimaryTeammate) roleFacts.push("this user's primary Agor assistant");
+    if (context.boardIsPrivate) roleFacts.push('on a private board only they can see');
+    lines.push(`- Role: you are ${roleFacts.join(', ')}`);
+  }
+
   lines.push('');
   lines.push(
     "Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
@@ -79,6 +92,8 @@ export function buildTeammateBootstrapPromptContext({
   userEmail,
   persona,
   suggestedIntegrations,
+  isPrimaryTeammate,
+  boardIsPrivate,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
@@ -106,6 +121,8 @@ export function buildTeammateBootstrapPromptContext({
       ? { persona: { id: personaId, ...(personaProfile ? { title: personaProfile.title } : {}) } }
       : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
+    ...(isPrimaryTeammate ? { isPrimaryTeammate: true } : {}),
+    ...(boardIsPrivate ? { boardIsPrivate: true } : {}),
     firstSession: true,
   };
 }
