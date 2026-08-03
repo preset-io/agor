@@ -536,27 +536,26 @@ describe('terminal:* handler authorization', () => {
   });
 
   describe('terminal:output / terminal:exit / terminal:tab (executor-only)', () => {
-    it.each([
-      'terminal:output',
-      'terminal:exit',
-      'terminal:tab',
-    ])('%s rejects user-token sockets (only service may emit)', (event) => {
-      const { io } = buildHarness();
-      const s = makeSocket('alice-sock');
-      asUser(s, ALICE);
-      connect(io, s);
-      // Even an authenticated user must not be able to spoof these — a
-      // forged terminal:output could fake a "permission granted" prompt
-      // into another user's terminal, etc.
-      s.handlers.get(event)?.({
-        userId: ALICE,
-        data: 'x',
-        exitCode: 0,
-        action: 'create',
-        tabName: 't',
-      });
-      expect(io.emitted).toEqual([]);
-    });
+    it.each(['terminal:output', 'terminal:exit', 'terminal:tab'])(
+      '%s rejects user-token sockets (only service may emit)',
+      (event) => {
+        const { io } = buildHarness();
+        const s = makeSocket('alice-sock');
+        asUser(s, ALICE);
+        connect(io, s);
+        // Even an authenticated user must not be able to spoof these — a
+        // forged terminal:output could fake a "permission granted" prompt
+        // into another user's terminal, etc.
+        s.handlers.get(event)?.({
+          userId: ALICE,
+          data: 'x',
+          exitCode: 0,
+          action: 'create',
+          tabName: 't',
+        });
+        expect(io.emitted).toEqual([]);
+      }
+    );
 
     it('terminal:output accepts post-connect authed, user-scoped service sockets and relays', () => {
       // Regression for executor flow: connect anonymously, then

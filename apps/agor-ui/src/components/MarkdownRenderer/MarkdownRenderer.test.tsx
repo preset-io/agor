@@ -105,6 +105,41 @@ describe('MarkdownRenderer', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('renders internal upload links as authenticated preview and download actions', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(new Blob(['upload bytes'], { type: 'text/plain' }), { status: 200 })
+      );
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => 'blob:upload-preview'),
+        revokeObjectURL: vi.fn(),
+      })
+    );
+
+    render(
+      <MarkdownRenderer
+        content={
+          '[example.txt](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (text/plain, 12 B)'
+        }
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'example.txt' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(
+      /\/uploads\/upl_00000000-0000-4000-8000-000000000001\/content$/
+    );
+    expect(anchorClick).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Download example.txt' })).toBeInTheDocument();
+
+    anchorClick.mockRestore();
+  });
+
   it('adds stable ids and self-links when heading anchors are enabled', async () => {
     const { container } = render(<MarkdownRenderer content={'## Foo\n\n## Foo!'} headingAnchors />);
 

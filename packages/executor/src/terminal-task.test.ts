@@ -85,20 +85,18 @@ describe('tryMarkTaskTerminal', () => {
     });
   });
 
-  it.each([
-    TaskStatus.COMPLETED,
-    TaskStatus.FAILED,
-    TaskStatus.STOPPED,
-    TaskStatus.TIMED_OUT,
-  ])('skips the patch when the task is already %s (e.g. inner SDK catch already wrote it)', async (current) => {
-    const { client, tasks } = makeClient(current);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+  it.each([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'skips the patch when the task is already %s (e.g. inner SDK catch already wrote it)',
+    async (current) => {
+      const { client, tasks } = makeClient(current);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
+      await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'boom');
 
-    expect(tasks.get).toHaveBeenCalledWith('t1');
-    expect(tasks.patch).not.toHaveBeenCalled();
-  });
+      expect(tasks.get).toHaveBeenCalledWith('t1');
+      expect(tasks.patch).not.toHaveBeenCalled();
+    }
+  );
 
   it('omits error_message when no message is supplied (e.g. SIGTERM stop)', async () => {
     const { client, tasks } = makeClient(TaskStatus.RUNNING);

@@ -807,10 +807,12 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
       target: { value: 'pem-body' },
     });
     clickButton(/^Continue$/);
-    await flush();
 
     // Step 3 (Configure): watch repos (tags Select, tokenized via comma) + identity.
-    const watchRepos = document.querySelector('#github_watch_repos') as HTMLInputElement;
+    // Form validation gates this transition asynchronously. Waiting for the
+    // destination control is deterministic under CI load; a single event-loop
+    // tick can run before React has committed the next step.
+    const watchRepos = await screen.findByLabelText('Watch Repos');
     fireEvent.change(watchRepos, { target: { value: 'preset-io/agor,' } });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
 

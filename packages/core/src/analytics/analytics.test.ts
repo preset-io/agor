@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
 import { getDefaultConfig } from '../config/config-manager.js';
 import type { AgorAnalyticsSettings } from '../config/types.js';
+import { runWithTenantContext } from '../db/tenant-context.js';
 import { isAnalyticsEventExcluded } from './filters.js';
 import {
   AnalyticsPackageLogger,
@@ -25,6 +26,10 @@ describe('analytics config defaults', () => {
   it('is disabled by default', () => {
     expect(getDefaultAnalyticsConfig().enabled).toBe(false);
     expect(getDefaultConfig().analytics?.enabled).toBe(false);
+    expect(getDefaultAnalyticsConfig().plugins?.map((plugin) => plugin.type)).toEqual([
+      'stdout',
+      'http_batch',
+    ]);
   });
 });
 
@@ -99,6 +104,41 @@ describe('analytics logger', () => {
 
     expect(() => logger.track('task.created', { task_id: 'task-1' })).not.toThrow();
     expect(warn).toHaveBeenCalledWith('[analytics] track failed for "task.created":', 'sync boom');
+  });
+
+  it('adds the trusted ambient tenant id to analytics context', () => {
+    const track = vi.fn(() => Promise.resolve());
+    const logger = new AnalyticsPackageLogger({ track } as never);
+
+    runWithTenantContext('tenant-a', () => {
+      logger.track(
+        'task.created',
+        { task_id: 'task-1' },
+        { userId: 'user-1', context: { source: 'test', tenant_id: 'spoofed-tenant' } }
+      );
+    });
+
+    expect(track).toHaveBeenCalledWith(
+      'task.created',
+      { task_id: 'task-1' },
+      {
+        userId: 'user-1',
+        context: { source: 'test', tenant_id: 'tenant-a' },
+      }
+    );
+  });
+
+  it('does not invent tenant identity outside a tenant context', () => {
+    const track = vi.fn(() => Promise.resolve());
+    const logger = new AnalyticsPackageLogger({ track } as never);
+
+    logger.track(
+      'daemon.event',
+      {},
+      { context: { source: 'system', tenant_id: 'spoofed-tenant' } }
+    );
+
+    expect(track).toHaveBeenCalledWith('daemon.event', {}, { context: { source: 'system' } });
   });
 });
 
@@ -215,23 +255,12 @@ describe('analytics plugins', () => {
     ]);
   });
 
-  it('skips relative module plugin paths to avoid cwd-dependent imports', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    const plugins = await resolveAnalyticsPlugins({
-      ...enabledBase,
-      plugins: [
-        {
-          type: 'module',
-          enabled: true,
-          options: { module_path: './analytics-plugin.js' },
-        },
-      ],
-    });
-
-    expect(plugins).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(
-      '[analytics] module plugin options.module_path must be a package specifier or absolute path; skipping relative path'
-    );
+  it('rejects unsupported plugins passed by an untyped caller', async () => {
+    await expect(
+      resolveAnalyticsPlugins({
+        ...enabledBase,
+        plugins: [{ type: 'module', enabled: true, options: { module_path: '/plugin.js' } }],
+      } as unknown as AgorAnalyticsSettings)
+    ).rejects.toThrow('Unsupported analytics plugin type: module');
   });
 });

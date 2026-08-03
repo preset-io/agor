@@ -1671,6 +1671,40 @@ export const boardComments = sqliteTable(
 );
 
 /**
+ * Upload metadata control plane. Bytes live in the configured storage adapter.
+ * Session/branch identifiers intentionally have no restrictive FK so upload
+ * cleanup and historical attachment snapshots remain independent.
+ */
+export const uploads = sqliteTable(
+  'uploads',
+  {
+    upload_ref: text('upload_ref').primaryKey(),
+    created_by: text('created_by', { length: 36 }).notNull(),
+    session_id: text('session_id', { length: 36 }).notNull(),
+    branch_id: text('branch_id', { length: 36 }).notNull(),
+    storage_key: text('storage_key').notNull(),
+    original_name: text('original_name').notNull(),
+    display_name: text('display_name').notNull(),
+    content_type: text('content_type').notNull(),
+    size_bytes: integer('size_bytes').notNull(),
+    checksum: text('checksum'),
+    status: text('status', { enum: ['pending', 'active', 'deleting'] })
+      .notNull()
+      .default('active'),
+    provenance: text('provenance', {
+      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+    }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at'),
+  },
+  (table) => ({
+    ownerIdx: index('uploads_owner_idx').on(table.created_by),
+    sessionIdx: index('uploads_session_idx').on(table.session_id),
+    expiryIdx: index('uploads_expiry_idx').on(table.expires_at),
+  })
+);
+
+/**
  * Gateway Channels table - Registered messaging platform integrations
  *
  * Users create channels to connect messaging platforms (Slack, Discord, etc.)
@@ -2324,6 +2358,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
+export type UploadRow = typeof uploads.$inferSelect;
+export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
 export type KBNamespaceInsert = typeof kbNamespaces.$inferInsert;
 export type KBNamespaceAclRow = typeof kbNamespaceAcl.$inferSelect;

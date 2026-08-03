@@ -319,6 +319,22 @@ describe('configured executor spawning', () => {
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
   });
 
+  it('launches a local executor from its operator-owned package directory, not payload cwd', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { spawnExecutor } = await import('./spawn-executor');
+    const tenantBranchPath = '/tenant-a/worktrees/repo/feature';
+
+    spawnExecutor({ command: 'prompt', params: { cwd: tenantBranchPath } });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { cwd?: string };
+    expect(spawnOptions.cwd).toBeTruthy();
+    expect(spawnOptions.cwd).not.toBe(tenantBranchPath);
+    expect(spawnOptions.cwd).toMatch(/\/packages\/executor$/);
+    expect(JSON.parse(proc.written)).toMatchObject({ params: { cwd: tenantBranchPath } });
+  });
+
   it('preserves the exit-0/no-result protocol failure diagnostic', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

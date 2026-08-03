@@ -10,29 +10,45 @@ import {
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
-  it('builds a hidden file-path preamble without modifying visible text', () => {
-    expect(
-      buildPromptWithAttachments('Compare these charts', [
-        '.agor/uploads/chart-a.png',
-        '.agor/uploads/chart-b.png',
-      ])
-    ).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png\n- .agor/uploads/chart-b.png\n\nCompare these charts'
+  it('honors daemon-provided upload limits', () => {
+    const file = new File(['12345'], 'small.txt', { type: 'text/plain' });
+    const { acceptedFiles, rejections } = validateComposerFileIntake([file], [], {
+      maxFileBytes: 4,
+      maxTotalBytes: 8,
+      maxFiles: 10,
+    });
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections[0]?.reason).toContain('4 B');
+  });
+
+  const chart = {
+    ref: 'upl_00000000-0000-4000-8000-000000000001',
+    filename: 'chart.png',
+    mimeType: 'image/png',
+    size: 5,
+  };
+
+  it('includes useful attachment metadata and a terse materialization hint', () => {
+    const data = {
+      ref: 'upl_00000000-0000-4000-8000-000000000002',
+      filename: 'data.csv',
+      mimeType: 'text/csv',
+      size: 1024 * 1024,
+    };
+    expect(buildPromptWithAttachments('Compare these charts', [chart, data])).toBe(
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)\n- [data.csv](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000002) (text/csv, 1 MB)\n\nCompare these charts'
     );
   });
 
   it('preserves slash commands at the start of the sent prompt', () => {
-    expect(
-      buildPromptWithAttachments('/compact focus on this chart', ['.agor/uploads/chart.png'])
-    ).toBe(`/compact focus on this chart
-
-Attached files:
-- .agor/uploads/chart.png`);
+    expect(buildPromptWithAttachments('/compact focus on this chart', [chart])).toBe(
+      '/compact focus on this chart\n\nAttachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)'
+    );
   });
 
   it('supports attachment-only prompts', () => {
-    expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png'
+    expect(buildPromptWithAttachments('   ', [chart])).toBe(
+      'Attachments — use `agor_upload_materialize` to access:\n- [chart.png](https://agor.live/_uploads/upl_00000000-0000-4000-8000-000000000001) (image/png, 5 B)'
     );
   });
 
@@ -169,7 +185,6 @@ Attached files:
     const currentAttachments = Array.from({ length: 9 }, (_, index) => ({
       id: `current-${index}`,
       file: new File(['x'], `current-${index}.txt`, { type: 'text/plain' }),
-      destination: 'branch' as const,
       status: 'pending' as const,
     }));
     const incomingFiles = [
@@ -179,8 +194,7 @@ Attached files:
 
     const { acceptedFiles, rejections } = validateComposerFileIntake(
       incomingFiles,
-      currentAttachments,
-      'branch'
+      currentAttachments
     );
 
     expect(acceptedFiles).toHaveLength(0);
@@ -205,7 +219,6 @@ Attached files:
         id: 'pending-png',
         file: png,
         previewUrl: 'blob:png',
-        destination: 'branch',
         status: 'pending',
       })
     ).toBe(false);
@@ -215,7 +228,6 @@ Attached files:
         id: 'failed-png',
         file: png,
         previewUrl: 'blob:png',
-        destination: 'branch',
         status: 'failed',
         error: 'Upload failed',
       })
@@ -225,7 +237,6 @@ Attached files:
       isBlockingComposerAttachment({
         id: 'pending-text',
         file: text,
-        destination: 'branch',
         status: 'pending',
       })
     ).toBe(false);

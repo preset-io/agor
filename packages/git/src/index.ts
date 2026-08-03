@@ -16,8 +16,6 @@ import {
   buildAuthHeaderEnv,
   buildGitConfigEnv,
   extractRepoName,
-  getBranchesDir,
-  getReposDir,
   gitUrlHasUserinfo,
   parseHostFromGitUrl,
   redactGitUrlCredentials,
@@ -567,7 +565,8 @@ export async function addSafeDirectoryBestEffort(path: string, logPrefix?: strin
 
 export interface CloneOptions {
   url: string;
-  targetDir?: string;
+  /** Caller-resolved destination; this package does not own application filesystem layout. */
+  targetDir: string;
   bare?: boolean;
   /**
    * Pin the working tree to a specific branch instead of the remote's HEAD.
@@ -600,9 +599,6 @@ export {
   buildGitConfigEnv,
   buildGitConfigParameters,
   extractRepoName,
-  getBranchesDir,
-  getBranchPath,
-  getReposDir,
   gitUrlHasUserinfo,
   isLikelyGitToken,
   parseHostFromGitUrl,
@@ -610,9 +606,7 @@ export {
   stripGitUrlCredentials,
 } from './pure';
 
-/**
- * Clone a Git repository to ~/.agor/repos/<name>
- */
+/** Clone a Git repository to the caller-owned, explicitly resolved target directory. */
 export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   const cloneUrl = stripGitUrlCredentials(options.url);
   if (cloneUrl !== options.url) {
@@ -622,8 +616,10 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   const repoName = extractRepoName(cloneUrl);
-  const reposDir = getReposDir();
-  const targetPath = options.targetDir || join(reposDir, repoName);
+  if (!options.targetDir) {
+    throw new Error('cloneRepo requires an explicitly resolved targetDir');
+  }
+  const targetPath = options.targetDir;
 
   // Auth is delivered exclusively via the `http.<host>.extraheader` env-var
   // path configured by `createGit`. We deliberately do NOT splice the token
@@ -1735,7 +1731,7 @@ export async function getGitState(repoPath: string): Promise<string> {
  */
 export async function deleteRepoDirectory(
   repoPath: string,
-  allowedReposDir: string = getReposDir()
+  allowedReposDir: string
 ): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');
@@ -1780,7 +1776,7 @@ export async function deleteRepoDirectory(
  */
 export async function deleteBranchDirectory(
   branchPath: string,
-  allowedBranchesDir: string = getBranchesDir()
+  allowedBranchesDir: string
 ): Promise<void> {
   const { rm } = await import('node:fs/promises');
   const { realpathSync, existsSync } = await import('node:fs');

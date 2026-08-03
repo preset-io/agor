@@ -59,6 +59,8 @@ import {
   markExecutorProcessExited,
   trackExecutorProcess,
 } from './executor-tracking.js';
+import { shouldRegisterLocalHostOperations } from './host/availability.js';
+import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -503,7 +505,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   {
     app.use('/gateway-channels', createGatewayChannelsService(db), {
-      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileFromExecutor'],
+      methods: ['find', 'get', 'create', 'patch', 'remove', 'uploadFileStreamFromExecutor'],
     });
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -552,7 +554,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
-  app.use('/admin/local-actions', createLocalActionsService());
+  // Host ACL/user/group operations exist only on a self-hosted daemon host. Hosted
+  // registration is intentionally absent rather than forwarding privileged
+  // work through an impersonated executor.
+  if (shouldRegisterLocalHostOperations(config)) {
+    app.use('/admin/local-actions', createLocalActionsService(createLocalDaemonHostOperations()));
+  }
 
   app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
@@ -972,7 +979,6 @@ function createExecuteHandler(
 
     let localExecutorPid: number | undefined;
     spawnExecutor(executorPayload, {
-      cwd,
       asUser: executorUnixUser || undefined,
       preparedEnv: executorEnv,
       logPrefix,

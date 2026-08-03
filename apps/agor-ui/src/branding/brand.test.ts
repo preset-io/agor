@@ -24,15 +24,15 @@ describe('brandMarkHref', () => {
     expect(brandMarkHref()).toBe(`${import.meta.env.BASE_URL}${BRAND.markFile}`);
   });
 
-  it.each([
-    'logo.svg',
-    'logo-mark.svg',
-  ])('keeps the package-local %s deployment copy identical to docs', (filename) => {
-    const uiLogo = readFileSync(path.resolve(process.cwd(), 'public', filename));
-    const docsLogo = readFileSync(path.resolve(process.cwd(), '../agor-docs/public', filename));
+  it.each(['logo.svg', 'logo-mark.svg'])(
+    'keeps the package-local %s deployment copy identical to docs',
+    (filename) => {
+      const uiLogo = readFileSync(path.resolve(process.cwd(), 'public', filename));
+      const docsLogo = readFileSync(path.resolve(process.cwd(), '../agor-docs/public', filename));
 
-    expect(uiLogo.equals(docsLogo)).toBe(true);
-  });
+      expect(uiLogo.equals(docsLogo)).toBe(true);
+    }
+  );
 
   it('keeps the display mark transparent and the badge explicitly backed', () => {
     const mark = readFileSync(path.resolve(process.cwd(), 'public/logo-mark.svg'), 'utf8');

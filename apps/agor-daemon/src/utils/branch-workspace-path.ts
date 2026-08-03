@@ -1,32 +1,6 @@
-import fs from 'node:fs';
-import { realpath } from 'node:fs/promises';
-import path from 'node:path';
 import type { BranchRepository } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, UserID, UserRole } from '@agor/core/types';
 import { hasBranchPermission } from './branch-authorization.js';
-
-export async function canonicalizeExistingPrefix(target: string): Promise<string> {
-  const resolved = path.resolve(target);
-  const segments = resolved.split(path.sep);
-  for (let i = segments.length; i >= 1; i -= 1) {
-    const prefix = segments.slice(0, i).join(path.sep) || path.sep;
-    if (!fs.existsSync(prefix)) continue;
-    const real = await realpath(prefix);
-    const tail = segments.slice(i).join(path.sep);
-    return tail ? path.join(real, tail) : real;
-  }
-  return resolved;
-}
-
-export function isPathInsideRoot(
-  root: string,
-  candidate: string,
-  options?: { allowRoot?: boolean }
-) {
-  const rel = path.relative(root, candidate);
-  if (rel === '') return options?.allowRoot === true;
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
-}
 
 export async function ensureBranchWorkspaceAccess(
   branchRepo: BranchRepository,

@@ -293,29 +293,26 @@ describe('GET /api/github/installations', () => {
     expect(mockListInstallations).not.toHaveBeenCalled();
   });
 
-  it.each([
-    '0',
-    '-1',
-    '1.5',
-    'Infinity',
-    'not-a-number',
-  ])('rejects invalid app IDs before reading the channel (%s)', async (appId) => {
-    const app = mockApp({ user: { user_id: 'u-admin', role: 'admin' } });
-    const handler = __testables.handleListInstallations(app, {} as never, staticConfig);
-    const res = mockRes();
+  it.each(['0', '-1', '1.5', 'Infinity', 'not-a-number'])(
+    'rejects invalid app IDs before reading the channel (%s)',
+    async (appId) => {
+      const app = mockApp({ user: { user_id: 'u-admin', role: 'admin' } });
+      const handler = __testables.handleListInstallations(app, {} as never, staticConfig);
+      const res = mockRes();
 
-    await handler(
-      mockReq({
-        headers: { authorization: 'Bearer valid-admin-token' },
-        query: { app_id: appId, channel_id: 'ch-1' },
-      }),
-      res as express.Response
-    );
+      await handler(
+        mockReq({
+          headers: { authorization: 'Bearer valid-admin-token' },
+          query: { app_id: appId, channel_id: 'ch-1' },
+        }),
+        res as express.Response
+      );
 
-    expect(res.statusCode).toBe(400);
-    expect(mockFindById).not.toHaveBeenCalled();
-    expect(mockListInstallations).not.toHaveBeenCalled();
-  });
+      expect(res.statusCode).toBe(400);
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockListInstallations).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not resolve credentials from a different channel type', async () => {
     mockFindById.mockResolvedValue({

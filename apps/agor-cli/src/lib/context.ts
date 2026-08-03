@@ -87,6 +87,12 @@ export function getDaemonModulePath(): string | null {
   return path.join(packageRoot, 'dist', 'daemon', 'index.js');
 }
 
+/** Resolve the deployment-local upload maintenance module in an installed bundle. */
+export function getDaemonUploadsMaintenanceModulePath(): string | null {
+  const daemonModule = getDaemonModulePath();
+  return daemonModule ? path.join(path.dirname(daemonModule), 'uploads-maintenance.js') : null;
+}
+
 /**
  * Get appropriate UI URL based on context
  *

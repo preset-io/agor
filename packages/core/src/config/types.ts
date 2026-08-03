@@ -853,7 +853,8 @@ export interface AgorTelemetrySettings {
  *
  * Disabled by default. When enabled, daemon/server code sends curated
  * lifecycle events through a central analytics client. Plugin configuration is
- * resolved by type at daemon startup.
+ * resolved by type at daemon startup. Events emitted inside a trusted tenant
+ * scope automatically include that tenant as `context.tenant_id`.
  */
 export interface AgorAnalyticsSettings {
   /** Master kill-switch. Defaults to false. */
@@ -878,8 +879,7 @@ export interface AgorAnalyticsSettings {
 
 export type AgorAnalyticsPluginSettings =
   | AgorAnalyticsStdoutPluginSettings
-  | AgorAnalyticsHttpBatchPluginSettings
-  | AgorAnalyticsModulePluginSettings;
+  | AgorAnalyticsHttpBatchPluginSettings;
 
 export interface AgorAnalyticsStdoutPluginSettings {
   type: 'stdout';
@@ -901,19 +901,6 @@ export interface AgorAnalyticsHttpBatchPluginSettings {
     timeout_ms?: number;
     /** Static headers only. */
     headers?: Record<string, string>;
-  };
-}
-
-export interface AgorAnalyticsModulePluginSettings {
-  type: 'module';
-  enabled?: boolean;
-  options?: {
-    /** Package name or absolute local module path to dynamically import. */
-    module_path?: string | null;
-    /** Factory export to call. Defaults to createAnalyticsPlugin. */
-    export_name?: string;
-    /** Passed as the first argument to the module factory. */
-    plugin_options?: Record<string, unknown>;
   };
 }
 
@@ -979,6 +966,22 @@ export interface AgorMultiTenancySettings {
   trusted_header?: string;
 }
 
+/** Canonical upload storage and lifecycle settings. */
+export interface AgorUploadSettings {
+  /**
+   * Base local directory or S3 URI. Defaults to `~/.agor`.
+   * Agor manages the tenant and feature namespaces below this base.
+   * Credentials are resolved out-of-band and must not be embedded in this URI.
+   */
+  location?: string;
+
+  /** Maximum age from creation in days. Zero disables automatic expiry. */
+  max_age_days?: number;
+
+  /** Maximum bytes accepted for one file, expressed in MiB. */
+  max_file_size_mb?: number;
+}
+
 /**
  * Complete Agor configuration
  */
@@ -1015,6 +1018,9 @@ export interface AgorConfig {
 
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
+
+  /** Upload storage and lifecycle policy. */
+  uploads?: AgorUploadSettings;
 }
 
 /**
@@ -1031,4 +1037,5 @@ export type ConfigKey =
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`
-  | `multi_tenancy.${keyof AgorMultiTenancySettings}`;
+  | `multi_tenancy.${keyof AgorMultiTenancySettings}`
+  | `uploads.${keyof AgorUploadSettings}`;

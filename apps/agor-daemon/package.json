@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./uploads-maintenance": {
+      "types": "./dist/uploads-maintenance.d.ts",
+      "import": "./dist/uploads-maintenance.js"
     }
   },
   "scripts": {
@@ -23,6 +27,8 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1101.0",
+    "@aws-sdk/lib-storage": "^3.1101.0",
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -31,7 +37,7 @@
     "@types/mdast": "^4.0.4",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
-    "diff": "^7.0.0",
+    "diff": "^8.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.0",
     "express-rate-limit": "^8.5.2",
@@ -60,7 +66,7 @@
     "concurrently": "^9.2.1",
     "glob": "^11.0.3",
     "tsup": "^8.5.1",
-    "tsx": "^4.23.0",
+    "tsx": "4.23.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10",
     "zod": "^4.4.3"

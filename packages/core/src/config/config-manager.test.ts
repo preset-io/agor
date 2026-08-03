@@ -223,21 +223,17 @@ describe('loadConfig', () => {
     );
   });
 
-  it.each([
-    'resources',
-    'services',
-    'credentials',
-    'opencode',
-    'codex',
-    'knowledge',
-  ])('rejects the removed %s config surface', async (key) => {
-    const agorDir = path.join(tempDir, '.agor');
-    const configPath = path.join(agorDir, 'config.yaml');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
+  it.each(['resources', 'services', 'credentials', 'opencode', 'codex', 'knowledge'])(
+    'rejects the removed %s config surface',
+    async (key) => {
+      const agorDir = path.join(tempDir, '.agor');
+      const configPath = path.join(agorDir, 'config.yaml');
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
 
-    await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
-  });
+      await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
+    }
+  );
 
   it('rejects the removed execution.cursor_sdk_enabled flag', async () => {
     const agorDir = path.join(tempDir, '.agor');
@@ -573,6 +569,19 @@ describe('loadConfig cache', () => {
     expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
     // And async path stays consistent.
     await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
+  });
+
+  it('rejects removed analytics module plugins on every load path', async () => {
+    await writeConfigFile(
+      'analytics:\n  enabled: false\n  plugins:\n    - type: module\n      enabled: false\n      options:\n        module_path: /opt/agor/plugin.js\n'
+    );
+
+    expect(() => loadConfigSync()).toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /analytics\.plugins\[0\].*module.*removed.*stdout.*http_batch/s
+    );
   });
 
   it('treats branch_rbac as app-level only in simple Unix mode', async () => {
