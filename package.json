@@ -43,16 +43,16 @@
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3",
+    "@biomejs/biome": "2.5.6",
     "@google-analytics/admin": "^9.2.0",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
-    "lint-staged": "^17.0.8",
-    "prettier": "^3.9.5",
-    "rollup": ">=4.59.0 <5",
+    "lint-staged": "^17.2.0",
+    "prettier": "^3.9.6",
+    "rollup": "4.62.4",
     "rollup-plugin-dts": "^6.4.1",
-    "tsx": "^4.23.0",
-    "turbo": "^2.10.4",
+    "tsx": "4.23.1",
+    "turbo": "^2.10.8",
     "typescript": "^6.0.3"
   },
   "packageManager": "pnpm@11.13.0",

@@ -32,37 +32,32 @@ describe('mcpLimit', () => {
     }
   });
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects an invalid positive integer default (%s)', (defaultValue) => {
-    expect(() => mcpPositiveIntWithDefault('limit', defaultValue)).toThrow(
-      'default must be a positive safe integer'
-    );
-  });
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid positive integer default (%s)',
+    (defaultValue) => {
+      expect(() => mcpPositiveIntWithDefault('limit', defaultValue)).toThrow(
+        'default must be a positive safe integer'
+      );
+    }
+  );
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects an invalid positive integer maximum (%s)', (maxValue) => {
-    expect(() => mcpPositiveIntWithDefault('limit', 1, maxValue)).toThrow(
-      'maximum must be a positive safe integer'
-    );
-  });
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid positive integer maximum (%s)',
+    (maxValue) => {
+      expect(() => mcpPositiveIntWithDefault('limit', 1, maxValue)).toThrow(
+        'maximum must be a positive safe integer'
+      );
+    }
+  );
 
   it('rejects a default above the maximum', () => {
     expect(() => mcpPositiveIntWithDefault('limit', 2, 1)).toThrow('exceeds maximum');
   });
 
-  it.each([
-    -1,
-    1.5,
-    Number.MAX_SAFE_INTEGER + 1,
-  ])('rejects an invalid offset default (%s)', (defaultValue) => {
-    expect(() => mcpOffset(defaultValue)).toThrow('default must be a non-negative safe integer');
-  });
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid offset default (%s)',
+    (defaultValue) => {
+      expect(() => mcpOffset(defaultValue)).toThrow('default must be a non-negative safe integer');
+    }
+  );
 });
