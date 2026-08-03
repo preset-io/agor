@@ -493,6 +493,15 @@ export function useAuth(): UseAuthReturn {
   };
 
   const logout = async () => {
+    const refreshToken = getStoredRefreshToken();
+    if (refreshToken) {
+      try {
+        const client = await createRestClient(getDaemonUrl());
+        await client.service('authentication/refresh').create({ refreshToken, action: 'logout' });
+      } catch {
+        // Always finish local logout; an expired/already-revoked family is safe.
+      }
+    }
     clearTokens();
     setState({
       user: null,

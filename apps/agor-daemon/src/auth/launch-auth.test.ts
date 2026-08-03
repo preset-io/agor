@@ -10,6 +10,7 @@ import {
   hash,
   initializeDatabase,
   insert,
+  RefreshTokenFamiliesRepository,
   select,
   update,
   users,
@@ -119,6 +120,7 @@ describe('one-time launch auth service', () => {
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
       usersService,
+      refreshFamilies: new RefreshTokenFamiliesRepository(db),
     });
   }
 

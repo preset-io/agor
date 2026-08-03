@@ -11,6 +11,7 @@ import {
   generateId,
   hash,
   insert,
+  type RefreshTokenFamiliesRepository,
   reattributeLegacyAnonymousRows,
   runWithTenantDatabaseScope,
   select,
@@ -116,6 +117,7 @@ export interface LaunchAuthServiceOptions {
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
   usersService: { get(id: UserID, params?: Params): Promise<User> };
+  refreshFamilies: RefreshTokenFamiliesRepository;
 }
 
 function envFlag(value: string | undefined): boolean | undefined {
@@ -650,21 +652,31 @@ export function classifyLaunchFailure(error: unknown): string {
   return LAUNCH_FAILURE_REASONS.UNEXPECTED;
 }
 
-function issueRuntimeTokens(
+async function issueRuntimeTokens(
   user: User,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn'],
   tenantClaim = 'tenant_id',
-  tenantId?: string
-): LaunchAuthResult {
+  tenantId: string | undefined,
+  refreshFamilies: RefreshTokenFamiliesRepository
+): Promise<LaunchAuthResult> {
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
     ...authTokenIssuedAtClaim(Date.now(), user),
     ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
   });
+  const decoded = jwt.decode(tokens.refreshToken) as JwtPayload;
+  await refreshFamilies.create({
+    familyId: tokens.familyId,
+    tokenId: tokens.refreshTokenId,
+    userId: user.user_id,
+    tenantId: tenantId ?? 'default',
+    expiresAt: new Date((decoded.exp ?? 0) * 1000),
+  });
 
   return {
-    ...tokens,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
     authentication: { strategy: 'launch' },
     user: redactUserAuthMetadata(user),
   };
@@ -722,7 +734,8 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
             options.accessTokenTtl,
             options.refreshTokenTtl,
             tenantClaim,
-            tenant.tenant_id
+            tenant.tenant_id,
+            options.refreshFamilies
           );
         });
       } catch (error) {

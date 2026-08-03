@@ -1021,6 +1021,24 @@ export const users = sqliteTable(
   })
 );
 
+/** Server-side state for one-time browser refresh-token rotation. */
+export const refreshTokenFamilies = sqliteTable(
+  'refresh_token_families',
+  {
+    family_id: text('family_id', { length: 36 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    current_token_hash: text('current_token_hash').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    revoked_at: t.timestamp('revoked_at'),
+  },
+  (table) => ({
+    userIdx: index('refresh_token_families_user_idx').on(table.user_id),
+  })
+);
+
 /**
  * Groups - admin-managed user collections for sharing and branch RBAC.
  */

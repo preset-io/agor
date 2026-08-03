@@ -1,3 +1,4 @@
+import { generateId } from '@agor/core/db';
 import type { User, UserID } from '@agor/core/types';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 
@@ -15,6 +16,8 @@ export interface RuntimeTokenPayload {
 export interface RuntimeTokenPair {
   accessToken: string;
   refreshToken: string;
+  familyId: string;
+  refreshTokenId: string;
 }
 
 export function runtimeTenantClaims(
@@ -54,7 +57,9 @@ export function issueRuntimeTokenPair(
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn'],
-  extraClaims: Record<string, unknown> = {}
+  extraClaims: Record<string, unknown> = {},
+  familyId = generateId(),
+  refreshTokenId = generateId()
 ): RuntimeTokenPair {
   return {
     accessToken: issueRuntimeToken(
@@ -63,9 +68,17 @@ export function issueRuntimeTokenPair(
       accessTokenTtl
     ),
     refreshToken: issueRuntimeToken(
-      { sub: user.user_id, type: 'refresh', ...extraClaims },
+      {
+        sub: user.user_id,
+        type: 'refresh',
+        family_id: familyId,
+        jti: refreshTokenId,
+        ...extraClaims,
+      },
       jwtSecret,
       refreshTokenTtl
     ),
+    familyId,
+    refreshTokenId,
   };
 }

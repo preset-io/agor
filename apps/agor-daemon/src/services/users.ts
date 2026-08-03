@@ -26,6 +26,7 @@ import {
   generateId,
   hash,
   insert,
+  RefreshTokenFamiliesRepository,
   select,
   type TenantScopeAwareDatabase,
   update,
@@ -366,7 +367,6 @@ export class UsersService {
     if (!row) {
       throw new Error(`User not found: ${id}`);
     }
-
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
@@ -645,6 +645,11 @@ export class UsersService {
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
+    }
+    if (data.password) {
+      const tenantId =
+        params?.tenant?.tenant_id ?? (row as { tenant_id?: string }).tenant_id ?? 'default';
+      await new RefreshTokenFamiliesRepository(this.db).revokeAll(id, tenantId);
     }
 
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as

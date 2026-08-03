@@ -10,10 +10,11 @@ function jwtWithPayload(payload: Record<string, unknown>): string {
 describe('authHeaders', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   it('prefers the active Agor access token over the legacy Feathers token', () => {
-    localStorage.setItem('agor-access-token', 'access-token');
+    sessionStorage.setItem('agor-access-token', 'access-token');
     localStorage.setItem('feathers-jwt', 'legacy-token');
 
     expect(getAgorAccessToken()).toBe('access-token');
@@ -23,25 +24,24 @@ describe('authHeaders', () => {
     });
   });
 
-  it('falls back to the legacy Feathers token', () => {
+  it('does not accept the durable legacy Feathers token', () => {
     localStorage.setItem('feathers-jwt', 'legacy-token');
 
-    expect(getAgorAccessToken()).toBe('legacy-token');
+    expect(getAgorAccessToken()).toBeNull();
     expect(getAuthHeaders()).toEqual({
       'Content-Type': 'application/json',
-      Authorization: 'Bearer legacy-token',
     });
   });
 
   it('decodes the current user id from the active token', () => {
-    localStorage.setItem('agor-access-token', jwtWithPayload({ sub: 'user-123' }));
+    sessionStorage.setItem('agor-access-token', jwtWithPayload({ sub: 'user-123' }));
     localStorage.setItem('feathers-jwt', jwtWithPayload({ sub: 'legacy-user' }));
 
     expect(getCurrentUserIdFromJwt()).toBe('user-123');
   });
 
   it('fails closed on malformed tokens', () => {
-    localStorage.setItem('agor-access-token', 'not-a-jwt');
+    sessionStorage.setItem('agor-access-token', 'not-a-jwt');
 
     expect(getCurrentUserIdFromJwt()).toBeNull();
   });

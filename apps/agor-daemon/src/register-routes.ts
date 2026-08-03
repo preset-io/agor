@@ -23,6 +23,7 @@ import {
   getCurrentTenantId,
   MCPServerRepository,
   MessagesRepository,
+  RefreshTokenFamiliesRepository,
   RepoRepository,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -445,6 +446,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Initialize API key strategy with dependencies
   const { UserApiKeysRepository } = await import('@agor/core/db');
   const userApiKeysRepo = new UserApiKeysRepository(db);
+  const refreshFamilies = new RefreshTokenFamiliesRepository(db);
   apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
 
   // SECURITY: Rate-limit the authentication + refresh endpoints.
@@ -516,6 +518,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           refreshTokenTtl: REFRESH_TOKEN_TTL,
           tenantClaim: tenantTokenClaim,
           debug: authEventDebug,
+          refreshFamilies,
         }),
       ],
     },
@@ -536,6 +539,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       usersService,
+      refreshFamilies,
     })
   );
 
@@ -558,6 +562,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       tenantClaim: tenantTokenClaim,
       usersService,
+      refreshFamilies,
     })
   );
 
