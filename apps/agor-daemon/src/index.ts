@@ -31,13 +31,18 @@ patchConsole();
 
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
+  getAgorHome,
+  getConfigPath,
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
+  restrictDaemonUmask,
   saveConfig,
+  secureOwnerDirectory,
+  secureOwnerFileIfPresent,
 } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
 import {
@@ -139,6 +144,12 @@ export interface DaemonStartOptions {
  * or from main.ts with no args for direct execution.
  */
 export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
+  // System-global daemon state: establish confidentiality before config, JWT,
+  // token, or database material can be created or consumed.
+  restrictDaemonUmask();
+  await secureOwnerDirectory(getAgorHome());
+  await secureOwnerFileIfPresent(getConfigPath());
+  if (options?.configPath) await secureOwnerFileIfPresent(options.configPath);
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');

@@ -11,6 +11,7 @@ import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
+import { secureOwnerDirectory, secureOwnerFileIfPresent } from './daemon-home-security';
 import {
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -203,12 +204,7 @@ export function getConfigPath(): string {
  * Ensure ~/.agor directory exists
  */
 async function ensureAgorHome(): Promise<void> {
-  const agorHome = getAgorHome();
-  try {
-    await fs.access(agorHome);
-  } catch {
-    await fs.mkdir(agorHome, { recursive: true });
-  }
+  await secureOwnerDirectory(getAgorHome());
 }
 
 /**
@@ -728,7 +724,20 @@ export async function saveConfig(config: AgorConfig): Promise<void> {
     noRefs: true,
   });
 
-  await fs.writeFile(configPath, content, 'utf-8');
+  await secureOwnerFileIfPresent(configPath);
+  const temporaryPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, content, {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await fs.rename(temporaryPath, configPath);
+    await fs.chmod(configPath, 0o600);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
   invalidateConfigCache();
 }
 

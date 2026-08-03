@@ -832,6 +832,20 @@ describe('saveConfig', () => {
     const agorDir = path.join(tempDir, '.agor');
     const stat = await fs.stat(agorDir);
     expect(stat.isDirectory()).toBe(true);
+    expect(stat.mode & 0o777).toBe(0o700);
+    expect((await fs.stat(path.join(agorDir, 'config.yaml'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('repairs permissive existing config home and file modes', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { mode: 0o755 });
+    await fs.writeFile(configPath, '{}', { mode: 0o644 });
+
+    await saveConfig(createMinimalConfig());
+
+    expect((await fs.stat(agorDir)).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
   });
 
   it('should overwrite existing config file', async () => {

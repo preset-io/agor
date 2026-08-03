@@ -11,7 +11,15 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile } from '@agor/core/config';
+import {
+  getAgorHome,
+  getConfigPath,
+  loadConfig,
+  loadConfigFromFile,
+  restrictDaemonUmask,
+  secureOwnerDirectory,
+  secureOwnerFileIfPresent,
+} from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {
@@ -44,6 +52,13 @@ export default class DaemonStart extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(DaemonStart);
+
+    // The CLI performs config and migration preflight before importing the
+    // daemon, so establish the same filesystem boundary first.
+    restrictDaemonUmask();
+    await secureOwnerDirectory(getAgorHome());
+    await secureOwnerFileIfPresent(getConfigPath());
+    if (flags.config) await secureOwnerFileIfPresent(resolve(flags.config));
 
     // 1. Load & validate config
     const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();

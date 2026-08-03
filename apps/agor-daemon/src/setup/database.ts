@@ -6,7 +6,9 @@
  */
 
 import { constants } from 'node:fs';
-import { access, mkdir } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { getAgorHome, secureOwnerDirectory, secureOwnerFileIfPresent } from '@agor/core/config';
 import {
   checkMigrationStatus,
   createDatabaseAsync,
@@ -33,7 +35,7 @@ export interface DatabaseInitResult {
  *
  * @param dbPath - Database connection string (file:~/.agor/agor.db or postgresql://...)
  */
-async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
+export async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
   // Only handle file system setup for SQLite (file: URLs)
   if (!dbPath.startsWith('file:')) {
     return;
@@ -41,15 +43,24 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
 
   // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
   const dbFilePath = extractDbFilePath(dbPath);
-  const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
+  const dbDir = dirname(dbFilePath);
 
   // Ensure database directory exists
   try {
     await access(dbDir, constants.F_OK);
+    // ~/.agor is the daemon's private data home. A custom database may live in
+    // a shared parent (for example /var/lib), so do not seize that parent;
+    // confidentiality is enforced on the database files themselves.
+    if (dbDir === getAgorHome()) await secureOwnerDirectory(dbDir);
   } catch {
     console.log(`📁 Creating database directory: ${dbDir}`);
-    await mkdir(dbDir, { recursive: true });
+    await secureOwnerDirectory(dbDir);
   }
+
+  await secureOwnerFileIfPresent(dbFilePath);
+  await secureOwnerFileIfPresent(`${dbFilePath}-wal`);
+  await secureOwnerFileIfPresent(`${dbFilePath}-shm`);
+  await secureOwnerFileIfPresent(`${dbFilePath}-journal`);
 
   // Check if database file exists (create message if needed)
   try {
@@ -117,6 +128,13 @@ export async function initializeDatabase(
 
   // Create database with foreign keys enabled
   const db = await createDatabaseAsync({ url: dbPath });
+  if (dbPath.startsWith('file:')) {
+    const dbFilePath = extractDbFilePath(dbPath);
+    await secureOwnerFileIfPresent(dbFilePath);
+    await secureOwnerFileIfPresent(`${dbFilePath}-wal`);
+    await secureOwnerFileIfPresent(`${dbFilePath}-shm`);
+    await secureOwnerFileIfPresent(`${dbFilePath}-journal`);
+  }
   const scopedDb = createTenantScopedDatabaseProxy(db, {
     requireScope: options.requireTenantScope === true,
     label: 'daemon database',
