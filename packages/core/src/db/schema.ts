@@ -34,6 +34,7 @@ export const branchGroupGrants = schema.branchGroupGrants;
 export const boardGroupGrants = schema.boardGroupGrants;
 export const schedules = schema.schedules;
 export const users = schema.users;
+export const refreshTokenFamilies = schema.refreshTokenFamilies;
 export const appVariables = schema.appVariables;
 export const agenticToolPresets = schema.agenticToolPresets;
 export const mcpServers = schema.mcpServers;

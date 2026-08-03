@@ -1,3 +1,4 @@
+import type { RefreshTokenFamiliesRepository } from '@agor/core/db';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './token-invalidation.js';
@@ -15,6 +16,7 @@ export interface IssueBrowserTokensHookOptions {
   refreshTokenTtl: SignOptions['expiresIn'];
   tenantClaim: string;
   debug?: (...args: unknown[]) => void;
+  refreshFamilies: RefreshTokenFamiliesRepository;
 }
 
 /**
@@ -32,7 +34,8 @@ export interface IssueBrowserTokensHookOptions {
  * User redaction applies on every path that returns a user.
  */
 export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOptions) {
-  const { jwtSecret, accessTokenTtl, refreshTokenTtl, tenantClaim, debug } = options;
+  const { jwtSecret, accessTokenTtl, refreshTokenTtl, tenantClaim, debug, refreshFamilies } =
+    options;
 
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
   return async (context: any) => {
@@ -66,6 +69,16 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
         ...runtimeTenantClaims(tenantId, tenantClaim),
       }
     );
+    const decoded = JSON.parse(
+      Buffer.from(tokens.refreshToken.split('.')[1], 'base64url').toString()
+    ) as { exp: number };
+    await refreshFamilies.create({
+      familyId: tokens.familyId,
+      tokenId: tokens.refreshTokenId,
+      userId: context.result.user.user_id,
+      tenantId: tenantId ?? 'default',
+      expiresAt: new Date(decoded.exp * 1000),
+    });
     context.result.accessToken = tokens.accessToken;
     context.result.refreshToken = tokens.refreshToken;
     context.result.user = redactUserAuthMetadata(context.result.user);

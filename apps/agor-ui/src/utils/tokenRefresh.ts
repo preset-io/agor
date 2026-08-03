@@ -41,15 +41,17 @@ export async function refreshAccessToken(
 }
 
 /**
- * Store authentication tokens in localStorage
+ * Store authentication tokens for this browser tab only. This intentionally
+ * avoids durable localStorage persistence; XSS can still read these bearer
+ * tokens, but closing the tab ends their browser-storage lifetime.
  *
  * @param accessToken - Access token to store
  * @param refreshToken - Optional refresh token to store (if rotated)
  */
 export function storeTokens(accessToken: string, refreshToken?: string): void {
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
   if (refreshToken) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+    sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
   }
 }
 
@@ -59,7 +61,7 @@ export function storeTokens(accessToken: string, refreshToken?: string): void {
  * @returns Refresh token or null if not found
  */
 export function getStoredRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
+  return sessionStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
 /**
@@ -68,13 +70,16 @@ export function getStoredRefreshToken(): string | null {
  * @returns Access token or null if not found
  */
 export function getStoredAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_TOKEN_KEY);
+  return sessionStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
 /**
  * Clear all authentication tokens from localStorage
  */
 export function clearTokens(): void {
+  sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+  sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+  // Remove pre-hardening durable credentials during migration.
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }

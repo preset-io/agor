@@ -2,7 +2,7 @@ import { getStoredAccessToken } from './tokenRefresh';
 
 export function getAgorAccessToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return getStoredAccessToken() ?? localStorage.getItem('feathers-jwt');
+  return getStoredAccessToken();
 }
 
 /** Get auth headers for daemon REST calls. */
@@ -18,8 +18,7 @@ export function getAuthHeaders(): HeadersInit {
  * Decode the current user's id from the active Agor access token.
  *
  * Used by artifact runtime-query bridges to fail closed before executing a
- * query intended for another user. Falls back to the legacy Feathers token for
- * older sessions that have not migrated to the access/refresh token pair yet.
+ * query intended for another user.
  */
 export function getCurrentUserIdFromJwt(): string | null {
   const token = getAgorAccessToken();

@@ -14,6 +14,7 @@ function makeHook() {
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
     tenantClaim: 'tenant_id',
+    refreshFamilies: { create: async () => undefined } as never,
   });
 }
 

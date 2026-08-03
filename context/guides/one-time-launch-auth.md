@@ -152,8 +152,13 @@ workspace host:
 
 - If a valid runtime session already exists for that host, the app opens
   immediately with no new code or exchange. Runtime sessions live in
-  origin-scoped `localStorage`, never a `Domain`-wide cookie, so a session
+  origin- and tab-scoped `sessionStorage`, never durable `localStorage` or a
+  `Domain`-wide cookie, so closing the tab removes the browser copy and a session
   established on `primary` is not automatically sent to `secondary`.
+  This is an explicit compatibility tradeoff: bearer tokens remain readable to
+  same-origin JavaScript, so CSP/XSS defenses remain essential, but persistence
+  no longer survives a tab/browser restart. Server-side one-use refresh families
+  bound replay and provide logout/password/admin revocation.
 - If there is no host-local session, the unauthenticated screen sends the
   browser to the configured `login_redirect_url` (the issuer's launch-init
   endpoint) with two query params: `return_to` (the current **relative** Agor

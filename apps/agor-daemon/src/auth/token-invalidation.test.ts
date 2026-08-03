@@ -3,7 +3,12 @@ import type { User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { expect, test, vi } from 'vitest';
-import { eq, update, users } from '../../../../packages/core/src/db';
+import {
+  eq,
+  RefreshTokenFamiliesRepository,
+  update,
+  users,
+} from '../../../../packages/core/src/db';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { AgorLocalStrategy } from '../register-routes';
 import { createUsersService, type UsersService } from '../services/users';
@@ -111,6 +116,14 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
               REFRESH_TOKEN_TTL,
               authTokenIssuedAtClaim(Date.now(), context.result.user)
             );
+            const decoded = jwt.decode(tokens.refreshToken) as jwt.JwtPayload;
+            await new RefreshTokenFamiliesRepository(db).create({
+              familyId: tokens.familyId,
+              tokenId: tokens.refreshTokenId,
+              tenantId: 'default',
+              userId: context.result.user.user_id,
+              expiresAt: new Date((decoded.exp ?? 0) * 1000),
+            });
             context.result.accessToken = tokens.accessToken;
             context.result.refreshToken = tokens.refreshToken;
             context.result.user = redactUserAuthMetadata(context.result.user);
@@ -187,6 +200,7 @@ dbTest('rejects a refresh token issued before the password change marker', async
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
     usersService,
+    refreshFamilies: new RefreshTokenFamiliesRepository(db),
   });
   const user = await createUser(usersService, 'stale-refresh@example.test');
   const issuedBefore = Date.now() - 10_000;
@@ -224,12 +238,15 @@ test('refresh token lookup is scoped to the tenant claim and reissues tenant-bea
     refreshTokenTtl: REFRESH_TOKEN_TTL,
     tenantClaim: 'tenant_id',
     usersService,
+    refreshFamilies: { rotate: vi.fn(async () => true) } as never,
   });
-  const refreshToken = issueRuntimeToken(
-    { sub: user.user_id, type: 'refresh', tenant_id: 'tenant-a' },
+  const refreshToken = issueRuntimeTokenPair(
+    user,
     JWT_SECRET,
-    REFRESH_TOKEN_TTL
-  );
+    ACCESS_TOKEN_TTL,
+    REFRESH_TOKEN_TTL,
+    { tenant_id: 'tenant-a' }
+  ).refreshToken;
 
   const result = await refreshService.create({ refreshToken });
 
@@ -255,6 +272,7 @@ dbTest(
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       usersService,
+      refreshFamilies: new RefreshTokenFamiliesRepository(db),
     });
     const target = await createUser(usersService, 'admin-reset-target@example.test');
     const issuedBefore = Date.now() - 10_000;
@@ -313,6 +331,7 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
     usersService,
+    refreshFamilies: new RefreshTokenFamiliesRepository(db),
   }).create({ refreshToken: loginResult.refreshToken });
   expect(refreshResult.user.email).toBe(user.email);
   expectNoTokenMarker(refreshResult.user);
