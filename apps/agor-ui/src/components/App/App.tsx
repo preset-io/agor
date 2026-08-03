@@ -245,6 +245,7 @@ export interface AppProps {
   /** Whether the web terminal is enabled on this instance (execution.allow_web_terminal) */
   webTerminalEnabled?: boolean;
   branchStorageConfig?: BranchStorageConfig;
+  uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
 // Stable empty-array sentinel: keeps prop refs equal across renders for the
@@ -354,6 +355,7 @@ export const App: React.FC<AppProps> = ({
   instanceDescription,
   webTerminalEnabled = false,
   branchStorageConfig,
+  uploadPolicy,
 }) => {
   // The always-mounted shell holds NO whole-map subscriptions. Everything it
   // needs is either a narrow per-id / derived-scalar selector below (which
@@ -1677,6 +1679,7 @@ export const App: React.FC<AppProps> = ({
                           sessionMcpServerIds={selectedSessionMcpServerIds}
                           open={!!effectiveSelectedSessionId}
                           onClose={handleCloseSessionPanel}
+                          uploadPolicy={uploadPolicy}
                         />
                       ) : pendingToolChoiceBranchId ? (
                         <PendingToolChoicePanel
@@ -1725,6 +1728,7 @@ export const App: React.FC<AppProps> = ({
             branch={newSessionBranch || undefined}
             currentUser={user}
             client={client}
+            uploadPolicy={uploadPolicy}
           />
         )}
         <SettingsModal

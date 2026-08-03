@@ -397,6 +397,63 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
   });
 
+  it('reuses existing board via server fetch when boardById store is empty (restart onboarding)', async () => {
+    const serverBoard = makeBoard({ board_id: 'board-existing', name: 'My board' });
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-new', created_by: 'user-1' })),
+      get: vi.fn(async () => serverBoard),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    };
+
+    renderWizard({
+      initialStep: 'workspace',
+      client: client as never,
+      user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
+      // No boardById — store is empty (the bug scenario)
+    });
+
+    await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-existing'));
+    expect(await screen.findByText('Board already set up')).toBeInTheDocument();
+    expect(screen.getByText('My board')).toBeInTheDocument();
+
+    clickButton(/keep going/i);
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+  });
+
+  it('creates a new board when mainBoardId points to a deleted board', async () => {
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-new', created_by: 'user-1' })),
+      get: vi.fn(async () => {
+        throw new Error('Not found');
+      }),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    };
+
+    renderWizard({
+      initialStep: 'workspace',
+      client: client as never,
+      user: makeUser({ preferences: { mainBoardId: 'board-deleted' } } as Partial<User>),
+    });
+
+    await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-deleted'));
+    // Board not found — user can name a new teammate and create a board
+    await waitFor(() => expect(screen.getByText('Name your AI teammate')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
+    clickButton(/^continue →/i);
+
+    await waitFor(() => {
+      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Ada', icon: '🤖' });
+    });
+  });
+
   it('integrations step shows persona-tailored MCP recommendations', async () => {
     renderWizard({ initialStep: 'integrations' });
 

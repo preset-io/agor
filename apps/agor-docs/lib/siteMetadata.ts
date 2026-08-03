@@ -25,6 +25,7 @@ export const DEFAULT_SOCIAL_IMAGE = '/screenshots/board-hero.png';
 export const SOCIAL_IMAGE_FIELDS = ['ogImage', 'socialImage', 'heroImage', 'image'] as const;
 
 export type FrontMatterLike = {
+  author?: string;
   canonical?: string;
   description?: string;
   date?: string | number | Date;

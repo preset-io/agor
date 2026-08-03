@@ -35,6 +35,7 @@ describe('Command Registry', () => {
     expect(commands).toContain('branch.knowledge.write');
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
+    expect(commands).toContain('branch.upload.materialize');
     expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
@@ -60,6 +61,7 @@ describe('Command Registry', () => {
     expect(hasCommand('branch.knowledge.write')).toBe(true);
     expect(hasCommand('branch.knowledge.read')).toBe(true);
     expect(hasCommand('branch.gateway.slack-file-upload')).toBe(true);
+    expect(hasCommand('branch.upload.materialize')).toBe(true);
     expect(hasCommand('branch.inspect')).toBe(true);
     expect(hasCommand('branch.agor-yml.import')).toBe(true);
     expect(hasCommand('branch.agor-yml.export')).toBe(true);

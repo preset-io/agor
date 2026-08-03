@@ -31,6 +31,7 @@ export * from './template';
 export * from './tenant';
 export * from './tenant-agentic-tool';
 export * from './ui';
+export * from './upload';
 export * from './user';
 export * from './utils';
 export * from './widget';

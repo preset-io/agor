@@ -6,7 +6,6 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { generateId } from '@agor/core';
 import {
   AgenticConfigurationResolutionError,
   assertV05Scope,
@@ -24,6 +23,7 @@ import {
   deleteFrom,
   encryptApiKey,
   eq,
+  generateId,
   hash,
   insert,
   select,

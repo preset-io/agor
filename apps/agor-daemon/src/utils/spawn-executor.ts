@@ -119,7 +119,6 @@ export interface ExecutorSpawnContext {
 }
 
 export interface SpawnExecutorOptions {
-  cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
   /** When set, spawns via `sudo -n -u $asUser`. Secrets go through a 0600 env-file. */
@@ -371,32 +370,6 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
 
-  // Detect missing-cwd up front (issue #1109). Without this, node's
-  // child_process surfaces `spawn /usr/local/bin/node ENOENT` — reported
-  // against the executable path, not the cwd that's actually gone — and
-  // operators end up debugging the wrong layer. The most common cause is
-  // running with a persistent database while `$HOME` is on an ephemeral
-  // volume (e.g. Kubernetes emptyDir): on pod redeploy the DB still
-  // references branch/repo paths that no longer exist on disk. We
-  // surface that clearly here; recovery is left to the operator
-  // (restore the volume, or use the branch/repo lifecycle commands to
-  // remove the orphan rows).
-  if (cwd && !existsSync(cwd)) {
-    console.error(
-      `${logPrefix} Refusing to spawn: cwd does not exist on disk: ${cwd}. ` +
-        `This usually means the branch or repo directory was deleted ` +
-        `out-of-band — for example a Kubernetes pod redeploy with an ` +
-        `ephemeral $HOME but a persistent database. Verify that the volume ` +
-        `backing $HOME persists across restarts. See issue #1109.`
-    );
-    // Surface failure through the normal exit-code path so onExit handlers
-    // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
-    // conventional "command not found" exit code; close enough semantically
-    // for "the cwd is gone" without inventing a new one.
-    options.onExit?.(127, { mode: 'local' });
-    return;
-  }
-
   let reportedExit = false;
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
@@ -548,14 +521,14 @@ function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Bu
 
 const INTERACTIVE_EXECUTOR_EVENT_PREFIX = 'AGOR_EXECUTOR_INTERACTIVE_EVENT ';
 
-function resolveLocalExecutorLocation(options: Pick<SpawnExecutorOptions, 'cwd'>) {
+function resolveLocalExecutorLocation() {
   const executorPath = findExecutorPath();
   return {
     executorPath,
     // Default to the executor package directory for proper module resolution.
     // ESM imports resolve relative to the file location, and pnpm's node_modules
     // structure requires running from the package directory.
-    cwd: options.cwd ?? path.dirname(path.dirname(executorPath)),
+    cwd: path.dirname(path.dirname(executorPath)),
   };
 }
 
@@ -607,7 +580,7 @@ function prepareLocalExecutorImpersonation(
 function prepareLocalExecutorSpawn(
   options: SpawnExecutorOptions,
   mode: '--stdin' | '--interactive-command',
-  location = resolveLocalExecutorLocation(options)
+  location = resolveLocalExecutorLocation()
 ) {
   const { executorPath, cwd } = location;
   const asUser = options.asUser || undefined;
@@ -935,21 +908,8 @@ function runExecutorCommandLocal(
   const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
   const rawAsUser = options.asUser;
   const asUser = rawAsUser || undefined;
-  const location = resolveLocalExecutorLocation(options);
-  const { cwd } = location;
-
-  if (cwd && !existsSync(cwd)) {
-    return Promise.resolve({
-      success: false,
-      error: {
-        code: 'EXECUTOR_CWD_MISSING',
-        message: `Refusing to spawn: cwd does not exist on disk: ${cwd}`,
-      },
-    });
-  }
-
-  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin', location);
-  const { cmd, args, envWithDaemonUrl, envFilePath } = prepared;
+  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin');
+  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 

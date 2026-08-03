@@ -232,7 +232,11 @@ services:
       # through Drizzle migrations during daemon startup; checking for the
       # drizzle schema here can deadlock fresh environments before the daemon has
       # a chance to create it.
-      test: ['CMD-SHELL', 'pg_isready -h localhost -d ${POSTGRES_DB:-agor}']
+      # Escape `$` so Compose leaves these for the container shell. Without an
+      # explicit user, pg_isready inherits the healthcheck process user
+      # (`root`) and PostgreSQL logs a failed `role "root" does not exist`
+      # connection on every probe.
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 2s
       timeout: 3s
       retries: 10

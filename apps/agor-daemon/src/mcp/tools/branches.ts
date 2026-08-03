@@ -948,6 +948,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               '"prompt" = can prompt ANY session (including other users\'), "all" = full access. ' +
               'Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
           ),
+        permissionSource: z
+          .enum(['board', 'override'])
+          .optional()
+          .describe(
+            'Choose whether effective non-owner access is inherited from the board or read from this branch override. Set "override" with othersCan="none" for an explicit private fallback.'
+          ),
         othersFsAccess: z
           .enum(['none', 'read', 'write'])
           .optional()
@@ -1043,6 +1049,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       if (args.othersCan !== undefined) {
         fieldsProvided++;
         updates.others_can = args.othersCan;
+      }
+      if (args.permissionSource !== undefined) {
+        fieldsProvided++;
+        updates.permission_source = args.permissionSource;
       }
       if (args.othersFsAccess !== undefined) {
         fieldsProvided++;

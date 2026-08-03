@@ -50,6 +50,7 @@ export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
 export const gatewayOutboundMessages = schema.gatewayOutboundMessages;
+export const uploads = schema.uploads;
 export const userApiKeys = schema.userApiKeys;
 export const kbNamespaces = schema.kbNamespaces;
 export const kbNamespaceAcl = schema.kbNamespaceAcl;

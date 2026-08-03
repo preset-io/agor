@@ -519,6 +519,18 @@ export const BranchSlackFileUploadPayloadSchema = BasePayloadSchema.extend({
 });
 export type BranchSlackFileUploadPayload = z.infer<typeof BranchSlackFileUploadPayloadSchema>;
 
+export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.upload.materialize'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    sessionId: z.string().uuid(),
+    uploadRef: z.string().regex(/^upl_[0-9a-f-]{36}$/),
+    filename: z.string().min(1),
+  }),
+});
+export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Branch Inspect Payload
 // ═══════════════════════════════════════════════════════════
@@ -968,6 +980,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchKnowledgeWritePayloadSchema,
   BranchKnowledgeReadPayloadSchema,
   BranchSlackFileUploadPayloadSchema,
+  BranchUploadMaterializePayloadSchema,
   BranchInspectPayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
@@ -1048,6 +1061,7 @@ export function getSupportedCommands(): string[] {
     'branch.knowledge.write',
     'branch.knowledge.read',
     'branch.gateway.slack-file-upload',
+    'branch.upload.materialize',
     'branch.inspect',
     'branch.agor-yml.import',
     'branch.agor-yml.export',

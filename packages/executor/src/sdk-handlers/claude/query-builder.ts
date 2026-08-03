@@ -7,7 +7,8 @@
 
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
-import { shortId, validateDirectory } from '@agor/core';
+import { shortId } from '@agor/core/db';
+import { validateDirectory } from '@agor/core/lib/validation';
 import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';

@@ -32,7 +32,7 @@ import {
   hasDefinedGatewayAgenticConfigInlineFields,
 } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { MAX_UPLOAD_FILE_SIZE } from '../utils/upload.js';
+import { getUploadLimits } from '../utils/upload.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 export class GatewayChannelsService extends DrizzleService<
@@ -163,15 +163,16 @@ export class GatewayChannelsService extends DrizzleService<
     return super.patch(id, data, params);
   }
 
-  async uploadFileFromExecutor(
+  async uploadFileStreamFromExecutor(
     data: {
       gatewayChannelId: string;
       channel: string;
       threadTs?: string;
-      fileBase64: string;
       filename: string;
       comment?: string;
+      size: number;
     },
+    file: NodeJS.ReadableStream | Buffer,
     params?: AuthenticatedParams
   ): Promise<unknown> {
     const caller = params?.user;
@@ -205,18 +206,9 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Slack channel is not an allowed write target');
     }
 
-    const normalizedBase64 = data.fileBase64;
-    if (normalizedBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64)) {
-      throw new BadRequest('File content must be valid Base64');
-    }
-    const padding = normalizedBase64.endsWith('==') ? 2 : normalizedBase64.endsWith('=') ? 1 : 0;
-    const decodedSize = (normalizedBase64.length / 4) * 3 - padding;
-    if (decodedSize > MAX_UPLOAD_FILE_SIZE) {
-      throw new BadRequest(`File exceeds the ${MAX_UPLOAD_FILE_SIZE}-byte upload limit`);
-    }
-    const file = Buffer.from(normalizedBase64, 'base64');
-    if (file.toString('base64') !== normalizedBase64) {
-      throw new BadRequest('File content must be canonical Base64');
+    const maxFileBytes = getUploadLimits().maxFileBytes;
+    if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > maxFileBytes) {
+      throw new BadRequest(`File exceeds the ${maxFileBytes}-byte upload limit`);
     }
 
     const connector = getConnector('slack', gatewayChannel.config);
@@ -224,7 +216,7 @@ export class GatewayChannelsService extends DrizzleService<
       uploadFile?: (input: {
         channel: string;
         threadTs?: string;
-        file: Buffer;
+        file: NodeJS.ReadableStream | Buffer;
         filename: string;
         comment?: string;
       }) => Promise<unknown>;

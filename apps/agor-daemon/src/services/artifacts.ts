@@ -14,7 +14,6 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import { generateId } from '@agor/core';
 import {
   getDaemonBaseUrl,
   loadConfig,
@@ -27,6 +26,7 @@ import {
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  generateId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';

@@ -137,6 +137,30 @@ afterEach(() => {
 });
 
 describe('agor_branches_update', () => {
+  it('can persist an explicit None override instead of an inherited board default', async () => {
+    const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
+
+    await update({
+      branchId: 'branch-1',
+      permissionSource: 'override',
+      othersCan: 'none',
+    });
+
+    expect(branchesPatch).toHaveBeenCalledWith(
+      'branch-1',
+      { permission_source: 'override', others_can: 'none' },
+      {}
+    );
+  });
+
   it('uses authenticated service params when falling back to the current session branch', async () => {
     const baseServiceParams = {
       authenticated: true,

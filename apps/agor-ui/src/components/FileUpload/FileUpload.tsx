@@ -13,7 +13,7 @@ const { Text } = Typography;
 const DEFAULT_AGENT_UPLOAD_MESSAGE =
   'Note: the user uploaded file(s): {filepath}\n\nPlease review and use them as context for this task.';
 
-export type { UploadDestination, UploadedFile } from './upload';
+export type { UploadedFile } from './upload';
 
 export interface FileUploadProps {
   sessionId: string;
@@ -118,11 +118,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       // If not notifying agent, optionally insert @filepath mention
       if (!notifyAgent && onInsertMention && result.files.length > 0) {
-        // Insert first file path as mention
+        // Insert the opaque upload reference; physical paths never cross this boundary.
         const firstFile = result.files[0];
-        // Quote paths with spaces to prevent breaking mention parser
-        const mentionPath = firstFile.path.includes(' ') ? `"${firstFile.path}"` : firstFile.path;
-        onInsertMention(mentionPath);
+        onInsertMention(firstFile.ref);
       }
 
       // Reset and close
@@ -175,8 +173,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         </Upload>
 
         <Text type="secondary" style={{ fontSize: '12px' }}>
-          Files are uploaded to <Text code>~/.agor/uploads/</Text>. When notified, the agent
-          receives the full file path and can copy or move it into the branch if needed.
+          Files are held in temporary session-scoped staging. When notified, the agent receives an
+          expiring handle and can materialize it into its session workspace.
         </Text>
 
         {/* Notify agent option */}

@@ -23,6 +23,7 @@ import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
+  CloudUploadOutlined,
   SettingOutlined,
   SoundOutlined,
   TeamOutlined,
@@ -69,6 +70,7 @@ import { ToolIcon } from '../ToolIcon';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
@@ -725,6 +727,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         break;
       case 'env-vars':
       case 'personal-api-keys':
+      case 'uploads':
         // These tabs save inline; keep the user on the current section.
         await saveDirtyAgenticConfigs();
         break;
@@ -786,6 +789,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label: 'Agor API Tokens',
           icon: <ApiOutlined />,
         },
+        ...(user?.user_id === currentUser?.user_id
+          ? [
+              {
+                key: 'uploads',
+                label: 'Uploads',
+                icon: <CloudUploadOutlined />,
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -960,6 +972,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             )}
           </>
         );
+      case 'uploads':
+        return <UploadsTab />;
       case 'env-vars':
         return (
           <>
@@ -1234,6 +1248,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       audio: 'Audio',
       groups: 'Groups',
       'personal-api-keys': 'Agor API Tokens',
+      uploads: 'Uploads',
     };
     return titles[activeTab] || 'User Settings';
   };

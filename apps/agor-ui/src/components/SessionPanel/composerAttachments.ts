@@ -1,4 +1,9 @@
-import type { UploadDestination, UploadedFile } from '../FileUpload';
+import {
+  buildUploadAttachmentPrompt,
+  formatUploadBytes,
+  type UploadIngressPolicy,
+} from '@agor/core/types';
+import type { UploadedFile } from '../FileUpload';
 
 export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -52,7 +57,6 @@ export interface ComposerAttachment {
   id: string;
   file: File;
   previewUrl?: string;
-  destination: UploadDestination;
   status: ComposerAttachmentStatus;
   uploadedFile?: UploadedFile;
   error?: string;
@@ -101,19 +105,18 @@ export function isSupportedComposerUploadFile(file: File): boolean {
   return COMPOSER_UPLOAD_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
-function formatBytes(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
-}
-
 export function validateComposerFileIntake(
   files: File[],
   currentAttachments: ComposerAttachment[] = [],
-  destination: UploadDestination = 'branch'
+  policy: UploadIngressPolicy = {
+    maxFileBytes: MAX_COMPOSER_UPLOAD_FILE_SIZE,
+    maxTotalBytes: MAX_COMPOSER_UPLOAD_TOTAL_SIZE,
+    maxFiles: MAX_COMPOSER_UPLOAD_FILES,
+  }
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
   const rejections: ComposerFileRejection[] = [];
   const currentUploadBatch = currentAttachments.filter(
-    (attachment) => attachment.destination === destination && attachment.status !== 'uploaded'
+    (attachment) => attachment.status !== 'uploaded'
   );
   let totalSize = currentUploadBatch.reduce((sum, attachment) => sum + attachment.file.size, 0);
   const candidates: File[] = [];
@@ -127,10 +130,10 @@ export function validateComposerFileIntake(
       continue;
     }
 
-    if (file.size > MAX_COMPOSER_UPLOAD_FILE_SIZE) {
+    if (file.size > policy.maxFileBytes) {
       rejections.push({
         file,
-        reason: `File is larger than ${formatBytes(MAX_COMPOSER_UPLOAD_FILE_SIZE)}`,
+        reason: `File is larger than ${formatUploadBytes(policy.maxFileBytes)}`,
       });
       continue;
     }
@@ -138,11 +141,12 @@ export function validateComposerFileIntake(
     candidates.push(normalizeComposerUploadFile(file));
   }
 
-  if (currentUploadBatch.length + candidates.length > MAX_COMPOSER_UPLOAD_FILES) {
+  if (currentUploadBatch.length + candidates.length > policy.maxFiles) {
+    const filesMessage = `Composer supports up to ${policy.maxFiles} pending files`;
     rejections.push(
       ...candidates.map((file) => ({
         file,
-        reason: MAX_COMPOSER_UPLOAD_FILES_MESSAGE,
+        reason: filesMessage,
       }))
     );
     return { acceptedFiles: [], rejections };
@@ -150,10 +154,10 @@ export function validateComposerFileIntake(
 
   const acceptedFiles: File[] = [];
   for (const file of candidates) {
-    if (totalSize + file.size > MAX_COMPOSER_UPLOAD_TOTAL_SIZE) {
+    if (totalSize + file.size > policy.maxTotalBytes) {
       rejections.push({
         file,
-        reason: `Selected files exceed ${formatBytes(MAX_COMPOSER_UPLOAD_TOTAL_SIZE)} total`,
+        reason: `Selected files exceed ${formatUploadBytes(policy.maxTotalBytes)} total`,
       });
       continue;
     }
@@ -169,7 +173,7 @@ export function summarizeComposerFileRejections(rejections: ComposerFileRejectio
   if (rejections.length === 0) return '';
 
   const first =
-    rejections.find((rejection) => rejection.reason === MAX_COMPOSER_UPLOAD_FILES_MESSAGE) ??
+    rejections.find((rejection) => rejection.reason.startsWith('Composer supports up to ')) ??
     rejections[0];
   const suffix = rejections.length > 1 ? ` (+${rejections.length - 1} more)` : '';
   return `${first.file.name}: ${first.reason}${suffix}`;
@@ -197,15 +201,13 @@ export function getLatestComposerPromptText({
   return promptHandle?.getValue() ?? inputValueRefValue ?? sendStartValue;
 }
 
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
-  const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
+export interface PromptAttachment {
+  ref: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
 
-  const attachmentBlock = ['Attached files:', ...attachmentPaths.map((path) => `- ${path}`)].join(
-    '\n'
-  );
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
+export function buildPromptWithAttachments(text: string, attachments: PromptAttachment[]): string {
+  return buildUploadAttachmentPrompt(text, attachments);
 }

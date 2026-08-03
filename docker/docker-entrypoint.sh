@@ -154,17 +154,23 @@ done
 echo "✅ @agor/executor initial build complete (including type definitions)"
 
 # In strict/insulated Unix modes, executors are launched as non-daemon Unix
-# users. The bind-mounted /app tree can be group-private in Agor-managed
-# worktrees, so those users may not be able to read /app/packages/executor even
-# though they can read their assigned branch checkout. Build a standalone,
-# world-readable executor runtime outside /app and point the daemon at it.
+# users. Expose only the compiled runtime packages through the group-private
+# /app bind mount. Keeping the executor in place means the watch processes below
+# update exactly the files subsequent executor launches use; no second pnpm
+# installation or stale runtime copy is involved.
 if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
-  echo "📦 Preparing shared executor runtime for Unix impersonation..."
-  rm -rf /tmp/agor-executor-runtime
-  pnpm --filter @agor/executor deploy --prod /tmp/agor-executor-runtime
-  chmod -R a+rX /tmp/agor-executor-runtime
-  export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
-  echo "✅ Shared executor runtime ready: $AGOR_EXECUTOR_PATH"
+  echo "📦 Exposing compiled executor runtime for Unix impersonation..."
+  sudo chmod o+x /app /app/packages \
+    /app/packages/core /app/packages/git /app/packages/executor
+  sudo chmod a+r /app/packages/core/package.json \
+    /app/packages/git/package.json /app/packages/executor/package.json
+  sudo chmod -R a+rX /app/packages/core/dist /app/packages/git/dist \
+    /app/packages/executor/bin /app/packages/executor/dist
+  # Preserve runtime readability for files added later by the watch compilers.
+  find /app/packages/core/dist /app/packages/git/dist /app/packages/executor/dist \
+    -type d -exec sudo setfacl -m d:o::rx {} +
+  export AGOR_EXECUTOR_PATH=/app/packages/executor/bin/agor-executor
+  echo "✅ Compiled executor runtime ready: $AGOR_EXECUTOR_PATH"
 fi
 
 echo "🔨 Building @agor-live/client (initial build)..."

@@ -12,7 +12,11 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, RepoID, UUID } from '@agor/core/types';
-import { loadConfigSync, resolveExecutionSecurityMode } from '../config/config-manager';
+import {
+  getBranchesDir,
+  loadConfigSync,
+  resolveExecutionSecurityMode,
+} from '../config/config-manager';
 import { resolveMultiTenancyConfig } from '../config/multitenancy';
 import {
   BoardObjectRepository,
@@ -20,7 +24,7 @@ import {
   BranchRepository,
   RepoRepository,
 } from '../db/repositories';
-import { cloneRepo, createBranch, getBranchPath } from '../git/exec';
+import { cloneRepo, createBranch } from '../git/exec';
 import { generateId } from '../lib/ids';
 import { DirectExecutor, UnixIntegrationService } from '../unix';
 
@@ -184,7 +188,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
         ? `-${tenantId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 40)}`
         : '';
     const branchName = `test-branch${tenantBranchSuffix}`;
-    const branchPath = getBranchPath(repoSlug, branchName);
+    const branchPath = path.join(getBranchesDir(tenantId), repoSlug, branchName);
 
     // Generate unique numeric ID for branch (used for port allocation)
     const branchUniqueId = Math.floor(Math.random() * 1000) + 1;

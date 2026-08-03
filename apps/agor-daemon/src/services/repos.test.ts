@@ -185,3 +185,36 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
     );
   });
 });
+
+describe('ReposService.cloneRepository Git lifecycle identity', () => {
+  it('creates managed storage as the daemon lifecycle user, not the requesting user', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockClear();
+    impersonationMocks.resolveExecutorReadAsUser.mockClear();
+    impersonationMocks.resolveGitImpersonationForUser.mockClear();
+
+    const repos = { patch: vi.fn() };
+    const app = {
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'repos') return repos;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'create').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor-teammate',
+    } as never);
+
+    await service.cloneRepository({ url: 'https://github.com/preset-io/agor-teammate.git' }, {
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+    } as never);
+
+    expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
+    expect(impersonationMocks.resolveExecutorReadAsUser).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'git.clone' }),
+      expect.objectContaining({ asUser: 'daemon-user' })
+    );
+  });
+});

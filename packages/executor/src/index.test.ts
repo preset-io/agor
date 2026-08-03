@@ -114,10 +114,10 @@ describe('AgorExecutor watchdog handoff', () => {
       agenticToolContext: { dataHome: '/opaque/opencode-home' },
       daemonUrl: 'http://daemon',
     }) as unknown as {
-      client: { service: () => { complete: typeof complete } };
+      client: { tasks: { complete: typeof complete } };
       executeTask(): Promise<void>;
     };
-    executor.client = { service: () => ({ complete }) };
+    executor.client = { tasks: { complete } };
 
     await executor.executeTask();
 

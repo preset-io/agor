@@ -14,7 +14,7 @@
  * See docs/designs/env-command-variants.md.
  */
 
-import { resolveVariantOrThrow } from '../config/agor-yml';
+import { resolveVariantOrThrow } from '../config/variant-resolver';
 import { buildBranchContext, renderTemplate } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/branch';
 

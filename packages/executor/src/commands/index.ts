@@ -48,6 +48,7 @@ import {
   handleUnixSyncRepo,
   handleUnixSyncUser,
 } from './unix.js';
+import { handleBranchUploadMaterialize } from './upload.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
 export interface CommandOptions {
@@ -261,6 +262,7 @@ registerCommand('branch.artifact.validate', handleBranchArtifactValidate);
 registerCommand('branch.knowledge.write', handleBranchKnowledgeWrite);
 registerCommand('branch.knowledge.read', handleBranchKnowledgeRead);
 registerCommand('branch.gateway.slack-file-upload', handleBranchSlackFileUpload);
+registerCommand('branch.upload.materialize', handleBranchUploadMaterialize);
 registerCommand('branch.inspect', handleBranchInspect);
 registerCommand('branch.agor-yml.import', handleBranchAgorYmlImport);
 registerCommand('branch.agor-yml.export', handleBranchAgorYmlExport);

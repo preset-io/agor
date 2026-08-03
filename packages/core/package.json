@@ -76,6 +76,12 @@
       "import": "./dist/config/index.js",
       "require": "./dist/config/index.cjs"
     },
+    "./config/node": {
+      "source": "./src/config/agor-yml.ts",
+      "types": "./dist/config/agor-yml.d.ts",
+      "import": "./dist/config/agor-yml.js",
+      "require": "./dist/config/agor-yml.cjs"
+    },
     "./config/browser": {
       "source": "./src/config/browser.ts",
       "types": "./dist/config/browser.d.ts",
@@ -99,6 +105,12 @@
       "types": "./dist/lib/feathers-validation.d.ts",
       "import": "./dist/lib/feathers-validation.js",
       "require": "./dist/lib/feathers-validation.cjs"
+    },
+    "./lib/validation": {
+      "source": "./src/lib/validation.ts",
+      "types": "./dist/lib/validation.d.ts",
+      "import": "./dist/lib/validation.js",
+      "require": "./dist/lib/validation.cjs"
     },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",
@@ -364,6 +376,12 @@
       "import": "./dist/local-actions/index.js",
       "require": "./dist/local-actions/index.cjs"
     },
+    "./local-actions/identity": {
+      "source": "./src/local-actions/identity.ts",
+      "types": "./dist/local-actions/identity.d.ts",
+      "import": "./dist/local-actions/identity.js",
+      "require": "./dist/local-actions/identity.cjs"
+    },
     "./templates/teammate-welcome-note": {
       "source": "./src/templates/teammate-welcome-note.ts",
       "types": "./dist/templates/teammate-welcome-note.d.ts",
@@ -425,7 +443,7 @@
     "cronstrue": "^3.24.0",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^5.2.1",
+    "js-yaml": "^5.2.2",
     "open": "^11.0.0",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",

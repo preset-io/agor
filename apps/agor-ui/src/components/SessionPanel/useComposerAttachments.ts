@@ -1,3 +1,4 @@
+import type { UploadIngressPolicy } from '@agor/core/types';
 import type { SessionID } from '@agor-live/client';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
@@ -14,9 +15,14 @@ import {
 interface UseComposerAttachmentsOptions {
   sessionId: SessionID | null;
   showError: (message: string) => void;
+  uploadPolicy?: UploadIngressPolicy;
 }
 
-export function useComposerAttachments({ sessionId, showError }: UseComposerAttachmentsOptions) {
+export function useComposerAttachments({
+  sessionId,
+  showError,
+  uploadPolicy,
+}: UseComposerAttachmentsOptions) {
   const [attachments, setAttachments] = React.useState<ComposerAttachment[]>([]);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
@@ -60,7 +66,8 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
 
       const { acceptedFiles, rejections } = validateComposerFileIntake(
         files,
-        attachmentsRef.current
+        attachmentsRef.current,
+        uploadPolicy
       );
       if (rejections.length > 0) {
         const validationMessage = summarizeComposerFileRejections(rejections);
@@ -82,13 +89,12 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
                 : `${Date.now()}-${file.name}`,
             file,
             previewUrl: supported ? URL.createObjectURL(file) : undefined,
-            destination: 'branch' as const,
             status: 'pending' as const,
           };
         }),
       ]);
     },
-    [showError]
+    [showError, uploadPolicy]
   );
 
   const removeAttachment = React.useCallback(
