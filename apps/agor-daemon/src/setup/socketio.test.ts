@@ -72,6 +72,10 @@ interface FakeIO {
   excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
   middlewares: Array<(socket: FakeSocket, next: (err?: Error) => void) => void>;
+  engine: {
+    closeHandler?: () => void;
+    once(event: string, fn: () => void): void;
+  };
   on(event: string, fn: any): void;
   use(fn: any): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
@@ -146,6 +150,11 @@ function makeIO(): FakeIO {
     excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
+    engine: {
+      once(event, fn) {
+        if (event === 'close') this.closeHandler = fn;
+      },
+    },
     on(event, fn) {
       if (event === 'connection') {
         this.connectionHandler = fn;
@@ -172,7 +181,7 @@ function makeApp(): Application {
   // app.on('login'), and app.emit for the terminal:ready/error relay.
   const eventHandlers = new Map<string, (...args: any[]) => void>();
   return {
-    service: () => ({ get: async () => ({ user_id: 'u' }) }),
+    service: () => ({ get: async (userId: string) => ({ user_id: userId }) }),
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
     eventHandlers,
@@ -299,6 +308,7 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     debugSpy.mockRestore();
     logSpy.mockRestore();
     warnSpy.mockRestore();
@@ -321,6 +331,48 @@ describe('Socket.IO lifecycle logging', () => {
       'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
     );
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+  });
+
+  it('uses the same single authentication signal for handshake-authenticated users', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('handshake-sock');
+    socket.handshake.auth = {
+      token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    connect(io, socket);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      'socket authenticated: handshake-sock user:11111111aaaaaaaaaaaa1111'
+    );
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
+  });
+
+  it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+
+    vi.advanceTimersByTime(5_000);
+    expect(logSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+
+    io.engine.closeHandler?.();
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(2);
   });
 
   it.each(['transport close', 'client namespace disconnect'])(

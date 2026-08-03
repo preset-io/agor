@@ -345,6 +345,14 @@ export function createSocketIOConfig(
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
 
+    const logAuthenticated = (socketId: string, userId?: string) => {
+      console.log(
+        userId
+          ? `socket authenticated: ${socketId} user:${shortId(userId)}`
+          : `socket authenticated: ${socketId} service`
+      );
+    };
+
     // SECURITY: Add authentication middleware for WebSocket connections
     io.use(async (socket, next) => {
       try {
@@ -428,9 +436,7 @@ export function createSocketIOConfig(
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
           }
-          console.log(
-            `🔐 WebSocket authenticated (service): ${socket.id} (role: ${decoded.role || 'unknown'})`
-          );
+          logAuthenticated(socket.id);
           return next();
         }
 
@@ -451,7 +457,7 @@ export function createSocketIOConfig(
           if (fs.data) fs.data.tenant = tenant;
         }
 
-        console.log(`🔐 WebSocket authenticated: ${socket.id} (user: ${shortId(user.user_id)})`);
+        logAuthenticated(socket.id, user.user_id);
         next();
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
@@ -487,7 +493,7 @@ export function createSocketIOConfig(
       // membership would just hand them a firehose subscription they must not have.
       if (user?.user_id && !isTerminalExecutorIdentity(user)) {
         socket.join(userRoomName(user.user_id));
-        console.log(
+        console.debug(
           `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
         );
       }
@@ -894,7 +900,7 @@ export function createSocketIOConfig(
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
-          console.log(`socket authenticated: ${socket.id} user:${shortId(userId)}`);
+          logAuthenticated(socket.id, userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
             socket.join(userRoomName(userId));
@@ -912,9 +918,10 @@ export function createSocketIOConfig(
       },
       5 * 60 * 1000
     );
+    metricsInterval.unref();
 
-    // Ensure interval is cleared on shutdown
-    process.once('beforeExit', () => clearInterval(metricsInterval));
+    // Socket.io closes its Engine.IO server during application shutdown.
+    io.engine.once('close', () => clearInterval(metricsInterval));
   };
 
   return {
