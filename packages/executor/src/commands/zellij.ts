@@ -439,11 +439,15 @@ export async function handleZellijAttach(
       }
     });
 
-    // Listen for resize events
+    // Same-size resize (browser's reconnect redraw) emits no SIGWINCH — force a repaint.
     socket.on('terminal:resize', (data: { userId: string; cols: number; rows: number }) => {
-      if (data.userId === userId && ptyProcess) {
-        currentPtyCols = data.cols;
-        currentPtyRows = data.rows;
+      if (data.userId !== userId || !ptyProcess) return;
+      const unchanged = data.cols === currentPtyCols && data.rows === currentPtyRows;
+      currentPtyCols = data.cols;
+      currentPtyRows = data.rows;
+      if (unchanged) {
+        forceZellijRepaint(ptyProcess, data.cols, data.rows);
+      } else {
         ptyProcess.resize(data.cols, data.rows);
       }
     });
