@@ -1185,17 +1185,16 @@ export function useAgorData(
     usersService.on('removed', realtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
+    // A single-row realtime event is an INCREMENTAL upsert, not a complete
+    // snapshot — merge the row without flipping the hydration gate, so a patch
+    // that lands before the full fetch can't mark a partial map authoritative.
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
-      const current = agorStore.getState().agenticToolSettingsByName;
-      agorStore
-        .getState()
-        .setAgenticToolSettings(
-          [...current.values()].filter((item) => item.tool !== updated.tool).concat(updated)
-        );
+      agorStore.getState().upsertAgenticToolSetting(updated);
     };
     agenticToolSettingsService.on('patched', agenticToolSettingsPatched);
+    agenticToolSettingsService.on('created', agenticToolSettingsPatched);
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
@@ -1441,6 +1440,7 @@ export function useAgorData(
       usersService.removeListener('removed', realtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
+      agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
 
       mcpServersService.removeListener('created', realtime.mcpServerCreated);
       mcpServersService.removeListener('patched', realtime.mcpServerPatched);
