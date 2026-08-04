@@ -438,7 +438,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
           {
             key: 'all-sessions',
-            label: 'All sessions',
+            label: 'Sessions',
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
@@ -462,7 +462,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
           {
             key: 'all-branches',
-            label: 'All branches',
+            label: 'Branches',
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
