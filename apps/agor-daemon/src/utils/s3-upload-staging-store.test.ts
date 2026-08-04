@@ -45,7 +45,7 @@ vi.mock('@agor/core/db', () => ({
       repositoryState.rows = repositoryState.rows.filter((row) => row.ref !== ref);
     }
   },
-  UsersRepository: class {
+  SessionRepository: class {
     async findById(_id: string) {
       return { unix_username: 'jose_garcia' };
     }
@@ -274,6 +274,29 @@ describe('S3UploadStagingStore', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:02Z'));
     expect(await store.cleanupExpired(owner, new Date())).toBe(1);
     expect(repositoryState.rows).toHaveLength(0);
+    expect(client.objects.size).toBe(0);
+  });
+
+  it('keys uploads by the immutable session unix_username, stable across a user rename', async () => {
+    const client = new FakeS3();
+    const bytes = new S3UploadStagingStore(
+      { bucket: 'uploads', prefix: '' },
+      { client: client as unknown as S3Client }
+    );
+    const store = new MetadataUploadStagingStore({} as never, bytes);
+    const metadata = await store.stage({
+      owner,
+      name: 'note.txt',
+      mimeType: 'text/plain',
+      provenance: 'browser',
+      body: Readable.from('hello'),
+    });
+    expect([...client.objects.keys()][0]).toMatch(
+      /^uploads\/tenants\/tenant-a\/home\/jose_garcia\/upl_/
+    );
+    const stream = await store.read({ ...owner, ref: metadata.ref });
+    expect(await readText(stream)).toBe('hello');
+    await expect(store.delete({ ...owner, ref: metadata.ref })).resolves.toBeUndefined();
     expect(client.objects.size).toBe(0);
   });
 });

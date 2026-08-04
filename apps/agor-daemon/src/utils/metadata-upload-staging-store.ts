@@ -1,5 +1,6 @@
-import { runWithTenantDatabaseScope, UploadRepository, UsersRepository } from '@agor/core/db';
+import { runWithTenantDatabaseScope, SessionRepository, UploadRepository } from '@agor/core/db';
 import type {
+  SessionID,
   TenantID,
   UploadMetadata,
   UploadOwner,
@@ -21,28 +22,36 @@ function sanitizeHomeSegment(value: string | null | undefined): string | undefin
  */
 export class MetadataUploadStagingStore implements UploadStagingStore {
   private readonly repository: UploadRepository;
-  private readonly users: UsersRepository;
+  private readonly sessions: SessionRepository;
 
   constructor(
     private readonly db: ConstructorParameters<typeof UploadRepository>[0],
     private readonly bytes: UploadStagingStore
   ) {
     this.repository = new UploadRepository(db);
-    this.users = new UsersRepository(db);
+    this.sessions = new SessionRepository(db);
   }
 
-  // The physical key lives under the uploader's home segment, matching the EFS
-  // /home/<user> layout. It must be derivable on read, so it is resolved from
-  // the owner's unix_username (falling back to the user id, then '_shared').
-  private async resolveHomeSegment(tenantId: TenantID, createdBy: UserID): Promise<string> {
-    const user = await runWithTenantDatabaseScope(this.db, tenantId, () =>
-      this.users.findById(createdBy)
+  // Session unix_username is immutable, so the key survives a user rename.
+  private async resolveHomeSegment(
+    tenantId: TenantID,
+    sessionId: SessionID,
+    createdBy: UserID
+  ): Promise<string> {
+    const session = await runWithTenantDatabaseScope(this.db, tenantId, () =>
+      this.sessions.findById(sessionId)
     );
-    return sanitizeHomeSegment(user?.unix_username) ?? sanitizeHomeSegment(createdBy) ?? '_shared';
+    return (
+      sanitizeHomeSegment(session?.unix_username) ?? sanitizeHomeSegment(createdBy) ?? '_shared'
+    );
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    const homeSegment = await this.resolveHomeSegment(input.owner.tenantId, input.owner.createdBy);
+    const homeSegment = await this.resolveHomeSegment(
+      input.owner.tenantId,
+      input.owner.sessionId,
+      input.owner.createdBy
+    );
     const metadata = await this.bytes.stage({ ...input, homeSegment });
     try {
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
@@ -73,7 +82,11 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
 
   async inspect(input: UploadReadInput): Promise<UploadMetadata> {
     const upload = await this.authorize(input);
-    const homeSegment = await this.resolveHomeSegment(input.tenantId, upload.createdBy);
+    const homeSegment = await this.resolveHomeSegment(
+      input.tenantId,
+      upload.sessionId,
+      upload.createdBy
+    );
     return this.bytes.inspect({ ...input, homeSegment });
   }
 
@@ -81,7 +94,11 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     input: UploadReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream> {
     const upload = await this.authorize(input);
-    const homeSegment = await this.resolveHomeSegment(input.tenantId, upload.createdBy);
+    const homeSegment = await this.resolveHomeSegment(
+      input.tenantId,
+      upload.sessionId,
+      upload.createdBy
+    );
     return this.bytes.read({ ...input, homeSegment });
   }
 
@@ -93,7 +110,11 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    const homeSegment = await this.resolveHomeSegment(input.tenantId, existing.createdBy);
+    const homeSegment = await this.resolveHomeSegment(
+      input.tenantId,
+      existing.sessionId,
+      existing.createdBy
+    );
     await this.bytes.consume({ ...input, homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
@@ -108,7 +129,11 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    const homeSegment = await this.resolveHomeSegment(input.tenantId, existing.createdBy);
+    const homeSegment = await this.resolveHomeSegment(
+      input.tenantId,
+      existing.sessionId,
+      existing.createdBy
+    );
     await this.bytes.delete({ ...input, homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
