@@ -1,5 +1,12 @@
 import { Readable } from 'node:stream';
-import type { BranchID, SessionID, TenantID, UploadOwner, UserID } from '@agor/core/types';
+import type {
+  BranchID,
+  SessionID,
+  TenantID,
+  UploadOwner,
+  UploadRef,
+  UserID,
+} from '@agor/core/types';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -324,5 +331,40 @@ describe('S3UploadStagingStore', () => {
     expect(await store.cleanupExpired(owner, new Date())).toBe(1);
     expect(repositoryState.rows).toHaveLength(0);
     expect(client.objects.size).toBe(0);
+  });
+
+  it('reads and deletes a pre-upgrade row whose storage_key is a legacy ref', async () => {
+    const client = new FakeS3();
+    const bytes = new S3UploadStagingStore(
+      { bucket: 'uploads', prefix: '' },
+      { client: client as unknown as S3Client }
+    );
+    const store = new MetadataUploadStagingStore({} as never, bytes);
+    const legacyRef = 'upl_ff000000-0000-4000-8000-000000000000';
+    client.objects.set(`uploads/tenants/tenant-a/uploads/objects/ff/${legacyRef}`, {
+      body: Buffer.from('legacy'),
+      metadata: {
+        'tenant-id': owner.tenantId,
+        'session-id': owner.sessionId,
+        'branch-id': owner.branchId,
+        'created-by': owner.createdBy,
+        name: 'old.txt',
+        'mime-type': 'text/plain',
+        'created-at': '2026-01-01T00:00:00.000Z',
+        'expires-at': '',
+        provenance: 'browser',
+      },
+    });
+    repositoryState.rows.push({
+      ...owner,
+      ref: legacyRef,
+      homeSegment: legacyRef,
+      status: 'active',
+    });
+    const stream = await store.read({ ...owner, ref: legacyRef as UploadRef });
+    expect(await readText(stream)).toBe('legacy');
+    await store.delete({ ...owner, ref: legacyRef as UploadRef });
+    expect(client.objects.size).toBe(0);
+    expect(repositoryState.rows).toHaveLength(0);
   });
 });

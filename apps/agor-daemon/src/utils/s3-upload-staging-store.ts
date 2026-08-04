@@ -156,6 +156,15 @@ export class S3UploadStagingStore implements UploadStagingStore {
 
   private key(tenantId: string, homeSegment: string | undefined, ref: UploadRef): string {
     if (!HANDLE_PATTERN.test(ref)) throw forbidden();
+    // Legacy row: storage_key held the ref; read it at the pre-#2152 key.
+    if (homeSegment && HANDLE_PATTERN.test(homeSegment)) {
+      const base = this.location.prefix ? `${this.location.prefix}/` : '';
+      const managed = getManagedStorageSegments('uploads', {
+        tenantId,
+        tenantSeparated: true,
+      }).join('/');
+      return `${base}${managed}/objects/${ref.slice(4, 6)}/${ref}`;
+    }
     return `${this.homePrefix(tenantId, homeSegment)}${ref}`;
   }
 
