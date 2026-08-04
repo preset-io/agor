@@ -640,15 +640,44 @@ describe('OpenCodeTool managed turn', () => {
     );
     const invocationConfig = JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '');
     expect(invocationConfig).toMatchObject({
-      tools: { question: false },
-      permission: { question: 'deny' },
+      tools: { question: false, task: false },
+      permission: { question: 'deny', task: 'deny' },
       agent: {
         'agor-managed': {
-          tools: { question: false },
-          permission: { question: 'deny' },
+          tools: { question: false, task: false },
+          permission: { question: 'deny', task: 'deny' },
         },
       },
     });
+  });
+
+  it('rejects nested task control even in automatic allow-all mode', async () => {
+    const scenario = makePermissionTurn({
+      permissionMode: 'bypassPermissions',
+      requests: [
+        {
+          type: 'permission.asked',
+          properties: {
+            id: 'oc-task-permission',
+            sessionID: 'oc-new',
+            permission: 'task',
+            patterns: ['explore'],
+            metadata: { agent: 'explore' },
+          },
+        },
+      ],
+    });
+
+    await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(
+      'OpenCode permission was rejected'
+    );
+    expect(scenario.permissionService.waitForDecision).not.toHaveBeenCalled();
+    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: expect.objectContaining({ permissionID: 'oc-task-permission' }),
+        body: { response: 'reject' },
+      })
+    );
   });
 
   it('handles a read permission in yolo mode without waiting for a decision', async () => {
@@ -1112,11 +1141,11 @@ describe('OpenCodeTool managed turn', () => {
 
     expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
       permission: { '*': 'ask' },
-      tools: { question: false },
+      tools: { question: false, task: false },
       agent: {
         'agor-managed': {
           mode: 'primary',
-          tools: { question: false },
+          tools: { question: false, task: false },
           permission: { '*': 'ask', bash: 'ask', edit: 'ask' },
         },
       },
@@ -1126,6 +1155,7 @@ describe('OpenCodeTool managed turn', () => {
       bash: 'ask',
       edit: 'ask',
       question: 'deny',
+      task: 'deny',
     });
     expect(client.session.prompt).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ agent: 'agor-managed' }) })

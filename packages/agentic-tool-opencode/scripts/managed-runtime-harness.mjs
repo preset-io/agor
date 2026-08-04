@@ -768,13 +768,18 @@ async function run() {
       assert.equal(permission.requests.length, mode === 'once' ? 2 : 1);
       assert(permission.messagePatches.every((patch) => patch.data.content.status === 'approved'));
     } else {
-      await assert.rejects(turn.promise, /permission was rejected|turn was aborted|User Stop/i);
+      const expectedError =
+        mode === 'timeout'
+          ? /permission request timed out/i
+          : /permission was rejected|turn was aborted|User Stop/i;
+      await assert.rejects(turn.promise, expectedError);
       assert.equal(permission.requests.length, 1);
       if (mode === 'timeout') {
         assert(
           permission.messagePatches.some((patch) => patch.data.content.status === 'timed_out')
         );
-        assert(permission.taskPatches.some((patch) => patch.data.status === 'timed_out'));
+        assert(permission.taskPatches.some((patch) => patch.data.status === 'awaiting_permission'));
+        assert(!permission.taskPatches.some((patch) => patch.data.status === 'timed_out'));
       }
     }
   }

@@ -183,6 +183,8 @@ protocols.
 
 For OpenCode, every expected exit returns one runner report after managed
 cleanup. The authenticated executor submits it through the generic Task service.
+Native question and nested-task controls remain denied until their child-session
+events can be routed through Agor's task and permission owners.
 For a local executor, the daemon first persists a quiesced success, failure, or
 interaction timeout as a nonterminal proposal. It commits the durable terminal
 Task state only after wrapper exit and process-group absence. For a remote

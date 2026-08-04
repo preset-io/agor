@@ -51,7 +51,7 @@ const AGOR_PERMISSION_INTERCEPTION = {
   grep: 'ask',
   list: 'ask',
   bash: 'ask',
-  task: 'ask',
+  task: 'deny',
   external_directory: 'ask',
   todowrite: 'ask',
   question: 'deny',
@@ -226,7 +226,7 @@ async function applyPermissionEffect(input: {
   let handledByAgor = false;
   let interactionTimedOut = false;
 
-  if (effect.request.permission === 'question') {
+  if (effect.request.permission === 'question' || effect.request.permission === 'task') {
     handledByAgor = true;
   } else if (canUseTool) {
     if (automaticallyAllowsOpenCodePermission(turn.permissionMode, effect.request.permission)) {
@@ -507,13 +507,13 @@ export class OpenCodeTool {
     return {
       ...resolved,
       permission: AGOR_PERMISSION_INTERCEPTION,
-      tools: { ...resolved.tools, question: false },
+      tools: { ...resolved.tools, question: false, task: false },
       agent: {
         ...configuredAgents,
         [AGOR_MANAGED_AGENT]: {
           ...managedAgent,
           mode: 'primary',
-          tools: { ...managedAgentTools, question: false },
+          tools: { ...managedAgentTools, question: false, task: false },
           permission: AGOR_PERMISSION_INTERCEPTION,
         },
       },

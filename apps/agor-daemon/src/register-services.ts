@@ -47,7 +47,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { ROLES, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, ROLES, TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -1033,11 +1033,16 @@ function createExecuteHandler(
             if (task.runner_report?.cleanup.outcome === 'quiesced') {
               const containment = await containExecutorProcess(sessionId, taskId);
               if (containment.status === 'verified_absent') {
-                untrackExecutorProcess(sessionId, taskId);
-                await tasks.finalizeRunnerResultAfterLocalContainment(taskId, {
+                const finalized = await tasks.finalizeRunnerResultAfterLocalContainment(taskId, {
                   ...params,
                   provider: undefined,
                 });
+                if (isTerminalTaskStatus(finalized?.status)) {
+                  untrackExecutorProcess(sessionId, taskId);
+                }
+                // A concurrent termination claim returns STOPPING here; retain
+                // its tracker until the termination coordinator settles it.
+                sessionTokenService.revokeToken(sessionToken);
                 return;
               }
               await requestExecutorTermination({
@@ -1047,6 +1052,7 @@ function createExecuteHandler(
                 errorMessage: 'Executor process-group cleanup could not be verified.',
                 params,
               });
+              sessionTokenService.revokeToken(sessionToken);
               return;
             }
           } catch (error) {
