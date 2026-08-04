@@ -44,6 +44,8 @@ lifecycle owners.
    is crash-safe without introducing a generic outbox.
 5. Preserve tenant identity through every runtime, reconciliation, callback,
    queue, and gateway boundary.
+6. Serialize recovery for one Session while keeping containment and external
+   I/O outside database transactions.
 
 ## Problems this architecture must solve
 
@@ -306,6 +308,23 @@ bounded repair sweep. It materializes claims and intents; existing dispatcher
 and gateway owners perform executor spawn and external send. It does not
 interpret SDK events or prove containment.
 
+#### Recovery ordering and transaction scope
+
+Recovery for one Session is an ordered continuation of the release protocol,
+not a set of competing startup jobs. Containment finishes or preserves the
+`stopping` hold before restart notices and terminal consequence repair run for
+that Session. Queue continuation stays suppressed until that ordered recovery
+reaches reconciliation. Different Sessions may recover concurrently only when
+each Session retains this single-writer order.
+
+Tenant identity may span the complete recovery operation; a database
+transaction may not span process containment, a bounded wait, executor RPC, or
+external delivery. Each durable claim, terminal commit, notice, and consequence
+repair uses a short, idempotent database unit. If one unit must lock both the
+Session and its Tasks, it locks the Session first and Tasks in stable order.
+Transient database conflicts abort only that unit; a later bounded repair pass
+re-reads durable Task truth rather than replaying external effects.
+
 #### Crash-safe consequence identities
 
 Restart repair requires narrow durable coordination facts, not another
@@ -377,15 +396,16 @@ waiting, compatibility failure, stalled, and terminal outcomes truthfully.
 All runtime exit paths converge on the release gate; only their trigger and
 mapped result differ.
 
-| Trigger                    | Runner/controller action                                                                | Result                                                                 |
-| -------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Normal success             | Close runtime, settle operations, flush bounded transcript writes, report quiescence    | Commit `completed`, then reconcile                                     |
-| Recognized semantic stall  | Diagnose, abort under enforce policy, then prove cleanup or contain                     | Commit `failed` only after proof; otherwise hold `stopping`            |
-| Unknown runtime vocabulary | Record compatibility evidence without renewing progress or claiming a semantic stall    | Continue under declared conformance policy; fail/contain after quiet   |
-| Lost operation completion  | Expire the operation identity's absolute deadline and abort its work                    | Apply the wait profile, then finalize or contain                       |
-| Interaction timeout        | Abort the runtime and prove release                                                     | Commit `timed_out`; otherwise hold `stopping`                          |
-| Stop or health termination | Fence the winning cause, request abort, and verify the available containment capability | Commit `stopped`/`failed`; otherwise hold `stopping`                   |
-| Consequence repair         | Re-enter tenant scope and claim the missing deterministic identity                      | Materialize once; repeated repair is a no-op after its durable receipt |
+| Trigger                    | Runner/controller action                                                                               | Result                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Normal success             | Close runtime, settle operations, flush bounded transcript writes, report quiescence                   | Commit `completed`, then reconcile                                     |
+| Recognized semantic stall  | Diagnose, abort under enforce policy, then prove cleanup or contain                                    | Commit `failed` only after proof; otherwise hold `stopping`            |
+| Unknown runtime vocabulary | Record compatibility evidence without renewing progress or claiming a semantic stall                   | Continue under declared conformance policy; fail/contain after quiet   |
+| Lost operation completion  | Expire the operation identity's absolute deadline and abort its work                                   | Apply the wait profile, then finalize or contain                       |
+| Interaction timeout        | Abort the runtime and prove release                                                                    | Commit `timed_out`; otherwise hold `stopping`                          |
+| Stop or health termination | Fence the winning cause, request abort, and verify the available containment capability                | Commit `stopped`/`failed`; otherwise hold `stopping`                   |
+| Daemon restart recovery    | Claim the orphan, contain outside a database transaction, then serialize notice and repair per Session | Commit or preserve `stopping`; continue the queue only after repair    |
+| Consequence repair         | Re-enter tenant scope and claim the missing deterministic identity                                     | Materialize once; repeated repair is a no-op after its durable receipt |
 
 ## Required invariants
 
@@ -408,10 +428,13 @@ mapped result differ.
 7. Terminal consequences are tenant-scoped and crash-repairable through
    deterministic identities or receipts; external delivery is not claimed to
    be exactly-once.
-8. Unattended execution cannot enter an interaction wait without a reachable
+8. Recovery for one Session is serialized; tenant identity may span
+   orchestration, but database transactions cannot span containment or external
+   I/O, and queue continuation waits for ordered reconciliation.
+9. Unattended execution cannot enter an interaction wait without a reachable
    responder.
-9. Supervision and consequence repair do not imply automatic Task retry,
-   prompt replay, or safe runtime adoption after restart.
+10. Supervision and consequence repair do not imply automatic Task retry,
+    prompt replay, or safe runtime adoption after restart.
 
 ## Failure-family coverage
 
@@ -447,7 +470,9 @@ Each implementation PR identifies:
 4. the conformance or containment capability affected;
 5. the tenant boundary and proportional negative proof, when applicable;
 6. whether [task-runtime-state.md](../concepts/task-runtime-state.md) and
-   [task-queueing.md](../concepts/task-queueing.md) need updates.
+   [task-queueing.md](../concepts/task-queueing.md) need updates;
+7. for startup or repair changes, the per-Session ordering and proof that no
+   database transaction spans containment or external I/O.
 
 Timeout values, concrete TypeScript shapes, reconciliation cadence, and
 agentic-tool-specific recovery results belong to the first implementation PR
@@ -481,5 +506,6 @@ numbers or class names.
 | Terminal settlement and consequences          | `apps/agor-daemon/src/services/tasks.ts`                                                                                               |
 | Queue and callback continuation               | `apps/agor-daemon/src/register-routes.ts`, `apps/agor-daemon/src/register-hooks.ts`                                                    |
 | Tenant-scoped queued/deferred work            | `apps/agor-daemon/src/utils/session-queue-tenant-scope.ts`, `apps/agor-daemon/src/utils/tenant-db-scope.ts`                            |
+| Startup recovery and short database units     | `apps/agor-daemon/src/startup.ts`, `packages/core/src/db/tenant-unit-of-work.ts`                                                       |
 | Gateway terminal outcomes                     | `apps/agor-daemon/src/services/gateway.ts`                                                                                             |
 | UI/gateway progress consumers                 | `apps/agor-ui/src/components/TaskBlock/`, `apps/agor-ui/src/components/TaskStatusIcon.tsx`, `apps/agor-daemon/src/services/gateway.ts` |
