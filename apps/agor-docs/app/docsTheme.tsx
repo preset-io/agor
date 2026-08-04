@@ -37,7 +37,7 @@ export const navbar = (
   </Navbar>
 );
 
-export const footer = <Footer>Source-available under BSL 1.1</Footer>;
+export const footer = <Footer>Open and self-hosted · BSL 1.1</Footer>;
 
 export const sharedLayoutProps = {
   docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',

@@ -462,9 +462,7 @@ export default class Init extends Command {
       const config = await loadConfig();
       if (config.telemetry?.enabled !== undefined || isTelemetryFullyDisabledByEnv()) return;
       this.log('');
-      this.log(
-        chalk.yellow('ℹ  Open-source telemetry is not configured for this existing install.')
-      );
+      this.log(chalk.yellow('ℹ  Community telemetry is not configured for this existing install.'));
       this.log(
         chalk.gray(
           `   Agor will not send telemetry unless an admin enables it. Learn more: ${AGOR_TELEMETRY_DOCS_URL}`

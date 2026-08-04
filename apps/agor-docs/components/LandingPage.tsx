@@ -310,7 +310,7 @@ const busItems: Array<{
   rippleDelays: number[];
 }> = [
   {
-    title: 'Source-available & self-hosted',
+    title: 'Open & self-hosted',
     desc: 'Your repos, your database, your infrastructure. Production use is permitted under BSL 1.1.',
     rippleSize: 10,
     rippleDelays: [0, 1500],
@@ -1496,7 +1496,7 @@ export function LandingPage() {
             <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
-            Onboard your first AI teammate via open-source build, or reach out to build at
+            Onboard your first AI teammate via the self-hosted build, or reach out to build at
             enterprise-ready scale. Agor Cloud is opening to teams now.
           </p>
           <div className={styles.heroActions}>

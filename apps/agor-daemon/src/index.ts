@@ -195,7 +195,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   configureOpenSourceTelemetryLogger(config);
   if (config.telemetry?.enabled === undefined) {
     console.warn(
-      'ℹ  Open-source telemetry is not configured; no telemetry will be sent. ' +
+      'ℹ  Community telemetry is not configured; no telemetry will be sent. ' +
         'Run `agor telemetry on` to enable or `agor telemetry off` to dismiss.'
     );
   }

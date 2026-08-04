@@ -44,7 +44,7 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
   - `Pick the best harness per session.`
   - `Reach them from Slack, GitHub, anywhere.`
   - `Team command center for all things agentic.`
-  - `open source · agor.live`
+  - `open · agor.live`
 
 ## Creative Direction
 
@@ -60,7 +60,7 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
 - Hook: a lone terminal prompt on the dark-teal agor.live background; line 1 types
   "one agent in a terminal is fine.", then "five across a team? chaos." snaps in.
 - Outro / punchline: dark-teal canvas + constellation resolve; agor wordmark + tagline
-  "Team command center for all things agentic." and "open source · agor.live". One logo hit.
+  "Team command center for all things agentic." and "open · agor.live". One logo hit.
 - Avoid:
   - Generic SaaS language ("streamline your workflow", "supercharge", "10x")
   - Abstract filler visuals / particle systems / equalizer bars
@@ -100,7 +100,7 @@ Use the storyboard in `brag-output/brag-plan.md` as the creative contract. Scene
    OpenCode) arrive one by one → caption "Pick the best harness per session."; then the
    Slack thread card slides in → caption "Reach them from Slack, GitHub, anywhere."
 5. **Outro / logo** — 3.0s — dark-teal canvas + constellation; agor wordmark + tagline
-   - "open source · agor.live". One clean logo hit.
+   - "open · agor.live". One clean logo hit.
 
 ## Audio
 

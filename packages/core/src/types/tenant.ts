@@ -1,7 +1,7 @@
 /**
  * Tenant identity primitives for app-level multi-tenancy.
  *
- * The default self-hosted/open-source mode uses a single static tenant
+ * The default self-hosted mode uses a single static tenant
  * (`default`). Cloud mode must resolve this from trusted auth/request context
  * and should fail closed when missing.
  */

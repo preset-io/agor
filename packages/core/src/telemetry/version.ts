@@ -22,7 +22,7 @@ function unique(values: string[]): string[] {
 }
 
 /**
- * Resolve the user-facing Agor product version for open-source telemetry.
+ * Resolve the user-facing Agor product version for community telemetry.
  *
  * Workspace package versions such as @agor/daemon and @agor/cli are internal
  * and currently remain at 0.1.0. The installable product package is agor-live
