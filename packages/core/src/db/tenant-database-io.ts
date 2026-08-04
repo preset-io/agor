@@ -18,7 +18,12 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
-import { canonicalJson, sha256Hex } from './tenant-archive';
+import {
+  canonicalJson,
+  readTableJsonl,
+  sha256Hex,
+  type TenantArchiveTable,
+} from './tenant-archive';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { TENANT_WRITE_GATE_KEY, TENANT_WRITE_GATE_NAMESPACE } from './tenant-write-gate';
 
@@ -104,15 +109,13 @@ export async function exportTenantTableRows(
     `
   );
   const rows = rowsOf(result);
-  const lines: string[] = [];
-  for (const record of rows) {
-    // postgres.js parses jsonb into a JS value; canonicalise for stable bytes.
-    lines.push(canonicalJson(record.row));
-  }
-  return {
-    jsonl: lines.length > 0 ? `${lines.join('\n')}\n` : '',
-    rowCount: lines.length,
-  };
+  // postgres.js parses jsonb into a JS value; the shared serializer canonicalises
+  // each row for stable bytes — the same path re-home derivation uses, so export
+  // and classification bytes cannot drift.
+  const jsonl = serializeTenantTableJsonl(
+    rows.map((record) => record.row as Record<string, unknown>)
+  );
+  return { jsonl, rowCount: rows.length };
 }
 
 /** One live tenant table's re-derived row count and content hash. */
@@ -143,6 +146,67 @@ export async function snapshotTenantTableHashes(
       table.tenantColumn
     );
     snapshots.push({ name: table.name, rowCount, sha256: sha256Hex(Buffer.from(jsonl, 'utf8')) });
+  }
+  return snapshots;
+}
+
+/**
+ * The SHA-256 of an empty (zero-row) table export — the hash
+ * {@link snapshotTenantTableHashes} yields for a table with no tenant rows.
+ */
+const EMPTY_TABLE_SHA256 = sha256Hex(Buffer.from('', 'utf8'));
+
+/**
+ * Serialise a table's tenant rows to the exact canonical JSONL bytes an export
+ * writes: one {@link canonicalJson} line per row, newline-separated with a
+ * trailing newline, or empty for zero rows. Shared by the archive reader (source
+ * bytes on export) and re-home derivation so their byte semantics cannot drift.
+ */
+export function serializeTenantTableJsonl(rows: Record<string, unknown>[]): string {
+  if (rows.length === 0) return '';
+  return `${rows.map((row) => canonicalJson(row)).join('\n')}\n`;
+}
+
+/**
+ * Derive, from the validated archive alone, the per-table row count and content
+ * hash the destination database will hold once {@link parseTenantJsonl} rewrites
+ * every row to `destinationTenantId` and it is restored. This applies the SAME
+ * tenant-id rewrite and canonical serialization `restoreDatabase` uses, so the
+ * result is the exact snapshot a post-restore {@link snapshotTenantTableHashes}
+ * re-derives — for a same-tenant import the rewrite is the identity, so it equals
+ * the archive's own per-table hashes; for a re-home it is the hash bound to the
+ * destination tenant id. Import classification compares live snapshots against
+ * these to prove an exact (possibly re-homed) restore, so a database committed
+ * before a filesystem-tail failure is recognised as already applied on retry.
+ *
+ * Row ORDER is preserved from the archive, which the export ordered by the
+ * server's `to_jsonb(row)::text COLLATE "C"`. Rewriting the tenant discriminator
+ * to a single destination value uniformly (an equal contribution to every row's
+ * ordering key) cannot reorder two distinct rows, so the archive order equals the
+ * order a live re-export of the rewritten rows produces — the bytes, and thus the
+ * hash, match exactly. Any mismatch is fail-closed: it classifies as a conflict.
+ */
+export async function deriveExpectedTenantTableSnapshots(
+  archivePath: string,
+  archivedTables: readonly TenantArchiveTable[],
+  destinationTenantId: string
+): Promise<TenantTableSnapshot[]> {
+  const archivedByName = new Map(archivedTables.map((table) => [table.name, table]));
+  const snapshots: TenantTableSnapshot[] = [];
+  for (const table of buildTenantInsertOrder()) {
+    const archived = archivedByName.get(table.name);
+    if (!archived || archived.rowCount === 0) {
+      snapshots.push({ name: table.name, rowCount: 0, sha256: EMPTY_TABLE_SHA256 });
+      continue;
+    }
+    const jsonl = await readTableJsonl(archivePath, table.name);
+    const rows = parseTenantJsonl(jsonl, destinationTenantId);
+    const bytes = serializeTenantTableJsonl(rows);
+    snapshots.push({
+      name: table.name,
+      rowCount: rows.length,
+      sha256: sha256Hex(Buffer.from(bytes, 'utf8')),
+    });
   }
   return snapshots;
 }

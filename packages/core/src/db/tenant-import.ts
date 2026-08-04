@@ -12,7 +12,10 @@
  *   2. Require an empty destination or the identical prior operation. Emptiness
  *      and identity are evaluated per portion (database, filesystem) so a run
  *      interrupted between the two can be re-run to completion, and a fully
- *      applied import is a no-op success — idempotency by operation.
+ *      applied import is a no-op success — idempotency by operation. Identity is
+ *      proven against the transformed archive: the per-table hashes the
+ *      destination will hold once the archive's rows are rewritten to the target
+ *      tenant, so the check holds for both same-tenant imports and re-homes.
  *   3. Restore the database transactionally: rows are inserted in deterministic
  *      parent-first order with movable PostgreSQL FKs deferred, inside one
  *      tenant-scoped transaction that commits atomically or rolls back.
@@ -20,9 +23,13 @@
  *      is materialised in a staging directory and published to the tenant root
  *      with a single atomic rename, preserving safe file modes.
  *
- * Re-homing to a different destination tenant id is supported, but only into a
- * genuinely empty destination (the archive's hashes are bound to the source
- * tenant id, so the identical-prior-operation shortcut cannot apply).
+ * Re-homing to a different destination tenant id is supported. Classification
+ * compares the live destination against hashes re-derived from the archive under
+ * the destination tenant id (not the source-bound archive hashes), so a re-home
+ * interrupted after the database commit but before the filesystem tail is
+ * recognised as already-applied on retry and completes the filesystem portion,
+ * and a fully-applied re-home re-runs as a no-op — the same per-portion
+ * idempotency the same-tenant path has.
  */
 
 import { rm } from 'node:fs/promises';
@@ -41,6 +48,7 @@ import {
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import {
+  deriveExpectedTenantTableSnapshots,
   insertTenantTableRows,
   parseTenantJsonl,
   snapshotTenantTableHashes,
@@ -90,35 +98,37 @@ type PortionState = 'empty' | 'matches' | 'conflict';
 /**
  * Classify the live database for the destination tenant relative to the archive:
  * empty (no rows), matches (already holds exactly this archive's rows), or
- * conflict (holds different data). When re-homing, a non-empty destination is
- * always a conflict because the archive hashes are bound to the source tenant.
+ * conflict (holds different data). Comparison is against `expectedByName` —
+ * the per-table snapshots the destination will hold once the archive's rows are
+ * rewritten to the destination tenant and restored (see
+ * {@link deriveExpectedTenantTableSnapshots}). Because the expected hashes are
+ * bound to the destination tenant id, a fully-applied re-home is recognised as
+ * `matches` exactly as a same-tenant import is, while any divergence — a foreign
+ * tenant's rows, a partial restore, or altered data — stays a fail-closed
+ * `conflict`.
  */
 async function classifyDatabase(
   db: Database,
   tenantId: string,
-  manifest: TenantArchiveManifest,
-  sameTenant: boolean
+  expectedByName: Map<string, { rowCount: number; sha256: string }>
 ): Promise<{ state: PortionState; totalRows: number }> {
-  const archivedByName = new Map(manifest.database.tables.map((table) => [table.name, table]));
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const snapshots = await snapshotTenantTableHashes(scoped, tenantId);
     let totalRows = 0;
     let anyMismatch = false;
     for (const snapshot of snapshots) {
       totalRows += snapshot.rowCount;
-      if (sameTenant) {
-        const archived = archivedByName.get(snapshot.name);
-        if (
-          !archived ||
-          archived.rowCount !== snapshot.rowCount ||
-          archived.sha256 !== snapshot.sha256
-        ) {
-          anyMismatch = true;
-        }
+      const expected = expectedByName.get(snapshot.name);
+      if (
+        !expected ||
+        expected.rowCount !== snapshot.rowCount ||
+        expected.sha256 !== snapshot.sha256
+      ) {
+        anyMismatch = true;
       }
     }
     if (totalRows === 0) return { state: 'empty' as PortionState, totalRows };
-    if (sameTenant && !anyMismatch) return { state: 'matches' as PortionState, totalRows };
+    if (!anyMismatch) return { state: 'matches' as PortionState, totalRows };
     return { state: 'conflict' as PortionState, totalRows };
   });
 }
@@ -202,7 +212,6 @@ export async function importTenant(
   const manifest = await readManifest(options.archivePath);
   const tenantId = options.tenantId ?? manifest.tenantId;
   assertValidTenantId(tenantId);
-  const sameTenant = tenantId === manifest.tenantId;
 
   // Validate the archive's own integrity before touching the live system.
   const integrity = await verifyArchiveIntegrity(options.archivePath, manifest);
@@ -241,8 +250,26 @@ export async function importTenant(
   // no missing, extra, or duplicate — before we read or restore any of them.
   assertManifestTablesMatchCatalog(manifest, identity.tenantTables);
 
+  // Derive the exact per-table snapshots the destination will hold once the
+  // archive's rows are rewritten to `tenantId` and restored. Comparing the live
+  // database against these — rather than against the source-bound archive hashes
+  // — lets a same-tenant import AND a re-home both recognise an already-applied
+  // restore, so a database committed before a filesystem-tail failure is not
+  // stranded as an unretryable conflict.
+  const expectedSnapshots = await deriveExpectedTenantTableSnapshots(
+    options.archivePath,
+    manifest.database.tables,
+    tenantId
+  );
+  const expectedByName = new Map(
+    expectedSnapshots.map((snapshot) => [
+      snapshot.name,
+      { rowCount: snapshot.rowCount, sha256: snapshot.sha256 },
+    ])
+  );
+
   // Classify each destination portion.
-  const dbClassification = await classifyDatabase(db, tenantId, manifest, sameTenant);
+  const dbClassification = await classifyDatabase(db, tenantId, expectedByName);
   if (dbClassification.state === 'conflict') {
     throw new MalformedArchiveError(
       'Refusing to import: destination database is not empty and does not match this archive'
@@ -258,14 +285,15 @@ export async function importTenant(
       inventory.fileCount + inventory.directoryCount + inventory.symlinkCount === 0
     ) {
       fsState = 'empty';
-    } else if (sameTenant) {
-      // A populated destination is only acceptable if it already matches.
+    } else {
+      // A populated destination is only acceptable if it already matches the
+      // manifest exactly. Filesystem content is independent of the tenant-id
+      // rewrite (paths and bytes are not tenant-bound), so a re-home whose tree
+      // was fully published is recognised here just as a same-tenant import is —
+      // letting a filesystem-tail retry finish as a no-op rather than conflict.
       const { walkTenantFilesystemTree } = await import('./tenant-filesystem');
       const walk = await walkTenantFilesystemTree(options.filesystemRoot as string);
-      const matches = filesystemMatches(manifest, walk.entries);
-      fsState = matches ? 'matches' : 'conflict';
-    } else {
-      fsState = 'conflict';
+      fsState = filesystemMatches(manifest, walk.entries) ? 'matches' : 'conflict';
     }
     if (fsState === 'conflict') {
       throw new MalformedArchiveError(

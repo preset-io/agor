@@ -130,12 +130,21 @@ an import interrupted between the database and filesystem steps can be re-run to
 completion. A non-empty destination that does not match the archive is refused.
 Traversal paths, escaping symlinks, and malformed archives are rejected.
 
-Passing a different `--tenant-id` re-homes the tenant into an empty destination.
-Re-homing requires a **fresh destination runtime**: row identifiers (UUID primary
-keys) are globally unique across a runtime, not merely within a tenant, so
-importing under a new tenant id into the *same* runtime the archive came from
-collides on those ids and is refused. Point a re-home at a separate runtime whose
-global key space is empty for the archived ids.
+The already-applied check compares the live destination against the hashes the
+archive *would* produce once its rows are rewritten to the destination tenant id,
+not the archive's source-bound hashes. This holds for re-homes too: a re-home
+whose database committed before a filesystem-tail failure is recognised as
+already-applied on retry and finishes the filesystem portion, rather than being
+stranded as an unretryable conflict. The filesystem portion is matched on tree
+content alone (paths and bytes are not tenant-bound), so it recognises a fully
+published tree regardless of the tenant id.
+
+Passing a different `--tenant-id` re-homes the tenant. Re-homing requires a
+**fresh destination runtime**: row identifiers (UUID primary keys) are globally
+unique across a runtime, not merely within a tenant, so importing under a new
+tenant id into the *same* runtime the archive came from collides on those ids and
+is refused. Point a re-home at a separate runtime whose global key space is empty
+for the archived ids.
 
 ### `agor tenant verify`
 

@@ -467,4 +467,146 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     await deleteTenantData(db, tenant);
   });
+
+  it('completes the filesystem on retry after a re-home database commit then FS-tail failure', async () => {
+    // Re-home a tenant: export the source, delete it (freeing its globally-unique
+    // ids), then import under a NEW tenant id. The database commits first; force
+    // the filesystem tail to fail AFTER that commit and prove the retry finishes
+    // the filesystem without re-inserting the (already-committed) re-homed rows.
+    const source = `tprh-src-${generateId()}`;
+    const rehomed = `tprh-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const sourceFs = join(scratch, `${source}-fs`);
+    await seedFilesystem(sourceFs);
+
+    const archive = join(scratch, `${source}-archive`);
+    const exported = await exportTenant(db, source, {
+      archivePath: archive,
+      filesystemRoot: sourceFs,
+    });
+    const expectedRows = exported.database.totalRows;
+    expect(expectedRows).toBeGreaterThan(0);
+
+    // Free the source's ids so the re-home does not collide in this one runtime.
+    await deleteTenantData(db, source);
+    await rm(sourceFs, { recursive: true, force: true });
+
+    // A destination whose PARENT is a regular file: classification sees the root
+    // as absent (empty FS portion, so the DB restores and commits), but staging —
+    // which runs after the commit — cannot mkdir under a non-directory and throws.
+    const brokenParent = join(scratch, `${rehomed}-broken`);
+    await writeFile(brokenParent, 'not a directory');
+    const brokenFsRoot = join(brokenParent, 'root');
+    await expect(
+      importTenant(db, {
+        archivePath: archive,
+        tenantId: rehomed,
+        filesystemRoot: brokenFsRoot,
+      })
+    ).rejects.toThrow();
+
+    // The re-homed database committed despite the filesystem-tail failure.
+    const afterFailure = await inspectTenant(db, rehomed);
+    expect(afterFailure.database.totalRows).toBe(expectedRows);
+
+    // Retry against a healthy destination root: the database is recognised as
+    // already applied (no re-insert) and only the filesystem portion completes.
+    const goodFsRoot = join(scratch, `${rehomed}-fs`);
+    const retried = await importTenant(db, {
+      archivePath: archive,
+      tenantId: rehomed,
+      filesystemRoot: goodFsRoot,
+    });
+    expect(retried.alreadyApplied).toBe(false);
+    expect(retried.database.restored).toBe(false);
+    expect(retried.database.totalRows).toBe(expectedRows);
+    expect(retried.filesystem.restored).toBe(true);
+    expect(await readFile(join(goodFsRoot, 'repos', 'org', 'file-a.txt'), 'utf8')).toBe('alpha');
+
+    // The database was not doubled by the retry.
+    const afterRetry = await inspectTenant(db, rehomed);
+    expect(afterRetry.database.totalRows).toBe(expectedRows);
+
+    await deleteTenantData(db, rehomed);
+    await rm(goodFsRoot, { recursive: true, force: true });
+  });
+
+  it('re-runs a fully-applied re-home as an idempotent no-op', async () => {
+    const source = `tprn-src-${generateId()}`;
+    const rehomed = `tprn-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const sourceFs = join(scratch, `${source}-fs`);
+    await seedFilesystem(sourceFs);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, { archivePath: archive, filesystemRoot: sourceFs });
+    await deleteTenantData(db, source);
+    await rm(sourceFs, { recursive: true, force: true });
+
+    const destFs = join(scratch, `${rehomed}-fs`);
+    const first = await importTenant(db, {
+      archivePath: archive,
+      tenantId: rehomed,
+      filesystemRoot: destFs,
+    });
+    expect(first.alreadyApplied).toBe(false);
+    expect(first.database.restored).toBe(true);
+    expect(first.filesystem.restored).toBe(true);
+
+    // A second run against the fully-applied re-home changes nothing.
+    const again = await importTenant(db, {
+      archivePath: archive,
+      tenantId: rehomed,
+      filesystemRoot: destFs,
+    });
+    expect(again.alreadyApplied).toBe(true);
+    expect(again.database.restored).toBe(false);
+    expect(again.filesystem.restored).toBe(false);
+
+    await deleteTenantData(db, rehomed);
+    await rm(destFs, { recursive: true, force: true });
+  });
+
+  it('refuses a re-home whose destination database was altered after restore', async () => {
+    const source = `tpra-src-${generateId()}`;
+    const rehomed = `tpra-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, { archivePath: archive });
+    await deleteTenantData(db, source);
+
+    const first = await importTenant(db, { archivePath: archive, tenantId: rehomed });
+    expect(first.database.restored).toBe(true);
+
+    // Mutating the re-homed destination makes it diverge from the archive-derived
+    // expected snapshot — a fail-closed conflict, never a false match.
+    await addSession(db, rehomed);
+    await expect(importTenant(db, { archivePath: archive, tenantId: rehomed })).rejects.toThrow(
+      /destination database is not empty/i
+    );
+
+    await deleteTenantData(db, rehomed);
+  });
+
+  it('never accepts a foreign tenant already living in the re-home destination', async () => {
+    // The re-home destination id already holds its OWN, unrelated data. The
+    // archive-derived expected snapshot is bound to that id, so the live foreign
+    // rows must never be mistaken for an already-applied re-home.
+    const source = `tprx-src-${generateId()}`;
+    const occupied = `tprx-dst-${generateId()}`;
+    await seedTenant(db, source);
+    await seedTenant(db, occupied);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, { archivePath: archive });
+
+    await expect(importTenant(db, { archivePath: archive, tenantId: occupied })).rejects.toThrow(
+      /destination database is not empty/i
+    );
+
+    // The occupied tenant was left untouched by the refused re-home.
+    const inspection = await inspectTenant(db, occupied);
+    expect(inspection.database.totalRows).toBeGreaterThan(0);
+
+    await deleteTenantData(db, source);
+    await deleteTenantData(db, occupied);
+  });
 });
