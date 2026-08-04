@@ -98,6 +98,45 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
+  it('logs prompt metadata without content and passes the original prompt unchanged', async () => {
+    const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+    } as any);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await setupQuery('test-session' as SessionID, prompt, deps);
+
+      const queryStartCalls = logSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('claude_query_start ')
+      );
+      expect(queryStartCalls).toHaveLength(1);
+      expect(queryStartCalls[0]).toHaveLength(1);
+      const queryStart = queryStartCalls[0][0] as string;
+      expect(queryStart).toContain(`prompt_length=${prompt.length}`);
+      expect(queryStart).toContain(
+        'option_names=additionalDirectories,cwd,debug,disallowedTools,includePartialMessages,mcpServers,model,pathToClaudeCodeExecutable,settingSources,stderr,systemPrompt'
+      );
+      expect(queryStart).toContain('mcp_total=1 mcp_remote=1 mcp_stdio=0 mcp_with_env=0');
+      expect(queryStart).not.toMatch(/[\r\n\u2028\u2029]/u);
+
+      const consoleOutput = logSpy.mock.calls.flat().map(String).join('\n');
+      expect(consoleOutput).not.toContain('SECRET_QUERY_SENTINEL');
+      expect(consoleOutput).not.toContain(prompt);
+
+      const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
+      const firstMessage = await promptIterator.next();
+      expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   // Pin the literal disallow list so a stray edit to the constant
   // (e.g. dropping `ExitWorktree`) trips this test, not just the plumbing one.
   // See `constants.ts` for why each name is on the list — #1177 covers

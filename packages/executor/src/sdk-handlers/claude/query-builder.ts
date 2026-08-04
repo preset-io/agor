@@ -41,27 +41,27 @@ import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
 function summarizeMcpConfigCounts(config: unknown): string {
-  if (!config || typeof config !== 'object') return 'none';
-
   let total = 0;
   let remote = 0;
   let stdio = 0;
   let withEnv = 0;
 
-  for (const server of Object.values(config as MCPServersConfig)) {
-    total += 1;
-    const type = server.type || 'stdio';
-    if (type === 'stdio') {
-      stdio += 1;
-    } else {
-      remote += 1;
-    }
-    if (server.env && Object.keys(server.env).length > 0) {
-      withEnv += 1;
+  if (config && typeof config === 'object') {
+    for (const server of Object.values(config as MCPServersConfig)) {
+      total += 1;
+      const type = server.type || 'stdio';
+      if (type === 'stdio') {
+        stdio += 1;
+      } else {
+        remote += 1;
+      }
+      if (server.env && Object.keys(server.env).length > 0) {
+        withEnv += 1;
+      }
     }
   }
 
-  return `total=${total} remote=${remote} stdio=${stdio} with_env=${withEnv}`;
+  return `mcp_total=${total} mcp_remote=${remote} mcp_stdio=${stdio} mcp_with_env=${withEnv}`;
 }
 
 export function formatListForLog(items: string[], maxItems = 5): string {
@@ -105,12 +105,7 @@ function getClaudeCodePath(): string {
 /**
  * Log prompt start with context
  */
-function logPromptStart(
-  sessionId: SessionID,
-  _prompt: string,
-  _cwd: string,
-  agentSessionId?: string
-) {
+function logPromptStart(sessionId: SessionID, agentSessionId?: string) {
   console.log(`🤖 Prompting Claude for session ${shortId(sessionId)}...`);
   if (agentSessionId) {
     console.log(`   Resuming session: ${agentSessionId}`);
@@ -218,7 +213,7 @@ export async function setupQuery(
     console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
-  logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
+  logPromptStart(sessionId, resume ? session.sdk_session_id : undefined);
 
   // Validate CWD exists before calling SDK
   try {
@@ -673,11 +668,12 @@ export async function setupQuery(
     }
   }
 
-  console.log('📤 Calling query() with:');
-  console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
-  console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
-  // Log safe MCP counts only. Per-server names/details are intentionally omitted from this per-query log.
-  console.log(`   MCP servers: ${summarizeMcpConfigCounts(queryOptions.mcpServers)}`);
+  // Keep this record content-free: prompts and MCP configuration may contain tenant secrets.
+  console.log(
+    `claude_query_start prompt_length=${prompt.length} ` +
+      `option_names=${Object.keys(queryOptions).sort().join(',')} ` +
+      summarizeMcpConfigCounts(queryOptions.mcpServers)
+  );
 
   // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
   // streaming-input query.  When a plain string is passed, the SDK sets

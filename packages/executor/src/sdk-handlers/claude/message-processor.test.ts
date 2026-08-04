@@ -1,5 +1,5 @@
 import type { SessionID } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 
 function createProcessor() {
@@ -15,6 +15,86 @@ function rateLimitMsg(info: Record<string, unknown>) {
 function systemMsg(payload: Record<string, unknown>) {
   return { type: 'system', ...payload } as never;
 }
+
+describe('SDKMessageProcessor result logging', () => {
+  it('logs fixed-key single-line usage summaries without nested iteration payloads', async () => {
+    const nestedSentinel = 'sk-ant-SECRET_LOG_SENTINEL\r\nDO_NOT_LOG_THIS_LINE';
+    const resultMessage = {
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 321,
+      duration_api_ms: 300,
+      is_error: false,
+      num_turns: 2,
+      result: '',
+      stop_reason: null,
+      total_cost_usd: 0.25,
+      usage: {
+        input_tokens: 123,
+        output_tokens: 45,
+        cache_read_input_tokens: 67,
+        iterations: [
+          { model: 'nested-model', prompt: nestedSentinel, usage: { input_tokens: 100 } },
+          { model: 'nested-model-2', response: nestedSentinel },
+        ],
+      },
+      modelUsage: {
+        'claude-sonnet\r\nINJECTED': {
+          inputTokens: 100,
+          outputTokens: 40,
+          cacheReadInputTokens: 60,
+          cacheCreationInputTokens: 0,
+          costUSD: 0.2,
+          contextWindow: 200_000,
+          nested: { secret: nestedSentinel },
+        },
+        'claude-haiku': {
+          outputTokens: 5,
+          cacheCreationInputTokens: 7,
+          costUSD: 0.05,
+          contextWindow: 100_000,
+        },
+      },
+      permission_denials: [],
+      uuid: 'result-uuid',
+      session_id: 'sdk-session',
+    };
+    const processor = new SDKMessageProcessor({
+      sessionId: 'test-session-id' as SessionID,
+      existingSdkSessionId: 'sdk-session',
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(resultMessage as never);
+      const logs = logSpy.mock.calls.map((call) => call[0]);
+
+      expect(
+        logSpy.mock.calls.every((call) => call.length === 1 && typeof call[0] === 'string')
+      ).toBe(true);
+      expect(logs).toEqual([
+        'claude_result subtype=success duration_ms=321 cost_usd=0.25',
+        'claude_token_usage input_tokens=123 output_tokens=45 cache_read_input_tokens=67 iterations=2',
+        'claude_model_usage model=claude-sonnet_INJECTED input_tokens=100 output_tokens=40 cache_read_input_tokens=60 cache_creation_input_tokens=0 cost_usd=0.2 context_window=200000',
+        'claude_model_usage model=claude-haiku output_tokens=5 cache_creation_input_tokens=7 cost_usd=0.05 context_window=100000',
+      ]);
+      expect(logs.join('\n')).not.toContain(nestedSentinel);
+      expect(logs.join('\n')).not.toContain('SECRET_LOG_SENTINEL');
+      expect(logs.every((line) => !/[\r\n\u2028\u2029]/u.test(line as string))).toBe(true);
+      expect(logs.slice(1).every((line) => !/[{}[\]]/u.test(line as string))).toBe(true);
+
+      const resultEvent = events.find((event) => event.type === 'result');
+      expect(resultEvent).toEqual({
+        type: 'result',
+        raw_sdk_message: resultMessage,
+        agentSessionId: undefined,
+      });
+      expect(events.at(-1)).toEqual({ type: 'end', reason: 'result' });
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
 
 describe('SDKMessageProcessor system event suppression', () => {
   it('suppresses status=requesting (PR #1116)', async () => {

@@ -38,6 +38,16 @@ function claudeMessageDebug(...args: unknown[]): void {
   }
 }
 
+function appendNumericLogField(parts: string[], key: string, value: unknown): void {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    parts.push(`${key}=${value}`);
+  }
+}
+
+function singleLineLogValue(value: string): string {
+  return value.replace(/[\s=]+/gu, '_');
+}
+
 /**
  * Content block interface for SDK messages
  */
@@ -566,22 +576,46 @@ export class SDKMessageProcessor {
    * Handle result messages (end of conversation)
    */
   private handleResult(msg: SDKResultMessage): ProcessedEvent[] {
-    const subtype = msg.subtype || 'unknown';
-    const duration = msg.duration_ms;
-    const cost = msg.total_cost_usd;
+    const resultParts = [`claude_result subtype=${singleLineLogValue(msg.subtype || 'unknown')}`];
+    appendNumericLogField(resultParts, 'duration_ms', msg.duration_ms);
+    appendNumericLogField(resultParts, 'cost_usd', msg.total_cost_usd);
+    console.log(resultParts.join(' '));
 
-    console.log(
-      `✅ SDK result: ${subtype}${duration ? ` (${duration}ms)` : ''}${cost ? ` ($${cost})` : ''}`
-    );
-
-    // Log additional metadata if available
-    if ('usage' in msg && msg.usage) {
-      console.log(`   Token usage:`, msg.usage);
+    if ('usage' in msg && msg.usage && typeof msg.usage === 'object') {
+      const usage = msg.usage as Record<string, unknown>;
+      const usageParts = ['claude_token_usage'];
+      appendNumericLogField(usageParts, 'input_tokens', usage.input_tokens);
+      appendNumericLogField(usageParts, 'output_tokens', usage.output_tokens);
+      appendNumericLogField(usageParts, 'cache_read_input_tokens', usage.cache_read_input_tokens);
+      appendNumericLogField(
+        usageParts,
+        'cache_creation_input_tokens',
+        usage.cache_creation_input_tokens
+      );
+      if (Array.isArray(usage.iterations)) {
+        usageParts.push(`iterations=${usage.iterations.length}`);
+      }
+      console.log(usageParts.join(' '));
     }
 
-    // Log modelUsage (should contain contextWindow per TypeScript types)
-    if ('modelUsage' in msg && msg.modelUsage) {
-      console.log(`   Model usage (with contextWindow):`, JSON.stringify(msg.modelUsage, null, 2));
+    if ('modelUsage' in msg && msg.modelUsage && typeof msg.modelUsage === 'object') {
+      for (const [model, rawUsage] of Object.entries(msg.modelUsage)) {
+        if (!rawUsage || typeof rawUsage !== 'object') continue;
+
+        const usage = rawUsage as Record<string, unknown>;
+        const modelParts = [`claude_model_usage model=${singleLineLogValue(model)}`];
+        appendNumericLogField(modelParts, 'input_tokens', usage.inputTokens);
+        appendNumericLogField(modelParts, 'output_tokens', usage.outputTokens);
+        appendNumericLogField(modelParts, 'cache_read_input_tokens', usage.cacheReadInputTokens);
+        appendNumericLogField(
+          modelParts,
+          'cache_creation_input_tokens',
+          usage.cacheCreationInputTokens
+        );
+        appendNumericLogField(modelParts, 'cost_usd', usage.costUSD);
+        appendNumericLogField(modelParts, 'context_window', usage.contextWindow);
+        console.log(modelParts.join(' '));
+      }
     }
 
     const events: ProcessedEvent[] = [];
