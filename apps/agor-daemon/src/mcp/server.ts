@@ -417,7 +417,7 @@ export function setupMCPRoutes(
     clearTimeout(entry.ttlTimer);
     entry.lastUsedAt = Date.now();
     entry.ttlTimer = setTimeout(() => {
-      console.warn(`⚠️  MCP streamable HTTP session expired: ${mcpSessionId}`);
+      console.debug(`MCP streamable HTTP session expired: ${mcpSessionId}`);
       closeStatefulTransport(mcpSessionId);
     }, STATEFUL_TRANSPORT_TTL_MS);
     entry.ttlTimer.unref?.();

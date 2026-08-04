@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
@@ -7,6 +8,16 @@ import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
+
+it('debugs routine MCP transport expiry while warning on capacity eviction', () => {
+  const source = readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
+  expect(source).toMatch(
+    /console\.debug\(`MCP streamable HTTP session expired: \$\{mcpSessionId\}`\);/
+  );
+  expect(source).toMatch(
+    /console\.warn\(`⚠️ {2}MCP streamable HTTP session limit reached; evicting \$\{oldestId\}`\);/
+  );
+});
 
 function testSqliteDb() {
   // Tenant scopes are transaction-free on SQLite. The MCP route tests mock the
