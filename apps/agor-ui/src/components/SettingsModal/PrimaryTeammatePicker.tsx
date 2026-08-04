@@ -1,7 +1,7 @@
 import type { AgorClient, Board, Branch, Repo } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { Alert, App as AntApp, Select, Space, Spin, Typography } from 'antd';
+import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -134,12 +134,9 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
           {teammateContext(current, boardById, repoById)}.
         </Typography.Text>
       ) : (
-        <Alert
-          type="info"
-          showIcon
-          message="No primary assistant set"
-          description="Pick a teammate below to use as your default for personal work."
-        />
+        <Typography.Text type="secondary">
+          No primary assistant set — pick one below to use as your default for personal work.
+        </Typography.Text>
       )}
 
       <Select

@@ -279,17 +279,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
       </Space>
 
       <Space>
-        {onCreateSession && (
-          <>
-            <NavbarComposeButton
-              client={presenceClient}
-              currentUser={user}
-              currentBoardId={currentBoardId}
-              onCreateSession={onCreateSession}
-            />
-            <Divider orientation="vertical" style={{ height: 32, margin: '0 4px' }} />
-          </>
-        )}
         <ConnectionStatus
           connected={connected}
           connecting={connecting}
@@ -329,6 +318,17 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           />
         </Tooltip>
+        {onCreateSession && (
+          <>
+            <Divider orientation="vertical" style={{ height: 32, margin: '0 4px' }} />
+            <NavbarComposeButton
+              client={presenceClient}
+              currentUser={user}
+              currentBoardId={currentBoardId}
+              onCreateSession={onCreateSession}
+            />
+          </>
+        )}
         <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}

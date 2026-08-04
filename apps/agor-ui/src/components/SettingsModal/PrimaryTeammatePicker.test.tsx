@@ -84,7 +84,7 @@ describe('PrimaryTeammatePicker', () => {
     seedStore([teammate('branch-2', 'Grace')]);
     renderPicker(createClient(null).client);
 
-    expect(await screen.findByText('No primary assistant set')).toBeInTheDocument();
+    expect(await screen.findByText(/No primary assistant set/)).toBeInTheDocument();
   });
 
   it('writes the picked teammate as an explicit change', async () => {
@@ -92,7 +92,7 @@ describe('PrimaryTeammatePicker', () => {
     const { client, setPrimaryTeammate } = createClient(null);
     renderPicker(client);
 
-    await screen.findByText('No primary assistant set');
+    await screen.findByText(/No primary assistant set/);
     fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(await screen.findByText('Grace'));
 

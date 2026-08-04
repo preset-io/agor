@@ -240,7 +240,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   })();
 
   const content = (
-    <div style={{ width: 380 }}>
+    <div style={{ width: 600, maxWidth: '90vw' }}>
       {resolving ? (
         <Flex justify="center" style={{ padding: token.paddingLG }}>
           <Spin />
@@ -325,7 +325,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         content={content}
       >
         <Button
-          type="text"
+          type="primary"
           icon={<EditOutlined style={{ fontSize: token.fontSizeLG }} />}
           aria-label="Compose — ask your primary assistant"
           title="Ask your primary assistant"

@@ -131,6 +131,20 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByRole('button', { name: 'Send in Background' })).toBeInTheDocument();
   });
 
+  it('gives the trigger and Send & Open primary weight, Send in Background secondary', async () => {
+    renderCompose({ primary: primaryBranch });
+    expect(
+      screen.getByRole('button', { name: 'Compose — ask your primary assistant' })
+    ).toHaveClass('ant-btn-primary');
+
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.getByRole('button', { name: 'Send & Open' })).toHaveClass('ant-btn-primary');
+    expect(screen.getByRole('button', { name: 'Send in Background' })).not.toHaveClass(
+      'ant-btn-primary'
+    );
+  });
+
   it('Send & Open navigates to the new session when on a non-primary board', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
