@@ -352,13 +352,17 @@ export function useAgorData(
         // gate ignores them. We apply through the store's `applyMaps` (not the
         // per-entity setters), keeping fetchData's deps stable so the subscribe
         // effect doesn't re-fire.
-        void client
-          .service('agentic-tool-settings')
-          .findAll()
-          .then((settings) => agorStore.getState().setAgenticToolSettings(settings))
-          .catch((settingsError) =>
-            console.error('Failed to load workspace agentic-tool settings:', settingsError)
-          );
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        void runHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
 
         void runHydration(
           'mcp-servers',
@@ -1191,6 +1195,9 @@ export function useAgorData(
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
+      // Bump the live-write revision so a background full-fetch that raced this
+      // upsert discards its (now-stale) snapshot instead of overwriting it.
+      bumpRevision('agenticToolSettings');
       agorStore.getState().upsertAgenticToolSetting(updated);
     };
     agenticToolSettingsService.on('patched', agenticToolSettingsPatched);

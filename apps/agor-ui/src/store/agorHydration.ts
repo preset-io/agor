@@ -59,7 +59,8 @@ export type HydratedCollection =
   | 'sessionMcp'
   | 'gatewayChannels'
   | 'artifacts'
-  | 'oauth';
+  | 'oauth'
+  | 'agenticToolSettings';
 
 // The collections a non-runHydration wholesale merge (the gated first-paint
 // `applyMaps`, and the silent reconnect resync) overwrites — so it can bump
@@ -86,6 +87,7 @@ const makeZeroCounters = (): Record<HydratedCollection, number> => ({
   gatewayChannels: 0,
   artifacts: 0,
   oauth: 0,
+  agenticToolSettings: 0,
 });
 
 // Per-collection live-write revision counters — the core of the

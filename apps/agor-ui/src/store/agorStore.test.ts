@@ -1,5 +1,11 @@
 import type { Session, TenantAgenticToolSettings } from '@agor-live/client';
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  bumpRevision,
+  cancelAndFailAllHydrations,
+  resetHydrationRevisions,
+  runHydration,
+} from './agorHydration';
 import { EMPTY_MAPS } from './agorMaps';
 import { agorStore } from './agorStore';
 
@@ -136,5 +142,79 @@ describe('agorStore agentic tool-settings hydration gate', () => {
     // fail-open or stale rows.
     expect(agorStore.getState().agenticToolSettingsHydrated).toBe(false);
     expect(agorStore.getState().agenticToolSettingsByName.size).toBe(0);
+  });
+});
+
+// The full agentic-tool-settings fetch rides the shared skip-apply-on-race /
+// generation lifecycle (runHydration + liveRevisions/hydrationGeneration), so
+// these mirror the exact wiring: apply = setAgenticToolSettings (full snapshot),
+// realtime = bumpRevision + upsertAgenticToolSetting, logout = cancelAndFail +
+// resetMaps.
+describe('agorStore agentic tool-settings fetch lifecycle races', () => {
+  const setting = (tool: string, enabled: boolean) =>
+    ({ tool, enabled }) as unknown as TenantAgenticToolSettings;
+  const apply = (settings: TenantAgenticToolSettings[]) =>
+    agorStore.getState().setAgenticToolSettings(settings);
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  beforeEach(() => {
+    resetHydrationRevisions();
+  });
+
+  it('drops a stale full snapshot that resolves after a realtime upsert raced it', async () => {
+    const first = deferred<TenantAgenticToolSettings[]>();
+    let call = 0;
+    const fetchFn = () => {
+      call += 1;
+      // The first (stale) response is controlled; any retry re-fetches the fresh
+      // server state that already reflects the upsert.
+      return call === 1 ? first.promise : Promise.resolve([setting('codex', false)]);
+    };
+
+    const done = runHydration('agentic-tool-settings', ['agenticToolSettings'], fetchFn, apply);
+    await Promise.resolve(); // let runHydration reach its first await
+
+    // A realtime upsert lands mid-fetch (Codex disabled), bumping the revision.
+    bumpRevision('agenticToolSettings');
+    agorStore.getState().upsertAgenticToolSetting(setting('codex', false));
+
+    // The older snapshot (Codex ENABLED) now resolves — it must be discarded.
+    first.resolve([setting('codex', true)]);
+    await done;
+
+    // The stale enabled snapshot never won; the disabled value survives.
+    expect(agorStore.getState().agenticToolSettingsByName.get('codex')).toEqual(
+      setting('codex', false)
+    );
+  });
+
+  it('ignores a full snapshot that resolves after logout (no repopulation)', async () => {
+    const first = deferred<TenantAgenticToolSettings[]>();
+    const done = runHydration(
+      'agentic-tool-settings',
+      ['agenticToolSettings'],
+      () => first.promise,
+      apply
+    );
+    await Promise.resolve(); // in-flight
+
+    // Logout teardown: cancel in-flight hydrations, then clear the maps.
+    cancelAndFailAllHydrations();
+    agorStore.getState().resetMaps();
+
+    // The request from the previous tenant resolves AFTER logout.
+    first.resolve([setting('codex', true)]);
+    await done;
+
+    // It must not repopulate; the next tenant starts un-hydrated.
+    expect(agorStore.getState().agenticToolSettingsByName.size).toBe(0);
+    expect(agorStore.getState().agenticToolSettingsHydrated).toBe(false);
   });
 });
