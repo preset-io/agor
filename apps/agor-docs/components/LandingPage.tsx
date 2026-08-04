@@ -310,8 +310,8 @@ const busItems: Array<{
   rippleDelays: number[];
 }> = [
   {
-    title: 'Open source & self-hosted',
-    desc: 'Your repos, your database, your infrastructure. Nobody’s moat but your own. BSL 1.1.',
+    title: 'Source-available & self-hosted',
+    desc: 'Your repos, your database, your infrastructure. Production use is permitted under BSL 1.1.',
     rippleSize: 10,
     rippleDelays: [0, 1500],
   },

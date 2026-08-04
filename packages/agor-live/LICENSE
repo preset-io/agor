@@ -10,7 +10,23 @@ Parameters
 Licensor:             Maxime Beauchemin
 Licensed Work:        Agor
                       The Licensed Work is (c) 2025 Maxime Beauchemin
-Additional Use Grant: None
+Additional Use Grant: You may make production use of the Licensed Work,
+                      provided that you do not offer the Licensed Work as a
+                      Hosted or Managed Agor Service.
+
+                      A "Hosted or Managed Agor Service" is a service made
+                      available to third parties in which (a) the Licensed
+                      Work is the primary software used to provide the service
+                      and (b) third parties directly access the Licensed
+                      Work's user interfaces or APIs to orchestrate or manage
+                      AI coding agents.
+
+                      For clarity, this grant permits internal use, commercial
+                      use, consulting, support, integration, modification, use
+                      as a component of a broader product or service, and
+                      operating a deployment solely for a specific customer's
+                      own use, provided that the use is not a Hosted or Managed
+                      Agor Service as defined above.
 Change Date:          2029-01-15
 Change License:       Apache License, Version 2.0
 
