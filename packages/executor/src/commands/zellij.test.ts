@@ -14,10 +14,16 @@ describe('forceZellijRepaint', () => {
     expect(resize).toHaveBeenLastCalledWith(100, 40);
   });
 
-  it('never shrinks rows below 1', () => {
+  it('nudges upward at the lower bound (1 → 2 → 1) so the size always changes', () => {
     const resize = vi.fn();
-    forceZellijRepaint({ resize }, 80, 1, (fn) => fn());
-    expect(resize).toHaveBeenCalledWith(80, 1);
+    let restore: (() => void) | undefined;
+    forceZellijRepaint({ resize }, 80, 1, (fn) => {
+      restore = fn;
+    });
+    expect(resize).toHaveBeenCalledWith(80, 2);
+    restore?.();
+    expect(resize).toHaveBeenLastCalledWith(80, 1);
+    expect(resize).toHaveBeenCalledTimes(2);
   });
 
   it('is a no-op when there is no pty', () => {

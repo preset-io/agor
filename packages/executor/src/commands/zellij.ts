@@ -126,7 +126,8 @@ function emitTerminalReady(socket: AgorClient['io'], userId: string): void {
 
 // On attach/reconnect zellij leaves the UI (frame, status bar, panes) undrawn
 // until a SIGWINCH or keypress arrives — a same-size resize signals nothing, so
-// briefly shrink the row count and restore it to force a full repaint.
+// briefly change the row count and restore it to force a full repaint. Nudge up
+// when rows is at the lower bound (1 → 2 → 1) so the size always actually changes.
 export function forceZellijRepaint(
   pty: Pick<IPty, 'resize'> | null,
   cols: number,
@@ -134,8 +135,9 @@ export function forceZellijRepaint(
   scheduleRestore: (fn: () => void) => void = (fn) => setTimeout(fn, 50)
 ): void {
   if (!pty) return;
+  const nudged = rows > 1 ? rows - 1 : rows + 1;
   try {
-    pty.resize(cols, Math.max(1, rows - 1));
+    pty.resize(cols, nudged);
   } catch {
     return;
   }
