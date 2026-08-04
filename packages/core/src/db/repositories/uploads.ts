@@ -28,6 +28,7 @@ function logical(row: UploadRow, tenantId: TenantID): Upload {
     checksum: row.checksum,
     status: row.status,
     provenance: row.provenance,
+    homeSegment: row.storage_key,
     createdAt: new Date(row.created_at).toISOString(),
     expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
   };
@@ -37,16 +38,19 @@ function logical(row: UploadRow, tenantId: TenantID): Upload {
 export class UploadRepository {
   constructor(private readonly db: Database) {}
 
-  async create(owner: UploadOwner, metadata: UploadMetadata): Promise<Upload> {
+  async create(
+    owner: UploadOwner,
+    metadata: UploadMetadata,
+    homeSegment?: string
+  ): Promise<Upload> {
     await insert(this.db, uploads)
       .values({
         upload_ref: metadata.ref,
         created_by: owner.createdBy,
         session_id: owner.sessionId,
         branch_id: owner.branchId,
-        // The byte-store port currently uses UploadRef as its opaque internal
-        // key. A Cloud adapter may translate this without exposing it.
-        storage_key: metadata.ref,
+        // Persisted home segment; rebuilds the physical key stably on later ops.
+        storage_key: homeSegment ?? metadata.ref,
         original_name: metadata.name,
         display_name: metadata.name,
         content_type: metadata.mimeType,

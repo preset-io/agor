@@ -79,6 +79,7 @@ export interface Upload {
   checksum: string | null;
   status: UploadStatus;
   provenance: UploadProvenance;
+  homeSegment: string;
   createdAt: string;
   expiresAt: string | null;
 }

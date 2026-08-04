@@ -23,13 +23,14 @@ const awsMocks = vi.hoisted(() => {
 });
 const uploadState = vi.hoisted(() => ({ aborts: 0 }));
 const repositoryState = vi.hoisted(() => ({ rows: [] as any[] }));
+const sessionState = vi.hoisted(() => ({ present: true }));
 
 vi.mock('@aws-sdk/client-s3', () => awsMocks);
 vi.mock('@agor/core/db', () => ({
   runWithTenantDatabaseScope: async (_db: unknown, _tenant: string, work: () => unknown) => work(),
   UploadRepository: class {
-    async create(nextOwner: UploadOwner, metadata: any) {
-      const row = { ...nextOwner, ...metadata, status: 'active' };
+    async create(nextOwner: UploadOwner, metadata: any, homeSegment?: string) {
+      const row = { ...nextOwner, ...metadata, homeSegment, status: 'active' };
       repositoryState.rows.push(row);
       return row;
     }
@@ -47,7 +48,7 @@ vi.mock('@agor/core/db', () => ({
   },
   SessionRepository: class {
     async findById(_id: string) {
-      return { unix_username: 'jose_garcia' };
+      return sessionState.present ? { unix_username: 'jose_garcia' } : null;
     }
   },
 }));
@@ -134,6 +135,7 @@ afterEach(() => {
   vi.useRealTimers();
   uploadState.aborts = 0;
   repositoryState.rows = [];
+  sessionState.present = true;
 });
 
 describe('S3UploadStagingStore', () => {
@@ -277,7 +279,7 @@ describe('S3UploadStagingStore', () => {
     expect(client.objects.size).toBe(0);
   });
 
-  it('keys uploads by the immutable session unix_username, stable across a user rename', async () => {
+  it('persists the home segment and reuses it, stable across a user rename', async () => {
     const client = new FakeS3();
     const bytes = new S3UploadStagingStore(
       { bucket: 'uploads', prefix: '' },
@@ -294,9 +296,33 @@ describe('S3UploadStagingStore', () => {
     expect([...client.objects.keys()][0]).toMatch(
       /^uploads\/tenants\/tenant-a\/home\/jose_garcia\/upl_/
     );
+    expect(repositoryState.rows[0].homeSegment).toBe('jose_garcia');
     const stream = await store.read({ ...owner, ref: metadata.ref });
     expect(await readText(stream)).toBe('hello');
     await expect(store.delete({ ...owner, ref: metadata.ref })).resolves.toBeUndefined();
+    expect(client.objects.size).toBe(0);
+  });
+
+  it('cleans up staged bytes after the owning session is deleted, via the persisted key', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const client = new FakeS3();
+    const bytes = new S3UploadStagingStore(
+      { bucket: 'uploads', prefix: '' },
+      { client: client as unknown as S3Client, ttlMs: 1_000 }
+    );
+    const store = new MetadataUploadStagingStore({} as never, bytes);
+    await store.stage({
+      owner,
+      name: 'note.txt',
+      mimeType: 'text/plain',
+      provenance: 'browser',
+      body: Readable.from('hello'),
+    });
+    sessionState.present = false;
+    vi.setSystemTime(new Date('2026-01-01T00:00:02Z'));
+    expect(await store.cleanupExpired(owner, new Date())).toBe(1);
+    expect(repositoryState.rows).toHaveLength(0);
     expect(client.objects.size).toBe(0);
   });
 });

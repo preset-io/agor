@@ -32,7 +32,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     this.sessions = new SessionRepository(db);
   }
 
-  // Session unix_username is immutable, so the key survives a user rename.
+  // Resolved once at stage time from the session, then persisted on the row.
   private async resolveHomeSegment(
     tenantId: TenantID,
     sessionId: SessionID,
@@ -55,7 +55,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     const metadata = await this.bytes.stage({ ...input, homeSegment });
     try {
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
-        this.repository.create(input.owner, metadata)
+        this.repository.create(input.owner, metadata, homeSegment)
       );
       return metadata;
     } catch (error) {
@@ -82,24 +82,14 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
 
   async inspect(input: UploadReadInput): Promise<UploadMetadata> {
     const upload = await this.authorize(input);
-    const homeSegment = await this.resolveHomeSegment(
-      input.tenantId,
-      upload.sessionId,
-      upload.createdBy
-    );
-    return this.bytes.inspect({ ...input, homeSegment });
+    return this.bytes.inspect({ ...input, homeSegment: upload.homeSegment });
   }
 
   async read(
     input: UploadReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream> {
     const upload = await this.authorize(input);
-    const homeSegment = await this.resolveHomeSegment(
-      input.tenantId,
-      upload.sessionId,
-      upload.createdBy
-    );
-    return this.bytes.read({ ...input, homeSegment });
+    return this.bytes.read({ ...input, homeSegment: upload.homeSegment });
   }
 
   async consume(input: UploadReadInput): Promise<void> {
@@ -110,12 +100,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    const homeSegment = await this.resolveHomeSegment(
-      input.tenantId,
-      existing.sessionId,
-      existing.createdBy
-    );
-    await this.bytes.consume({ ...input, homeSegment });
+    await this.bytes.consume({ ...input, homeSegment: existing.homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
@@ -129,12 +114,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    const homeSegment = await this.resolveHomeSegment(
-      input.tenantId,
-      existing.sessionId,
-      existing.createdBy
-    );
-    await this.bytes.delete({ ...input, homeSegment });
+    await this.bytes.delete({ ...input, homeSegment: existing.homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
