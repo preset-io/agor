@@ -352,6 +352,8 @@ export interface Task {
   sdk_failure?: SdkFailure;
   /** Durable intent while verified local containment is pending. */
   termination_request?: TerminationRequest;
+  /** Proposed runner outcome, pending host-owned local containment proof. */
+  runner_report?: TaskRunnerReport;
   /** Immutable watchdog policy snapshot for this dispatch. */
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)

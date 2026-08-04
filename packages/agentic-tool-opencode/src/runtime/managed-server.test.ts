@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -13,6 +13,10 @@ import {
 
 const roots: string[] = [];
 
+function nativeDataHome(root: string, namespace = 'namespace'): string {
+  return join(root, 'home', '.local', 'share', 'agor', 'opencode', namespace);
+}
+
 afterEach(async () => {
   const { rm } = await import('node:fs/promises');
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -22,7 +26,7 @@ describe('OpenCode native data boundary', () => {
   it('provisions a private namespace and verifies OpenCode-owned auth permissions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-opencode-boundary-'));
     roots.push(root);
-    const dataHome = join(root, 'namespace');
+    const dataHome = nativeDataHome(root);
 
     await ensureOpenCodeDataHome(dataHome);
     const directory = await stat(dataHome);
@@ -30,7 +34,6 @@ describe('OpenCode native data boundary', () => {
     if (typeof process.getuid === 'function') expect(directory.uid).toBe(process.getuid());
 
     const authDir = join(dataHome, 'opencode');
-    await ensureOpenCodeDataHome(authDir);
     const authPath = join(authDir, 'auth.json');
     await writeFile(authPath, '{"synthetic":true}', { mode: 0o600 });
 
@@ -42,12 +45,33 @@ describe('OpenCode native data boundary', () => {
   it('rejects a symlink instead of provisioning through it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-opencode-symlink-'));
     roots.push(root);
+    const home = join(root, 'home');
     const target = join(root, 'target');
-    const dataHome = join(root, 'namespace');
-    await ensureOpenCodeDataHome(target);
-    await symlink(target, dataHome);
+    const dataHome = nativeDataHome(root);
+    await mkdir(home, { mode: 0o700 });
+    await mkdir(target, { mode: 0o700 });
+    await symlink(target, join(home, '.local'));
 
     await expect(ensureOpenCodeDataHome(dataHome)).rejects.toThrow(/symbolic link/i);
+  });
+
+  it('rejects an unsafe existing auth file before a managed server can spawn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-auth-mode-'));
+    roots.push(root);
+    const dataHome = nativeDataHome(root);
+    await ensureOpenCodeDataHome(dataHome);
+    const authPath = join(dataHome, 'opencode', 'auth.json');
+    await writeFile(authPath, '{}', { mode: 0o600 });
+    await chmod(authPath, 0o644);
+    const spawn = vi.fn();
+
+    await expect(
+      startManagedOpenCodeServer(
+        { directory: tmpdir(), dataHome },
+        { resolveBinary: async () => '/packaged/opencode', spawn }
+      )
+    ).rejects.toThrow(/unsafe permissions/i);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 
@@ -55,7 +79,7 @@ describe('managed OpenCode readiness', () => {
   it('namespaces every OpenCode XDG root under the private native-data home', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-opencode-xdg-'));
     roots.push(root);
-    const dataHome = join(root, 'namespace');
+    const dataHome = nativeDataHome(root);
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),

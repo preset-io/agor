@@ -95,6 +95,8 @@ async function withFreshClient<T>(
   directory = dataHome,
   runtime = DEFAULT_AUTH_RUNTIME
 ): Promise<T> {
+  await runtime.ensureOpenCodeDataHome(dataHome);
+  await runtime.verifyOpenCodeAuthFileBoundary(dataHome, { allowMissing: true });
   const server = await runtime.startManagedOpenCodeServer({
     directory,
     dataHome,

@@ -1313,6 +1313,44 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
 
+    const current = await this.taskRepo.findById(data.task_id);
+    if (current?.executor_mode !== 'templated') {
+      try {
+        const pending = await this.taskRepo.recordRunnerReport(data.task_id, {
+          turn: data.turn,
+          cleanup: data.cleanup,
+        });
+        if (!pending) throw new Conflict(`Task ${shortId(data.task_id)} is not runner-writable`);
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: pending,
+          id: pending.task_id,
+          params,
+        });
+        return pending;
+      } catch (error) {
+        return this.handleRunnerResultRace(data, params, error);
+      }
+    }
+
+    return this.commitRunnerResult(data, params);
+  }
+
+  /** Internal host gate: call only after the local executor process group is absent. */
+  async finalizeRunnerResultAfterLocalContainment(
+    taskId: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const current = await this.taskRepo.findById(taskId);
+    if (!current?.runner_report) return null;
+    return this.commitRunnerResult({ task_id: taskId, ...current.runner_report }, params);
+  }
+
+  private async commitRunnerResult(
+    data: TaskRunnerReportInput,
+    params?: TaskParams
+  ): Promise<Task> {
     const terminalStatus =
       data.turn.outcome === 'success'
         ? TaskStatus.COMPLETED
@@ -1332,18 +1370,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     try {
       task = await this.taskRepo.updateFromExecutor(data.task_id, updates);
     } catch (error) {
-      const current = await this.taskRepo.findById(data.task_id);
-      if (current && isTerminalTaskStatus(current.status)) return current;
-      const request = current?.termination_request;
-      if (current?.status !== TaskStatus.STOPPING || !request) throw error;
-      const quiesced = await this.taskRepo.recordExecutorQuiescence({
-        task_id: data.task_id,
-        requested_at: request.requested_at,
-      });
-      if (!quiesced) {
-        throw new Conflict(`Task ${shortId(data.task_id)} termination state changed`);
-      }
-      return this.acceptExecutorQuiescence(quiesced, params);
+      return this.handleRunnerResultRace(data, params, error);
     }
 
     emitServiceEvent(this.app, {
@@ -1369,6 +1396,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
     await this.processCompletionSideEffects(task, terminalStatus, internalParams);
     return task;
+  }
+
+  private async handleRunnerResultRace(
+    data: TaskRunnerReportInput,
+    params: TaskParams | undefined,
+    error: unknown
+  ): Promise<Task> {
+    const current = await this.taskRepo.findById(data.task_id);
+    if (current && isTerminalTaskStatus(current.status)) return current;
+    const request = current?.termination_request;
+    if (current?.status !== TaskStatus.STOPPING || !request) throw error;
+    const quiesced = await this.taskRepo.recordExecutorQuiescence({
+      task_id: data.task_id,
+      requested_at: request.requested_at,
+    });
+    if (!quiesced) {
+      throw new Conflict(`Task ${shortId(data.task_id)} termination state changed`);
+    }
+    return this.acceptExecutorQuiescence(quiesced, params);
   }
 
   async recordExecutorStartupWarning(

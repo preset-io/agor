@@ -105,7 +105,10 @@ describe('TasksService executor termination report', () => {
     const emit = vi.fn();
     const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
     const service = Object.create(TasksService.prototype) as TasksService;
-    Reflect.set(service, 'taskRepo', { updateFromExecutor });
+    Reflect.set(service, 'taskRepo', {
+      findById: vi.fn().mockResolvedValue({ ...task, executor_mode: 'templated' }),
+      updateFromExecutor,
+    });
     Reflect.set(service, 'trackTaskCompleted', vi.fn());
     Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
     Reflect.set(service, 'app', { service: () => ({ emit }) });
@@ -138,7 +141,10 @@ describe('TasksService executor termination report', () => {
     const sessionPatch = vi.fn().mockResolvedValue({});
     const processCompletionSideEffects = vi.fn();
     const service = Object.create(TasksService.prototype) as TasksService;
-    Reflect.set(service, 'taskRepo', { updateFromExecutor });
+    Reflect.set(service, 'taskRepo', {
+      findById: vi.fn().mockResolvedValue({ ...task, executor_mode: 'templated' }),
+      updateFromExecutor,
+    });
     Reflect.set(service, 'trackTaskCompleted', vi.fn());
     Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
     Reflect.set(service, 'app', {
@@ -188,6 +194,75 @@ describe('TasksService executor termination report', () => {
     ).resolves.toBe(task);
 
     expect(processCompletionSideEffects).not.toHaveBeenCalled();
+  });
+
+  it('persists a local quiesced outcome without making the task terminal', async () => {
+    const running = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.RUNNING,
+      executor_mode: 'local',
+    } as Task;
+    const pending = {
+      ...running,
+      runner_report: {
+        turn: { outcome: 'success' as const },
+        cleanup: { outcome: 'quiesced' as const },
+      },
+    } as Task;
+    const recordRunnerReport = vi.fn().mockResolvedValue(pending);
+    const emit = vi.fn();
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      findById: vi.fn().mockResolvedValue(running),
+      recordRunnerReport,
+    });
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
+
+    await expect(
+      service.reportRunnerResult({
+        task_id: running.task_id,
+        turn: { outcome: 'success' },
+        cleanup: { outcome: 'quiesced' },
+      })
+    ).resolves.toBe(pending);
+
+    expect(recordRunnerReport).toHaveBeenCalledWith(running.task_id, pending.runner_report);
+    expect(pending.status).toBe(TaskStatus.RUNNING);
+    expect(emit).toHaveBeenCalledWith('patched', pending, expect.any(Object));
+  });
+
+  it('commits a pending local outcome after the host proves containment', async () => {
+    const pending = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.RUNNING,
+      executor_mode: 'local',
+      runner_report: {
+        turn: { outcome: 'success' as const, model: 'provider/model' },
+        cleanup: { outcome: 'quiesced' as const },
+      },
+    } as Task;
+    const completed = { ...pending, status: TaskStatus.COMPLETED } as Task;
+    const updateFromExecutor = vi.fn().mockResolvedValue(completed);
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      findById: vi.fn().mockResolvedValue(pending),
+      updateFromExecutor,
+    });
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+
+    await expect(service.finalizeRunnerResultAfterLocalContainment(pending.task_id)).resolves.toBe(
+      completed
+    );
+    expect(updateFromExecutor).toHaveBeenCalledWith(pending.task_id, {
+      status: TaskStatus.COMPLETED,
+      model: 'provider/model',
+    });
+    expect(processCompletionSideEffects).toHaveBeenCalledOnce();
   });
 
   it('hands unverified cleanup to containment without terminalizing the task', async () => {

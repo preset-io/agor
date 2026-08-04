@@ -40,6 +40,23 @@ describe('OpenCode auxiliary adapter', () => {
     });
   });
 
+  it('routes a one-shot operation through the contained command transport', async () => {
+    await expect(
+      OPENCODE_AUXILIARY_ADAPTER.executeInteractive(
+        { context, request: { operation: 'read-model-catalog' }, dryRun: true },
+        {
+          emit() {},
+          async read() {
+            throw new Error('one-shot operations must not read a control frame');
+          },
+        }
+      )
+    ).resolves.toEqual({
+      success: true,
+      data: { dryRun: true, operation: 'read-model-catalog' },
+    });
+  });
+
   it('routes interactive OAuth without reading a control frame during dry-run', async () => {
     await expect(
       OPENCODE_AUXILIARY_ADAPTER.executeInteractive(

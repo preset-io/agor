@@ -1,7 +1,6 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { createOpenCodeModelsService, resolveOpenCodeCreateModelFallback } from './models-service';
 
 vi.mock('@agor/core/config', async () => {
@@ -30,11 +29,15 @@ vi.mock('@agor/core/unix', async () => {
   };
 });
 
+const runCommand = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/spawn-executor.js', () => ({
-  runExecutorCommand: vi.fn(),
+  runExecutorCommand: runCommand,
+  startContainedExecutorCommand: (payload: unknown, options: unknown) => ({
+    result: runCommand(payload, options),
+    verifyAbsence: vi.fn(async () => true),
+  }),
 }));
 
-const runCommand = vi.mocked(runExecutorCommand);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
 const usersRepository = vi.mocked(UsersRepository);

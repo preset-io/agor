@@ -183,12 +183,14 @@ protocols.
 
 For OpenCode, every expected exit returns one runner report after managed
 cleanup. The authenticated executor submits it through the generic Task service.
-The daemon maps a quiesced success, failure, or interaction timeout to the
-durable terminal Task state. Unverified cleanup instead enters the existing
-termination coordinator and keeps the Task `stopping` until containment is
-verified. A termination request that wins the race consumes a quiesced runner
-report as cooperative release evidence rather than allowing the turn result to
-overwrite the winning cause.
+For a local executor, the daemon first persists a quiesced success, failure, or
+interaction timeout as a nonterminal proposal. It commits the durable terminal
+Task state only after wrapper exit and process-group absence. For a remote
+executor, the fenced quiescence report is the authoritative containment proof.
+Unverified cleanup instead enters the existing termination coordinator and
+keeps the Task `stopping` until containment is verified. A termination request
+that wins the race consumes a quiesced runner report as cooperative release
+evidence rather than allowing the turn result to overwrite the winning cause.
 
 This is the focused #2078 slice of the desired
 [task runtime architecture](https://github.com/preset-io/agor/pull/2090): the
@@ -199,9 +201,10 @@ three framework classes or a second lifecycle.
 
 The slice advances the "Task terminal before runtime release" failure family,
 including interaction-timeout settlement. OpenCode provides cooperative
-cleanup evidence; the daemon maps a quiesced report or invokes containment for
-an unverified report. Existing behavior for other agentic tools remains
-unchanged until their runners adopt the same shared report contract.
+cleanup evidence; the daemon release gate maps a quiesced report only after the
+execution-mode-specific containment proof, or invokes containment for an
+unverified report. Existing behavior for other agentic tools remains unchanged
+until their runners adopt the same shared report contract.
 
 ### Authentication and model catalogs
 
@@ -220,7 +223,8 @@ authentication changes. Unavailable choices are absent from normal selectors,
 while a stored unavailable pair remains visible and unlisted configured
 providers remain available through exact manual entry. Unconditional refresh
 controls are replaced by failure-only retry. The task runtime remains
-authoritative for every selected pair.
+authoritative for every selected pair. MCP model discovery projects the same
+caller-authorized catalog, retaining each provider ID on its models.
 
 Secrets never enter browser registry metadata. UI contributions receive only
 authorized host clients and non-secret state.
@@ -304,10 +308,19 @@ OpenCode command adapter owns OAuth payload validation and event semantics.
 This separation preserves the TaskRunner boundary above: auxiliary operations
 remain bounded non-Task commands and never submit runner reports.
 
+Every local OpenCode auxiliary command, interactive or one-shot, uses tracked
+process-group containment before releasing its result or credential-mutation
+slot. Templated execution is rejected for native-state operations until the
+remote substrate supplies equivalent fenced cleanup evidence. An unverified
+local cleanup retains a namespace verifier that blocks later mutations.
+
 ## Native-state and concurrency contract
 
 The daemon derives one opaque tenant-and-user namespace and the executor maps
 all four OpenCode XDG roots (`data`, `config`, `cache`, and `state`) beneath it.
+Before a managed server starts, the runtime verifies the owned non-symlink
+ancestor chain, private state directories, and any existing `auth.json`; it
+rechecks the credential file after mutations.
 The host-provided subject and Unix identity remain authoritative. This is an
 OS-enforced boundary only in strict mode; shared-UID modes provide logical
 separation, not protection from another same-UID process.

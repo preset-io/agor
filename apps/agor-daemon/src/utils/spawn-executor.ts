@@ -166,6 +166,11 @@ export interface InteractiveExecutorHandle {
   verifyAbsence(): Promise<boolean>;
 }
 
+export interface ContainedExecutorCommandHandle {
+  result: Promise<ExecutorCommandResult>;
+  verifyAbsence(): Promise<boolean>;
+}
+
 export interface InteractiveExecutorFailures {
   localProcessRequired: ExecutorCommandResult;
   spawn: ExecutorCommandResult;
@@ -178,6 +183,8 @@ export interface InteractiveExecutorFailures {
 
 export interface StartInteractiveExecutorOptions extends RunExecutorCommandOptions {
   failures: InteractiveExecutorFailures;
+  /** Close stdin after the initial payload when no later control frame is expected. */
+  closeInputAfterPayload?: boolean;
   onEvent?: (
     event: unknown,
     input: Pick<InteractiveExecutorHandle, 'deliver' | 'endInput'>
@@ -873,7 +880,7 @@ export function startInteractiveExecutor(
   timer = setTimeout(() => {
     void finalize(failures.timeout);
   }, timeoutMs);
-  void input.deliver(withResolvedConfig(payload));
+  void input.deliver(withResolvedConfig(payload), options.closeInputAfterPayload);
 
   return {
     result,
@@ -886,6 +893,75 @@ export function startInteractiveExecutor(
       untrackExecutorProcess(attemptId, taskId);
       return true;
     },
+  };
+}
+
+/**
+ * Starts a short local executor command and releases its result only after the
+ * tracked process group is absent. Native-state operations deliberately reject
+ * templated launchers until remote execution has an equivalent cleanup proof.
+ */
+export function startContainedExecutorCommand(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions = {}
+): ContainedExecutorCommandHandle {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const command = String(payload.command ?? '?');
+  const transport = startInteractiveExecutor(payload, {
+    ...options,
+    timeoutMs,
+    closeInputAfterPayload: true,
+    failures: {
+      localProcessRequired: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_LOCAL_PROCESS_REQUIRED',
+          message: 'This executor command requires verifiable local process containment',
+        },
+      },
+      spawn: {
+        success: false,
+        error: { code: 'EXECUTOR_SPAWN_ERROR', message: 'Executor process did not start' },
+      },
+      stdin: {
+        success: false,
+        error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor command input failed' },
+      },
+      timeout: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: `Executor command timed out after ${timeoutMs}ms`,
+          details: { command },
+        },
+      },
+      cancelled: {
+        success: false,
+        error: { code: 'EXECUTOR_CANCELLED', message: 'Executor command was cancelled' },
+      },
+      cleanupUnverified: {
+        success: false,
+        error: {
+          code: 'EXECUTOR_CLEANUP_UNVERIFIED',
+          message: 'Executor command cleanup could not be verified',
+        },
+      },
+      missingResult: (stderrSeen) => ({
+        success: false,
+        error: {
+          code: 'EXECUTOR_RESULT_MISSING',
+          message: 'Executor exited without a JSON result',
+          details: {
+            command,
+            stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
+          },
+        },
+      }),
+    },
+  });
+  return {
+    result: transport.result,
+    verifyAbsence: transport.verifyAbsence,
   };
 }
 

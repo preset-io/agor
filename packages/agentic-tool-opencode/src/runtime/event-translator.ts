@@ -187,6 +187,7 @@ export function createOpenCodeEventTranslator(input: {
     ['message.part.delta', partDelta],
     ['permission.asked', (properties) => permission(properties, 'asked')],
     ['permission.updated', (properties) => permission(properties, 'updated')],
+    ['permission.replied', () => []],
     ['session.status', (properties) => sessionStatus(properties, 'status')],
     ['session.idle', (properties) => sessionStatus(properties, 'idle')],
     ['session.error', sessionError],

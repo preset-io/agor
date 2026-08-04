@@ -3,7 +3,7 @@ import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, lstat, mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
@@ -199,28 +199,96 @@ function assertOwnedPrivatePath(
   }
 }
 
-export async function ensureOpenCodeDataHome(dataHome: string): Promise<void> {
+function resolveOpenCodeNativeBoundary(dataHome: string): {
+  homeDir: string;
+  opencodeRoot: string;
+  dataHome: string;
+} {
   if (!isAbsolute(dataHome)) throw new Error('OpenCode native data path must be absolute');
-  try {
-    const existing = await lstat(dataHome);
-    if (existing.isSymbolicLink()) {
-      throw new Error('OpenCode native data path cannot be a symbolic link');
+  const resolvedDataHome = resolve(dataHome);
+  const opencodeRoot = dirname(resolvedDataHome);
+  const agorRoot = dirname(opencodeRoot);
+  const shareRoot = dirname(agorRoot);
+  const localRoot = dirname(shareRoot);
+  const homeDir = dirname(localRoot);
+  if (
+    basename(opencodeRoot) !== 'opencode' ||
+    basename(agorRoot) !== 'agor' ||
+    basename(shareRoot) !== 'share' ||
+    basename(localRoot) !== '.local'
+  ) {
+    throw new Error('OpenCode native data path is outside its expected executor-home boundary');
+  }
+  return { homeDir, opencodeRoot, dataHome: resolvedDataHome };
+}
+
+async function assertOwnedDirectoryChain(boundary: string, target: string): Promise<void> {
+  const child = relative(boundary, target);
+  if (!child || child.startsWith('..') || isAbsolute(child)) {
+    throw new Error('OpenCode native data path escaped its executor-home boundary');
+  }
+  let current = boundary;
+  for (const segment of child.split(sep)) {
+    current = join(current, segment);
+    let entry: Awaited<ReturnType<typeof lstat>>;
+    try {
+      entry = await lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
     }
+    if (entry.isSymbolicLink()) {
+      throw new Error('OpenCode native data path cannot contain a symbolic link');
+    }
+    if (!entry.isDirectory()) {
+      throw new Error('OpenCode native data ancestors must be directories');
+    }
+    if (typeof process.getuid === 'function' && entry.uid !== process.getuid()) {
+      throw new Error('OpenCode native data path is not owned by the executor identity');
+    }
+    if ((Number(entry.mode) & 0o022) !== 0) {
+      throw new Error('OpenCode native data ancestors cannot be group- or world-writable');
+    }
+  }
+}
+
+async function ensureOwnedPrivateDirectory(boundary: string, directory: string): Promise<void> {
+  await assertOwnedDirectoryChain(boundary, directory);
+  let created = false;
+  try {
+    await lstat(directory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    created = true;
   }
-  await mkdir(dataHome, { recursive: true, mode: 0o700 });
-  await chmod(dataHome, 0o700);
-  const entry = await lstat(dataHome);
+  if (created) await chmod(directory, 0o700);
+  await assertOwnedDirectoryChain(boundary, directory);
+  const entry = await lstat(directory);
   if (!entry.isDirectory()) throw new Error('OpenCode native data path must be a directory');
   assertOwnedPrivatePath(entry, 0o700);
+}
+
+export async function ensureOpenCodeDataHome(dataHome: string): Promise<void> {
+  const boundary = resolveOpenCodeNativeBoundary(dataHome);
+  await ensureOwnedPrivateDirectory(boundary.homeDir, boundary.opencodeRoot);
+  await ensureOwnedPrivateDirectory(boundary.homeDir, boundary.dataHome);
+  await ensureOwnedPrivateDirectory(boundary.homeDir, join(boundary.dataHome, 'opencode'));
+}
+
+export async function prepareOpenCodeNativeState(dataHome: string): Promise<void> {
+  const boundary = resolveOpenCodeNativeBoundary(dataHome);
+  await ensureOpenCodeDataHome(boundary.dataHome);
+  await verifyOpenCodeAuthFileBoundary(boundary.dataHome, { allowMissing: true });
 }
 
 export async function verifyOpenCodeAuthFileBoundary(
   dataHome: string,
   options: { allowMissing?: boolean } = {}
 ): Promise<void> {
-  const authPath = join(dataHome, 'opencode', 'auth.json');
+  const boundary = resolveOpenCodeNativeBoundary(dataHome);
+  await assertOwnedDirectoryChain(boundary.homeDir, join(boundary.dataHome, 'opencode'));
+  const authPath = join(boundary.dataHome, 'opencode', 'auth.json');
   let entry: Awaited<ReturnType<typeof lstat>>;
   try {
     entry = await lstat(authPath);
@@ -409,7 +477,13 @@ export async function startManagedOpenCodeServer(
       }
     : {};
   if (input.dataHome) {
-    await Promise.all(Object.values(nativeEnvironment).map(ensureOpenCodeDataHome));
+    const boundary = resolveOpenCodeNativeBoundary(input.dataHome);
+    await prepareOpenCodeNativeState(boundary.dataHome);
+    await Promise.all(
+      Object.values(nativeEnvironment)
+        .filter((directory) => directory !== boundary.dataHome)
+        .map((directory) => ensureOwnedPrivateDirectory(boundary.homeDir, directory))
+    );
   }
 
   const randomBytes = dependencies.randomBytes ?? nodeRandomBytes;

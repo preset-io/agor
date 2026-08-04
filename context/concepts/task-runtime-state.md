@@ -203,8 +203,11 @@ explicitly force-fail it. A daemon restart can logically release orphaned work
 as `stopped`, but records that termination was not verified.
 
 OpenCode is the first runner to report its normalized turn result and cleanup
-result together. A quiesced report lets the Task service map success, runtime
-failure, or interaction timeout to `completed`, `failed`, or `timed_out`. A
+result together. For local execution, a quiesced report is persisted as a
+nonterminal proposed outcome; the daemon maps it to `completed`, `failed`, or
+`timed_out` only after the wrapper exits and process-group absence is verified.
+A remote executor's fenced quiescence report is itself the authoritative
+containment proof and may be mapped immediately. A
 termination claim that already won consumes the same report as cooperative
 quiescence. An unverified cleanup report claims `stopping` instead of writing a
 terminal Task or making the Session promptable.

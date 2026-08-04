@@ -28,7 +28,7 @@ function payloadFor(input: AuxiliaryInput): OpenCodeAuthPayload {
 async function executeInteractive(input: AuxiliaryInput, channel: InteractiveChannel) {
   const payload = payloadFor(input);
   if (payload.params.operation !== 'connect-oauth') {
-    throw new Error('OpenCode OAuth requires a connect-oauth request');
+    return handleOpenCodeAuth(payload, { dryRun: input.dryRun });
   }
   const oauthPayload = { ...payload, params: payload.params };
 

@@ -4,6 +4,7 @@
  * Type-safe CRUD operations for tasks with short ID support.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ExecutorPulse,
   ExecutorTerminationCompleteInput,
@@ -11,6 +12,7 @@ import type {
   SessionID,
   Task,
   TaskMetadata,
+  TaskRunnerReport,
   TerminationCause,
   UUID,
 } from '@agor/core/types';
@@ -246,6 +248,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         latest_executor_pulse: task.latest_executor_pulse,
         sdk_failure: task.sdk_failure,
         termination_request: task.termination_request,
+        runner_report: task.runner_report,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
       },
     };
@@ -604,6 +607,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           executor_quiesced_at: observedAt.toISOString(),
         },
       };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
+  }
+
+  /** Persist the runner's one immutable proposed outcome without terminalizing the task. */
+  async recordRunnerReport(id: string, report: TaskRunnerReport): Promise<Task | null> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (!executorOwnsTask(row)) return null;
+      const current = this.rowToTask(row);
+      if (current.runner_report) {
+        if (!isDeepStrictEqual(current.runner_report, report)) {
+          throw new RepositoryError('Runner outcome has already been proposed');
+        }
+        return current;
+      }
+      const data = { ...row.data, runner_report: report };
       await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
       return this.rowToTask({ ...row, data });
     });

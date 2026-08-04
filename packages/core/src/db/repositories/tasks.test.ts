@@ -1305,6 +1305,32 @@ describe('TaskRepository.update', () => {
     ).toEqual(reported);
   });
 
+  dbTest('records one immutable nonterminal runner outcome', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+    const report = {
+      turn: { outcome: 'success' as const, model: 'provider/model' },
+      cleanup: { outcome: 'quiesced' as const },
+    };
+
+    const recorded = await taskRepo.recordRunnerReport(task.task_id, report);
+    expect(recorded).toMatchObject({ status: TaskStatus.RUNNING, runner_report: report });
+    await expect(taskRepo.recordRunnerReport(task.task_id, report)).resolves.toEqual(recorded);
+    await expect(
+      taskRepo.recordRunnerReport(task.task_id, {
+        turn: { outcome: 'failure', error_message: 'different outcome' },
+        cleanup: { outcome: 'quiesced' },
+      })
+    ).rejects.toThrow(/already been proposed/i);
+  });
+
   dbTest(
     'releases a stopping task after restart without claiming verified absence',
     async ({ db }) => {

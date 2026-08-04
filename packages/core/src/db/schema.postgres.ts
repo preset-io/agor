@@ -371,6 +371,7 @@ export const tasks = pgTable(
         latest_executor_pulse?: Task['latest_executor_pulse'];
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
+        runner_report?: Task['runner_report'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
       }>()
       .notNull(),

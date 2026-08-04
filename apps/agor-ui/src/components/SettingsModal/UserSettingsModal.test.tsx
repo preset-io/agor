@@ -474,7 +474,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       patch: vi.fn(),
       remove: vi.fn(),
     };
-    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+    let authentication: unknown = { accessToken: 'old-subject' };
+    const client = {
+      service: vi.fn(() => service),
+      get: vi.fn(() => authentication),
+      on: vi.fn(),
+    } as unknown as AgorClient;
     const oldUser = makeUser();
     const newUser = makeUser({
       user_id: 'user-2',
@@ -507,6 +512,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(await screen.findByText('Old user authorization.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel authorization' })).toBeInTheDocument();
 
+    authentication = { accessToken: 'new-subject' };
     rerender(renderModal(newUser));
 
     expect(await screen.findByText('New User Provider')).toBeInTheDocument();
@@ -557,7 +563,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       patch: vi.fn(),
       remove: vi.fn(),
     };
-    const client = { service: vi.fn(() => service) } as unknown as AgorClient;
+    let authentication: unknown = { accessToken: 'old-subject' };
+    const client = {
+      service: vi.fn(() => service),
+      get: vi.fn(() => authentication),
+      on: vi.fn(),
+    } as unknown as AgorClient;
     const oldUser = makeUser();
     const newUser = makeUser({
       user_id: 'user-2',
@@ -580,6 +591,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     const { rerender } = render(renderModal(oldUser));
 
     await waitFor(() => expect(service.find).toHaveBeenCalledTimes(1));
+    authentication = { accessToken: 'new-subject' };
     rerender(renderModal(newUser));
 
     expect(await screen.findByText('New User Provider')).toBeInTheDocument();

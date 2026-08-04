@@ -1319,8 +1319,31 @@ describe('modelConfig schema (string shorthand coercion)', () => {
 
 describe('agor_models_list', () => {
   it('returns model registries grouped by agenticTool', async () => {
+    const findOpenCodeModels = vi.fn(async () => ({
+      runtimeVersion: '1.14.33',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          availableForSelection: true,
+          models: [{ id: 'gpt-5', name: 'GPT-5', status: 'active' }],
+        },
+        {
+          id: 'unavailable',
+          name: 'Unavailable',
+          availableForSelection: false,
+          models: [{ id: 'hidden', name: 'Hidden', status: 'active' }],
+        },
+      ],
+    }));
+    const app = makeFakeApp({
+      'opencode-models': {
+        find: findOpenCodeModels,
+      },
+    });
+    const baseServiceParams = { tenant: { tenant_id: 'tenant-a' } };
     const { agor_models_list } = await registerAndCaptureHandlers(
-      { app: {}, userId: 'user-1', sessionId: 'sess-1' },
+      { app, userId: 'user-1', sessionId: 'sess-1', baseServiceParams },
       ['agor_models_list']
     );
 
@@ -1342,9 +1365,26 @@ describe('agor_models_list', () => {
     expect(claudeIds).toContain('claude-sonnet-5');
     expect(parsed.opencode).toMatchObject({
       default: null,
-      models: [],
-      note: expect.stringContaining('provider-specific'),
+      models: [{ id: 'gpt-5', displayName: 'GPT-5', provider: 'openai', status: 'active' }],
+      note: expect.stringContaining('exact provider/model pair'),
     });
+    expect(findOpenCodeModels).toHaveBeenCalledWith(baseServiceParams);
+  });
+
+  it('keeps other registries available when the unfiltered OpenCode catalog is unavailable', async () => {
+    const app = makeFakeApp({
+      'opencode-models': { find: vi.fn(async () => Promise.reject(new Error('disabled'))) },
+    });
+    const { agor_models_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_models_list']
+    );
+
+    const result = await agor_models_list({});
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.codex.models.length).toBeGreaterThan(0);
+    expect(parsed.opencode.models).toEqual([]);
+    expect(parsed.opencode.note).toContain('catalog is unavailable');
   });
 
   it('filters to a single agenticTool when requested', async () => {

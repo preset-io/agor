@@ -203,6 +203,9 @@ describe('opencode.auth executor command', () => {
     } as never);
 
     expect(runtime.start).toHaveBeenCalledTimes(1);
+    expect(runtime.verifyAuthFileBoundary.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.start.mock.invocationCallOrder[0]!
+    );
     expect(runtime.start).toHaveBeenCalledWith(
       expect.objectContaining({
         dataHome: '/home/alice/.local/share/agor/opencode/opaque',
@@ -410,6 +413,17 @@ describe('opencode.auth executor command', () => {
       },
     });
     expect(runtime.start).toHaveBeenCalledTimes(1);
+    expect(runtime.verifyAuthFileBoundary).toHaveBeenNthCalledWith(
+      1,
+      '/home/alice/.local/share/agor/opencode/opaque',
+      { allowMissing: true }
+    );
+    expect(runtime.verifyAuthFileBoundary.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.start.mock.invocationCallOrder[0]!
+    );
+    expect(runtime.verifyAuthFileBoundary.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      mutationClient.auth.set.mock.invocationCallOrder[0]!
+    );
     expect(JSON.stringify(result)).not.toContain('synthetic-kimi-key');
     expect(JSON.stringify(result)).not.toContain('/home/alice');
   });

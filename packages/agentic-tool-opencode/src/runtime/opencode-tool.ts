@@ -54,7 +54,7 @@ const AGOR_PERMISSION_INTERCEPTION = {
   task: 'ask',
   external_directory: 'ask',
   todowrite: 'ask',
-  question: 'ask',
+  question: 'deny',
   webfetch: 'ask',
   websearch: 'ask',
   lsp: 'ask',
@@ -103,6 +103,7 @@ export type OpenCodeTurnResult = {
 export type OpenCodeInvocationConfig = {
   mcp: Record<string, unknown>;
   permission?: Record<string, 'ask' | 'allow' | 'deny'>;
+  tools?: Record<string, boolean>;
   [key: string]: unknown;
 };
 
@@ -225,7 +226,9 @@ async function applyPermissionEffect(input: {
   let handledByAgor = false;
   let interactionTimedOut = false;
 
-  if (canUseTool) {
+  if (effect.request.permission === 'question') {
+    handledByAgor = true;
+  } else if (canUseTool) {
     if (automaticallyAllowsOpenCodePermission(turn.permissionMode, effect.request.permission)) {
       response = 'once';
     } else {
@@ -489,14 +492,28 @@ export class OpenCodeTool {
 
   private protectedInvocationConfig(resolved: OpenCodeInvocationConfig): OpenCodeInvocationConfig {
     const configuredAgents =
-      typeof resolved.agent === 'object' && resolved.agent !== null ? resolved.agent : {};
+      typeof resolved.agent === 'object' && resolved.agent !== null
+        ? (resolved.agent as Record<string, unknown>)
+        : {};
+    const configuredManagedAgent = configuredAgents[AGOR_MANAGED_AGENT];
+    const managedAgent =
+      typeof configuredManagedAgent === 'object' && configuredManagedAgent !== null
+        ? (configuredManagedAgent as Record<string, unknown>)
+        : {};
+    const managedAgentTools =
+      typeof managedAgent.tools === 'object' && managedAgent.tools !== null
+        ? managedAgent.tools
+        : {};
     return {
       ...resolved,
       permission: AGOR_PERMISSION_INTERCEPTION,
+      tools: { ...resolved.tools, question: false },
       agent: {
         ...configuredAgents,
         [AGOR_MANAGED_AGENT]: {
+          ...managedAgent,
           mode: 'primary',
+          tools: { ...managedAgentTools, question: false },
           permission: AGOR_PERMISSION_INTERCEPTION,
         },
       },
@@ -586,12 +603,13 @@ export class OpenCodeTool {
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () => {
       cleanupPromise ??= (async () => {
-        if (!turnCompleted) {
-          await this.settlesWithin(
-            this.abortActiveSession(client, activeOpenCodeSessionId, input.directory),
-            this.dependencies.shutdownTimeoutMs
-          );
-        }
+        const activeSessionAbort = turnCompleted
+          ? Promise.resolve()
+          : this.settleWithinOrThrow(
+              this.abortActiveSession(client, activeOpenCodeSessionId, input.directory),
+              this.dependencies.shutdownTimeoutMs,
+              'OpenCode active session abort did not settle within the shutdown timeout'
+            );
         const collectorStop = this.settleWithinOrThrow(
           stopEventCollector(),
           this.dependencies.shutdownTimeoutMs,
@@ -600,15 +618,16 @@ export class OpenCodeTool {
         this.dependencies.cancelPendingPermissions?.(input.agorSessionId);
         // Child containment must start even if iterator.return() or the
         // collector itself ignores cancellation forever.
-        const [collectorResult, closeResult] = await Promise.allSettled([collectorStop, close()]);
-        const failures = [collectorResult, closeResult].flatMap((result) =>
+        const [abortResult, collectorResult, closeResult] = await Promise.allSettled([
+          activeSessionAbort,
+          collectorStop,
+          close(),
+        ]);
+        const failures = [abortResult, collectorResult, closeResult].flatMap((result) =>
           result.status === 'rejected' ? [result.reason] : []
         );
         if (failures.length > 1) {
-          throw new AggregateError(
-            failures,
-            'OpenCode event collector and child cleanup both failed'
-          );
+          throw new AggregateError(failures, 'OpenCode runtime cleanup failed in multiple phases');
         }
         if (failures.length === 1) throw failures[0];
       })();
@@ -684,20 +703,6 @@ export class OpenCodeTool {
       });
     } catch {
       // Local child cleanup remains authoritative.
-    }
-  }
-
-  private async settlesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        promise.then(() => true),
-        new Promise<false>((resolve) => {
-          timer = setTimeout(() => resolve(false), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
     }
   }
 

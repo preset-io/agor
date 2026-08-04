@@ -22,6 +22,7 @@ import {
   type AgenticToolName,
   type Board,
   getSessionType,
+  type OpenCodeModelCatalog,
   type Session,
   type SessionType,
   type ZoneBoardObject,
@@ -1581,8 +1582,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //     best-effort starter list.
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
-  //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list. Its entry explains that discovery happens after provider choice.
+  //   - OpenCode is a provider+model matrix. Its server-free, caller-authorized
+  //     catalog is flattened here while retaining the provider on every model.
   server.registerTool(
     'agor_models_list',
     {
@@ -1597,6 +1598,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      let openCodeCatalog: OpenCodeModelCatalog | undefined;
+      let openCodeCatalogUnavailable = false;
+      if (!args.agenticTool || args.agenticTool === 'opencode') {
+        try {
+          openCodeCatalog = (await ctx.app
+            .service('opencode-models')
+            .find(ctx.baseServiceParams)) as OpenCodeModelCatalog;
+        } catch (error) {
+          if (args.agenticTool === 'opencode') throw error;
+          openCodeCatalogUnavailable = true;
+        }
+      }
       const claudeModels = AVAILABLE_CLAUDE_MODEL_ALIASES.map((m) => ({
         id: m.id,
         displayName: m.displayName,
@@ -1647,8 +1660,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         },
         opencode: {
           default: null,
-          models: [],
-          note: 'OpenCode models are provider-specific and are discovered after selecting a provider. Pass both modelConfig.provider and modelConfig.model from the OpenCode provider catalog.',
+          models:
+            openCodeCatalog?.providers.flatMap((provider) =>
+              provider.availableForSelection
+                ? provider.models.map((model) => ({
+                    id: model.id,
+                    displayName: model.name,
+                    provider: provider.id,
+                    status: model.status,
+                  }))
+                : []
+            ) ?? [],
+          note: openCodeCatalogUnavailable
+            ? 'The caller-authorized OpenCode catalog is unavailable. Exact provider/model IDs may still be entered manually.'
+            : 'OpenCode requires an exact provider/model pair. Use each model’s provider with modelConfig.mode "exact"; configured IDs absent from this catalog may still be entered manually.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,

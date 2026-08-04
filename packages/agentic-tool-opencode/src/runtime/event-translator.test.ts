@@ -288,6 +288,17 @@ describe('OpenCode event translator', () => {
       { type: 'error', message: 'Unsupported OpenCode control event: session.completed' },
     ]);
   });
+
+  it('ignores the known permission acknowledgement emitted after Agor replies', () => {
+    const events = translator();
+
+    expect(
+      events.translate({
+        type: 'permission.replied',
+        properties: { sessionID: ACTIVE_SESSION, requestID: 'permission-1', reply: 'once' },
+      })
+    ).toEqual([]);
+  });
 });
 
 describe('OpenCode transcript reconciliation', () => {

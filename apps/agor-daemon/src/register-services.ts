@@ -57,9 +57,11 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import {
+  containExecutorProcess,
   getTrackedExecutor,
   markExecutorProcessExited,
   trackExecutorProcess,
+  untrackExecutorProcess,
 } from './executor-tracking.js';
 import { shouldRegisterLocalHostOperations } from './host/availability.js';
 import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
@@ -1023,6 +1025,34 @@ function createExecuteHandler(
         console.log(`${logPrefix} Exited with code ${code}`);
 
         if (spawnContext.mode === 'local') markExecutorProcessExited(sessionId, localExecutorPid);
+
+        if (spawnContext.mode === 'local') {
+          try {
+            const tasks = app.service('tasks') as unknown as TasksServiceImpl;
+            const task = await tasks.get(taskId, { ...params, provider: undefined });
+            if (task.runner_report?.cleanup.outcome === 'quiesced') {
+              const containment = await containExecutorProcess(sessionId, taskId);
+              if (containment.status === 'verified_absent') {
+                untrackExecutorProcess(sessionId, taskId);
+                await tasks.finalizeRunnerResultAfterLocalContainment(taskId, {
+                  ...params,
+                  provider: undefined,
+                });
+                return;
+              }
+              await requestExecutorTermination({
+                app,
+                taskId,
+                cause: 'runtime_cleanup_failed',
+                errorMessage: 'Executor process-group cleanup could not be verified.',
+                params,
+              });
+              return;
+            }
+          } catch (error) {
+            console.warn(`${logPrefix} Failed to finalize contained runner result:`, error);
+          }
+        }
 
         if (spawnContext.mode === 'templated') {
           const disposition = classifyExecutorExit({

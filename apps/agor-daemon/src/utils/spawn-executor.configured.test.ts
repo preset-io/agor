@@ -986,6 +986,70 @@ describe('configured executor spawning', () => {
       fixture.restore();
     }
   });
+
+  it('releases a contained short command only after process-group absence', async () => {
+    const fixture = installMockExecutor('agor-contained-executor-');
+    const { proc } = fixture;
+    try {
+      const { startContainedExecutorCommand } = await import('./spawn-executor');
+      const handle = startContainedExecutorCommand({ command: 'test.inspect', params: {} });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Array),
+        expect.objectContaining({ detached: true })
+      );
+      expect(trackMock).toHaveBeenCalledWith(expect.objectContaining({ pid: proc.pid }));
+
+      proc.stdout.emit('data', Buffer.from('{"success":true,"data":{"ok":true}}\n'));
+      proc.emit('exit', 0);
+      proc.emit('close', 0);
+
+      await expect(handle.result).resolves.toEqual({ success: true, data: { ok: true } });
+      expect(containMock).toHaveBeenCalledOnce();
+      expect(untrackMock).toHaveBeenCalledOnce();
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  it('retains a verifier when short-command cleanup is not yet proven', async () => {
+    containMock
+      .mockResolvedValueOnce({ status: 'unverified', reason: 'still present' })
+      .mockResolvedValueOnce({ status: 'verified_absent' });
+    const fixture = installMockExecutor('agor-contained-unverified-');
+    const { proc } = fixture;
+    try {
+      const { startContainedExecutorCommand } = await import('./spawn-executor');
+      const handle = startContainedExecutorCommand({ command: 'test.inspect', params: {} });
+      proc.emit('exit', 0);
+      proc.emit('close', 0);
+
+      await expect(handle.result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'EXECUTOR_CLEANUP_UNVERIFIED' },
+      });
+      expect(untrackMock).not.toHaveBeenCalled();
+      await expect(handle.verifyAbsence()).resolves.toBe(true);
+      expect(containMock).toHaveBeenCalledTimes(2);
+      expect(untrackMock).toHaveBeenCalledOnce();
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  it('rejects templated short commands that lack a remote cleanup contract', async () => {
+    const { configureExecutor, startContainedExecutorCommand } = await import('./spawn-executor');
+    configureExecutor({ executor_command_template: 'remote {command}' });
+
+    await expect(
+      startContainedExecutorCommand({ command: 'test.inspect', params: {} }).result
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: 'EXECUTOR_LOCAL_PROCESS_REQUIRED' },
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('substituteTemplateVariables', () => {

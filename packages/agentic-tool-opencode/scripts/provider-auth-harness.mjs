@@ -15,7 +15,8 @@ assert(
   strictQaArgument === -1 || (strictQaDataHome && isAbsolute(strictQaDataHome)),
   '--strict-qa-data-home requires an absolute path'
 );
-const dataHome = strictQaDataHome ?? join(root, 'opaque-namespace');
+const dataHome =
+  strictQaDataHome ?? join(root, 'home', '.local', 'share', 'agor', 'opencode', 'opaque-namespace');
 const branchDirectory = join(root, 'branch-worktree');
 const synthetic = {
   kimi: 'agor-synthetic-kimi-not-a-real-key',

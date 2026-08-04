@@ -9,19 +9,17 @@ import type {
   OpenCodeProviderDiscovery,
   OpenCodeProviderSettings,
 } from '@agor/core/types';
-import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { resolveOpenCodeConfigurationDirectory } from './configuration-scope.js';
 import {
   type AuthenticatedOpenCodeSubjectContext,
   resolveAuthenticatedOpenCodeSubjectContext,
 } from './credential-namespace.js';
-import { createOpenCodeExecutorInvocation } from './executor-command.js';
+import { startOpenCodeExecutorInvocation } from './executor-command.js';
+import {
+  blockOpenCodeNativeStateNamespace,
+  inOpenCodeNativeStateMutationSlot,
+} from './native-state-coordinator.js';
 import { type OpenCodeOAuthExecutorHandle, startOpenCodeOAuthExecutor } from './oauth-executor.js';
-
-const mutationSlots = new Map<string, Promise<void>>();
-// An unverified OAuth process keeps the same namespace coordinator closed.
-// The stored verifier delegates recovery to the existing tracked-process owner.
-const blockedNamespaces = new Map<string, () => Promise<boolean>>();
 
 function assertOptionalStringRecord(
   value: unknown
@@ -34,40 +32,6 @@ function assertOptionalStringRecord(
       Object.values(value).some((entry) => typeof entry !== 'string'))
   ) {
     throw new BadRequest('Provider prompt values must be strings.');
-  }
-}
-
-async function inMutationSlot<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const previous = mutationSlots.get(key) ?? Promise.resolve();
-  const current = previous
-    .catch(() => undefined)
-    .then(async () => {
-      const verifyAbsence = blockedNamespaces.get(key);
-      if (verifyAbsence) {
-        let verified = false;
-        try {
-          verified = await verifyAbsence();
-        } catch {
-          // Existing containment owns details; the public service stays secret-safe.
-        }
-        if (!verified) {
-          throw new BadRequest(
-            'OpenCode provider cleanup could not be verified. Later mutations remain blocked.'
-          );
-        }
-        if (blockedNamespaces.get(key) === verifyAbsence) blockedNamespaces.delete(key);
-      }
-      return work();
-    });
-  const settled = current.then(
-    () => undefined,
-    () => undefined
-  );
-  mutationSlots.set(key, settled);
-  try {
-    return await current;
-  } finally {
-    if (mutationSlots.get(key) === settled) mutationSlots.delete(key);
   }
 }
 
@@ -153,15 +117,16 @@ export class OpenCodeAuthService {
         }
       | { operation: 'disconnect'; providerId: string }
   ): Promise<OpenCodeProviderDiscovery> {
-    const result = await runExecutorCommand(
-      createOpenCodeExecutorInvocation(context.dataHome, params),
-      {
-        asUser: context.asUser,
-        env: context.executorEnv,
-        logPrefix: '[OpenCode Auth]',
-        templateVariables: { unix_user: context.asUser ?? undefined },
-      }
-    );
+    const handle = startOpenCodeExecutorInvocation(context.dataHome, params, {
+      asUser: context.asUser,
+      env: context.executorEnv,
+      logPrefix: '[OpenCode Auth]',
+      templateVariables: { unix_user: context.asUser ?? undefined },
+    });
+    const result = await handle.result;
+    if (result.error?.code === 'EXECUTOR_CLEANUP_UNVERIFIED') {
+      blockOpenCodeNativeStateNamespace(context.namespaceKey, () => handle.verifyAbsence());
+    }
     if (!result.success || !result.data) {
       throw new BadRequest('OpenCode provider operation failed. Try again.');
     }
@@ -219,7 +184,7 @@ export class OpenCodeAuthService {
     assertOptionalStringRecord(metadata);
 
     const context = await this.credentialContext(params);
-    const result = await inMutationSlot(context.namespaceKey, () =>
+    const result = await inOpenCodeNativeStateMutationSlot(context.namespaceKey, () =>
       this.execute(context, { operation: 'connect-api-key', providerId, apiKey, metadata })
     );
     return this.settings(context, result);
@@ -281,7 +246,7 @@ export class OpenCodeAuthService {
     context: AuthenticatedOpenCodeSubjectContext,
     request: ValidatedOAuthRequest
   ): Promise<void> {
-    await inMutationSlot(context.namespaceKey, async () => {
+    await inOpenCodeNativeStateMutationSlot(context.namespaceKey, async () => {
       if (attempt.cancelRequested) {
         attempt.phase = 'cancelled';
         attempt.resolveReady();
@@ -321,7 +286,7 @@ export class OpenCodeAuthService {
 
       const result = await handle.result;
       if (result.error?.code === 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED') {
-        blockedNamespaces.set(context.namespaceKey, () => handle.verifyAbsence());
+        blockOpenCodeNativeStateNamespace(context.namespaceKey, () => handle.verifyAbsence());
       }
       this.settleAttempt(attempt, result, context);
       scheduleAttemptPrune(attempt);
@@ -423,7 +388,7 @@ export class OpenCodeAuthService {
     const providerId = id?.trim();
     if (!providerId) throw new BadRequest('Provider is required.');
     const context = await this.credentialContext(params);
-    const result = await inMutationSlot(context.namespaceKey, () =>
+    const result = await inOpenCodeNativeStateMutationSlot(context.namespaceKey, () =>
       this.execute(context, { operation: 'disconnect', providerId })
     );
     return this.settings(context, result);

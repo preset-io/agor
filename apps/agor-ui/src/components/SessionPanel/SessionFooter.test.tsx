@@ -245,7 +245,7 @@ describe('SessionFooter', () => {
         {
           id: 'openai',
           name: 'OpenAI',
-          runtimeAvailable: true,
+          availableForSelection: true,
           models: [{ id: 'gpt-5', name: 'GPT-5', status: 'active' }],
         },
       ],

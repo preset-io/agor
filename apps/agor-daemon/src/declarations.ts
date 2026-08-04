@@ -147,6 +147,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<Task>;
   reportRunnerResult(data: TaskRunnerReportInput, params?: FeathersParams): Promise<Task>;
+  finalizeRunnerResultAfterLocalContainment(
+    taskId: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,

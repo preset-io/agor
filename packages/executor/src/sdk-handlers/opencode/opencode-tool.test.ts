@@ -621,7 +621,7 @@ describe('OpenCodeTool managed turn', () => {
         ],
       }),
     });
-    const { tool } = makeTool({
+    const { tool, spawnCalls } = makeTool({
       client,
       permissionService,
       messagesRepo: { findBySessionId: vi.fn().mockResolvedValue([]) },
@@ -638,6 +638,17 @@ describe('OpenCodeTool managed turn', () => {
     expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
       expect.objectContaining({ body: { response: 'once' } })
     );
+    const invocationConfig = JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '');
+    expect(invocationConfig).toMatchObject({
+      tools: { question: false },
+      permission: { question: 'deny' },
+      agent: {
+        'agor-managed': {
+          tools: { question: false },
+          permission: { question: 'deny' },
+        },
+      },
+    });
   });
 
   it('handles a read permission in yolo mode without waiting for a decision', async () => {
@@ -1101,9 +1112,11 @@ describe('OpenCodeTool managed turn', () => {
 
     expect(JSON.parse(spawnCalls[0].options.env?.OPENCODE_CONFIG_CONTENT ?? '')).toMatchObject({
       permission: { '*': 'ask' },
+      tools: { question: false },
       agent: {
         'agor-managed': {
           mode: 'primary',
+          tools: { question: false },
           permission: { '*': 'ask', bash: 'ask', edit: 'ask' },
         },
       },
@@ -1112,6 +1125,7 @@ describe('OpenCodeTool managed turn', () => {
       '*': 'ask',
       bash: 'ask',
       edit: 'ask',
+      question: 'deny',
     });
     expect(client.session.prompt).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ agent: 'agor-managed' }) })

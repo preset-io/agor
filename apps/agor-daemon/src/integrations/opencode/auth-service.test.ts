@@ -6,7 +6,6 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { createOpenCodeAuthService } from './auth-service';
 import { startOpenCodeOAuthExecutor } from './oauth-executor.js';
 
@@ -33,15 +32,19 @@ vi.mock('@agor/core/unix', async () => {
   };
 });
 
+const runCommand = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/spawn-executor.js', () => ({
-  runExecutorCommand: vi.fn(),
+  runExecutorCommand: runCommand,
+  startContainedExecutorCommand: (payload: unknown, options: unknown) => ({
+    result: runCommand(payload, options),
+    verifyAbsence: vi.fn(async () => true),
+  }),
 }));
 
 vi.mock('./oauth-executor.js', () => ({
   startOpenCodeOAuthExecutor: vi.fn(),
 }));
 
-const runCommand = vi.mocked(runExecutorCommand);
 const startOAuth = vi.mocked(startOpenCodeOAuthExecutor);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
