@@ -122,7 +122,7 @@ describe('OpenCode executor adapter', () => {
     });
 
     await expect(execute(state.value)).resolves.toMatchObject({
-      status: 'completed',
+      result: 'success',
       taskPatch: { model: 'openai/gpt-test' },
     });
 
@@ -186,7 +186,8 @@ describe('OpenCode executor adapter', () => {
     mocks.runTurn.mockRejectedValue(new Error('OpenCode provider authentication failed'));
 
     await expect(execute(state.value)).resolves.toMatchObject({
-      status: 'failed',
+      result: 'failure',
+      failureCause: 'runtime_failure',
       taskPatch: { error_message: 'OpenCode provider authentication failed' },
       error: expect.objectContaining({ message: 'OpenCode provider authentication failed' }),
     });
@@ -209,7 +210,8 @@ describe('OpenCode executor adapter', () => {
     const state = client({ model_config: { mode: 'exact', provider: 'openai', model: '' } });
 
     await expect(execute(state.value)).resolves.toMatchObject({
-      status: 'failed',
+      result: 'failure',
+      failureCause: 'runtime_failure',
       error: expect.objectContaining({ message: expect.stringMatching(/provider and model/i) }),
     });
 
@@ -238,7 +240,7 @@ describe('OpenCode executor adapter', () => {
     abortController.abort();
     mocks.runTurn.mockRejectedValue(new Error('cancelled'));
 
-    await expect(execute(state.value, abortController)).resolves.toEqual({ status: 'stopped' });
+    await expect(execute(state.value, abortController)).resolves.toEqual({ result: 'failure', failureCause: 'runtime_cancelled' });
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();

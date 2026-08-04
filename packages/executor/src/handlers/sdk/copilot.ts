@@ -6,6 +6,7 @@
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import type { InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
@@ -63,7 +64,8 @@ export async function executeCopilotTask(params: {
           repos.users,
           permissionService,
           repos.sessionsService,
-          repos.mcpOAuthAuthHeaders
+          repos.mcpOAuthAuthHeaders,
+          resolveSdkWatchdogConfig(params.resolvedConfig?.execution).operation_absolute_timeout_ms
         ),
     });
   } finally {

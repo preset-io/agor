@@ -28,6 +28,9 @@ client's earlier Session GET.
    The prompt endpoint carries tenant identity through a long-route scope;
    admission itself is a bound short repository unit, so the Session lock is
    released before title/config work, claim preparation, or event delivery.
+   Sentinel launch values (`message_range.start_index = -1` and
+   `git_state.sha_at_start = ''`) remain until a dispatch claim pins the actual
+   transcript and Git state.
 2. **Attempt the head** — the prompt route immediately offers that Task to
    `spawnTaskExecutor`. If the Session is promptable and the Task is the
    durable queue head, it may leave the queue without waiting for a later scan.
@@ -60,12 +63,13 @@ death or duplicate triggers cannot affect correctness.
 
 Queued rows survive daemon restart. Completion, Stop, callbacks, widgets,
 scheduled initialization, and the recovery worker may all trigger draining;
-duplicate triggers converge at the same durable claim. Callback and widget
-occurrences use deterministic Task IDs so competing producers converge on one
-queued row and one position. Their stable initial-message identity is persisted
-in `Task.metadata.initial_message_id`; a later drainer therefore writes exactly
-the same transcript row. A losing admission that still observes `queued` writes
-no transcript row.
+duplicate triggers converge at the same durable claim. Callback creation and
+its source receipt commit together while holding the target Session queue lock,
+so competing producers converge on one queued row and one position. Widget
+occurrences use deterministic Task IDs. Stable initial-message identity is
+persisted in `Task.metadata.initial_message_id`; a later drainer therefore
+writes exactly the same transcript row. A losing admission that still observes
+`queued` writes no transcript row.
 
 Widget submit/dismiss uses a separate short Message-row claim before registry
 or connector work. Only `pending -> resolving` may perform that work; the

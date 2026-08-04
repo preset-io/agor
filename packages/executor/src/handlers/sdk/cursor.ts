@@ -24,7 +24,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -509,9 +509,13 @@ export async function executeCursorTask(params: {
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
   if (params.permissionMode && params.permissionMode !== 'bypassPermissions') {
-    console.warn(
-      `[cursor] Ignoring permission mode "${params.permissionMode}"; @cursor/sdk currently runs autonomously in Agor.`
-    );
+    return {
+      result: 'failure',
+      failureCause: 'interaction_unavailable',
+      taskPatch: {
+        error_message: `Cursor cannot honor permission mode "${params.permissionMode}" because its SDK does not expose permission callbacks. Use bypassPermissions to run it autonomously.`,
+      },
+    };
   }
 
   const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
@@ -699,7 +703,8 @@ export async function executeCursorTask(params: {
       }
       if (isDaemonOwnedAbort(params.abortController)) return;
       return {
-        status: stopped || failed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
+        result: stopped || failed ? 'failure' : 'success',
+        failureCause: stopped ? 'runtime_cancelled' : failed ? 'runtime_failure' : undefined,
         taskPatch: stopped
           ? {
               ...taskPatch,
@@ -727,7 +732,8 @@ export async function executeCursorTask(params: {
     }
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
     return {
-      status: TaskStatus.FAILED,
+      result: 'failure',
+      failureCause: params.abortController.signal.aborted ? 'runtime_cancelled' : 'runtime_failure',
       taskPatch,
       ...(!params.abortController.signal.aborted ? { error: err } : {}),
     };

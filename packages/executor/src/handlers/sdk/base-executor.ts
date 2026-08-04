@@ -15,6 +15,7 @@ import { generateId, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
+  ExecutorFailureCause,
   MessageID,
   MessageSource,
   PermissionMode,
@@ -22,7 +23,7 @@ import type {
   StreamingEventType,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, TaskStatus } from '@agor/core/types';
+import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
@@ -33,6 +34,7 @@ import {
   type AgenticToolOutcome,
   type AgenticToolTaskPatch,
   awaitRuntimeCleanup,
+  RuntimeCleanupError,
 } from '../../terminal-task.js';
 import { getInteractionAbortOutcome, isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -48,6 +50,16 @@ function sdkDebug(...args: unknown[]): void {
 
 class MissingCredentialError extends Error {
   override readonly name = 'MissingCredentialError';
+}
+
+function nativeDeadlineFailure(
+  tool: AgenticToolName,
+  error: Error
+): ExecutorFailureCause | undefined {
+  const expired =
+    (tool === 'claude-code' && /no activity for \d+s \(timeout: \d+s\)/i.test(error.message)) ||
+    (tool === 'copilot' && /timeout after \d+ms waiting for session\.idle/i.test(error.message));
+  return expired ? 'agentic_tool_timeout' : undefined;
 }
 
 export async function appendTaskFailureMessage(
@@ -588,17 +600,10 @@ export async function executeToolTask(params: {
     // Capture git SHA at task end
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
 
-    // Determine task status based on SDK result
-    // - wasStopped: user explicitly stopped the task
-    // - hadError: SDK returned an error subtype (e.g., error_during_execution)
     const interactionOutcome = getInteractionAbortOutcome(params.abortController);
-    const taskStatus =
-      interactionOutcome?.status ??
-      (result.wasStopped
-        ? TaskStatus.FAILED
-        : result.hadError
-          ? TaskStatus.FAILED
-          : TaskStatus.COMPLETED);
+    const failureCause =
+      interactionOutcome?.cause ??
+      (result.wasStopped ? 'runtime_cancelled' : result.hadError ? 'runtime_failure' : undefined);
 
     if (result.hadError) {
       console.error(
@@ -686,9 +691,14 @@ export async function executeToolTask(params: {
       }
     }
 
-    return { status: taskStatus, taskPatch: patchData };
+    return {
+      result: failureCause ? 'failure' : 'success',
+      failureCause,
+      taskPatch: patchData,
+    };
   } catch (error) {
     if (daemonOwnsTerminality()) return;
+    if (error instanceof RuntimeCleanupError) throw error;
     const err = error instanceof Error ? error : new Error(String(error));
     const interactionOutcome = getInteractionAbortOutcome(params.abortController);
     const failureMessage = interactionOutcome?.errorMessage ?? (err.message || String(err));
@@ -716,7 +726,9 @@ export async function executeToolTask(params: {
     await appendTaskFailureMessage(client, sessionId, taskId, err, failureMessage);
 
     return {
-      status: interactionOutcome?.status ?? TaskStatus.FAILED,
+      result: 'failure',
+      failureCause:
+        interactionOutcome?.cause ?? nativeDeadlineFailure(toolName, err) ?? 'runtime_failure',
       taskPatch: patchData,
       ...(interactionOutcome ? {} : { error: err }),
     };

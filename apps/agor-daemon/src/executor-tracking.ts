@@ -5,6 +5,7 @@ import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
+import type { LocalExecutorRuntime } from '@agor/core/types';
 import { buildSpawnArgs } from '@agor/core/unix';
 
 export interface ExecutorContainmentIdentity {
@@ -222,12 +223,38 @@ export function trackExecutorProcess(
     asUser?: string;
   },
   owner?: object
-): void {
-  executorProcesses(owner).set(input.sessionId, {
+): LocalExecutorRuntime {
+  const tracked: ExecutorContainmentIdentity = {
     ...input,
     pgid: input.pid,
     startIdentity: readStartIdentity(input.pid),
     bootIdentity: readBootIdentity(),
+    leaderExited: false,
+  };
+  executorProcesses(owner).set(input.sessionId, tracked);
+  return {
+    mode: 'local',
+    pid: tracked.pid,
+    ...(tracked.startIdentity ? { start_identity: tracked.startIdentity } : {}),
+    ...(tracked.bootIdentity ? { boot_identity: tracked.bootIdentity } : {}),
+    ...(tracked.asUser ? { as_user: tracked.asUser } : {}),
+  };
+}
+
+export function restoreExecutorProcess(
+  sessionId: string,
+  taskId: string,
+  runtime: LocalExecutorRuntime,
+  owner?: object
+): void {
+  executorProcesses(owner).set(sessionId, {
+    sessionId,
+    taskId,
+    pid: runtime.pid,
+    pgid: runtime.pid,
+    startIdentity: runtime.start_identity,
+    bootIdentity: runtime.boot_identity,
+    asUser: runtime.as_user,
     leaderExited: false,
   });
 }

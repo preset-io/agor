@@ -345,6 +345,24 @@ describe('TaskBlock SDK failure presentation', () => {
     expect(container.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
   });
 
+  it('presents adapter incompatibility without calling it a semantic stall', () => {
+    renderTaskBlock(
+      makeTask({
+        status: TaskStatus.STOPPING,
+        sdk_failure: {
+          ...observedSdkFailure,
+          reason: 'adapter_incompatible',
+          watchdog_action: 'enforced',
+          termination: 'requested',
+        },
+      }),
+      true
+    );
+
+    expect(screen.getAllByText('Runtime compatibility failed')).toHaveLength(2);
+    expect(screen.queryByText('Agent progress stalled')).not.toBeInTheDocument();
+  });
+
   it('explains an active observe-only diagnosis without showing work in progress', () => {
     const { container } = renderTaskBlock(
       makeTask({

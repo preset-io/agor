@@ -82,7 +82,8 @@ export class CopilotTool implements ITool {
     usersRepo?: UsersRepository,
     permissionService?: PermissionService,
     sessionsService?: SessionsPatchClient,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    turnTimeoutMs?: number
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -103,7 +104,8 @@ export class CopilotTool implements ITool {
         messagesService,
         tasksService,
         sessionsService,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        turnTimeoutMs
       );
     }
   }
@@ -441,7 +443,7 @@ export class CopilotTool implements ITool {
       };
     }
 
-    const result = this.promptService.stopTask(sessionId as SessionID);
+    const result = await this.promptService.stopTask(sessionId as SessionID);
 
     if (result.success) {
       return {

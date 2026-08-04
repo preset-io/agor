@@ -106,7 +106,35 @@ function makeService(
     session_id: parentSessionId,
     status: TaskStatus.QUEUED,
   });
-  const createPending = vi.fn(async (data: Partial<Task>) => ({ ...callbackTask, ...data }));
+  const createPending = vi.fn(
+    async (
+      sourceTaskId: string,
+      targetSessionId: string,
+      data: { full_prompt: string; created_by: string; metadata: Task['metadata'] }
+    ) => {
+      const source = tasksById.get(sourceTaskId)!;
+      const existing = source.metadata?.callback_dispatches?.some(
+        (receipt) => receipt.target_session_id === targetSessionId
+      );
+      if (existing) return { created: false, task: callbackTask };
+      source.metadata = {
+        ...(source.metadata ?? {}),
+        callback_dispatches: [
+          ...(source.metadata?.callback_dispatches ?? []),
+          {
+            event: 'session_completion',
+            target_session_id: targetSessionId as never,
+            queued_task_id: callbackTaskId as never,
+            dispatched_at: '2026-01-01T00:00:06.000Z',
+          },
+        ],
+      };
+      return {
+        created: true,
+        task: { ...callbackTask, full_prompt: data.full_prompt, metadata: data.metadata },
+      };
+    }
+  );
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
     const target = id === parentSessionId ? parentSession : childSession;
@@ -114,8 +142,7 @@ function makeService(
     return { ...target };
   });
   const triggerQueueProcessing = vi.fn(async () => undefined);
-  const gatewayFlush = vi.fn(async () => undefined);
-  const gatewayProgress = vi.fn(async () => undefined);
+  const gatewayFinalize = vi.fn(async () => undefined);
   const messagesFind = vi.fn(async () => [
     {
       role: 'assistant',
@@ -126,17 +153,15 @@ function makeService(
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
-    taskRepo: typeof repository & { createPending: typeof createPending };
+    taskRepo: typeof repository & { createCompletionCallbackOnce: typeof createPending };
     id: string;
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
-    completionCallbackDispatches: Map<string, Promise<unknown>>;
   };
   service.repository = repository;
-  service.taskRepo = { ...repository, createPending };
+  service.taskRepo = { ...repository, createCompletionCallbackOnce: createPending };
   service.id = 'task_id';
   service.emit = vi.fn();
-  service.completionCallbackDispatches = new Map();
   service.app = {
     service: vi.fn((name: string) => {
       if (name === 'sessions') {
@@ -149,7 +174,7 @@ function makeService(
       if (name === 'messages') return { find: messagesFind };
       if (name === 'branches') return { get: vi.fn() };
       if (name === 'gateway') {
-        return { flushOutboundBuffer: gatewayFlush, updateProgress: gatewayProgress };
+        return { finalizeTask: gatewayFinalize, updateProgress: vi.fn() };
       }
       throw new Error(`unexpected service ${name}`);
     }),
@@ -162,14 +187,88 @@ function makeService(
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
-    gatewayFlush,
-    gatewayProgress,
+    gatewayFinalize,
     getStoredTask: (id = taskId) => tasksById.get(id),
     childSession,
   };
 }
 
+async function reconcile(
+  service: TasksService,
+  status: Task['status'],
+  updates: Partial<Task> = {}
+): Promise<boolean> {
+  const current = (await service.get(taskId)) as Task;
+  return service.reconcileTerminalTask({ ...current, ...updates, status }, status);
+}
+
 describe('TasksService completion callbacks', () => {
+  it('repairs each recent terminal Task instead of only the latest Task per Session', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const tasks = [
+      makeTask({ status: TaskStatus.COMPLETED }),
+      makeTask({ task_id: callbackTaskId, status: TaskStatus.FAILED }),
+    ];
+    Reflect.set(service, 'taskRepo', { findRecentTerminal: vi.fn().mockResolvedValue(tasks) });
+    service.reconcileTerminalTask = vi.fn().mockResolvedValue(true);
+
+    await service.repairTerminalConsequences();
+
+    expect(service.reconcileTerminalTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-observes an older termination without reverting the newer Session projection', async () => {
+    const newerTaskId = callbackTaskId;
+    const { service, sessionsPatch, gatewayFinalize } = makeService({
+      childSession: { tasks: [taskId, newerTaskId] as never },
+    });
+
+    await service.reconcileTerminalTask(
+      makeTask({
+        status: TaskStatus.FAILED,
+        termination_request: {
+          cause: 'heartbeat_lost',
+          requested_at: '2026-01-01T00:00:04.000Z',
+        },
+      }),
+      TaskStatus.FAILED
+    );
+
+    expect(sessionsPatch).not.toHaveBeenCalledWith(
+      childSessionId,
+      expect.objectContaining({ runtime_projection: expect.anything() }),
+      expect.anything()
+    );
+    expect(gatewayFinalize).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: taskId, state: 'failed' })
+    );
+  });
+
+  it('preserves an acknowledged ready flag when repairing the same terminal projection', async () => {
+    const { service, sessionsPatch, childSession } = makeService({
+      childSession: {
+        ready_for_prompt: false,
+        runtime_projection: {
+          terminal_task_id: taskId as never,
+          applied_at: '2026-01-01T00:00:06.000Z',
+        },
+      },
+    });
+
+    await (service as any).projectTerminalSession(
+      makeTask({ status: TaskStatus.COMPLETED }),
+      TaskStatus.COMPLETED,
+      childSession,
+      {}
+    );
+
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      childSessionId,
+      expect.not.objectContaining({ ready_for_prompt: true }),
+      {}
+    );
+  });
+
   it('does not inject a BTW result twice after terminal reconciliation is retried', async () => {
     const { service, childSession, messagesFind, getStoredTask } = makeService({
       task: {
@@ -201,7 +300,7 @@ describe('TasksService completion callbacks', () => {
 
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
-    const { service, createPending, gatewayFlush, gatewayProgress } = makeService();
+    const { service, createPending, gatewayFinalize } = makeService();
     const tx = {
       execute: vi.fn(async () => []),
     };
@@ -213,20 +312,23 @@ describe('TasksService completion callbacks', () => {
         return result;
       }),
     };
-    createPending.mockImplementationOnce(async (data: Partial<Task>) => {
+    createPending.mockImplementationOnce(async (_source, _target, data) => {
       events.push('callback:queued');
       return {
-        ...makeTask({
-          task_id: callbackTaskId,
-          session_id: parentSessionId,
-          status: TaskStatus.QUEUED,
-        }),
-        ...data,
+        created: true,
+        task: {
+          ...makeTask({
+            task_id: callbackTaskId,
+            session_id: parentSessionId,
+            status: TaskStatus.QUEUED,
+          }),
+          full_prompt: data.full_prompt,
+          metadata: data.metadata,
+        },
       };
     });
     await runWithTenantDatabaseScope(db as never, 'tenant-1', async () => {
-      await service.patch(taskId, {
-        status: TaskStatus.COMPLETED,
+      await reconcile(service, TaskStatus.COMPLETED, {
         completed_at: '2026-01-01T00:00:05.000Z',
       });
 
@@ -249,8 +351,7 @@ describe('TasksService completion callbacks', () => {
       'tx:committed',
     ]);
     expect(createPending).toHaveBeenCalledTimes(1);
-    expect(gatewayFlush).toHaveBeenCalledWith(childSessionId);
-    expect(gatewayProgress).toHaveBeenCalledWith(
+    expect(gatewayFinalize).toHaveBeenCalledWith(
       expect.objectContaining({
         session_id: childSessionId,
         task_id: taskId,
@@ -269,28 +370,25 @@ describe('TasksService completion callbacks', () => {
       getStoredTask,
     } = makeService();
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
+    await reconcile(service, TaskStatus.COMPLETED, {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
     expect(createPending).toHaveBeenCalledWith(
+      taskId,
+      parentSessionId,
       expect.objectContaining({
-        task_id: durableCallbackTaskId,
-        session_id: parentSessionId,
-        status: TaskStatus.QUEUED,
         metadata: expect.objectContaining({
           is_agor_callback: true,
           source: 'agor',
           child_session_id: childSessionId,
           child_task_id: taskId,
           queued_by_user_id: userId,
-          initial_message_id: durableCallbackTaskId,
         }),
       })
     );
-    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    const callbackPrompt = createPending.mock.calls[0][2].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('**Result:**');
     expect(callbackPrompt).toContain('Final child result');
@@ -321,14 +419,13 @@ describe('TasksService completion callbacks', () => {
   it('uses the same terminal callback for a failed task', async () => {
     const { service, createPending } = makeService();
 
-    await service.patch(taskId, {
-      status: TaskStatus.FAILED,
+    await reconcile(service, TaskStatus.FAILED, {
       completed_at: '2026-01-01T00:00:05.000Z',
       error_message: 'SDK activity stalled (progress_stalled).',
     });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
-    expect(createPending.mock.calls[0][0].full_prompt).toContain('failed');
+    expect(createPending.mock.calls[0][2].full_prompt).toContain('failed');
   });
 
   it('includeOriginalPrompt=false queues one templated callback without an original prompt section', async () => {
@@ -348,13 +445,12 @@ describe('TasksService completion callbacks', () => {
       },
     });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
+    await reconcile(service, TaskStatus.COMPLETED, {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
-    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    const callbackPrompt = createPending.mock.calls[0][2].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('**Result:**');
     expect(callbackPrompt).toContain('Final child result');
@@ -381,13 +477,12 @@ describe('TasksService completion callbacks', () => {
       task: { full_prompt: originalPrompt },
     });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
+    await reconcile(service, TaskStatus.COMPLETED, {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
-    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    const callbackPrompt = createPending.mock.calls[0][2].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
     expect(callbackPrompt).toContain(originalPrompt);
@@ -411,13 +506,12 @@ describe('TasksService completion callbacks', () => {
       task: { full_prompt: 'remote session initial prompt' },
     });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
+    await reconcile(service, TaskStatus.COMPLETED, {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
     await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
-    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    const callbackPrompt = createPending.mock.calls[0][2].full_prompt as string;
     expect(callbackPrompt).toContain('[Agor] Child session');
     expect(callbackPrompt).toContain('## Original Prompt');
     expect(callbackPrompt).toContain('remote session initial prompt');
@@ -430,8 +524,8 @@ describe('TasksService completion callbacks', () => {
     );
   });
 
-  it('dedupes concurrent completion callback dispatch for the same task target', async () => {
-    const { service, createPending, childSession } = makeService();
+  it('relies on the atomic callback receipt when concurrent reconciliations race', async () => {
+    const { service, createPending, childSession, triggerQueueProcessing } = makeService();
     const completedTask = makeTask({
       status: TaskStatus.COMPLETED,
       completed_at: '2026-01-01T00:00:05.000Z',
@@ -442,49 +536,10 @@ describe('TasksService completion callbacks', () => {
       (service as any).dispatchCompletionCallbacks(completedTask, childSession, {}),
     ]);
 
-    expect(createPending).toHaveBeenCalledTimes(1);
-  });
-
-  it('still triggers target queue processing if dispatch marker persistence fails after queueing', async () => {
-    const { service, repository, createPending, triggerQueueProcessing } = makeService();
-    const completedTask = makeTask({
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
-    const originalUpdate = repository.update.getMockImplementation();
-    repository.update.mockImplementation(async (id: string, updates: Partial<Task>) => {
-      if (updates.metadata?.callback_dispatches) {
-        throw new Error('metadata write failed');
-      }
-      if (!originalUpdate) throw new Error('missing original update');
-      return originalUpdate(id, updates);
-    });
-
-    await (service as any).dispatchCompletionCallbacks(completedTask, makeSession(), {});
-
-    expect(createPending).toHaveBeenCalledTimes(1);
-    expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {});
-  });
-
-  it('runs once-mode cleanup only for the caller that actually attempts dispatch', async () => {
-    const { service, createPending, sessionsPatch, childSession } = makeService();
-    const completedTask = makeTask({
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
-
-    await Promise.all([
-      (service as any).dispatchCompletionCallbacks(completedTask, childSession, {}),
-      (service as any).dispatchCompletionCallbacks(completedTask, childSession, {}),
-    ]);
-
-    expect(createPending).toHaveBeenCalledTimes(1);
-    expect(
-      sessionsPatch.mock.calls.filter(
-        ([id, updates]) =>
-          id === childSessionId && (updates as Partial<Session>).callback_config?.enabled === false
-      )
-    ).toHaveLength(1);
+    expect(createPending).toHaveBeenCalledTimes(2);
+    // Both repair attempts may wake the target queue. The queue processor is
+    // idempotent; the durable callback receipt is what prevents a duplicate Task.
+    expect(triggerQueueProcessing).toHaveBeenCalledTimes(2);
   });
 
   it("callbackMode='once' prevents a repeat callback after the first firing", async () => {
@@ -533,7 +588,7 @@ describe('TasksService completion callbacks', () => {
     expect(childSession.callback_config?.enabled).toBe(true);
   });
 
-  it('does not queue or trigger when callback dispatch metadata already exists', async () => {
+  it('retries target queue processing when callback creation was already committed', async () => {
     const { service, createPending, triggerQueueProcessing, childSession } = makeService({
       task: {
         metadata: {
@@ -565,8 +620,8 @@ describe('TasksService completion callbacks', () => {
 
     await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
 
-    expect(createPending).not.toHaveBeenCalled();
-    expect(triggerQueueProcessing).not.toHaveBeenCalledWith(parentSessionId, {});
+    expect(createPending).toHaveBeenCalledTimes(1);
+    expect(triggerQueueProcessing).toHaveBeenCalledWith(parentSessionId, {});
   });
 
   it('does not queue or trigger target processing when callbacks are disabled', async () => {
@@ -609,7 +664,9 @@ describe('TasksService completion callbacks', () => {
     await (service as any).dispatchCompletionCallbacks(completedTask, childSession, {});
 
     expect(createPending).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: parentSessionId })
+      completedTask.task_id,
+      parentSessionId,
+      expect.anything()
     );
   });
 

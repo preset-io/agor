@@ -24,7 +24,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
@@ -180,7 +180,9 @@ export async function executeOpenCodeTask(params: {
     );
 
     if (isDaemonOwnedAbort(params.abortController)) return;
-    if (params.abortController.signal.aborted) return { status: TaskStatus.STOPPED };
+    if (params.abortController.signal.aborted) {
+      return { result: 'failure', failureCause: 'runtime_cancelled' };
+    }
 
     const finalIndex = (await repos.messages.findBySessionId(sessionId)).length;
     await repos.messagesService.create({
@@ -197,7 +199,7 @@ export async function executeOpenCodeTask(params: {
       metadata: result.finalMessage.metadata,
     });
     return {
-      status: TaskStatus.COMPLETED,
+      result: 'success',
       taskPatch: {
         model: `${session.model_config.provider}/${session.model_config.model}`,
       },
@@ -212,10 +214,13 @@ export async function executeOpenCodeTask(params: {
       return;
     }
     if (isDaemonOwnedAbort(params.abortController)) return;
-    if (params.abortController.signal.aborted) return { status: TaskStatus.STOPPED };
+    if (params.abortController.signal.aborted) {
+      return { result: 'failure', failureCause: 'runtime_cancelled' };
+    }
     await appendTaskFailureMessage(client, sessionId, taskId, failure);
     return {
-      status: TaskStatus.FAILED,
+      result: 'failure',
+      failureCause: 'runtime_failure',
       taskPatch: { error_message: failure.message },
       error: failure,
     };

@@ -9,7 +9,16 @@ function completionHarness(input: {
   sessionReadFails?: boolean;
   settlementOutcome?: 'transitioned' | 'terminal';
 }) {
-  const sessionsPatch = vi.fn().mockResolvedValue({ session_id: input.resultTask.session_id });
+  const session = {
+    session_id: input.resultTask.session_id,
+    status: 'running',
+    ready_for_prompt: false,
+    tasks: input.sessionTasks ?? [input.resultTask.task_id as string],
+  };
+  const sessionsPatch = vi.fn(async (_id: string, updates: Record<string, unknown>) => {
+    Object.assign(session, updates);
+    return { ...session };
+  });
   const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
   const sessionsGet = input.sessionReadFails
     ? vi.fn().mockRejectedValue(new Error('transient read'))
@@ -47,6 +56,7 @@ function completionHarness(input: {
           triggerQueueProcessing,
         };
       }
+      if (name === 'gateway') return { finalizeTask: vi.fn() };
       throw new Error(`unexpected service ${name}`);
     },
   };
@@ -73,6 +83,22 @@ describe('TasksService executor heartbeat helpers', () => {
     await expect(service.reportRuntimeTelemetry({ task_id: stoppingTask.task_id })).resolves.toBe(
       stoppingTask
     );
+  });
+
+  it('rejects generic terminal patches outside the runtime release gate', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000000',
+      status: TaskStatus.RUNNING,
+    };
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const update = vi.fn();
+    Reflect.set(service, 'get', vi.fn().mockResolvedValue(task));
+    Reflect.set(service, 'repository', { update });
+
+    await expect(service.patch(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      'runtime release gate'
+    );
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('does not let an executor terminal patch bypass coordinator-owned stopping', async () => {
@@ -280,21 +306,22 @@ describe('TasksService executor heartbeat helpers', () => {
     const { service, sessionsPatch, triggerQueueProcessing } = completionHarness({
       currentTask,
       resultTask: stoppedTask,
-      sessionTasks: [taskId, '018f0000-0000-7000-8000-000000000032'],
+      sessionTasks: [taskId],
     });
 
-    const result = await service.patch(taskId, {
-      status: TaskStatus.STOPPED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    const result = await service.settleTermination({ taskId, outcome: 'verified_absent' });
 
-    expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
+    expect(result.task).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
     expect(sessionsPatch).toHaveBeenCalledWith(
       sessionId,
-      { status: 'idle', ready_for_prompt: true },
-      undefined
+      expect.objectContaining({
+        status: 'idle',
+        ready_for_prompt: true,
+        runtime_projection: expect.objectContaining({ terminal_task_id: taskId }),
+      }),
+      { provider: undefined }
     );
-    expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, undefined);
+    expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, { provider: undefined });
   });
 
   it('ignores late executor attempts to revive a stopped task as awaiting permission', async () => {

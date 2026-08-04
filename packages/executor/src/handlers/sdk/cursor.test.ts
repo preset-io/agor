@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildCursorAssistantContent,
+  executeCursorTask,
   normalizeCursorToolInput,
   normalizeCursorToolName,
   reportCursorActivity,
@@ -111,5 +112,21 @@ describe('Cursor SDK handler helpers', () => {
     const onActivity = vi.fn();
     reportCursorActivity(onActivity, { type: 'request' } as never);
     expect(onActivity).toHaveBeenCalledWith({ type: 'unknown_activity', detail: 'request' });
+  });
+
+  it('fails before launch when Cursor cannot enforce the requested permission mode', async () => {
+    await expect(
+      executeCursorTask({
+        client: {} as never,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'test',
+        permissionMode: 'default',
+        abortController: new AbortController(),
+      })
+    ).resolves.toMatchObject({
+      result: 'failure',
+      failureCause: 'interaction_unavailable',
+    });
   });
 });

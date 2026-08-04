@@ -140,7 +140,8 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
   const task = await repo.create({
     session_id: session.session_id,
     full_prompt: 'This is a test task',
-    status: TaskStatus.CREATED,
+    status: TaskStatus.RUNNING,
+    executor_connected_at: new Date().toISOString(),
     message_range: {
       start_index: 0,
       end_index: 1,
@@ -165,10 +166,11 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
   console.log('  ✅ findBySession works');
 
   // Test update
-  const updated = await repo.update(task.task_id, {
+  const result = await repo.settleExecutorOutcome({
+    taskId: task.task_id,
     status: TaskStatus.COMPLETED,
-    completed_at: new Date().toISOString(),
   });
+  const updated = result.task;
 
   if (updated.status !== TaskStatus.COMPLETED || !updated.completed_at) {
     throw new Error('Task update failed');

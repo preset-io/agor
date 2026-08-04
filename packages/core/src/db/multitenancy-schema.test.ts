@@ -264,4 +264,15 @@ describe('Postgres multitenancy schema coverage', () => {
       /CREATE POLICY "mcp_catalog_ingestion_write"[\s\S]*?USING \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)[\s\S]*?WITH CHECK \(current_setting\('agor\.system_scope', true\) = 'mcp_catalog_ingestion'\)/
     );
   });
+
+  it('limits runtime recovery discovery to active resources and an explicit capability', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0082_task_runtime_recovery.sql');
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('ON "tasks"');
+    expect(migration).toContain('ON "sessions"');
+    expect(migration).toContain("'stopping'");
+    expect(migration).toContain("= 'task_runtime_recovery'");
+    expect(migration).not.toContain('WITH CHECK');
+  });
 });

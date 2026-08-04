@@ -41,7 +41,7 @@ When a child session (spawned via subsession) completes its task, automatically 
 
 2. **Task Completion Detection** (`apps/agor-daemon/src/services/tasks.ts:93-124`)
    - When task status → `COMPLETED` or `FAILED`, sets `session.ready_for_prompt = true`
-   - Triggers via `TasksService.patch()` and `TasksService.complete()`
+   - Triggers after daemon-owned settlement or containment commits a terminal Task
    - Already has app context for cross-service operations
    - **Updated:** Callbacks now trigger on any terminal task status (COMPLETED, FAILED, etc.)
 

@@ -36,7 +36,7 @@ export const TaskStatusIcon: React.FC<TaskStatusIconProps> = ({
   const iconStyle = { fontSize: size };
   const spinSize = size <= 14 ? 'small' : size >= 24 ? 'large' : 'medium';
 
-  if (progressState === 'stalled') {
+  if (progressState === 'stalled' || progressState === 'incompatible') {
     return <WarningOutlined style={{ ...iconStyle, color: token.colorWarning }} />;
   }
   if (progressState === 'waiting' && status === TaskStatus.RUNNING) {

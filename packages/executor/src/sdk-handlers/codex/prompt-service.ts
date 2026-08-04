@@ -52,7 +52,9 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { InteractionMode } from '../../payload-types.js';
 import type { SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markInteractionAbort } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -310,7 +312,8 @@ export class CodexPromptService {
     _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
     private tasksService?: TasksService,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private interactionMode: InteractionMode = 'interactive'
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -1016,10 +1019,6 @@ export class CodexPromptService {
     // Use the API key from constructor (this.apiKey)
     const currentApiKey = this.apiKey || '';
 
-    // Only recreate Codex client if API key changed (prevents memory leak - issue #133)
-    // This ensures hot-reload of credentials from Settings UI while avoiding process accumulation
-    this.refreshClient(currentApiKey);
-
     codexDebug(`🔍 [Codex] Starting prompt execution for session ${shortId(sessionId)}`);
     codexDebug(`   Permission mode: ${permissionMode || 'not specified (will use default)'}`);
     codexDebug(`   Existing thread ID: ${session.sdk_session_id || 'none (will create new)'}`);
@@ -1047,6 +1046,22 @@ export class CodexPromptService {
     const sandboxMode = sandboxModeEnvOverride ?? configuredSandboxMode;
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
+    if (this.interactionMode === 'unattended' && approvalPolicy !== 'never') {
+      const message =
+        `Codex approval policy "${approvalPolicy}" requires a responder, ` +
+        'but this execution surface is unattended. Use a policy-only mode to run it.';
+      if (abortController) {
+        markInteractionAbort(abortController, {
+          cause: 'interaction_unavailable',
+          errorMessage: message,
+        });
+      }
+      throw new Error(message);
+    }
+
+    // Recreate the client only after launch policy is known to be answerable.
+    // This preserves credential hot-reload without starting work that must fail fast.
+    this.refreshClient(currentApiKey);
     // Apps can mutate remote systems outside the filesystem sandbox. Only
     // remove their approval gate for explicit allow-all intent when no
     // per-field or environment override makes the effective policy stricter.

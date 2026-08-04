@@ -187,6 +187,7 @@ export const sessions = pgTable(
         // Custom context for Handlebars templates
         // Keep scheduler/gateway/user context owned by the canonical Session type.
         custom_context?: Session['custom_context'];
+        runtime_projection?: Session['runtime_projection'];
 
         // Read-only metadata retained for historical sessions created by the
         // removed experimental Claude CLI integration. No runtime consumes it.

@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@agor/core/types';
+import type { ExecutorFailureCause } from '@agor/core/types';
 
 const DaemonAbortCause = {
   COORDINATOR_TERMINATION: 'coordinator_termination',
@@ -7,7 +7,7 @@ const DaemonAbortCause = {
 type DaemonOwnedAbortCause = (typeof DaemonAbortCause)[keyof typeof DaemonAbortCause];
 
 export interface InteractionAbortOutcome {
-  status: typeof TaskStatus.FAILED | typeof TaskStatus.TIMED_OUT;
+  cause: Extract<ExecutorFailureCause, 'interaction_unavailable' | 'interaction_timeout'>;
   errorMessage: string;
 }
 

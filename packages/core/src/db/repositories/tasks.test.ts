@@ -1029,8 +1029,6 @@ describe('TaskRepository.findByStatus', () => {
 // Executor connection
 // ============================================================================
 
-const startupWarning = 'Remote executor is still starting.';
-
 async function createExecutorDispatch(
   db: Database,
   executorMode: 'local' | 'templated' = 'templated'
@@ -1375,7 +1373,10 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
 
     expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
     await taskRepo.connectExecutor(task.task_id);
-    await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
+    await taskRepo.settleExecutorOutcome({
+      taskId: task.task_id,
+      status: TaskStatus.COMPLETED,
+    });
     expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
   });
 });
@@ -1400,7 +1401,7 @@ describe('TaskRepository.recordSdkHealthObservation', () => {
     };
 
     const [, observation] = await Promise.all([
-      taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED }),
+      taskRepo.settleExecutorOutcome({ taskId: task.task_id, status: TaskStatus.COMPLETED }),
       taskRepo.recordSdkHealthObservation(task.task_id, failure),
     ]);
     const completed = await taskRepo.findById(task.task_id);
@@ -1543,6 +1544,18 @@ describe('TaskRepository.update', () => {
     expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.DISPATCHING);
   });
 
+  dbTest('does not let generic updates bypass the runtime release gate', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      'runtime release gate'
+    );
+  });
+
   dbTest('should update task by full UUID and short ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -1555,8 +1568,8 @@ describe('TaskRepository.update', () => {
 
     // Update by short ID
     const idPrefix = toShortId(data.task_id!, 8);
-    const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
-    expect(updated2.status).toBe(TaskStatus.COMPLETED);
+    const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.AWAITING_PERMISSION });
+    expect(updated2.status).toBe(TaskStatus.AWAITING_PERMISSION);
   });
 
   dbTest('keeps persisted identity authoritative over update payloads', async ({ db }) => {
@@ -1569,7 +1582,6 @@ describe('TaskRepository.update', () => {
       session_id: await createSessionWithDeps(db),
       created_by: 'forged-user',
       created_at: '2000-01-01T00:00:00.000Z',
-      status: TaskStatus.COMPLETED,
     });
 
     expect(updated).toMatchObject({
@@ -1577,7 +1589,6 @@ describe('TaskRepository.update', () => {
       session_id: created.session_id,
       created_by: created.created_by,
       created_at: created.created_at,
-      status: TaskStatus.COMPLETED,
     });
     expect(await taskRepo.findById(created.task_id)).toMatchObject({
       task_id: created.task_id,
@@ -1586,21 +1597,29 @@ describe('TaskRepository.update', () => {
     });
   });
 
-  dbTest('allows a running executor task to complete normally', async ({ db }) => {
+  dbTest('settles a connected running executor through the release gate', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const created = await taskRepo.create(
-      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T19:59:00.000Z',
+      })
     );
 
-    const updated = await taskRepo.update(created.task_id, {
+    const result = await taskRepo.settleExecutorOutcome({
+      taskId: created.task_id,
       status: TaskStatus.COMPLETED,
-      completed_at: '2026-07-10T20:00:00.000Z',
+      now: new Date('2026-07-10T20:00:00.000Z'),
     });
 
-    expect(updated).toMatchObject({
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-07-10T20:00:00.000Z',
+    expect(result).toMatchObject({
+      outcome: 'transitioned',
+      task: {
+        status: TaskStatus.COMPLETED,
+        completed_at: '2026-07-10T20:00:00.000Z',
+      },
     });
   });
 
@@ -1613,6 +1632,7 @@ describe('TaskRepository.update', () => {
       createTaskData({
         session_id: sessionId,
         status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
         started_at: startedAt,
         message_range: {
           start_index: 0,
@@ -1623,11 +1643,18 @@ describe('TaskRepository.update', () => {
     );
 
     await expect(
-      taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED, completed_at: completedAt })
+      taskRepo.settleExecutorOutcome({
+        taskId: created.task_id,
+        status: TaskStatus.COMPLETED,
+        now: new Date(completedAt),
+      })
     ).resolves.toMatchObject({
-      completed_at: completedAt,
-      duration_ms: 5_000,
-      message_range: { end_timestamp: completedAt },
+      outcome: 'transitioned',
+      task: {
+        completed_at: completedAt,
+        duration_ms: 5_000,
+        message_range: { end_timestamp: completedAt },
+      },
     });
   });
 
@@ -1952,7 +1979,7 @@ describe('TaskRepository.update', () => {
   });
 
   dbTest(
-    'releases a stopping task after restart without claiming verified absence',
+    'keeps a stopping task nonterminal when runtime absence cannot be verified',
     async ({ db }) => {
       const taskRepo = new TaskRepository(db);
       const sessionId = await createSessionWithDeps(db);
@@ -1967,7 +1994,7 @@ describe('TaskRepository.update', () => {
 
       const result = await taskRepo.settleTermination({
         taskId: task.task_id,
-        outcome: 'restart_unverified',
+        outcome: 'unverified',
         errorMessage: 'Daemon restarted',
         sdkFailure: {
           reason: 'termination_unverified',
@@ -1978,9 +2005,9 @@ describe('TaskRepository.update', () => {
       });
 
       expect(result).toMatchObject({
-        outcome: 'transitioned',
+        outcome: 'unverified',
         task: {
-          status: TaskStatus.STOPPED,
+          status: TaskStatus.STOPPING,
           error_message: 'Daemon restarted',
           sdk_failure: { termination: 'unverified' },
         },
@@ -2181,7 +2208,10 @@ describe('TaskRepository.update', () => {
         // resume wins it may complete before the terminal write; if completion
         // wins, the resume must reject. The lifecycle invariant is identical.
         const [completionResult, resumeResult] = await Promise.allSettled([
-          taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED }),
+          taskRepo.settleExecutorOutcome({
+            taskId: created.task_id,
+            status: TaskStatus.COMPLETED,
+          }),
           taskRepo.update(created.task_id, { status: TaskStatus.RUNNING }),
         ]);
 
@@ -2212,8 +2242,6 @@ describe('TaskRepository.update', () => {
 
     const completedAt = new Date().toISOString();
     const updated = await taskRepo.update(data.task_id!, {
-      status: TaskStatus.COMPLETED,
-      completed_at: completedAt,
       tool_use_count: 10,
       duration_ms: 45000,
       git_state: {
@@ -2230,8 +2258,7 @@ describe('TaskRepository.update', () => {
       },
     });
 
-    expect(updated.status).toBe(TaskStatus.COMPLETED);
-    expect(updated.completed_at).toBe(completedAt);
+    expect(updated.status).toBe(TaskStatus.CREATED);
     expect(updated.tool_use_count).toBe(10);
     expect(updated.duration_ms).toBe(45000);
     expect(updated.git_state.sha_at_end).toBe('def456');
@@ -2271,19 +2298,23 @@ describe('TaskRepository.update', () => {
   dbTest('should round-trip error_message on failed task update', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
-    const data = createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING });
+    const data = createTaskData({
+      session_id: sessionId,
+      status: TaskStatus.RUNNING,
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+    });
     await taskRepo.create(data);
 
     const errorMessage =
       'Unix user agor_123 not found. Ensure the Unix user is created before attempting to execute sessions.';
-    const updated = await taskRepo.update(data.task_id!, {
+    const result = await taskRepo.settleExecutorOutcome({
+      taskId: data.task_id!,
       status: TaskStatus.FAILED,
-      completed_at: new Date().toISOString(),
-      error_message: errorMessage,
+      taskPatch: { error_message: errorMessage },
     });
 
-    expect(updated.status).toBe(TaskStatus.FAILED);
-    expect(updated.error_message).toBe(errorMessage);
+    expect(result.task.status).toBe(TaskStatus.FAILED);
+    expect(result.task.error_message).toBe(errorMessage);
 
     // Fetching fresh from the repo must still surface the error.
     const refetched = await taskRepo.findById(data.task_id!);
@@ -2867,6 +2898,55 @@ describe('TaskRepository.createPending', () => {
       expect(admitted.map((task) => task.queue_position).sort()).toEqual([1, 2, 3]);
     }
   );
+});
+
+describe('TaskRepository.createCompletionCallbackOnce', () => {
+  dbTest('creates one ordered callback Task with its source receipt', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sourceSessionId = await createSessionWithDeps(db);
+    const targetSessionId = await createSessionWithDeps(db);
+    const source = await taskRepo.create(
+      createTaskData({ session_id: sourceSessionId, status: TaskStatus.COMPLETED })
+    );
+    await taskRepo.createPending(
+      createPendingInput({ session_id: targetSessionId, status: TaskStatus.QUEUED })
+    );
+    const input = {
+      full_prompt: 'Child completed',
+      created_by: source.created_by,
+      metadata: { is_agor_callback: true },
+    };
+
+    const first = await taskRepo.createCompletionCallbackOnce(
+      source.task_id,
+      targetSessionId,
+      input
+    );
+    const retry = await taskRepo.createCompletionCallbackOnce(
+      source.task_id,
+      targetSessionId,
+      input
+    );
+
+    expect(first).toMatchObject({
+      created: true,
+      task: { status: TaskStatus.QUEUED, queue_position: 2 },
+    });
+    expect(retry).toMatchObject({
+      created: false,
+      task: { task_id: first.task?.task_id },
+    });
+    expect(await taskRepo.findById(source.task_id)).toMatchObject({
+      metadata: {
+        callback_dispatches: [
+          expect.objectContaining({
+            target_session_id: targetSessionId,
+            queued_task_id: first.task?.task_id,
+          }),
+        ],
+      },
+    });
+  });
 });
 
 // ============================================================================

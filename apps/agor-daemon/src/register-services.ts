@@ -177,6 +177,7 @@ import {
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
+import { hasSessionInteractionResponder } from './utils/realtime-publish.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
@@ -1077,7 +1078,11 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
-        interactionMode: getSessionType(session) === 'agent' ? 'interactive' : 'unattended',
+        interactionMode:
+          getSessionType(session) === 'agent' &&
+          hasSessionInteractionResponder(app, sessionId, params.connection)
+            ? 'interactive'
+            : 'unattended',
       },
     };
 
@@ -1111,7 +1116,7 @@ function createExecuteHandler(
         nativeState?.markSpawned();
         if (spawnContext.mode === 'local' && child.pid) {
           localExecutorPid = child.pid;
-          trackExecutorProcess(
+          const runtime = trackExecutorProcess(
             {
               sessionId,
               taskId,
@@ -1120,6 +1125,15 @@ function createExecuteHandler(
             },
             app
           );
+          void (app.service('tasks') as unknown as TasksServiceImpl)
+            .patch(
+              taskId,
+              { metadata: { executor_runtime: runtime } },
+              { ...params, provider: undefined }
+            )
+            .catch((error) =>
+              console.warn(`${logPrefix} Failed to persist local runtime identity:`, error)
+            );
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
         if (!nativeState) return;
@@ -1159,20 +1173,12 @@ function createExecuteHandler(
           });
           if (disposition !== 'authoritative') {
             if (disposition === 'ambiguous') {
-              try {
-                await (
-                  app.service('tasks') as unknown as TasksServiceImpl
-                ).recordExecutorStartupWarning(
-                  taskId,
-                  `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
-                  { ...params, provider: undefined }
-                );
-              } catch (error) {
-                console.warn(`${logPrefix} Failed to record ambiguous launcher exit:`, error);
-              }
+              console.warn(
+                `${logPrefix} Launcher exited with code ${code ?? 'unknown'}, but remote work may have been dispatched`
+              );
             }
             console.log(
-              `${logPrefix} Launcher exit is passive; awaiting remote executor lifecycle`
+              `${logPrefix} Launcher exit is passive; the bounded connection deadline owns recovery`
             );
             nativeState?.finished.resolve();
             return;

@@ -5,7 +5,6 @@ import {
   awaitRuntimeCleanup,
   finalizeTask,
   requestContainment,
-  tryFinalizeTask,
   tryRequestContainment,
 } from './terminal-task.js';
 
@@ -26,15 +25,17 @@ describe('executor settlement reporting', () => {
 
     await expect(
       finalizeTask(client, 't1', {
-        status: TaskStatus.FAILED,
+        result: 'failure',
+        failureCause: 'runtime_failure',
         taskPatch: { error_message: 'boom', model: 'test-model' },
       })
-    ).resolves.toBe(true);
+    ).resolves.toBeUndefined();
 
     expect(reportExecutorSettlement).toHaveBeenCalledWith({
       task_id: 't1',
       kind: 'quiesced',
-      status: TaskStatus.FAILED,
+      result: 'failure',
+      failure_cause: 'runtime_failure',
       task_patch: { error_message: 'boom', model: 'test-model' },
     });
   });
@@ -51,15 +52,14 @@ describe('executor settlement reporting', () => {
     });
   });
 
-  it('surfaces cooperative reporting errors and swallows only fail-safe reports', async () => {
+  it('surfaces cooperative reporting errors and swallows only fail-safe containment reports', async () => {
     const reportExecutorSettlement = vi.fn().mockRejectedValue(new Error('socket closed'));
     const client = { service: () => ({ reportExecutorSettlement }) } as unknown as AgorClient;
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(finalizeTask(client, 't1', { status: TaskStatus.FAILED })).rejects.toThrow(
-      'socket closed'
-    );
-    await expect(tryFinalizeTask(client, 't1', { status: TaskStatus.FAILED })).resolves.toBe(false);
+    await expect(
+      finalizeTask(client, 't1', { result: 'failure', failureCause: 'runtime_failure' })
+    ).rejects.toThrow('socket closed');
     await expect(tryRequestContainment(client, 't1', new Error('boom'))).resolves.toBeUndefined();
   });
 });

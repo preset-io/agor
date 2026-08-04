@@ -6,7 +6,6 @@
 
 import type {
   ExecutorOutcomePatch,
-  ExecutorSettlementStatus,
   ExecutorTerminationCompleteInput,
   RuntimeTelemetryInput,
   SdkFailure,
@@ -15,6 +14,7 @@ import type {
   TaskID,
   TaskMetadata,
   TaskPendingDispatchStatus,
+  TenantID,
   TerminationCause,
   TerminationCoordinationClaim,
   UUID,
@@ -27,9 +27,23 @@ import {
   sessionCanStartTask,
   TaskStatus,
 } from '@agor/core/types';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, like, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
-import type { Database } from '../client';
+import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
   insert,
@@ -202,6 +216,55 @@ export interface TaskRuntimeDiscoveryOptions {
 export interface ExecutorOutcomeSettlementResult {
   outcome: 'transitioned' | 'condition_changed' | 'terminal';
   task: Task;
+}
+
+/** System-scope discovery exposes only tenant identities; recovery re-enters tenant scope. */
+export class RuntimeRecoveryDiscoveryRepository {
+  constructor(private db: SystemDatabase) {}
+
+  async findRecoveryTenantIds(): Promise<TenantID[]> {
+    const taskTenant = (tasks as unknown as { tenant_id?: unknown }).tenant_id;
+    const sessionTenant = (sessions as unknown as { tenant_id?: unknown }).tenant_id;
+    if (!isPostgresDatabase(this.db) || !taskTenant || !sessionTenant) {
+      throw new RepositoryError('Runtime recovery discovery requires PostgreSQL');
+    }
+    const taskRows = await select(this.db, { tenant_id: taskTenant })
+      .from(tasks)
+      .where(
+        or(
+          inArray(tasks.status, [
+            TaskStatus.DISPATCHING,
+            TaskStatus.RUNNING,
+            TaskStatus.AWAITING_PERMISSION,
+            TaskStatus.AWAITING_INPUT,
+            TaskStatus.STOPPING,
+          ]),
+          gt(tasks.completed_at, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+        )
+      )
+      .groupBy(taskTenant as never)
+      .all();
+    const sessionRows = await select(this.db, { tenant_id: sessionTenant })
+      .from(sessions)
+      .where(
+        inArray(sessions.status, [
+          SessionStatus.RUNNING,
+          SessionStatus.STOPPING,
+          SessionStatus.AWAITING_PERMISSION,
+          SessionStatus.AWAITING_INPUT,
+          SessionStatus.TIMED_OUT,
+        ])
+      )
+      .groupBy(sessionTenant as never)
+      .all();
+    const tenantIds = [...taskRows, ...sessionRows].map(({ tenant_id }) => {
+      if (typeof tenant_id !== 'string' || tenant_id.length === 0) {
+        throw new RepositoryError('Runtime recovery found a resource without tenant identity');
+      }
+      return tenant_id as TenantID;
+    });
+    return [...new Set(tenantIds)];
+  }
 }
 
 /**
@@ -1203,11 +1266,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
       const current = this.rowToTask(row);
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
-      const restartRelease = input.outcome === 'restart_unverified';
-      if (
-        !restartRelease &&
-        (current.status !== TaskStatus.STOPPING || !current.termination_request)
-      ) {
+      if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
         return { outcome: 'condition_changed', task: current };
       }
 
@@ -1272,11 +1331,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return { outcome: 'condition_changed', task: current };
       }
 
-      const finalStatus = restartRelease
-        ? TaskStatus.STOPPED
-        : input.outcome === 'forced_unverified'
+      const finalStatus =
+        input.outcome === 'forced_unverified'
           ? TaskStatus.FAILED
-          : current.termination_request!.cause === 'user_stop'
+          : current.termination_request.cause === 'user_stop'
             ? TaskStatus.STOPPED
             : TaskStatus.FAILED;
       const settlementAt = await this.mutationNow(txDb, fullId, input.now);
@@ -1292,13 +1350,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               sdk_failure: {
                 ...failure,
                 termination:
-                  input.outcome === 'forced_unverified' || restartRelease
+                  input.outcome === 'forced_unverified'
                     ? ('unverified' as const)
                     : ('verified' as const),
               },
             }
           : {}),
-        ...(finalStatus === TaskStatus.FAILED || restartRelease
+        ...(finalStatus === TaskStatus.FAILED
           ? {
               error_message:
                 input.errorMessage ??
@@ -1362,8 +1420,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async settleExecutorOutcome(input: {
     taskId: string;
-    status: ExecutorSettlementStatus;
+    status: typeof TaskStatus.COMPLETED | typeof TaskStatus.FAILED | typeof TaskStatus.TIMED_OUT;
     taskPatch?: ExecutorOutcomePatch;
+    sdkFailure?: SdkFailure;
     now?: Date;
   }): Promise<ExecutorOutcomeSettlementResult> {
     return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
@@ -1374,6 +1433,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const { git_state: gitStatePatch, ...outcomePatch } = input.taskPatch ?? {};
       const taskPatch: Partial<Task> = {
         ...outcomePatch,
+        ...(input.sdkFailure ? { sdk_failure: input.sdkFailure } : {}),
         ...(gitStatePatch ? { git_state: { ...current.git_state, ...gitStatePatch } } : {}),
       };
 
@@ -1472,6 +1532,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           throw new RepositoryError(
             'termination-owned tasks must be settled through settleTermination'
           );
+        }
+        if (!isTerminalTaskStatus(current.status) && isTerminalTaskStatus(updates.status)) {
+          throw new RepositoryError('terminal tasks must settle through the runtime release gate');
         }
 
         const merged = {
@@ -1816,6 +1879,99 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Insert a queued Task while holding the target Session's durable queue lock. */
+  private async insertQueuedTask(
+    txDb: Database,
+    taskBase: Partial<Task> & { session_id: SessionID }
+  ): Promise<Task> {
+    await lockRowForUpdate(
+      txDb,
+      this.db,
+      sessions,
+      eq(sessions.session_id, taskBase.session_id)
+    );
+    const sessionRow = await select(txDb)
+      .from(sessions)
+      .where(eq(sessions.session_id, taskBase.session_id))
+      .one();
+    if (!sessionRow) throw new EntityNotFoundError('Session', taskBase.session_id);
+
+    const position = await select(txDb, {
+      maxPos: sql<number | null>`max(${tasks.queue_position})`,
+    })
+      .from(tasks)
+      .where(sql`${tasks.session_id} = ${taskBase.session_id} AND ${tasks.status} = 'queued'`)
+      .one();
+    const queued = this.taskToInsert({
+      ...taskBase,
+      status: TaskStatus.QUEUED,
+      queue_position: (position?.maxPos ?? 0) + 1,
+    });
+    await insert(txDb, tasks).values(queued).run();
+    const row = await select(txDb).from(tasks).where(eq(tasks.task_id, queued.task_id)).one();
+    if (!row) throw new RepositoryError('Failed to retrieve created queued task');
+    return this.rowToTask(row);
+  }
+
+  /** Create a callback Task and its source receipt in one row-locked transaction. */
+  async createCompletionCallbackOnce(
+    sourceTaskId: string,
+    targetSessionId: SessionID,
+    input: {
+      full_prompt: string;
+      created_by: string;
+      metadata: TaskMetadata;
+    }
+  ): Promise<{ created: boolean; task?: Task }> {
+    return this.mutateLockedTask(sourceTaskId, async (txDb, row, fullId) => {
+      const source = this.rowToTask(row);
+      if (!isTerminalTaskStatus(source.status)) {
+        throw new RepositoryError('Completion callbacks require a terminal source Task');
+      }
+      const existing = source.metadata?.callback_dispatches?.find(
+        (receipt) =>
+          receipt.event === 'session_completion' && receipt.target_session_id === targetSessionId
+      );
+      if (existing) {
+        const callback = existing.queued_task_id
+          ? await select(txDb).from(tasks).where(eq(tasks.task_id, existing.queued_task_id)).one()
+          : undefined;
+        return { created: false, ...(callback ? { task: this.rowToTask(callback) } : {}) };
+      }
+
+      const callback = await this.insertQueuedTask(txDb, {
+        session_id: targetSessionId,
+        full_prompt: input.full_prompt,
+        created_by: input.created_by,
+        metadata: input.metadata,
+        message_range: {
+          start_index: -1,
+          end_index: -1,
+          start_timestamp: new Date().toISOString(),
+        },
+        git_state: { ref_at_start: '', sha_at_start: '' },
+        tool_use_count: 0,
+      });
+
+      const metadata: TaskMetadata = {
+        ...(source.metadata ?? {}),
+        callback_dispatches: [
+          ...(source.metadata?.callback_dispatches ?? []),
+          {
+            event: 'session_completion',
+            target_session_id: targetSessionId,
+            queued_task_id: callback.task_id,
+            dispatched_at: new Date().toISOString(),
+          },
+        ],
+      };
+      const sourceData = this.taskToInsert({ ...source, metadata }).data;
+      await update(txDb, tasks).set({ data: sourceData }).where(eq(tasks.task_id, fullId)).run();
+
+      return { created: true, task: callback };
+    });
+  }
+
   /**
    * Find all QUEUED tasks for a session, ordered by queue_position ascending.
    */
@@ -1834,6 +1990,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  async findRecentTerminal(limit = 100): Promise<Task[]> {
+    const rows = await select(this.db)
+      .from(tasks)
+      .where(
+        inArray(tasks.status, [
+          TaskStatus.COMPLETED,
+          TaskStatus.FAILED,
+          TaskStatus.STOPPED,
+          TaskStatus.TIMED_OUT,
+        ])
+      )
+      .orderBy(desc(tasks.completed_at))
+      .limit(limit)
+      .all();
+    return rows.map((row: TaskRow) => this.rowToTask(row));
   }
 
   /**

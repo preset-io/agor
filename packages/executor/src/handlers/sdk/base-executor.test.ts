@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RuntimeCleanupError } from '../../terminal-task.js';
 import {
   createStreamingCallbacks,
   executeToolTask,
@@ -40,6 +41,37 @@ function makeSuccessfulClient(capture: { data?: unknown }) {
       };
     },
   } as never;
+}
+
+function makeExecutionClient() {
+  const taskPatch = vi.fn().mockResolvedValue(undefined);
+  const messageCreate = vi.fn().mockResolvedValue(undefined);
+  const client = {
+    service(name: string) {
+      if (name === 'config/resolve-api-key') {
+        return {
+          create: vi.fn().mockResolvedValue({
+            apiKey: 'daemon-key',
+            source: 'user',
+            useNativeAuth: false,
+          }),
+        };
+      }
+      if (name === 'sessions') {
+        return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
+      }
+      if (name === 'tasks') return { patch: taskPatch };
+      if (name === 'messages') {
+        return {
+          find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+          create: messageCreate,
+        };
+      }
+      if (name === '/tasks/streaming') return {};
+      throw new Error(`unexpected service ${name}`);
+    },
+  } as never;
+  return { client, messageCreate, taskPatch };
 }
 
 describe('streaming callback settlement', () => {
@@ -165,7 +197,8 @@ describe('executeToolTask credential preflight', () => {
     expect(createTool).not.toHaveBeenCalled();
     expect(taskPatch).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({
-      status: 'failed',
+      result: 'failure',
+      failureCause: 'runtime_failure',
       taskPatch: {
         error_message: expect.stringContaining('No scoped gemini credential'),
       },
@@ -233,7 +266,7 @@ describe('executeToolTask credential preflight', () => {
   });
 
   it('returns completion data without writing terminal task state', async () => {
-    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const { client, taskPatch } = makeExecutionClient();
     const executePromptWithStreaming = vi.fn().mockResolvedValue({
       userMessageId: 'user-message',
       assistantMessageIds: ['assistant-message'],
@@ -241,26 +274,6 @@ describe('executeToolTask credential preflight', () => {
       hadError: false,
       model: 'test-model',
     });
-    const client = {
-      service(name: string) {
-        if (name === 'config/resolve-api-key') {
-          return {
-            create: vi.fn().mockResolvedValue({
-              apiKey: 'daemon-key',
-              source: 'user',
-              useNativeAuth: false,
-            }),
-          };
-        }
-        if (name === 'sessions') {
-          return { get: vi.fn().mockRejectedValue(new Error('no git state in unit test')) };
-        }
-        if (name === 'tasks') return { patch: taskPatch };
-        if (name === 'messages' || name === '/tasks/streaming') return {};
-        throw new Error(`unexpected service ${name}`);
-      },
-    } as never;
-
     const outcome = await executeToolTask({
       client,
       sessionId: 'session-1' as never,
@@ -273,10 +286,57 @@ describe('executeToolTask credential preflight', () => {
     });
 
     expect(outcome).toMatchObject({
-      status: 'completed',
+      result: 'success',
       taskPatch: { model: 'test-model' },
     });
     expect(taskPatch).not.toHaveBeenCalled();
+  });
+
+  it('normalizes the configured Copilot SDK deadline', async () => {
+    const { client, messageCreate } = makeExecutionClient();
+    const outcome = await executeToolTask({
+      client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN',
+      toolName: 'copilot',
+      createTool: () => ({
+        executePromptWithStreaming: vi
+          .fn()
+          .mockRejectedValue(new Error('Timeout after 14400000ms waiting for session.idle')),
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      result: 'failure',
+      failureCause: 'agentic_tool_timeout',
+    });
+    expect(messageCreate).toHaveBeenCalledOnce();
+  });
+
+  it('escalates cleanup uncertainty instead of returning a terminal outcome', async () => {
+    const { client, messageCreate } = makeExecutionClient();
+
+    await expect(
+      executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN',
+        toolName: 'copilot',
+        createTool: () => ({
+          executePromptWithStreaming: vi
+            .fn()
+            .mockRejectedValue(new RuntimeCleanupError('Copilot', new Error('stop failed'))),
+        }),
+      })
+    ).rejects.toThrow('Copilot runtime cleanup failed');
+
+    expect(messageCreate).not.toHaveBeenCalled();
   });
 });
 

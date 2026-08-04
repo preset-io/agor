@@ -1,48 +1,8 @@
-import { BadRequest, Forbidden } from '@agor/core/feathers';
+import { BadRequest } from '@agor/core/feathers';
 import { type Task, TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
-import {
-  authorizeTaskTerminalRoute,
-  findUnverifiedTerminationTask,
-  rejectRemovedClaudeCliRestart,
-} from './register-routes.js';
+import { expect, it } from 'vitest';
+import { findUnverifiedTerminationTask, rejectRemovedClaudeCliRestart } from './register-routes.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from './utils/agentic-tool-runtime.js';
-
-function harness(createdBy = 'user-1', role = 'member') {
-  return {
-    id: 'task-1',
-    params: { provider: 'rest', user: { user_id: 'user-1', role } } as never,
-    tasksService: {
-      get: vi.fn().mockResolvedValue({
-        task_id: 'task-1',
-        session_id: 'session-1',
-        created_by: createdBy,
-      }),
-    } as never,
-  };
-}
-
-describe('task complete/fail route authorization', () => {
-  it('allows the task creator', async () => {
-    await expect(authorizeTaskTerminalRoute(harness())).resolves.toMatchObject({
-      provider: undefined,
-    });
-  });
-
-  it('rejects another member', async () => {
-    await expect(authorizeTaskTerminalRoute(harness('other-user'))).rejects.toBeInstanceOf(
-      Forbidden
-    );
-  });
-
-  it("allows admins to settle another user's task", async () => {
-    await expect(authorizeTaskTerminalRoute(harness('other-user', 'admin'))).resolves.toMatchObject(
-      {
-        provider: undefined,
-      }
-    );
-  });
-});
 
 it('selects the unverified active task even when newer queued work exists', () => {
   const stopping = {

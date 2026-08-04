@@ -12,6 +12,7 @@
  */
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -32,6 +33,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { SdkActivityCallback } from '../../sdk-watchdog.js';
+import { RuntimeCleanupError } from '../../terminal-task.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -112,6 +114,7 @@ export interface CopilotRawResponse {
 
 export class CopilotPromptService {
   private client: InstanceType<typeof CopilotSdk.CopilotClient> | null = null;
+  private clientStopPromise: Promise<void> | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
 
@@ -136,7 +139,8 @@ export class CopilotPromptService {
     messagesService?: MessagesService,
     tasksService?: TasksService,
     sessionsService?: SessionsPatchClient,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private turnTimeoutMs = resolveSdkWatchdogConfig().operation_absolute_timeout_ms
   ) {
     this.apiKey = apiKey;
     this.messagesRepo = messagesRepo;
@@ -144,6 +148,36 @@ export class CopilotPromptService {
     this.messagesService = messagesService;
     this.tasksService = tasksService;
     this.sessionsService = sessionsService;
+  }
+
+  private async stopClient(): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    let stopPromise = this.clientStopPromise;
+    if (!stopPromise) {
+      stopPromise = client.stop().then(() => {
+        if (this.client === client) this.client = null;
+      });
+      this.clientStopPromise = stopPromise;
+    }
+    try {
+      await stopPromise;
+    } finally {
+      if (this.clientStopPromise === stopPromise) this.clientStopPromise = null;
+    }
+  }
+
+  private async requireClientStop(): Promise<void> {
+    try {
+      await this.stopClient();
+    } catch (cause) {
+      throw new RuntimeCleanupError('Copilot', cause);
+    }
+  }
+
+  private isStopRequested(sessionId: SessionID, controller?: AbortController): boolean {
+    return controller?.signal.aborted === true || this.stopRequested.has(sessionId);
   }
 
   /**
@@ -262,6 +296,11 @@ export class CopilotPromptService {
     abortController?: AbortController,
     onActivity?: SdkActivityCallback
   ): AsyncGenerator<CopilotStreamEvent> {
+    if (this.isStopRequested(sessionId, abortController)) {
+      yield { type: 'stopped', sessionId: '' };
+      return;
+    }
+
     // Get session to check for existing SDK session ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
@@ -281,6 +320,10 @@ export class CopilotPromptService {
     }
 
     console.log(`   Working directory: ${branch.path}`);
+    if (this.isStopRequested(sessionId, abortController)) {
+      yield { type: 'stopped', sessionId: '' };
+      return;
+    }
 
     // Create CopilotClient (spawns CLI process)
     const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
@@ -295,6 +338,11 @@ export class CopilotPromptService {
     try {
       await this.client.start();
       console.log(`✅ [Copilot] Client started`);
+
+      if (this.isStopRequested(sessionId, abortController)) {
+        yield { type: 'stopped', sessionId: '' };
+        return;
+      }
 
       // Build session configuration with interactive permission support
       const permissionDeps: PermissionDeps | undefined =
@@ -387,12 +435,6 @@ export class CopilotPromptService {
           `⚠️  [Copilot] setModel("${invocationModel}") failed; relying on session config:`,
           err instanceof Error ? err.message : err
         );
-      }
-
-      // Clear any stale stop flag
-      if (this.stopRequested.has(sessionId)) {
-        console.log(`⚠️  Clearing stale stop flag for session ${sessionId}`);
-        this.stopRequested.delete(sessionId);
       }
 
       console.log(
@@ -496,10 +538,9 @@ export class CopilotPromptService {
         };
       });
 
-      // Use sendAndWait for blocking execution with timeout
-      const timeoutMs = 10 * 60 * 1000; // 10 minutes
+      // Keep the SDK-owned deadline aligned with the runtime profile's absolute turn ceiling.
       try {
-        await copilotSession.sendAndWait({ prompt }, timeoutMs);
+        await copilotSession.sendAndWait({ prompt }, this.turnTimeoutMs);
       } catch (error) {
         // Check for abort
         if (
@@ -598,29 +639,28 @@ export class CopilotPromptService {
       console.error('❌ Copilot streaming error:', error);
       throw error;
     } finally {
-      // Clean up client (stops CLI process)
-      if (this.client) {
-        try {
-          await this.client.stop();
-          console.log(`✅ [Copilot] Client stopped`);
-        } catch (err) {
-          console.warn(`⚠️  [Copilot] Failed to stop client:`, err);
-        }
-        this.client = null;
-      }
+      await this.requireClientStop();
+      console.log(`✅ [Copilot] Client stopped`);
     }
   }
 
   /**
    * Stop currently executing task
    *
-   * Sets a flag that is checked during execution.
-   * Primary cancellation happens via AbortController.
+   * Fences pre-launch work and waits for an active SDK client to stop.
    */
-  stopTask(sessionId: SessionID): { success: boolean; reason?: string } {
+  async stopTask(sessionId: SessionID): Promise<{ success: boolean; reason?: string }> {
     this.stopRequested.set(sessionId, true);
     console.log(`🛑 Stop requested for Copilot session ${sessionId}`);
-    return { success: true };
+    try {
+      await this.stopClient();
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /**
@@ -629,14 +669,10 @@ export class CopilotPromptService {
   async closeSession(sessionId: SessionID): Promise<void> {
     this.stopRequested.delete(sessionId);
 
-    // Clean up client if still running
-    if (this.client) {
-      try {
-        await this.client.stop();
-      } catch {
-        /* best-effort */
-      }
-      this.client = null;
+    try {
+      await this.stopClient();
+    } catch {
+      /* best-effort */
     }
   }
 }

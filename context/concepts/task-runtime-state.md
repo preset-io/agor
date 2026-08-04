@@ -9,9 +9,9 @@
 `Task.status` is the durable execution lifecycle. Heartbeats report whether the
 executor wrapper can still communicate. Pulses report bounded SDK activity.
 Watchdogs interpret those signals. Agentic-tool adapters return a normalized
-outcome after their runtime path settles, and the top-level executor commits
-cooperative terminal state. The daemon's termination coordinator owns forced
-safe release.
+success/failure result after their runtime path settles. The executor reports
+quiescence; the daemon maps that result to terminal Task state. The daemon's
+termination coordinator owns forced containment and terminal release.
 
 ```text
 Prompt
@@ -64,19 +64,19 @@ ownership. Neither replaces `Task.status`.
 
 ## Durable task lifecycle
 
-| State                 | Meaning                                                                | Normal owner of the next transition                             |
-| --------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `queued`              | The prompt is durable and waiting behind another turn.                 | Daemon queue processor                                          |
-| `created`             | The task exists but launch intent has not been persisted.              | Daemon launch path                                              |
-| `dispatching`         | Launch intent is durable; no executor has claimed the task.            | Authenticated task-scoped executor                              |
-| `running`             | The executor connected and owns the active turn.                       | Executor finalizer, permission flow, or termination coordinator |
-| `awaiting_permission` | SDK execution is paused for a permission decision.                     | Executor permission flow                                        |
-| `awaiting_input`      | Legacy historical state; new tasks do not enter it.                    | Legacy executor flow                                            |
-| `stopping`            | Termination is durably claimed; containment is not yet settled.        | Daemon termination coordinator                                  |
-| `completed`           | The SDK turn completed successfully.                                   | Terminal                                                        |
-| `failed`              | The turn or supervised containment failed.                             | Terminal                                                        |
-| `stopped`             | A user-requested stop settled, or restart recovery released an orphan. | Terminal                                                        |
-| `timed_out`           | A permission/input wait expired.                                       | Terminal                                                        |
+| State                 | Meaning                                                         | Normal owner of the next transition                             |
+| --------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
+| `queued`              | The prompt is durable and waiting behind another turn.          | Daemon queue processor                                          |
+| `created`             | The task exists but launch intent has not been persisted.       | Daemon launch path                                              |
+| `dispatching`         | Launch intent is durable; no executor has claimed the task.     | Authenticated task-scoped executor                              |
+| `running`             | The executor connected and owns the active turn.                | Executor finalizer, permission flow, or termination coordinator |
+| `awaiting_permission` | SDK execution is paused for a permission decision.              | Executor permission flow                                        |
+| `awaiting_input`      | Legacy historical state; new tasks do not enter it.             | Legacy executor flow                                            |
+| `stopping`            | Termination is durably claimed; containment is not yet settled. | Daemon termination coordinator                                  |
+| `completed`           | The SDK turn completed successfully.                            | Terminal                                                        |
+| `failed`              | The turn or supervised containment failed.                      | Terminal                                                        |
+| `stopped`             | A user-requested stop settled after verified release.           | Terminal                                                        |
+| `timed_out`           | A permission/input wait expired.                                | Terminal                                                        |
 
 The important transitions are:
 
@@ -126,6 +126,7 @@ the explicit create-then-run API and scheduled compatibility/reconciliation.
 | `latest_executor_progress`   | What was the latest accepted meaningful-progress fact?                 | Current wait or wrapper liveness         |
 | `sdk_failure`                | What runtime-health diagnosis was observed or enforced?                | Proof that execution stopped             |
 | `termination_request`        | Which termination cause owns containment, and for which request epoch? | Final containment outcome by itself      |
+| `metadata.executor_runtime`  | Which local process identity startup may safely re-check?              | Proof that the process still exists      |
 
 An executor pulse contains a monotonically increasing executor-local sequence,
 a bounded kind/detail, and a daemon-authored observation time. The repository
@@ -137,8 +138,8 @@ The shared pulse vocabulary is:
 - `sdk_started` — the SDK boundary or a supervised resume was reached;
 - `progress` — known meaningful SDK activity;
 - `waiting` — a known permission/input wait that pauses watchdog time;
-- `unknown_activity` — an unrecognized event that is retained as diagnostic
-  evidence and fails open.
+- `unknown_activity` — unrecognized observational activity retained as
+  compatibility evidence, not semantic progress.
 
 Agentic-tool runtime adapters own the translation from SDK-specific events into
 this vocabulary and executor-local operation events. Operations and waits carry
@@ -192,27 +193,33 @@ mapping-review point.
 
 - Starts at the executor boundary, before SDK import/subscription/prompt setup,
   so a silent SDK startup is covered.
+- Bounds the complete turn with the shared runtime-profile absolute ceiling.
 - Uses semantic activity rather than heartbeat time.
 - Pauses quiet supervision while waiting for a known permission/input decision,
   but enforces that wait's absolute deadline.
 - Tracks parallel tool/item/background work by stable operation ID, each with
   quiet and absolute deadlines.
-- Records unknown vocabulary once as `unknown_activity` and continues rather
-  than terminating work it cannot classify. Unknown activity does not refresh
-  progress or suppress an independent recognized deadline.
+- Records unknown observational vocabulary once as `unknown_activity` without
+  counting it as progress. Continuous unknown activity does not become a
+  semantic stall; if the stream later becomes quiet, enforcement reports
+  `adapter_incompatible`. Unknown control/lifecycle ordering fails immediately
+  as adapter incompatibility.
 - In `observe` mode, writes a `would_fire` diagnosis and leaves lifecycle state
   unchanged. The fired deadline is latched to avoid a busy repeat; meaningful
   activity for that deadline invalidates the latch and rearms supervision.
-- In `enforce` mode, recognized first-progress, idle, operation, or wait
+- In `enforce` mode, recognized first-progress, absolute-turn, idle, operation, or wait
   deadline failures terminate supervision once, request SDK abort, and hand
   containment to the daemon.
 
 First-progress supervision covers all mapped executor SDKs, including Cursor.
 Claude and Codex also have a one-hour post-progress idle timeout by default;
-operators may disable either tool's check explicitly with `null`. Identified
-operations use that tool-specific idle timeout as their default quiet deadline
-and retain a four-hour absolute ceiling. With `null`, operation quiet supervision
-falls back to that absolute ceiling. Disabling wrapper heartbeat keeps coalesced
+operators may disable either tool's check explicitly with `null`. Every mapped
+turn and identified operation retains the shared four-hour absolute ceiling;
+operations use that tool-specific idle timeout as their default quiet deadline.
+Copilot configures its SDK-owned blocking deadline from the same absolute turn
+ceiling instead of imposing a shorter adapter-specific timeout.
+With `null`, operation quiet supervision falls back to that absolute ceiling.
+Disabling wrapper heartbeat keeps coalesced
 pulse telemetry but disables periodic heartbeat writes and the stale-wrapper
 backstop; the executor-local watchdog still makes and reports direct health
 decisions. New Tasks default to `enforce`; a legacy active Task without a
@@ -221,39 +228,64 @@ write is rejected, the executor refreshes durable Task state; when the daemon
 already considers the Task terminal, the executor aborts its runtime and does
 not attempt another terminal settlement.
 
+The conformance manifest names all six shipped adapters, their pinned SDK
+versions, and `enforce`, `observe-only`, or `blocked` launch behavior. An
+observe-only adapter cannot silently inherit enforcement. Claude also declares
+its native idle deadline as observable, while Copilot declares its blocking SDK
+deadline as configured. Matching SDK expiry is normalized as
+`agentic_tool_timeout`, not an Agor semantic-stall diagnosis.
+
 ## Cooperative completion and interaction waits
 
-Agentic-tool adapters return one normalized outcome containing the terminal
-status and non-lifecycle task data such as model, SDK response, context usage,
-error detail, and final git state. They do not patch terminal task state. The
+Agentic-tool adapters return normalized `success` or `failure(cause)` plus
+non-lifecycle task data such as model, SDK response, context usage, error
+detail, and final git state. They do not speak Task-status vocabulary or patch
+terminal state. The daemon maps the winning result/cause. The
 top-level executor accepts that outcome only after the adapter's SDK call and
 bounded cooperative cleanup have settled. Outstanding transcript-stream side
 effects are drained within the same bound so a terminal outcome cannot overtake
 them. The executor then reports one semantic `quiesced` settlement to the
 daemon. The daemon strictly validates that runtime payload at the trust seam,
 then commits terminal timing and result fields atomically.
+Runtime cancellation without a winning `user_stop` request maps to `failed`;
+`cancelled` is not a durable Task status.
 Process-level failure handlers never guess terminality; cleanup uncertainty
 reports `containment_required` and converges on the termination coordinator.
 
-The shared SDK adapter waits for its asynchronous provider stop hook before it
-returns. Cursor waits for the active run and closes the agent; OpenCode waits
-for its stop request. If the abort belongs to daemon containment, adapters
-return no cooperative terminal outcome and the termination coordinator remains
-authoritative.
+The executor host waits for each adapter's asynchronous runtime stop hook before it
+returns. Cursor waits for the active run and closes the agent, Copilot fences
+pre-launch work and stops its CLI client, and OpenCode waits for its stop
+request. If the abort belongs to daemon containment, adapters return no
+cooperative terminal outcome and the termination coordinator remains authoritative.
 
 Claude and Copilot permission decisions use the executor's outer abort
 controller. A denial, timeout, unavailable responder, or permission-flow error
 first aborts the agentic-tool query. Only after that query settles does the
 executor finalizer commit `failed` or `timed_out`. A `timed_out` task retains
-the same terminal reconciliation contract as other settled tasks.
+the same terminal reconciliation contract as other settled tasks. Their shared
+permission service owns the interaction deadline while the watchdog only
+pauses quiet supervision, avoiding two clocks racing to choose the outcome.
 
 Executor launch payloads also declare whether the surface is `interactive` or
-`unattended`. Direct agent sessions are interactive. Scheduled and gateway
-sessions are unattended while those surfaces lack a matching permission
-response path, so permission requests fail immediately rather than waiting for
-a responder that cannot answer. Interactive permission waits, including
-OpenCode's provider-side wait telemetry, use the shared
-`execution.permission_timeout_ms` resolver and its ten-minute default.
+`unattended`. A direct agent launch is interactive only when its request or
+Session stream room has a live authenticated browser responder. Scheduled and
+gateway sessions are unattended while those surfaces lack a matching response path.
+Claude and Copilot fail unavailable requests immediately; their interactive
+waits use the shared `execution.permission_timeout_ms` resolver and its
+ten-minute default. Codex unattended runs fail before SDK work when their
+approval policy requires a responder; policy-only runs retain the configured
+sandbox and network boundaries. OpenCode has no Agor permission-response path, so it
+resolves each request from the configured launch policy: authorized edits or
+bypass modes proceed, and everything else is rejected instead of waiting or
+broadening access. The watchdog owns the bound around that policy-response
+round trip. Gemini's SDK policy engine runs in non-interactive mode, so
+requests outside its configured approval policy are denied instead of waiting.
+Cursor exposes neither permission callbacks nor a granular policy surface, so
+restrictive modes fail before launch rather than silently running autonomously.
+
+UI and gateway progress use the same pure projection. Adapter incompatibility
+remains distinct from a semantic stall, so unknown protocol vocabulary is not
+presented as evidence that meaningful work stopped.
 
 ## Termination and safe release
 
@@ -287,15 +319,16 @@ Containment then depends on execution mode:
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Local executor            | Cooperative quiescence when available, followed by process-group absence verification by the daemon application that owns the PID/PGID handle; escalation can use `SIGTERM` then `SIGKILL`. |
 | Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                                                                          |
-| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                              |
+| Server-side execution     | Failed forced cleanup records `runtime_cleanup_unverified`; local wrapper absence alone cannot release the Task.                                                                            |
 
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
 `stopping`, the session stays non-promptable, and an authorized owner/admin must
-explicitly force-fail it. A daemon restart can logically release orphaned work
-as `stopped`, but records that termination was not verified. This last release
-exists only in explicit `standalone` compatibility mode; shared PostgreSQL
-startup never treats another replica's work as orphaned.
+explicitly force-fail it. Standalone startup reloads a durable local runtime
+identity when available, claims `daemon_restart` termination, and resumes
+containment after the server is listening. Restart itself never releases the
+Task. Shared PostgreSQL startup never treats another replica's work as
+orphaned; the fleet reconciler acts only on expired durable runtime evidence.
 
 An abrupt local-launcher-daemon loss is not absence proof. If its execution
 substrate survives the launcher and callbacks route to the fleet, the detached
@@ -320,23 +353,38 @@ admission/UI projection:
 - the Session row is also the admission fence across different pending Tasks,
   so concurrent daemons cannot launch two executors for one Session; a losing
   created Task is durably queued;
+- generic Task patches cannot commit terminal status; executor settlement and
+  termination settlement are the only release-gated terminal paths;
 - permission and Stop states are projected while their task owns the turn;
-- terminal settlement writes the task terminal state, then projects the
-  session back to its appropriate resting state in the same transaction. A
-  fresh transition publishes its task event and analytics once; observing the
-  same immutable terminal truth again reruns reconciliation without duplicating
-  them;
+- terminal settlement writes Task truth and the minimal Session projection in
+  the same transaction. A fresh transition publishes its Task event and
+  analytics once; observing the same immutable terminal truth again reruns
+  reconciliation without duplicating them;
+- terminal reconciliation repairs the Session projection, dispatches callbacks,
+  materializes the originating gateway consequence, and may trigger the queued
+  Task with the lowest `queue_position`;
 - required reconciliation failures propagate so later terminal observation can
   retry them. Queue processing and other idempotent side effects run after
   commit;
+- callback Task creation and its source receipt are one transaction. Gateway
+  terminal intent is stored on the source Task, and the final assistant
+  response is reloaded from persisted Messages instead of an in-memory buffer.
+  Missing or pending consequence state remains repairable after restart;
 - after verified settlement, a separately queued durable Task may run after
   commit; it is not a retry or replay of the settled prompt;
-- reconciliation repairs a failed/not-ready session when no non-queued task
+- reconciliation repairs a failed/not-ready Session when no non-queued Task
   still owns that busy state;
 - `reconcileSessionState` is the bounded startup/route repair entry point and
   derives the coarse projection from durable Task truth;
 - generic Session patch hooks do not independently drain the queue or finalize
   gateways.
+
+Standalone recovery performs narrow tenant-ID discovery, re-enters each tenant,
+and runs bounded containment and consequence repair after listening. Queued
+prompts behind unverifiable work remain ordered and blocked; they are neither
+discarded nor replayed. Session projection records the terminal Task it applied
+under the Session row lock, so repair preserves a later
+`ready_for_prompt=false` acknowledgement.
 
 UI and gateway consumers use the shared runtime presentation projection derived
 from Task status, latest activity, latest meaningful progress, and stall
@@ -367,15 +415,16 @@ Preserve these invariants:
 4. Terminal state remains immutable.
 5. `stopping` is released only through the termination coordinator.
 6. A session is not made promptable before required containment is verified.
-7. Unknown activity fails open; absence of classification is not proof of a
-   stall.
+7. Unknown activity is compatibility evidence, not progress or semantic-stall
+   evidence; quiet after unknown activity reports adapter incompatibility.
 8. Remote launcher exit, wrapper exit, SDK quiescence, and process absence are
    different evidence and must not be collapsed.
 9. Daemon and executor releases are one runtime contract; mixed-version
    rollouts are unsupported.
 10. Supervision does not imply automatic retry, prompt replay, or exactly-once
     external effects. Verified settlement may continue a separately queued
-    Task; unverified containment may not.
+    Task; unverified containment may not. Durable domain receipts make restart
+    repair idempotent inside Agor; external delivery remains at-least-once.
 11. Daemon startup is non-destructive in shared PostgreSQL policy; queues and
     Session projection change only from authoritative Task outcomes.
 12. Agentic-tool adapters return normalized outcomes and do not write terminal

@@ -19,6 +19,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { InteractionMode } from '../../payload-types.js';
 import { truncateContentIfNeeded } from '../../services/tool-result-truncator.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -100,7 +101,8 @@ export class CodexTool implements ITool {
     useNativeAuth?: boolean,
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    interactionMode?: InteractionMode
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -121,7 +123,8 @@ export class CodexTool implements ITool {
         usersRepo,
         useNativeAuth ?? false,
         tasksService,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        interactionMode
       );
     }
   }

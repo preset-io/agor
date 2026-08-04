@@ -12,8 +12,15 @@ import {
   shortId,
 } from '@agor/core/db';
 import { getConnector } from '@agor/core/gateway';
-import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type {
+  GatewayChannel,
+  SessionID,
+  Task,
+  ThreadSessionMap,
+  User,
+  UserID,
+} from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
@@ -148,6 +155,7 @@ function makeGatewayHarness(args: {
   user?: User;
   alignedUser?: User | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
+  messages?: Array<Record<string, unknown>>;
 }) {
   const channel = args.channel ?? slackChannel;
   const executionUser = args.user ?? user;
@@ -177,6 +185,7 @@ function makeGatewayHarness(args: {
         return { create: sessionsCreate, get: sessionsGet, setMCPServers };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
+      if (name === 'messages') return { find: vi.fn(async () => args.messages ?? []) };
       throw new Error(`Unexpected service: ${name}`);
     },
   };
@@ -228,8 +237,34 @@ function makeGatewayHarness(args: {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => args.alignedUser ?? null);
+  const tasks = new Map<string, Task>();
+  const taskRepo = {
+    findById: vi.fn(async (id: string) => {
+      const existing = tasks.get(id);
+      if (existing) return existing;
+      const task = {
+        task_id: id,
+        session_id: 'sess-1',
+        status: TaskStatus.COMPLETED,
+        metadata: {},
+      } as Task;
+      tasks.set(id, task);
+      return task;
+    }),
+    update: vi.fn(async (id: string, updates: Partial<Task>) => {
+      const current = await taskRepo.findById(id);
+      const task = {
+        ...current,
+        ...updates,
+        metadata: { ...(current?.metadata ?? {}), ...(updates.metadata ?? {}) },
+      } as Task;
+      tasks.set(id, task);
+      return task;
+    }),
+  };
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
+  (service as unknown as { taskRepo: typeof taskRepo }).taskRepo = taskRepo;
   (
     service as unknown as {
       usersRepo: { findByEmailForAlignment: typeof findByEmailForAlignment };
@@ -257,6 +292,7 @@ function makeGatewayHarness(args: {
     channelRepo,
     threadMapRepo,
     findByEmailForAlignment,
+    taskRepo,
   };
 }
 
@@ -1615,6 +1651,123 @@ describe('GatewayService MCP resolution', () => {
       tenantId: 'tenant-channel',
     });
     expect(emitted).toHaveBeenCalledOnce();
+  });
+});
+
+describe('GatewayService terminal reconciliation', () => {
+  it('reloads persisted responses and keeps one idempotency receipt per Task', async () => {
+    const sendMessage = vi.fn(async () => 'comment-1');
+    const channel = {
+      ...slackChannel,
+      id: 'chan-github',
+      channel_type: 'github',
+      config: {},
+    } as GatewayChannel;
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      metadata: { processing_comment_id: 42 },
+    });
+    const { service, taskRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: mapping,
+      connector: { sendMessage },
+      messages: [
+        { role: 'assistant', index: 1, content: [{ type: 'text', text: 'Final answer' }] },
+      ],
+    });
+    // Startup repair must use durable mapping/channel truth before listeners
+    // have populated the process-local fast path.
+    (service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants.clear();
+    const terminal = {
+      session_id: 'sess-1',
+      task_id: 'task-1',
+      state: 'done' as const,
+    };
+
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    await runWithTenantContext('tenant-channel', () =>
+      service.finalizeTask({ ...terminal, task_id: 'task-2' })
+    );
+    await runWithTenantContext('tenant-channel', () =>
+      service.finalizeTask({ ...terminal, task_id: 'task-2' })
+    );
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Final answer',
+        metadata: { edit_comment_id: 42 },
+      })
+    );
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
+    await expect(taskRepo.findById('task-2')).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
+  });
+
+  it('keeps a Slack delivery pending when the provider update fails', async () => {
+    const setThreadStatus = vi.fn().mockRejectedValue(new Error('slack unavailable'));
+    const { service, taskRepo } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { setThreadStatus },
+    });
+
+    await expect(
+      runWithTenantContext('tenant-channel', () =>
+        service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'failed' })
+      )
+    ).rejects.toThrow('slack unavailable');
+
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'pending' } },
+    });
+  });
+
+  it('retries a pending Slack delivery against its original thread mapping', async () => {
+    const originalMapping = makeMapping({
+      id: 'map-original',
+      thread_id: 'C123-original',
+      metadata: { slack_active_thread_id: 'C123-original' },
+    });
+    const currentMapping = makeMapping({
+      id: 'map-current',
+      thread_id: 'C123-current',
+      metadata: { slack_active_thread_id: 'C123-current' },
+    });
+    const setThreadStatus = vi.fn(async () => undefined);
+    const { service, taskRepo, threadMapRepo } = makeGatewayHarness({
+      existingMapping: currentMapping,
+      connector: { setThreadStatus },
+    });
+    threadMapRepo.findById.mockImplementation(async (id: string) =>
+      id === originalMapping.id ? originalMapping : currentMapping
+    );
+    await taskRepo.update('task-1', {
+      metadata: {
+        gateway_terminal_delivery: {
+          mapping_id: originalMapping.id,
+          channel_id: originalMapping.channel_id,
+          status: 'pending',
+          intended_at: '2026-06-22T00:00:00.000Z',
+        },
+      },
+    });
+
+    await runWithTenantContext('tenant-channel', () =>
+      service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
+    );
+
+    expect(threadMapRepo.findBySession).not.toHaveBeenCalled();
+    expect(threadMapRepo.findById).toHaveBeenCalledWith(originalMapping.id);
+    expect(setThreadStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'C123-original' })
+    );
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'delivered' } },
+    });
   });
 });
 

@@ -24,17 +24,25 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { InteractionMode, ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
-import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
+import {
+  activityToPulse,
+  applyAdapterConformanceMode,
+  getSdkActivityConformance,
+  markSdkHealthAbort,
+  type RuntimeActivity,
+  SdkWatchdog,
+} from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import {
   type AgenticToolOutcome,
   finalizeTask as persistTaskOutcome,
-  tryFinalizeTask as tryPersistTaskOutcome,
+  requestContainment as reportContainmentRequired,
+  tryRequestContainment,
 } from './terminal-task.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
@@ -71,6 +79,7 @@ export class AgorExecutor {
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
+  private latestPulseSequence?: number;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
 
@@ -83,10 +92,18 @@ export class AgorExecutor {
    * Normal callers reach it only after runtime quiescence; daemon-owned
    * termination and enforced watchdog aborts deliberately bypass it.
    */
-  private async finalizeTask(outcome: AgenticToolOutcome, bestEffort = false): Promise<void> {
+  private async finalizeTask(outcome: AgenticToolOutcome): Promise<void> {
     if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
-    const persist = bestEffort ? tryPersistTaskOutcome : persistTaskOutcome;
-    await persist(this.client, this.config.taskId, outcome);
+    await persistTaskOutcome(this.client, this.config.taskId, outcome);
+  }
+
+  private async requestContainment(error: unknown, bestEffort = false): Promise<void> {
+    if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
+    if (bestEffort) {
+      await tryRequestContainment(this.client, this.config.taskId, error);
+      return;
+    }
+    await reportContainmentRequired(this.client, this.config.taskId, error);
   }
 
   /**
@@ -134,15 +151,7 @@ export class AgorExecutor {
         return;
       }
       console.error('[executor] Fatal error:', error);
-      await this.finalizeTask(
-        {
-          status: TaskStatus.FAILED,
-          taskPatch: {
-            error_message: error instanceof Error ? error.message : String(error),
-          },
-        },
-        true
-      );
+      await this.requestContainment(error, true);
       process.exit(1);
     }
   }
@@ -168,7 +177,6 @@ export class AgorExecutor {
       const event = data as {
         requestId: string;
         taskId: string;
-        sessionId: string;
         allow: boolean;
         reason?: string;
         remember: boolean;
@@ -177,8 +185,7 @@ export class AgorExecutor {
       };
       console.log('[executor] Received permission_resolved event:', event);
 
-      if (event.taskId === this.config.taskId && event.sessionId === this.config.sessionId) {
-        this.recordPulse('sdk_started', 'permission.resolved');
+      if (event.taskId === this.config.taskId) {
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
           requestId: event.requestId,
@@ -196,19 +203,27 @@ export class AgorExecutor {
   }
 
   private handleTaskLifecycleUpdate(task: Task): void {
-    if (
-      task.task_id !== this.config.taskId ||
-      task.status !== TaskStatus.STOPPING ||
-      !task.termination_request
-    ) {
+    if (task.task_id !== this.config.taskId) return;
+    if (isTerminalTaskStatus(task.status)) {
+      if (!this.abortController.signal.aborted) {
+        console.warn(
+          `[executor] Daemon reports Task ${shortId(task.task_id)} is already ${task.status}; relinquishing runtime ownership`
+        );
+      }
+      this.relinquishRuntimeOwnership();
       return;
     }
+    if (task.status !== TaskStatus.STOPPING || !task.termination_request) return;
     if (this.terminationRequest?.requested_at === task.termination_request.requested_at) return;
 
     this.terminationRequest = task.termination_request;
     console.log(
       `[executor] Received ${task.termination_request.cause} termination request; stopping SDK`
     );
+    this.relinquishRuntimeOwnership();
+  }
+
+  private relinquishRuntimeOwnership(): void {
     markCoordinatorTerminationAbort(this.abortController);
     this.heartbeat?.stop();
     this.heartbeat = null;
@@ -274,20 +289,24 @@ export class AgorExecutor {
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
       onTask: (task) => this.handleTaskLifecycleUpdate(task),
+      onReportError: () => this.refreshTerminationState(),
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
-    if (this.config.tool !== 'cursor') {
-      this.watchdog = new SdkWatchdog({
-        tool: this.config.tool,
-        config: watchdogConfig,
-        sdkVersion: getSdkActivityVersion(this.config.tool),
-        onDecision: (evidence) => this.handleWatchdogDecision(evidence),
-      });
-      // Start at the executor boundary so imports, subscriptions, prompt
-      // submission, and a silent first SDK event are all covered.
-      this.recordPulse('sdk_started', this.config.tool);
-    }
+    const conformance = getSdkActivityConformance(this.config.tool);
+    if (!conformance) throw new Error(`Missing runtime conformance for ${this.config.tool}`);
+    this.watchdog = new SdkWatchdog({
+      tool: this.config.tool,
+      config: {
+        ...watchdogConfig,
+        mode: applyAdapterConformanceMode(watchdogConfig.mode, conformance.mode),
+      },
+      sdkVersion: conformance.version,
+      onDecision: (evidence) => this.handleWatchdogDecision(evidence),
+    });
+    // Start at the executor boundary so imports, subscriptions, prompt
+    // submission, and a silent first SDK event are all covered.
+    this.recordActivity({ type: 'sdk_started', detail: this.config.tool });
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -310,7 +329,7 @@ export class AgorExecutor {
         messageSource: this.config.messageSource,
         agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
-        onPulse: (kind, detail) => this.recordPulse(kind, detail),
+        onActivity: (activity) => this.recordActivity(activity),
         interactionMode: this.config.interactionMode,
       });
 
@@ -326,12 +345,10 @@ export class AgorExecutor {
     }
   }
 
-  private recordPulse(
-    kind: Parameters<ExecutorHeartbeatHandle['recordPulse']>[0],
-    detail?: string
-  ) {
-    this.heartbeat?.recordPulse(kind, detail);
-    this.watchdog?.record(kind, detail);
+  private recordActivity(activity: RuntimeActivity): void {
+    const observedActivity = this.watchdog?.record(activity) ?? activity;
+    const pulse = activityToPulse(observedActivity);
+    this.latestPulseSequence = this.heartbeat?.recordPulse(pulse.kind, pulse.detail);
   }
 
   private async handleWatchdogDecision(
@@ -341,7 +358,13 @@ export class AgorExecutor {
     let acknowledged = false;
     const report = this.client
       .service('tasks')
-      .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
+      .reportSdkHealthFailure({
+        ...evidence,
+        task_id: this.config.taskId,
+        ...(this.latestPulseSequence === undefined
+          ? {}
+          : { pulse_sequence_at_detection: this.latestPulseSequence }),
+      })
       .then((task) => {
         acknowledged = true;
         this.handleTaskLifecycleUpdate(task);
@@ -386,19 +409,18 @@ export class AgorExecutor {
     const shutdown = async (signal: string) => {
       console.log(`[executor] Received ${signal}, shutting down...`);
 
-      // Abort any running task
       if (this.isRunning) {
         this.abortController.abort();
+        // Let the normal execution/finalization path await provider cleanup.
+        // If it cannot return, exiting without a terminal write leaves the
+        // daemon's liveness/containment owners to settle the Task safely.
+        const graceMs =
+          this.config.resolvedConfig?.execution?.sdk_watchdog?.abort_grace_ms ??
+          resolveSdkWatchdogConfig().abort_grace_ms;
+        const deadline = setTimeout(() => process.exit(70), graceMs);
+        deadline.unref?.();
+        return;
       }
-      this.heartbeat?.stop();
-      this.heartbeat = null;
-      this.watchdog?.stop();
-      this.watchdog = null;
-
-      // The daemon's termination coordinator owns STOPPING → terminal. This
-      // fallback only fires for an out-of-band signal while the task is active.
-      await this.finalizeTask({ status: TaskStatus.STOPPED }, true);
-
       process.exit(0);
     };
 
@@ -407,13 +429,9 @@ export class AgorExecutor {
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);
-      await this.finalizeTask(
-        {
-          status: TaskStatus.FAILED,
-          taskPatch: {
-            error_message: `uncaughtException: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        },
+      this.abortController.abort();
+      await this.requestContainment(
+        new Error(`uncaughtException: ${error instanceof Error ? error.message : String(error)}`),
         true
       );
       process.exit(1);
@@ -421,13 +439,11 @@ export class AgorExecutor {
 
     process.on('unhandledRejection', async (reason) => {
       console.error('[executor] Unhandled rejection:', reason);
-      await this.finalizeTask(
-        {
-          status: TaskStatus.FAILED,
-          taskPatch: {
-            error_message: `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`,
-          },
-        },
+      this.abortController.abort();
+      await this.requestContainment(
+        new Error(
+          `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`
+        ),
         true
       );
       process.exit(1);

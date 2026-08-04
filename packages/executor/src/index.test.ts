@@ -104,7 +104,7 @@ describe('AgorExecutor watchdog handoff', () => {
         .fn()
         .mockResolvedValue({ task_id: 'task-1', status: 'completed' }),
     };
-    let settleAdapter!: (value: { status: 'completed'; taskPatch: { model: string } }) => void;
+    let settleAdapter!: (value: { result: 'success'; taskPatch: { model: string } }) => void;
     runtime.execute.mockReturnValueOnce(
       new Promise((resolve) => {
         settleAdapter = resolve;
@@ -128,7 +128,7 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(tasks.reportExecutorSettlement).not.toHaveBeenCalled();
 
     settleAdapter({
-      status: 'completed',
+      result: 'success',
       taskPatch: { model: 'openai/test-model' },
     });
     await execution;
@@ -137,7 +137,7 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(tasks.reportExecutorSettlement).toHaveBeenCalledWith({
       task_id: 'task-1',
       kind: 'quiesced',
-      status: 'completed',
+      result: 'success',
       task_patch: { model: 'openai/test-model' },
     });
     expect(runtime.execute.mock.invocationCallOrder[0]).toBeLessThan(

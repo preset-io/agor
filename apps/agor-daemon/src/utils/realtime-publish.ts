@@ -325,6 +325,24 @@ function isServiceConnection(connection: unknown): boolean {
   return user?._isServiceAccount === true || (user?.role as string | undefined) === 'service';
 }
 
+function isInteractiveUserConnection(connection: unknown): boolean {
+  const user = userFromConnection(connection);
+  return (
+    !!user?.role && !isServiceConnection(connection) && hasMinimumRole(user.role, ROLES.MEMBER)
+  );
+}
+
+/** True only when launch has a live browser connection capable of answering this Session. */
+export function hasSessionInteractionResponder(
+  app: Application,
+  sessionId: string,
+  launchConnection?: unknown
+): boolean {
+  const room = existingChannel(app, sessionStreamChannelName(sessionId));
+  const subscribers = room ? (room as unknown as { connections: unknown[] }).connections : [];
+  return [launchConnection, ...subscribers].some(isInteractiveUserConnection);
+}
+
 /** Per-connection flag: set only by the explicit `{capability:true}` announce (not by a plain subscribe), so the owner fallback skips this connection for all sessions. */
 export const SESSION_STREAMS_AWARE_FLAG = '__agorSessionStreamsAware';
 

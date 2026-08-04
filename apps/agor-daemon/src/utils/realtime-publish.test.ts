@@ -13,9 +13,11 @@ import type {
 import {
   configureRealtimePublish,
   executorTaskChannelName,
+  hasSessionInteractionResponder,
   leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
   REDIS_FEATHERS_DENIED_PATHS,
+  sessionStreamChannelName,
 } from './realtime-publish';
 
 class FakeChannel {
@@ -77,6 +79,26 @@ function session(id: string, branchId: string): Session {
 }
 
 const scopeOnlyDb = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
+
+describe('session interaction capability', () => {
+  it('requires a live non-service launch or Session subscriber connection', () => {
+    const browser = { user: user('browser') };
+    const viewer = { user: user('viewer', ROLES.VIEWER) };
+    const service = { user: { ...user('executor'), _isServiceAccount: true } };
+    const room = sessionStreamChannelName('session-1');
+
+    expect(
+      hasSessionInteractionResponder(makeApp([], {}, { [room]: [browser] }), 'session-1')
+    ).toBe(true);
+    expect(
+      hasSessionInteractionResponder(makeApp([], {}, { [room]: [service] }), 'session-1')
+    ).toBe(false);
+    expect(hasSessionInteractionResponder(makeApp([], {}, { [room]: [viewer] }), 'session-1')).toBe(
+      false
+    );
+    expect(hasSessionInteractionResponder(makeApp([]), 'session-1', browser)).toBe(true);
+  });
+});
 
 describe('configureRealtimePublish executor control scope', () => {
   it('routes termination only to the private room for that Task', async () => {

@@ -116,6 +116,13 @@ function statusPatchCall(sessionsPatch: ReturnType<typeof vi.fn>) {
   return sessionsPatch.mock.calls[0];
 }
 
+function reconcile(service: TasksService, status: Task['status']): Promise<boolean> {
+  return service.reconcileTerminalTask(
+    makeTask({ status, completed_at: '2026-01-01T00:00:05.000Z' }),
+    status
+  );
+}
+
 describe('TasksService auto-title', () => {
   it.each([TaskStatus.QUEUED, TaskStatus.RUNNING])(
     'auto-titles an untitled session when a %s task is created',
@@ -133,10 +140,7 @@ describe('TasksService auto-title', () => {
   it('writes the terminal status/ready patch prompt-flow-only, with the original params', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: undefined } });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     // The status patch must not carry `title` — folding metadata in would make
     // the sessions RBAC hook demand `all` and fail a non-owner's completion.
@@ -149,10 +153,7 @@ describe('TasksService auto-title', () => {
   it('auto-titles an untitled session via a separate trusted (provider-less) patch', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: undefined } });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     const titleCall = titlePatchCall(sessionsPatch);
     expect(titleCall).toBeDefined();
@@ -165,10 +166,7 @@ describe('TasksService auto-title', () => {
   it('does not overwrite an explicit title', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: 'My session' } });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     expect(titlePatchCall(sessionsPatch)).toBeUndefined();
   });
@@ -176,10 +174,7 @@ describe('TasksService auto-title', () => {
   it('treats an explicitly-cleared empty-string title as set (does not re-arm auto-title)', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: '' } });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     // '' is a deliberate user choice, not "unset" — never re-derive over it.
     expect(titlePatchCall(sessionsPatch)).toBeUndefined();
@@ -194,10 +189,7 @@ describe('TasksService auto-title', () => {
       .mockResolvedValueOnce(makeSession({ title: undefined }))
       .mockResolvedValueOnce(makeSession({ title: 'User typed this while it ran' }));
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     expect(titlePatchCall(sessionsPatch)).toBeUndefined();
   });
@@ -208,10 +200,7 @@ describe('TasksService auto-title', () => {
       session: { title: undefined, tasks: [earlierTaskId, taskId] },
     });
 
-    await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
+    await reconcile(service, TaskStatus.COMPLETED);
 
     const titleCall = titlePatchCall(sessionsPatch);
     expect(titleCall?.[1]).toEqual({ title: DERIVED_TITLE });
@@ -266,10 +255,7 @@ describe('TasksService auto-title', () => {
       });
 
       await service.create(makeTask({ status: TaskStatus.RUNNING }));
-      await service.patch(taskId, {
-        status,
-        completed_at: '2026-01-01T00:00:05.000Z',
-      });
+      await reconcile(service, status);
 
       expect(session.title).toBe(DERIVED_TITLE);
       expect(sessionsPatch.mock.calls.filter((call) => call[1]?.title !== undefined)).toHaveLength(

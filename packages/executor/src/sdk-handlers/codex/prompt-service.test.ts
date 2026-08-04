@@ -27,6 +27,7 @@ import type {
   SessionMCPServerRepository,
   SessionRepository,
 } from '../../db/feathers-repositories.js';
+import { getInteractionAbortOutcome } from '../../termination-state.js';
 import type { Message, PermissionMode, SessionID } from '../../types.js';
 import type { MessagesService } from '../base/index.js';
 
@@ -339,6 +340,53 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
     vi.clearAllMocks();
+  });
+
+  it('fails an unattended approval wait before starting Codex work', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      'unattended'
+    );
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-unattended',
+      branch_id: 'branch-1',
+      permission_config: {
+        mode: 'auto',
+        codex: {
+          sandboxMode: 'workspace-write',
+          approvalPolicy: 'on-request',
+          networkAccess: false,
+        },
+      },
+    });
+    const abortController = new AbortController();
+    const consume = async () => {
+      for await (const _event of service.promptSessionStreaming(
+        'session-unattended' as SessionID,
+        'review',
+        undefined,
+        undefined,
+        abortController
+      )) {
+        // The launch policy must reject before the SDK produces an event.
+      }
+    };
+
+    await expect(consume()).rejects.toThrow('execution surface is unattended');
+    expect(getInteractionAbortOutcome(abortController)).toMatchObject({
+      cause: 'interaction_unavailable',
+    });
+    expect(mockInstanceCount).toBe(0);
   });
 
   it.each([

@@ -152,6 +152,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         scheduled_from_branch: row.scheduled_from_branch ?? false,
         schedule_id: (row.schedule_id as UUID | null) ?? undefined,
         ready_for_prompt: row.ready_for_prompt ?? false,
+        runtime_projection: row.data.runtime_projection,
         archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
         archived_reason: row.archived_reason ?? undefined,
         current_context_usage: row.data.current_context_usage,
@@ -211,6 +212,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         callback_config: session.callback_config,
         fork_origin: session.fork_origin,
         custom_context: session.custom_context,
+        runtime_projection: session.runtime_projection,
         current_context_usage: session.current_context_usage,
         context_window_limit: session.context_window_limit,
         last_context_update_at: session.last_context_update_at,
@@ -775,12 +777,25 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         const currentRow = currentResult.sessions;
         const boardId = (currentResult.branches?.board_id ?? null) as UUID | null;
         const current = this.rowToSession(currentRow, boardId, baseUrl);
+        const projectedTaskId = updates.runtime_projection?.terminal_task_id;
+        const latestTaskId = current.tasks.at(-1);
+        if (projectedTaskId && latestTaskId && projectedTaskId !== latestTaskId) {
+          return current;
+        }
 
         // STEP 2: Deep merge updates into current session (in memory)
         // IMPORTANT: Receiver-side merge for nested objects (permission_config, model_config, etc.)
         // This prevents partial updates from losing existing nested fields.
         // Strategy: Objects = deep merge, Arrays = replace, Primitives = replace
-        const { sdk_session_id: sdkSessionIdUpdate, ...genericUpdates } = updates;
+        const repeatedTerminalProjection =
+          updates.ready_for_prompt === true &&
+          updates.runtime_projection?.terminal_task_id !== undefined &&
+          updates.runtime_projection.terminal_task_id ===
+            current.runtime_projection?.terminal_task_id;
+        const effectiveUpdates = repeatedTerminalProjection
+          ? { ...updates, ready_for_prompt: undefined }
+          : updates;
+        const { sdk_session_id: sdkSessionIdUpdate, ...genericUpdates } = effectiveUpdates;
         const merged = deepMerge(current, genericUpdates);
         if (sdkSessionIdUpdate === null) {
           delete merged.sdk_session_id;
@@ -809,7 +824,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // still advance it; without that, the staleness check in query-builder.ts
         // (hoursSinceUpdate > 24) would erroneously clear sdk_session_id and
         // disconnect agents from their history.
-        const shouldRefreshLastUpdated = !isSessionTimestampNeutralPatch(updates);
+        const shouldRefreshLastUpdated = !isSessionTimestampNeutralPatch(effectiveUpdates);
         if (shouldRefreshLastUpdated) {
           insertData.updated_at = new Date();
         }

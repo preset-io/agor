@@ -428,7 +428,7 @@ export class GeminiPromptService {
         // The Scheduler needs a MessageBus and PolicyEngine for approval workflows
         const policyEngine = new Gemini.PolicyEngine({
           approvalMode: mapPermissionMode(permissionMode), // Convert our permission mode to Gemini's ApprovalMode
-          nonInteractive: false,
+          nonInteractive: true,
         });
         const messageBus = new Gemini.MessageBus(policyEngine);
         const scheduler = new Gemini.Scheduler({

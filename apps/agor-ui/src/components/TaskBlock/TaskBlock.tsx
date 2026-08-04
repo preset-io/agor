@@ -560,7 +560,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const normalized = task.normalized_sdk_response || null;
     const sdkFailure = task.sdk_failure;
     const taskProgressState: TaskRuntimeProgressState = deriveTaskRuntimeProgressState(task);
-    const activeSdkFailure = taskProgressState === 'stalled' ? sdkFailure : undefined;
+    const activeSdkFailure =
+      taskProgressState === 'stalled' || taskProgressState === 'incompatible'
+        ? sdkFailure
+        : undefined;
+    const isAdapterIncompatible = taskProgressState === 'incompatible';
     const presentTaskAsRunning = taskProgressState === 'working';
 
     // Use computed context window from database (already summed across tasks since last compaction)
@@ -639,7 +643,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             />
             {activeSdkFailure && (
               <Tag icon={<WarningOutlined />} color="warning" style={{ fontSize: 11 }}>
-                Agent progress stalled
+                {isAdapterIncompatible ? 'Runtime compatibility failed' : 'Agent progress stalled'}
               </Tag>
             )}
             {scheduledFromBranch && scheduledRunAt && (
@@ -744,11 +748,17 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     <Alert
                       type="warning"
                       showIcon
-                      title="Agent progress stalled"
+                      title={
+                        isAdapterIncompatible
+                          ? 'Runtime compatibility failed'
+                          : 'Agent progress stalled'
+                      }
                       description={
-                        task.status === TaskStatus.STOPPING
-                          ? 'Stopping executor. The task remains stopping until process absence is verified.'
-                          : 'Monitoring only. The executor is still running, but the agent is not making progress. Check the heartbeat and SDK pulse details above.'
+                        isAdapterIncompatible
+                          ? 'The agentic-tool SDK emitted protocol activity this adapter cannot safely interpret. Agor stopped trusting semantic supervision for this turn.'
+                          : task.status === TaskStatus.STOPPING
+                            ? 'Stopping executor. The task remains stopping until process absence is verified.'
+                            : 'Monitoring only. The executor is still running, but the agent is not making progress. Check the heartbeat and SDK pulse details above.'
                       }
                       style={{ marginBottom: token.sizeUnit * 2 }}
                     />

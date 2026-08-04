@@ -14,7 +14,7 @@ describe('ExecutorSettlementInputSchema', () => {
   const quiesced = {
     task_id: 'task-1',
     kind: 'quiesced',
-    status: TaskStatus.COMPLETED,
+    result: 'success',
     task_patch: {
       git_state: { sha_at_end: 'abc123' },
       model: 'test-model',
@@ -30,8 +30,16 @@ describe('ExecutorSettlementInputSchema', () => {
     },
   } as const;
 
-  it('accepts both executor settlement variants', () => {
+  it('accepts success, failure, and containment settlement variants', () => {
     expect(ExecutorSettlementInputSchema.parse(quiesced)).toEqual(quiesced);
+    expect(
+      ExecutorSettlementInputSchema.parse({
+        task_id: 'task-1',
+        kind: 'quiesced',
+        result: 'failure',
+        failure_cause: 'runtime_failure',
+      })
+    ).toMatchObject({ result: 'failure' });
     expect(
       ExecutorSettlementInputSchema.parse({
         task_id: 'task-1',
@@ -42,7 +50,7 @@ describe('ExecutorSettlementInputSchema', () => {
   });
 
   it.each([
-    { ...quiesced, status: TaskStatus.RUNNING },
+    { ...quiesced, result: 'running' },
     { ...quiesced, unexpected: true },
     { ...quiesced, task_patch: { unexpected: true } },
     { ...quiesced, task_patch: { git_state: { sha_at_end: 'abc123', unexpected: true } } },
@@ -158,5 +166,20 @@ describe('deriveTaskRuntimeProgressState', () => {
         latest_executor_progress: { ...progress, sequence: 1 },
       })
     ).toBe('stalled');
+  });
+
+  it('keeps adapter incompatibility distinct from a semantic stall', () => {
+    expect(
+      deriveTaskRuntimeProgressState({
+        status: TaskStatus.STOPPING,
+        sdk_failure: {
+          reason: 'adapter_incompatible',
+          detected_at: '2026-01-01T00:00:01.000Z',
+          tool: 'cursor',
+          watchdog_action: 'enforced',
+          termination: 'requested',
+        },
+      })
+    ).toBe('incompatible');
   });
 });

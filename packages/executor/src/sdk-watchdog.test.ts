@@ -1,7 +1,10 @@
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
+import type { AgenticToolName } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   activityToPulse,
+  applyAdapterConformanceMode,
+  getSdkActivityConformance,
   getSdkActivityVersion,
   isSdkHealthAbort,
   markSdkHealthAbort,
@@ -12,10 +15,38 @@ const config = {
   mode: 'enforce',
   first_progress_timeout_ms: 100,
   abort_grace_ms: 25,
-  operation_absolute_timeout_ms: 300,
+  operation_absolute_timeout_ms: 10_000,
   claude_idle_timeout_ms: 100,
   codex_idle_timeout_ms: 100,
 } as unknown as ResolvedSdkWatchdogConfig;
+
+describe('adapter conformance', () => {
+  it('covers every shipped adapter and cannot enforce observe-only traces', () => {
+    for (const tool of ['claude-code', 'codex', 'gemini', 'copilot', 'opencode', 'cursor']) {
+      expect(getSdkActivityConformance(tool)).toBeDefined();
+    }
+    expect(applyAdapterConformanceMode('enforce', 'observe-only')).toBe('observe');
+    expect(() => applyAdapterConformanceMode('enforce', 'blocked')).toThrow(
+      /not runtime-conformant/
+    );
+    expect(getSdkActivityConformance('claude-code')?.nativeDeadline).toBe('observable');
+    expect(getSdkActivityConformance('copilot')?.nativeDeadline).toBe('configured');
+  });
+
+  it('matches the exact SDK versions installed by the runtime packages', () => {
+    const tools: AgenticToolName[] = [
+      'claude-code',
+      'codex',
+      'gemini',
+      'copilot',
+      'opencode',
+      'cursor',
+    ];
+    for (const tool of tools) {
+      expect(getSdkActivityConformance(tool)?.version).toBe(getSdkActivityVersion(tool));
+    }
+  });
+});
 
 describe('SdkWatchdog', () => {
   beforeEach(() => {
@@ -47,22 +78,6 @@ describe('SdkWatchdog', () => {
     ]);
   });
 
-  it('includes the package-owned OpenCode SDK version in watchdog evidence', async () => {
-    const decisions: Array<Record<string, unknown>> = [];
-    const watchdog = new SdkWatchdog({
-      tool: 'opencode',
-      config,
-      sdkVersion: getSdkActivityVersion('opencode'),
-      now: () => Date.now(),
-      onDecision: (evidence) => decisions.push(evidence),
-    });
-    watchdog.record({ type: 'sdk_started' });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(decisions[0]?.sdk_version).toBe('@opencode-ai/sdk@1.14.33');
-  });
-
   it('enforces the Codex post-progress quiet deadline', async () => {
     const { watchdog, decisions } = setup();
     watchdog.record({ type: 'progress' });
@@ -91,6 +106,21 @@ describe('SdkWatchdog', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(decisions).toEqual([expect.objectContaining({ reason: 'progress_stalled' })]);
+  });
+
+  it('enforces the absolute turn deadline despite ongoing progress', async () => {
+    const { watchdog, decisions } = setup({
+      codex_idle_timeout_ms: null,
+      operation_absolute_timeout_ms: 120,
+    });
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(50);
+    watchdog.record({ type: 'progress' });
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(decisions).toEqual([expect.objectContaining({ reason: 'turn_timed_out' })]);
   });
 
   it('pauses the Codex post-progress deadline during a known wait', async () => {
@@ -218,6 +248,21 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([expect.objectContaining({ reason: 'wait_timed_out' })]);
   });
 
+  it('leaves adapter-owned wait expiry to the adapter', async () => {
+    const { watchdog, decisions } = setup();
+    watchdog.record({
+      type: 'waiting_started',
+      id: 'permission-1',
+      reason: 'permission',
+      absoluteTimeoutMs: 100,
+      deadlineOwner: 'adapter',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(decisions).toEqual([]);
+  });
+
   it('resumes quiet supervision after the matching wait finishes', async () => {
     const { watchdog, decisions } = setup();
     watchdog.record({
@@ -252,10 +297,10 @@ describe('SdkWatchdog', () => {
     expect(decisions).toEqual([
       expect.objectContaining({ reason: 'unknown_activity', watchdog_action: 'would_fire' }),
     ]);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(100);
     expect(decisions).toEqual([
       expect.objectContaining({ reason: 'unknown_activity' }),
-      expect.objectContaining({ reason: 'no_first_progress', watchdog_action: 'enforced' }),
+      expect.objectContaining({ reason: 'adapter_incompatible', watchdog_action: 'enforced' }),
     ]);
   });
 
@@ -268,10 +313,13 @@ describe('SdkWatchdog', () => {
       detail: 'operation_finished:missing',
     });
     await Promise.resolve();
-    expect(decisions).toEqual([expect.objectContaining({ reason: 'unknown_activity' })]);
+    expect(decisions).toEqual([
+      expect.objectContaining({ reason: 'unknown_activity' }),
+      expect.objectContaining({ reason: 'adapter_incompatible', watchdog_action: 'enforced' }),
+    ]);
 
     await vi.advanceTimersByTimeAsync(50);
-    expect(decisions.at(-1)).toEqual(expect.objectContaining({ reason: 'no_first_progress' }));
+    expect(decisions.at(-1)).toEqual(expect.objectContaining({ reason: 'adapter_incompatible' }));
   });
 
   it('does not let a duplicate operation start move its absolute deadline', async () => {

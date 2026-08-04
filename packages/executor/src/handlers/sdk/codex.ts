@@ -6,7 +6,7 @@
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { InteractionMode, ResolvedConfigSlice } from '../../payload-types.js';
 import { CodexTool } from '../../sdk-handlers/codex/index.js';
 import type { SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -27,6 +27,7 @@ export async function executeCodexTask(params: {
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
   onActivity?: SdkActivityCallback;
+  interactionMode?: InteractionMode;
 }): Promise<AgenticToolOutcome | undefined> {
   // Import base executor helper
   const { executeToolTask } = await import('./base-executor.js');
@@ -50,7 +51,8 @@ export async function executeCodexTask(params: {
         useNativeAuth, // Flag for native auth (if applicable)
         repos.mcpServers, // MCPServerRepository for global MCP server resolution
         repos.users,
-        repos.mcpOAuthAuthHeaders
+        repos.mcpOAuthAuthHeaders,
+        params.interactionMode
       ),
   });
 }

@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import type { PersistedAgenticToolName } from './agentic-tool';
-import type { GatewayInboundEventID } from './gateway';
+import type { GatewayChannelID, GatewayInboundEventID, ThreadSessionMapID } from './gateway';
 import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
@@ -56,10 +56,12 @@ export interface RuntimeTelemetryInput {
 export const SDK_WATCHDOG_FAILURE_REASONS = [
   'no_first_progress',
   'progress_stalled',
+  'turn_timed_out',
   'operation_stalled',
   'operation_timed_out',
   'wait_timed_out',
   'unknown_activity',
+  'adapter_incompatible',
 ] as const;
 
 export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[number];
@@ -67,6 +69,7 @@ export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[num
 export type SdkFailureReason =
   | 'startup_timeout'
   | SdkWatchdogFailureReason
+  | 'agentic_tool_timeout'
   | 'heartbeat_lost'
   | 'termination_unverified';
 
@@ -96,6 +99,7 @@ export type SdkHealthFailureInput = Pick<
 export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
+  | 'daemon_restart'
   | 'heartbeat_lost'
   | 'sdk_health_failure'
   | 'runtime_cleanup_failed';
@@ -155,6 +159,14 @@ export interface ExecutorTerminationCompleteInput {
  * - `child_session_id` / `child_task_id`: lineage breadcrumbs for callback
  *   tasks — the child session/task whose completion produced this prompt.
  */
+export interface LocalExecutorRuntime {
+  mode: 'local';
+  pid: number;
+  start_identity?: string;
+  boot_identity?: string;
+  as_user?: string;
+}
+
 export interface TaskMetadata {
   is_agor_callback?: boolean;
   source?: PersistedMessageSource;
@@ -174,6 +186,16 @@ export interface TaskMetadata {
     queued_task_id?: TaskID;
     dispatched_at: string;
   }>;
+  /** Restart-safe gateway consequence receipt, scoped to this source Task. */
+  gateway_terminal_delivery?: {
+    mapping_id: ThreadSessionMapID;
+    channel_id: GatewayChannelID;
+    status: 'pending' | 'delivered';
+    intended_at: string;
+    delivered_at?: string;
+  };
+  /** Local process identity used only to resume containment after daemon restart. */
+  executor_runtime?: LocalExecutorRuntime;
   /** Durable idempotency marker for the system message emitted by a BTW fork. */
   btw_result_delivery?: {
     parent_session_id: SessionID;
@@ -443,10 +465,15 @@ export interface Task {
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }
 
-export type ExecutorSettlementStatus =
-  | typeof TaskStatus.COMPLETED
-  | typeof TaskStatus.FAILED
-  | typeof TaskStatus.TIMED_OUT;
+export type ExecutorResult = 'success' | 'failure';
+export const EXECUTOR_FAILURE_CAUSES = [
+  'runtime_failure',
+  'runtime_cancelled',
+  'interaction_unavailable',
+  'interaction_timeout',
+  'agentic_tool_timeout',
+] as const;
+export type ExecutorFailureCause = (typeof EXECUTOR_FAILURE_CAUSES)[number];
 
 /**
  * One semantic report from the executor finalizer. A quiesced runtime may be
@@ -515,11 +542,20 @@ const ExecutorOutcomePatchSchema = z.strictObject({
  */
 export type ExecutorOutcomePatch = z.infer<typeof ExecutorOutcomePatchSchema>;
 
-export const ExecutorSettlementInputSchema = z.discriminatedUnion('kind', [
+const ExecutorFailureCauseSchema = z.enum(EXECUTOR_FAILURE_CAUSES);
+
+export const ExecutorSettlementInputSchema = z.union([
   z.strictObject({
     task_id: z.string().min(1),
     kind: z.literal('quiesced'),
-    status: z.enum([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TIMED_OUT]),
+    result: z.literal('success'),
+    task_patch: ExecutorOutcomePatchSchema.optional(),
+  }),
+  z.strictObject({
+    task_id: z.string().min(1),
+    kind: z.literal('quiesced'),
+    result: z.literal('failure'),
+    failure_cause: ExecutorFailureCauseSchema,
     task_patch: ExecutorOutcomePatchSchema.optional(),
   }),
   z.strictObject({
@@ -531,7 +567,13 @@ export const ExecutorSettlementInputSchema = z.discriminatedUnion('kind', [
 
 export type ExecutorSettlementInput = z.infer<typeof ExecutorSettlementInputSchema>;
 
-export type TaskRuntimeProgressState = 'working' | 'waiting' | 'stalled' | 'terminal' | 'inactive';
+export type TaskRuntimeProgressState =
+  | 'working'
+  | 'waiting'
+  | 'incompatible'
+  | 'stalled'
+  | 'terminal'
+  | 'inactive';
 
 const STALL_DIAGNOSIS_REASONS: ReadonlySet<SdkFailureReason> = new Set([
   'no_first_progress',
@@ -565,6 +607,9 @@ export function deriveTaskRuntimeProgressState(
     (failure.pulse_sequence_at_detection !== undefined
       ? latestProgress.sequence > failure.pulse_sequence_at_detection
       : Date.parse(latestProgress.observed_at) > Date.parse(failure.detected_at));
+  if (failure?.reason === 'adapter_incompatible' && !supersededObserveDiagnosis) {
+    return 'incompatible';
+  }
   if (failure && STALL_DIAGNOSIS_REASONS.has(failure.reason) && !supersededObserveDiagnosis) {
     return 'stalled';
   }

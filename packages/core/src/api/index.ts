@@ -400,16 +400,6 @@ export interface TasksService extends AgorService<Task> {
    * Returns array of created tasks with IDs
    */
   createMany(data: Partial<Task>[]): Promise<Task[]>;
-
-  /**
-   * Mark a task as completed
-   */
-  complete(id: string, data: { report?: unknown }, params?: Params): Promise<Task>;
-
-  /**
-   * Mark a task as failed
-   */
-  fail(id: string, data: { error: string }, params?: Params): Promise<Task>;
 }
 
 /** Public Message CRUD surface. Full replacement is daemon-internal. */

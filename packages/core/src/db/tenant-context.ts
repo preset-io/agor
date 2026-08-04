@@ -24,6 +24,7 @@ export type SystemDatabaseCapability =
   | 'mcp_oauth_callback'
   | 'mcp_oauth_maintenance'
   | 'upload_maintenance'
+  | 'task_runtime_recovery'
   | 'mcp_catalog_ingestion';
 
 export interface TenantContextScope {

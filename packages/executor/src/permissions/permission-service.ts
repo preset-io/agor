@@ -158,6 +158,7 @@ export class PermissionService {
       id: requestId,
       reason: 'permission',
       absoluteTimeoutMs: this.timeoutMs,
+      deadlineOwner: 'adapter',
     });
 
     return new Promise((resolve) => {

@@ -1071,6 +1071,61 @@ describe('SessionRepository.update', () => {
     }
   );
 
+  dbTest('should apply terminal attention only once for the same Task receipt', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const taskId = generateId();
+    const session = await repo.create(
+      createSessionData({ branch_id: branch.branch_id, ready_for_prompt: false })
+    );
+    const projection = {
+      terminal_task_id: taskId as never,
+      applied_at: '2026-01-01T00:00:00.000Z',
+    };
+
+    await repo.update(session.session_id, {
+      ready_for_prompt: true,
+      runtime_projection: projection,
+    });
+    await repo.update(session.session_id, { ready_for_prompt: false });
+    const repaired = await repo.update(session.session_id, {
+      ready_for_prompt: true,
+      runtime_projection: projection,
+    });
+
+    expect(repaired.ready_for_prompt).toBe(false);
+  });
+
+  dbTest('should not project an older terminal Task over a newer active Task', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const oldTaskId = generateId();
+    const newTaskId = generateId();
+    const session = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        tasks: [oldTaskId, newTaskId] as never,
+      })
+    );
+
+    const unchanged = await repo.update(session.session_id, {
+      status: SessionStatus.IDLE,
+      ready_for_prompt: true,
+      runtime_projection: {
+        terminal_task_id: oldTaskId as never,
+        applied_at: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    expect(unchanged).toMatchObject({
+      status: SessionStatus.RUNNING,
+      ready_for_prompt: false,
+      runtime_projection: undefined,
+    });
+  });
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const repo = new SessionRepository(db);
 

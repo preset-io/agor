@@ -178,21 +178,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
       suppressBtwCleanup?: boolean;
     }
   ): Promise<Session>;
-  recordExecutorStartupWarning(
-    taskId: string,
-    warning: string,
-    params?: FeathersParams
-  ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
-  complete(
-    id: string,
-    data: { git_state?: { sha_at_end?: string; commit_message?: string } },
-    params?: FeathersParams
-  ): Promise<Task>;
-  fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
   claimTermination(

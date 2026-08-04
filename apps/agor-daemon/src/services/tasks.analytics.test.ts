@@ -117,49 +117,44 @@ describe('TasksService analytics lifecycle events', () => {
     const track = vi.fn();
     setAnalyticsLoggerForTests({ isEnabled: () => true, track });
 
-    const runningTask = makeTask({
-      status: TaskStatus.RUNNING,
-      started_at: '2026-01-01T00:00:00.000Z',
-    });
     const timedOutTask = makeTask({
       status: TaskStatus.TIMED_OUT,
       started_at: '2026-01-01T00:00:00.000Z',
       completed_at: '2026-01-01T00:00:05.000Z',
       duration_ms: 5000,
     });
-    const { service, sessionsService } = makeService({
-      findById: vi.fn().mockResolvedValueOnce(runningTask).mockResolvedValueOnce(runningTask),
-      update: vi.fn().mockResolvedValue(timedOutTask),
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const settleExecutorOutcome = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: 'transitioned', task: timedOutTask })
+      .mockResolvedValueOnce({ outcome: 'terminal', task: timedOutTask });
+    const reconcileTerminalTask = vi.fn().mockResolvedValue(true);
+    Reflect.set(service, 'taskRepo', { settleExecutorOutcome });
+    Reflect.set(service, 'reconcileTerminalTask', reconcileTerminalTask);
+    Reflect.set(service, 'app', {
+      service: () => ({ emit: vi.fn() }),
     });
 
-    await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT });
+    const settlement = {
+      task_id: timedOutTask.task_id,
+      kind: 'quiesced' as const,
+      result: 'failure' as const,
+      failure_cause: 'interaction_timeout' as const,
+      task_patch: {},
+    };
+    await service.reportExecutorSettlement(settlement);
+    await service.reportExecutorSettlement(settlement);
 
     expect(track).toHaveBeenCalledWith(
       'task.completed',
       expect.objectContaining({
-        task_id: runningTask.task_id,
+        task_id: timedOutTask.task_id,
         status: TaskStatus.TIMED_OUT,
         duration_ms: 5000,
       }),
-      { userId: runningTask.created_by }
+      { userId: timedOutTask.created_by }
     );
-    expect(sessionsService.patch).toHaveBeenCalledWith(
-      runningTask.session_id,
-      {
-        status: 'timed_out',
-        ready_for_prompt: true,
-      },
-      undefined
-    );
-
-    track.mockClear();
-    service.repository.findById = vi
-      .fn()
-      .mockResolvedValueOnce(timedOutTask)
-      .mockResolvedValueOnce(timedOutTask);
-    await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT });
-
-    expect(track).not.toHaveBeenCalledWith('task.completed', expect.anything(), expect.anything());
-    expect(sessionsService.patch).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(reconcileTerminalTask).toHaveBeenCalledTimes(2);
   });
 });

@@ -19,6 +19,8 @@ import {
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import {
   MessagesRepository,
+  RuntimeRecoveryDiscoveryRepository,
+  runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
@@ -28,7 +30,7 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
-import { containAllTrackedExecutors } from './executor-tracking.js';
+import { containAllTrackedExecutors, restoreExecutorProcess } from './executor-tracking.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -41,6 +43,7 @@ import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
 import type { TerminalsService } from './services/terminals.js';
+import { claimExecutorTermination, requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 import {
@@ -209,28 +212,36 @@ async function readAndClearSentinel(): Promise<boolean> {
 // Orphan cleanup
 // ---------------------------------------------------------------------------
 
-function startupTenantParams(config: AgorConfig): { tenant: TenantContext } {
-  const multiTenancy = resolveMultiTenancyConfig(config);
+function startupTenantParams(config: AgorConfig, tenantId?: string): { tenant: TenantContext } {
+  const resolved = tenantId ?? resolveMultiTenancyConfig(config).static_tenant_id;
   return {
     tenant: {
-      tenant_id: multiTenancy.static_tenant_id,
-      source: 'static',
+      tenant_id: resolved as TenantContext['tenant_id'],
+      source: tenantId ? 'explicit' : 'static',
     },
   };
 }
 
 async function runStartupTenantDatabaseScope<T>(
   ctx: Pick<StartupContext, 'config' | 'db'>,
-  work: () => Promise<T>
+  work: () => Promise<T>,
+  tenantId?: string
 ): Promise<T> {
-  // Startup/background daemon jobs have no request auth context. Keep the
-  // historical bootstrap/static tenant behavior explicit at the DB boundary so
-  // guarded required_from_auth databases fail closed everywhere else.
-  return runWithTenantDatabaseScope(ctx.db, startupTenantParams(ctx.config).tenant.tenant_id, work);
+  const id = startupTenantParams(ctx.config, tenantId).tenant.tenant_id;
+  return runWithTenantDatabaseScope(ctx.db, id, work);
+}
+
+interface TenantRuntimeRecovery {
+  tenantId: string;
+  orphanedTasks: Task[];
+  orphanedSessions: Session[];
+  sessionsResetFromOrphanedTasks: number;
+  stuckIdleSessions: Session[];
 }
 
 interface OrphanCleanupResult {
   wasGraceful: boolean;
+  recoveries: TenantRuntimeRecovery[];
   orphanedTasks: Task[];
   orphanedSessions: Session[];
   sessionIdsWithOrphanedTasks: Set<string>;
@@ -250,62 +261,40 @@ async function collectAllPages<T>(
   }
 }
 
-export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
-  return runStartupTenantDatabaseScope(ctx, () => cleanupOrphanStatusesInTenantScope(ctx));
+async function startupTenantIds(ctx: StartupContext): Promise<string[]> {
+  const config = resolveMultiTenancyConfig(ctx.config);
+  if (config.mode === 'static') return [config.static_tenant_id];
+  return runWithSystemDatabaseScope(
+    ctx.db,
+    'task runtime recovery discovery',
+    (db) => new RuntimeRecoveryDiscoveryRepository(db).findRecoveryTenantIds(),
+    { capability: 'task_runtime_recovery' }
+  );
 }
 
-async function cleanupOrphanStatusesInTenantScope(
-  ctx: StartupContext
-): Promise<OrphanCleanupResult> {
-  const { app, sessionsService } = ctx;
+async function recoverTenantRuntime(
+  ctx: StartupContext,
+  tenantId: string
+): Promise<TenantRuntimeRecovery> {
+  const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl;
+  const sessions = ctx.sessionsService;
+  const params = startupTenantParams(ctx.config, tenantId);
+  const orphanedTasks = await tasks.getOrphaned(params as never);
 
-  // Get tasks service from the app (registered during services phase)
-  const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
-  // Startup cleanup runs before any user request/auth context exists. In
-  // auth-resolved multi-tenant deployments, scope cleanup to the configured
-  // bootstrap/static tenant instead of failing daemon boot. Tenant-specific
-  // crash cleanup for every active tenant belongs in a later control-plane/DataPlane
-  // reconciler pass; startup must stay non-blocking for launch-auth tenants.
-  const startupParams = startupTenantParams(ctx.config);
-
-  // Determine restart type before touching anything — sentinel is consumed here
-  const wasGraceful = await readAndClearSentinel();
-
-  // Find all orphaned executor-owned tasks (dispatching, running, stopping, awaiting_permission, awaiting_input)
-  const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
-
-  if (orphanedTasks.length > 0) {
-    for (const task of orphanedTasks) {
-      const session = await sessionsService.get(task.session_id, startupParams as never);
-      await tasksService.settleTermination(
-        {
-          taskId: task.task_id,
-          outcome: 'restart_unverified',
-          sdkFailure: task.sdk_failure
-            ? { ...task.sdk_failure, termination: 'unverified' }
-            : {
-                reason: 'termination_unverified',
-                detected_at: new Date().toISOString(),
-                tool: session.agentic_tool,
-                last_pulse: task.latest_executor_pulse,
-                termination: 'unverified',
-              },
-          errorMessage: 'Daemon restart released this Task without verifying executor termination.',
-        },
-        { ...startupParams, suppressTerminalQueueProcessing: true } as never
-      );
-      startupDebug(
-        `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
-      );
-    }
+  for (const task of orphanedTasks) {
+    const runtime = task.metadata?.executor_runtime;
+    if (runtime) restoreExecutorProcess(task.session_id, task.task_id, runtime, ctx.app);
+    await claimExecutorTermination({
+      app: ctx.app,
+      taskId: task.task_id,
+      cause: 'daemon_restart',
+      errorMessage: 'Daemon restart requires executor containment before this Task can settle.',
+      params: params as never,
+    });
   }
 
-  // QUEUED Tasks are durable user intent. Leave them intact across daemon
-  // restarts; the fleet-wide queue worker will discover and attempt them after
-  // startup cleanup has made their Session promptable again. Active runtime
-  // cleanup above is intentionally separate from durable queue recovery.
-
-  // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT)
+  // QUEUED Tasks are durable user intent. Leave them intact for the fleet-wide
+  // queue worker; runtime recovery only reconciles active Task/Session truth.
   const orphanedSessions: Session[] = [];
   for (const status of [
     SessionStatus.RUNNING,
@@ -317,125 +306,119 @@ async function cleanupOrphanStatusesInTenantScope(
     orphanedSessions.push(
       ...(await collectAllPages<Session>(
         (skip) =>
-          sessionsService.find({
+          sessions.find({
             query: { status, $limit: 1000, $skip: skip },
-            ...startupParams,
+            ...params,
           }) as Promise<Session[] | Paginated<Session>>
       ))
     );
   }
 
-  if (orphanedSessions.length > 0) {
-    for (const session of orphanedSessions) {
-      await tasksService.reconcileSessionState(session.session_id, {
-        ...startupParams,
-        suppressTerminalQueueProcessing: true,
-      } as never);
-      startupDebug(
-        `   ✓ Reconciled session ${shortId(session.session_id)} from Task truth (was: ${session.status})`
-      );
-    }
-  }
-
-  // Also check for sessions that had orphaned tasks (even if session wasn't in RUNNING/STOPPING)
-  const sessionIdsWithOrphanedTasks = new Set(
-    orphanedTasks.map((t: Task) => t.session_id as string)
-  );
-  let sessionsResetFromOrphanedTasks = 0;
-  if (sessionIdsWithOrphanedTasks.size > 0) {
-    for (const sessionId of sessionIdsWithOrphanedTasks) {
-      const session = await sessionsService.get(sessionId as Id, startupParams as never);
-      // If session is still in an active state after orphaned task cleanup,
-      // repair it through the same Task-owned reconciler used at settlement.
-      if (
-        session.status === SessionStatus.RUNNING ||
-        session.status === SessionStatus.STOPPING ||
-        session.status === SessionStatus.AWAITING_PERMISSION ||
-        session.status === SessionStatus.TIMED_OUT
-      ) {
-        await tasksService.reconcileSessionState(
-          sessionId as string,
-          { ...startupParams, suppressTerminalQueueProcessing: true } as never
-        );
-        sessionsResetFromOrphanedTasks++;
-        startupDebug(
-          `   ✓ Marked session ${shortId(sessionId)} as idle (had orphaned tasks, was: ${session.status})`
-        );
-      }
-    }
-  }
-
-  // Fix sessions that are IDLE but not promptable *because a kill interrupted
-  // them* — the daemon died during the stop path after writing status=idle but
-  // before writing ready_for_prompt=true, or the executor exit raced the stop
-  // endpoint. IDLE + ready_for_prompt=false is NOT inherently orphaned state:
-  // the UI also uses ready_for_prompt as the unread/attention flag (opening a
-  // conversation patches it false, branch cards highlight while it's true —
-  // see SessionPromptState in @agor/core/types), so it is the normal resting
-  // state of every read session. Discriminate by the session's most recent
-  // task: only sessions whose latest task was non-terminal at boot (just
-  // orphan-stopped above, or still in an executing state) were
-  // actually interrupted; read sessions have a terminal latest task from a
-  // previous run and must be left untouched.
-  const bootInterruptedTaskIds = new Set<string>(
-    orphanedTasks.map((t: Task) => t.task_id as string)
-  );
-
-  const idleNotReadySessions = await collectAllPages<Session>(
-    (skip) =>
-      sessionsService.find({
-        query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000, $skip: skip },
-        ...startupParams,
-      }) as Promise<Session[] | Paginated<Session>>
-  );
-
-  const stuckIdleSessions: Session[] = [];
-  for (const session of idleNotReadySessions) {
-    // Sessions maintain an ordered task-ID list; the last entry is the most
-    // recent task (same convention as injectRestartNotices below).
-    const latestTaskId = session.tasks?.at(-1);
-    if (!latestTaskId) {
-      continue; // never ran a task — nothing was interrupted
-    }
-
-    let wasInterrupted = bootInterruptedTaskIds.has(latestTaskId as string);
-    if (!wasInterrupted) {
-      try {
-        const latestTask = await tasksService.get(latestTaskId, startupParams as never);
-        wasInterrupted = !isTerminalTaskStatus(latestTask.status);
-      } catch {
-        // Task row missing/unreadable — fail closed: don't re-flag the session.
-      }
-    }
-    if (!wasInterrupted) {
-      continue;
-    }
-
-    stuckIdleSessions.push(session);
-    await tasksService.reconcileSessionState(session.session_id, {
-      ...startupParams,
+  for (const session of orphanedSessions) {
+    await tasks.reconcileSessionState(session.session_id, {
+      ...params,
       suppressTerminalQueueProcessing: true,
     } as never);
     startupDebug(
-      `   ✓ Unblocked stuck-idle session ${shortId(session.session_id)} (ready_for_prompt was false, latest task interrupted)`
+      `   ✓ Reconciled session ${shortId(session.session_id)} from Task truth (was: ${session.status})`
     );
   }
 
-  const cleanupParts: string[] = [
-    `${orphanedTasks.length} orphaned task(s) stopped`,
-    `${orphanedSessions.length} active session(s) reset`,
+  const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map((task) => String(task.session_id)));
+  let sessionsResetFromOrphanedTasks = 0;
+  for (const sessionId of sessionIdsWithOrphanedTasks) {
+    const session = await sessions.get(sessionId as Id, params as never);
+    if (
+      session.status === SessionStatus.RUNNING ||
+      session.status === SessionStatus.STOPPING ||
+      session.status === SessionStatus.AWAITING_PERMISSION ||
+      session.status === SessionStatus.TIMED_OUT
+    ) {
+      await tasks.reconcileSessionState(sessionId, {
+        ...params,
+        suppressTerminalQueueProcessing: true,
+      } as never);
+      sessionsResetFromOrphanedTasks += 1;
+    }
+  }
+
+  // IDLE + ready=false is normally a read/attention state. Repair only rows
+  // whose latest Task was active at boot or remains nonterminal.
+  const bootInterruptedTaskIds = new Set(orphanedTasks.map((task) => String(task.task_id)));
+  const idleNotReadySessions = await collectAllPages<Session>(
+    (skip) =>
+      sessions.find({
+        query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000, $skip: skip },
+        ...params,
+      }) as Promise<Session[] | Paginated<Session>>
+  );
+  const stuckIdleSessions: Session[] = [];
+  for (const session of idleNotReadySessions) {
+    const latestTaskId = session.tasks?.at(-1);
+    if (!latestTaskId) continue;
+
+    let wasInterrupted = bootInterruptedTaskIds.has(String(latestTaskId));
+    if (!wasInterrupted) {
+      try {
+        const latestTask = await tasks.get(latestTaskId, params as never);
+        wasInterrupted = !isTerminalTaskStatus(latestTask.status);
+      } catch {
+        // Missing or invisible Task truth fails closed.
+      }
+    }
+    if (!wasInterrupted) continue;
+
+    stuckIdleSessions.push(session);
+    await tasks.reconcileSessionState(session.session_id, {
+      ...params,
+      suppressTerminalQueueProcessing: true,
+    } as never);
+  }
+
+  return {
+    tenantId,
+    orphanedTasks,
+    orphanedSessions,
+    sessionsResetFromOrphanedTasks,
+    stuckIdleSessions,
+  };
+}
+
+export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+  const wasGraceful = await readAndClearSentinel();
+  const recoveries: TenantRuntimeRecovery[] = [];
+  for (const tenantId of await startupTenantIds(ctx)) {
+    recoveries.push(
+      await runWithTenantContext(tenantId, () =>
+        runStartupTenantDatabaseScope(ctx, () => recoverTenantRuntime(ctx, tenantId), tenantId)
+      )
+    );
+  }
+
+  const orphanedTasks = recoveries.flatMap((recovery) => recovery.orphanedTasks);
+  const orphanedSessions = recoveries.flatMap((recovery) => recovery.orphanedSessions);
+  const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map((task) => String(task.session_id)));
+  const sessionsResetFromOrphanedTasks = recoveries.reduce(
+    (total, recovery) => total + recovery.sessionsResetFromOrphanedTasks,
+    0
+  );
+  const stuckIdleSessions = recoveries.flatMap((recovery) => recovery.stuckIdleSessions);
+  const cleanupParts = [
+    `${orphanedTasks.length} orphaned task(s) claimed for containment`,
+    `${orphanedSessions.length} active session(s) reconciled`,
     'durable queued task(s) preserved',
   ];
   if (sessionsResetFromOrphanedTasks > 0) {
-    cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reset`);
+    cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reconciled`);
   }
   if (stuckIdleSessions.length > 0) {
     cleanupParts.push(`${stuckIdleSessions.length} stuck-idle session(s) unblocked`);
   }
-  console.log(`[startup] orphan cleanup: ${cleanupParts.join(', ')}`);
+  console.log(`[startup] runtime recovery: ${cleanupParts.join(', ')}`);
 
   return {
     wasGraceful,
+    recoveries,
     orphanedTasks,
     orphanedSessions,
     sessionIdsWithOrphanedTasks,
@@ -443,26 +426,73 @@ async function cleanupOrphanStatusesInTenantScope(
   };
 }
 
+async function resumeOrphanContainment(
+  ctx: StartupContext,
+  cleanup: OrphanCleanupResult
+): Promise<void> {
+  for (const recovery of cleanup.recoveries) {
+    const params = startupTenantParams(ctx.config, recovery.tenantId);
+    await runWithTenantContext(recovery.tenantId, async () => {
+      for (const task of recovery.orphanedTasks) {
+        await requestExecutorTermination({
+          app: ctx.app,
+          taskId: task.task_id,
+          cause: 'daemon_restart',
+          errorMessage: 'Daemon restart requires executor containment before this Task can settle.',
+          params: params as never,
+          withTenantDatabase: (work) =>
+            runStartupTenantDatabaseScope(ctx, work, recovery.tenantId),
+        });
+      }
+    });
+  }
+}
+
+async function repairTerminalConsequences(
+  ctx: StartupContext,
+  cleanup: OrphanCleanupResult
+): Promise<void> {
+  const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl & {
+    repairTerminalConsequences(limit?: number, params?: unknown): Promise<void>;
+  };
+  for (const recovery of cleanup.recoveries) {
+    const params = startupTenantParams(ctx.config, recovery.tenantId);
+    await runWithTenantContext(recovery.tenantId, () =>
+      runStartupTenantDatabaseScope(
+        ctx,
+        () => tasks.repairTerminalConsequences(100, params),
+        recovery.tenantId
+      )
+    );
+  }
+}
+
 async function injectRestartNotices(
   ctx: StartupContext,
   cleanupResult: OrphanCleanupResult
 ): Promise<void> {
-  return runStartupTenantDatabaseScope(ctx, () =>
-    injectRestartNoticesInTenantScope(ctx, cleanupResult)
-  );
+  for (const recovery of cleanupResult.recoveries) {
+    await runWithTenantContext(recovery.tenantId, () =>
+      runStartupTenantDatabaseScope(
+        ctx,
+        () => injectRestartNoticesInTenantScope(ctx, cleanupResult.wasGraceful, recovery),
+        recovery.tenantId
+      )
+    );
+  }
 }
 
 async function injectRestartNoticesInTenantScope(
   ctx: StartupContext,
-  cleanupResult: OrphanCleanupResult
+  wasGraceful: boolean,
+  recovery: TenantRuntimeRecovery
 ): Promise<void> {
   const { app, db, sessionsService } = ctx;
-  const { wasGraceful, orphanedTasks, orphanedSessions, sessionIdsWithOrphanedTasks } =
-    cleanupResult;
+  const { tenantId, orphanedTasks, orphanedSessions } = recovery;
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
-  const startupParams = startupTenantParams(ctx.config);
+  const startupParams = startupTenantParams(ctx.config, tenantId);
 
   // Inject a system message into every affected session so the user (and the
   // agent on resume) see an in-transcript explanation — not a toast, a
@@ -475,7 +505,7 @@ async function injectRestartNoticesInTenantScope(
   // with no task_id would be silently invisible in the UI.
   const affectedSessionIds = new Set<string>([
     ...orphanedSessions.map((s) => s.session_id as string),
-    ...Array.from(sessionIdsWithOrphanedTasks),
+    ...orphanedTasks.map((task) => String(task.session_id)),
   ]);
 
   if (affectedSessionIds.size === 0) {
@@ -653,6 +683,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   initializeEnvironmentHealthMonitor(healthMonitor);
   if (orphanCleanupResult) {
+    runPostStartJob('runtime-containment-resume', () =>
+      resumeOrphanContainment(ctx, orphanCleanupResult)
+    );
+    runPostStartJob('terminal-consequence-repair', () =>
+      repairTerminalConsequences(ctx, orphanCleanupResult)
+    );
     runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
   }
 

@@ -410,7 +410,8 @@ describe('Task Repository Integration', () => {
     const task = await taskRepo.create({
       session_id: session.session_id,
       full_prompt: 'Test prompt',
-      status: TaskStatus.CREATED,
+      status: TaskStatus.RUNNING,
+      executor_connected_at: new Date().toISOString(),
       created_by: 'test-user' as UserID,
       message_range: {
         start_index: 0,
@@ -422,13 +423,14 @@ describe('Task Repository Integration', () => {
     });
 
     const completedAt = new Date().toISOString();
-    const updated = await taskRepo.update(task.task_id, {
+    const result = await taskRepo.settleExecutorOutcome({
+      taskId: task.task_id,
       status: TaskStatus.COMPLETED,
-      completed_at: completedAt,
+      now: new Date(completedAt),
     });
 
-    expect(updated.status).toBe(TaskStatus.COMPLETED);
-    expect(updated.completed_at).toBe(completedAt);
+    expect(result.task.status).toBe(TaskStatus.COMPLETED);
+    expect(result.task.completed_at).toBe(completedAt);
   });
 });
 

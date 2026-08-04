@@ -80,6 +80,7 @@ import type {
   TaskID,
   TenantID,
   ThreadSessionMap,
+  ThreadSessionMapID,
   User,
   UserID,
 } from '@agor/core/types';
@@ -230,7 +231,14 @@ interface SlackHistoryConnector extends GatewayConnector {
   fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult>;
 }
 
-export type GatewayProgressState = 'queued' | 'working' | 'waiting' | 'stalled' | 'done' | 'failed';
+export type GatewayProgressState =
+  | 'queued'
+  | 'working'
+  | 'waiting'
+  | 'incompatible'
+  | 'stalled'
+  | 'done'
+  | 'failed';
 
 export interface GatewayProgressData {
   session_id: string;
@@ -732,15 +740,6 @@ export class GatewayService {
   private activeChannelTenants = new Set<string>();
 
   /**
-   * GitHub message buffer: keyed by session_id, stores the latest message text.
-   * For GitHub channels, we don't send every assistant message in real-time
-   * (unlike Slack). Instead, we buffer and only send the last message when
-   * the session turn completes (goes idle). Each new message overwrites the
-   * previous one — only the final message matters.
-   */
-  private lastMessageBuffer = new Map<string, string>();
-
-  /**
    * Slack status updates are serialized and lightly throttled so concurrent
    * tool/message hooks do not race while deleting/reposting the transient row.
    * Terminal states always bypass this throttle.
@@ -1159,6 +1158,7 @@ export class GatewayService {
   ): string {
     if (data.state === 'done') return '';
     if (data.state === 'failed') return 'ran into an error.';
+    if (data.state === 'incompatible') return 'encountered an incompatible runtime event.';
     if (data.state === 'stalled') return 'appears to be stalled.';
     if (data.state === 'waiting') return 'is waiting for input.';
     if (data.state === 'queued') {
@@ -1183,6 +1183,9 @@ export class GatewayService {
   ): string | undefined {
     if (data.state === 'done') return undefined;
     if (data.state === 'failed') return this.formatSlackLoadingMessage('Agor ran into an error.');
+    if (data.state === 'incompatible') {
+      return this.formatSlackLoadingMessage('Runtime compatibility check failed.');
+    }
     if (data.state === 'stalled') return this.formatSlackLoadingMessage('Agor appears stalled.');
     if (data.state === 'waiting') return this.formatSlackLoadingMessage('Waiting for input…');
     if (data.state === 'queued') return this.formatSlackLoadingMessage('Queued in Agor…');
@@ -1287,9 +1290,14 @@ export class GatewayService {
    * raw JSON args/results. Raw tool inputs are already persisted in Agor's
    * transcript; Slack receives only a compact truncated preview.
    */
-  async updateProgress(data: GatewayProgressData): Promise<void> {
+  async updateProgress(
+    data: GatewayProgressData,
+    originMappingId?: ThreadSessionMapID
+  ): Promise<void> {
     const previous = this.slackProgressQueues.get(data.session_id) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => this.updateProgressNow(data));
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.updateProgressNow(data, originMappingId));
     this.slackProgressQueues.set(data.session_id, next);
 
     try {
@@ -1373,17 +1381,22 @@ export class GatewayService {
     this.slackStreamStatusRefreshLast.delete(taskId);
   }
 
-  private async updateProgressNow(data: GatewayProgressData): Promise<void> {
-    if (!(await this.shouldQueryGatewayRouting())) return;
+  private async updateProgressNow(
+    data: GatewayProgressData,
+    originMappingId?: ThreadSessionMapID
+  ): Promise<void> {
+    const isTerminal = data.state === 'done' || data.state === 'failed';
+    if (!isTerminal && !(await this.shouldQueryGatewayRouting())) return;
 
-    const mapping = await this.threadMapRepo.findBySession(data.session_id);
-    if (!mapping) return;
+    const mapping = originMappingId
+      ? await this.threadMapRepo.findById(originMappingId)
+      : await this.threadMapRepo.findBySession(data.session_id);
+    if (!mapping || mapping.session_id !== data.session_id) return;
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
     if (!channel?.enabled || channel.channel_type !== 'slack') return;
 
     const now = Date.now();
-    const isTerminal = data.state === 'done' || data.state === 'failed';
     const metadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
       string,
       unknown
@@ -1394,6 +1407,7 @@ export class GatewayService {
       (data.state === 'queued' ||
         data.state === 'working' ||
         data.state === 'waiting' ||
+        data.state === 'incompatible' ||
         data.state === 'stalled') &&
       (metadata.slack_status_state === 'done' || metadata.slack_status_state === 'failed');
     const lastUpdate = this.slackProgressLastUpdate.get(data.session_id) ?? 0;
@@ -1478,9 +1492,11 @@ export class GatewayService {
           iconEmoji: ':hourglass_flowing_sand:',
         });
       } catch (error) {
+        if (isTerminal) throw error;
         console.warn('[gateway] Failed to set Slack assistant status:', error);
       }
     } catch (error) {
+      if (isTerminal) throw error;
       console.warn('[gateway] Failed to update Slack progress status:', error);
     }
   }
@@ -2879,15 +2895,9 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // GitHub and Shortcut channels buffer the message instead of sending
-    // immediately — only the last message is posted when the session goes idle
-    // (via flushOutboundBuffer). This keeps noisy intermediate agent messages
-    // out of PR/story threads; the agent's final message IS the reply.
+    // GitHub and Shortcut receive only the persisted final assistant message.
+    // Terminal reconciliation reloads it from the database after the Task commits.
     if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') {
-      this.lastMessageBuffer.set(data.session_id, data.message);
-      console.log(
-        `[gateway] Buffered ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
-      );
       return { routed: true, channelType: channel.channel_type };
     }
 
@@ -2954,112 +2964,89 @@ export class GatewayService {
     );
   }
 
-  /**
-   * Flush the buffered last message for a session (GitHub / Shortcut).
-   *
-   * Called when a session transitions to idle (turn complete). Posts the last
-   * buffered message as a PR/issue/story comment by editing the connector's
-   * processing acknowledgement. If no buffered message exists, this is a no-op.
-   */
-  async flushOutboundBuffer(sessionId: string): Promise<void> {
-    let bufferedMessage = this.lastMessageBuffer.get(sessionId);
-    let durableMessageId: string | undefined;
-    let durableReplyMetadata: Record<string, unknown> | undefined;
-    // The local buffer is only a latency cache. PostgreSQL/SQLite messages are
-    // the durable recovery source when creation and idle hooks land on
-    // different daemons or the message-producing daemon dies.
-    try {
-      const messages = await this.messagesRepo.findBySessionId(sessionId as SessionID);
-      const latest = [...messages]
-        .reverse()
-        .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
-      if (latest) {
-        bufferedMessage = gatewayMessageText(latest.content);
-        durableMessageId = latest.message_id;
-        if (latest.task_id) {
-          const task = await this.taskRepo.findById(latest.task_id);
-          durableReplyMetadata = task?.metadata?.gateway_reply_metadata;
-        }
+  private async terminalAssistantText(data: GatewayProgressData): Promise<string> {
+    if (data.task_id) {
+      const result = await this.app.service('messages').find({
+        query: { task_id: data.task_id },
+        paginate: false,
+      } as never);
+      const messages = (Array.isArray(result) ? result : result.data) as Message[];
+      const assistant = [...messages]
+        .filter((message) => message.role === 'assistant')
+        .sort((left, right) => right.index - left.index)[0];
+      if (assistant) {
+        if (typeof assistant.content === 'string') return assistant.content;
+        const text = Array.isArray(assistant.content)
+          ? assistant.content
+              .filter((block) => block.type === 'text' && typeof block.text === 'string')
+              .map((block) => String(block.text))
+              .join('\n\n')
+          : '';
+        if (text) return text;
       }
-    } catch (error) {
-      if (!bufferedMessage) throw error;
-      console.warn('[gateway] Falling back to process-local outbound buffer:', error);
     }
-    if (!bufferedMessage) return;
+    return data.state === 'failed'
+      ? data.error_message || 'The task failed before producing a response.'
+      : 'Task completed.';
+  }
 
-    this.lastMessageBuffer.delete(sessionId);
-
-    // Look up session → thread mapping
-    const mapping = await this.threadMapRepo.findBySession(sessionId);
-    if (!mapping) {
-      console.warn(
-        `[gateway] flushOutboundBuffer: no thread mapping for session ${shortId(sessionId)}`
-      );
-      return;
+  /** Materialize one durable terminal gateway consequence (at-least-once externally). */
+  async finalizeTask(data: GatewayProgressData): Promise<void> {
+    if (!data.task_id) return;
+    const task = await this.taskRepo.findById(data.task_id);
+    if (!task) return;
+    const existing = task.metadata?.gateway_terminal_delivery;
+    if (existing?.status === 'delivered') return;
+    const mapping = existing
+      ? await this.threadMapRepo.findById(existing.mapping_id)
+      : await this.threadMapRepo.findBySession(data.session_id);
+    if (!mapping || (existing && mapping.channel_id !== existing.channel_id)) return;
+    const receipt =
+      existing ??
+      ({
+        mapping_id: mapping.id,
+        channel_id: mapping.channel_id,
+        status: 'pending',
+        intended_at: new Date().toISOString(),
+      } as const);
+    if (!existing) {
+      await this.taskRepo.update(task.task_id, {
+        metadata: { gateway_terminal_delivery: receipt },
+      });
     }
-
     const channel = await this.channelRepo.findById(mapping.channel_id);
-    if (
-      !channel?.enabled ||
-      (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
-    ) {
-      return;
-    }
+    if (!channel?.enabled || !hasConnector(channel.channel_type as ChannelType)) return;
 
-    const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
-      string,
-      unknown
-    >;
-    if (durableMessageId && mappingMetadata.gateway_last_flushed_message_id === durableMessageId) {
-      return;
-    }
-
-    try {
-      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-
+    if (channel.channel_type === 'slack') {
+      await this.updateProgress(data, mapping.id);
+    } else {
+      const connector =
+        this.getActiveListener(channel.id) ??
+        getConnector(channel.channel_type as ChannelType, channel.config);
+      const message = await this.terminalAssistantText(data);
       const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+        connector.formatMessage ? connector.formatMessage(message) : message
       );
-
-      // Edit the "Processing..." comment with the final response
-      const outboundMetadata: Record<string, unknown> = {};
-      if (typeof durableReplyMetadata?.processing_comment_id === 'number') {
-        outboundMetadata.edit_comment_id = durableReplyMetadata.processing_comment_id;
-      } else if (
-        mapping.metadata &&
-        typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
-      ) {
-        outboundMetadata.edit_comment_id = (
-          mapping.metadata as Record<string, unknown>
-        ).processing_comment_id;
-      }
-
+      const metadata: Record<string, unknown> = {};
+      const processingCommentId = mapping.metadata?.processing_comment_id;
+      if (typeof processingCommentId === 'number') metadata.edit_comment_id = processingCommentId;
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: outboundMetadata,
+        metadata,
       });
-
-      if (durableMessageId) {
-        await this.threadMapRepo.mergeMetadata(mapping.id, {
-          gateway_last_flushed_message_id: durableMessageId,
-        });
-      }
-
-      console.log(
-        `[gateway] Flushed ${channel.channel_type} buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
-      );
-    } catch (error) {
-      // Re-queue the message so it can be retried on next flush (e.g. session
-      // goes idle again, or daemon restarts). Without this, a transient GitHub
-      // API error would permanently lose the agent's final response.
-      this.lastMessageBuffer.set(sessionId, bufferedMessage);
-      console.error(
-        `[gateway] Failed to flush ${channel.channel_type} buffer for session ${shortId(sessionId)} (re-queued):`,
-        error
-      );
     }
+
+    await this.taskRepo.update(task.task_id, {
+      metadata: {
+        gateway_terminal_delivery: {
+          ...receipt,
+          status: 'delivered',
+          delivered_at: new Date().toISOString(),
+        },
+      },
+    });
   }
 
   private scheduleListenerScan(delayMs: number): void {

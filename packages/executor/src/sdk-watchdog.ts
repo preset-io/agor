@@ -3,13 +3,7 @@ import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { AgenticToolName, ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
 import { isSdkHealthFailureAbort, markSdkHealthFailureAbort } from './termination-state.js';
 
-export type SdkActivityAdapter =
-  | 'claude-code'
-  | 'codex'
-  | 'gemini'
-  | 'copilot'
-  | 'opencode'
-  | 'cursor';
+export type SdkActivityAdapter = AgenticToolName;
 
 export type RuntimeActivity =
   | { type: 'sdk_started'; detail?: string }
@@ -24,10 +18,24 @@ export type RuntimeActivity =
     }
   | { type: 'operation_progress'; id: string }
   | { type: 'operation_finished'; id: string; outcome?: string }
-  | { type: 'waiting_started'; id: string; reason: string; absoluteTimeoutMs: number }
+  | {
+      type: 'waiting_started';
+      id: string;
+      reason: string;
+      absoluteTimeoutMs: number;
+      deadlineOwner?: 'adapter' | 'watchdog';
+    }
   | { type: 'waiting_finished'; id: string; outcome?: string };
 
 export type SdkActivityCallback = (activity: RuntimeActivity) => void;
+
+export type AdapterConformanceMode = 'enforce' | 'observe-only' | 'blocked';
+
+export interface SdkActivityConformance {
+  version: string;
+  mode: AdapterConformanceMode;
+  nativeDeadline?: 'observable' | 'configured';
+}
 
 export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> = {
   'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.197',
@@ -38,11 +46,44 @@ export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> =
   cursor: '@cursor/sdk@1.0.23',
 };
 
+type SdkActivityConformancePolicy = Omit<SdkActivityConformance, 'version'>;
+
+const SDK_ACTIVITY_CONFORMANCE_POLICY: Record<
+  SdkActivityAdapter,
+  SdkActivityConformancePolicy
+> = {
+  'claude-code': {
+    mode: 'enforce',
+    nativeDeadline: 'observable',
+  },
+  codex: { mode: 'enforce' },
+  gemini: { mode: 'enforce' },
+  copilot: {
+    mode: 'enforce',
+    nativeDeadline: 'configured',
+  },
+  opencode: { mode: 'enforce' },
+  cursor: { mode: 'enforce' },
+};
+
 export function getSdkActivityVersion(tool: AgenticToolName): string | undefined {
-  return (
-    getAgenticToolIntegration(tool).sdkVersion ??
-    SDK_ACTIVITY_VERSION_MANIFEST[tool as SdkActivityAdapter]
-  );
+  return getAgenticToolIntegration(tool).sdkVersion ?? SDK_ACTIVITY_VERSION_MANIFEST[tool];
+}
+
+export function getSdkActivityConformance(adapter: string): SdkActivityConformance | undefined {
+  const policy = SDK_ACTIVITY_CONFORMANCE_POLICY[adapter as SdkActivityAdapter];
+  if (!policy) return undefined;
+  const version = getSdkActivityVersion(adapter as AgenticToolName);
+  if (!version) return undefined;
+  return { version, ...policy };
+}
+
+export function applyAdapterConformanceMode(
+  requested: ResolvedSdkWatchdogConfig['mode'],
+  conformance: AdapterConformanceMode
+): ResolvedSdkWatchdogConfig['mode'] {
+  if (conformance === 'blocked') throw new Error('Agentic-tool adapter is not runtime-conformant');
+  return requested === 'enforce' && conformance === 'observe-only' ? 'observe' : requested;
 }
 
 function boundedDetail(value: string): string {
@@ -103,6 +144,7 @@ interface ActiveWait {
   id: string;
   startedAt: number;
   absoluteTimeoutMs: number;
+  deadlineOwner: 'adapter' | 'watchdog';
 }
 
 interface WatchdogState {
@@ -111,6 +153,7 @@ interface WatchdogState {
   idleAnchor?: number;
   pausedAt?: number;
   unknownCount: number;
+  lastUnknownAt?: number;
   unknownReported: boolean;
   operations: Map<string, ActiveOperation>;
   waits: Map<string, ActiveWait>;
@@ -122,6 +165,7 @@ interface WatchdogDeadline {
   reason: WatchdogReason;
   key: string;
   at: number;
+  quietAnchor?: number;
 }
 
 function positiveTimeout(value: number | undefined, fallback: number): number {
@@ -162,6 +206,7 @@ export class SdkWatchdog {
           id: activity.id,
           startedAt: now,
           absoluteTimeoutMs: positiveTimeout(activity.absoluteTimeoutMs, 1),
+          deadlineOwner: activity.deadlineOwner ?? 'watchdog',
         });
       }
       this.state.pausedAt ??= now;
@@ -171,7 +216,7 @@ export class SdkWatchdog {
 
     if (activity.type === 'waiting_finished') {
       if (!this.state.waits.has(activity.id)) {
-        const unknown = this.recordUnknown(`waiting_finished:${activity.id}`, now);
+        const unknown = this.recordProtocolError(`waiting_finished:${activity.id}`, now);
         this.check();
         return unknown;
       }
@@ -230,7 +275,7 @@ export class SdkWatchdog {
       case 'operation_progress': {
         const operation = this.state.operations.get(activity.id);
         if (!operation) {
-          const unknown = this.recordUnknown(`operation_progress:${activity.id}`, now);
+          const unknown = this.recordProtocolError(`operation_progress:${activity.id}`, now);
           this.check();
           return unknown;
         }
@@ -241,7 +286,7 @@ export class SdkWatchdog {
       }
       case 'operation_finished':
         if (!this.state.operations.has(activity.id)) {
-          const unknown = this.recordUnknown(`operation_finished:${activity.id}`, now);
+          const unknown = this.recordProtocolError(`operation_finished:${activity.id}`, now);
           this.check();
           return unknown;
         }
@@ -269,11 +314,18 @@ export class SdkWatchdog {
 
   private recordUnknown(detail: string, now: number): RuntimeActivity {
     this.state.unknownCount += 1;
+    this.state.lastUnknownAt = now;
     if (!this.state.unknownReported) {
       this.state.unknownReported = true;
       this.emitDecision('unknown_activity', now, false);
     }
     return { type: 'unknown_activity', detail };
+  }
+
+  private recordProtocolError(detail: string, now: number): RuntimeActivity {
+    const unknown = this.recordUnknown(detail, now);
+    this.emitDecision('adapter_incompatible', now, true, `adapter_incompatible:${detail}`);
+    return unknown;
   }
 
   private defaultOperationQuietTimeoutMs(): number {
@@ -301,7 +353,15 @@ export class SdkWatchdog {
     const now = this.now();
     const deadlines: WatchdogDeadline[] = [];
 
+    if (this.state.startedAt !== undefined) {
+      deadlines.push({
+        reason: 'turn_timed_out',
+        key: 'turn_timed_out',
+        at: this.state.startedAt + this.options.config.operation_absolute_timeout_ms,
+      });
+    }
     for (const wait of this.state.waits.values()) {
+      if (wait.deadlineOwner === 'adapter') continue;
       const deadline = wait.startedAt + wait.absoluteTimeoutMs;
       deadlines.push({ reason: 'wait_timed_out', key: `wait_timed_out:${wait.id}`, at: deadline });
     }
@@ -318,6 +378,7 @@ export class SdkWatchdog {
           reason: 'operation_stalled',
           key: `operation_stalled:${operation.id}`,
           at: quietDeadline,
+          quietAnchor: operation.lastProgressAt,
         });
       }
     }
@@ -325,7 +386,12 @@ export class SdkWatchdog {
     if (this.state.waits.size === 0 && this.state.operations.size === 0) {
       if (this.state.startedAt !== undefined && this.state.firstProgressAt === undefined) {
         const deadline = this.state.startedAt + this.options.config.first_progress_timeout_ms;
-        deadlines.push({ reason: 'no_first_progress', key: 'no_first_progress', at: deadline });
+        deadlines.push({
+          reason: 'no_first_progress',
+          key: 'no_first_progress',
+          at: deadline,
+          quietAnchor: this.state.startedAt,
+        });
       } else if (this.state.firstProgressAt !== undefined) {
         const idleTimeout =
           this.options.tool === 'claude-code'
@@ -335,12 +401,33 @@ export class SdkWatchdog {
               : null;
         if (idleTimeout !== null) {
           const deadline = (this.state.idleAnchor ?? this.state.firstProgressAt) + idleTimeout;
-          deadlines.push({ reason: 'progress_stalled', key: 'progress_stalled', at: deadline });
+          deadlines.push({
+            reason: 'progress_stalled',
+            key: 'progress_stalled',
+            at: deadline,
+            quietAnchor: this.state.idleAnchor ?? this.state.firstProgressAt,
+          });
         }
       }
     }
 
-    const decision = deadlines.find(
+    const interpretedDeadlines = deadlines.map((deadline) => {
+      const lastUnknownAt = this.state.lastUnknownAt;
+      if (
+        deadline.quietAnchor === undefined ||
+        lastUnknownAt === undefined ||
+        lastUnknownAt <= deadline.quietAnchor
+      ) {
+        return deadline;
+      }
+      return {
+        reason: 'adapter_incompatible' as const,
+        key: `adapter_incompatible:${deadline.key}`,
+        at: lastUnknownAt + (deadline.at - deadline.quietAnchor),
+      };
+    });
+
+    const decision = interpretedDeadlines.find(
       (deadline) => now >= deadline.at && !this.observeLatches.has(deadline.key)
     );
     if (decision) {
@@ -348,7 +435,7 @@ export class SdkWatchdog {
       if (this.decided) return;
     }
 
-    const nextCheckAt = deadlines
+    const nextCheckAt = interpretedDeadlines
       .filter((deadline) => !this.observeLatches.has(deadline.key))
       .reduce<number | undefined>(
         (earliest, deadline) => Math.min(earliest ?? deadline.at, deadline.at),

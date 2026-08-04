@@ -1,4 +1,9 @@
-import { createTenantScopedDatabaseProxy, MissingTenantDatabaseScopeError } from '@agor/core/db';
+import {
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantId,
+  MissingTenantDatabaseScopeError,
+  RuntimeRecoveryDiscoveryRepository,
+} from '@agor/core/db';
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,7 +61,10 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       return task;
     }),
     patch: vi.fn(),
-    settleTermination: vi.fn(),
+    claimTermination: vi.fn(async (input: { taskId: string }) => ({
+      outcome: 'claimed',
+      task: (fixtures.orphanedTasks ?? []).find((task) => task.task_id === input.taskId),
+    })),
     reconcileSessionState: vi.fn(),
   };
   const sessionsService = {
@@ -103,7 +111,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     db,
     config: {
       multi_tenancy: {
-        mode: 'required_from_auth',
+        mode: 'static',
         static_tenant_id: 'startup-tenant',
         auth_claim: 'tenant_id',
       },
@@ -165,7 +173,7 @@ describe('startup tenant database scope', () => {
     expect(tasksService.getOrphaned).not.toHaveBeenCalled();
     expect(tasksService.find).not.toHaveBeenCalled();
     expect(tasksService.patch).not.toHaveBeenCalled();
-    expect(tasksService.settleTermination).not.toHaveBeenCalled();
+    expect(tasksService.claimTermination).not.toHaveBeenCalled();
     expect(sessionsService.find).not.toHaveBeenCalled();
     expect(sessionsService.patch).not.toHaveBeenCalled();
   });
@@ -240,32 +248,48 @@ describe('startup tenant database scope', () => {
     expect(baseDb.marker).toHaveBeenCalled();
   });
 
-  it('preserves restart recovery while disclosing unverified termination', async () => {
+  it('claims orphaned execution for containment without terminalizing it or wiping its queue', async () => {
     const task = makeTask({});
-    const session = makeSession({ tasks: [task.task_id] as Session['tasks'] });
+    const queued = makeTask({ task_id: 'queued-1', status: TaskStatus.QUEUED });
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      queuedTasks: [queued],
+    });
+
+    const result = await cleanupOrphanStatuses(ctx);
+
+    expect(tasksService.claimTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.task_id, cause: 'daemon_restart' }),
+      expect.anything()
+    );
+    expect(tasksService.patch).not.toHaveBeenCalled();
+    expect(tasksService.find).not.toHaveBeenCalled();
+    expect(result.orphanedTasks).toEqual([task]);
+  });
+
+  it('reconciles active Session projection from the claimed Task truth', async () => {
+    const task = makeTask({});
+    const session = makeSession({ status: SessionStatus.RUNNING, tasks: [task.task_id] as never });
     const { ctx, tasksService } = makeStartupContextWithGuardedDb({
       orphanedTasks: [task],
       sessionsById: { [session.session_id]: session },
     });
+    const sessionsService = ctx.sessionsService as unknown as { find: ReturnType<typeof vi.fn> };
+    sessionsService.find.mockImplementation(async (params: { query?: { status?: string } }) => ({
+      data: params.query?.status === SessionStatus.RUNNING ? [session] : [],
+      total: params.query?.status === SessionStatus.RUNNING ? 1 : 0,
+    }));
 
     await cleanupOrphanStatuses(ctx);
-    expect(tasksService.settleTermination).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: task.task_id,
-        outcome: 'restart_unverified',
-        sdkFailure: expect.objectContaining({
-          reason: 'termination_unverified',
-          termination: 'unverified',
-        }),
-        errorMessage: expect.stringContaining('without verifying executor termination'),
-      }),
+
+    expect(tasksService.reconcileSessionState).toHaveBeenCalledWith(
+      session.session_id,
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
   });
 
   it('demonstrates guarded startup DB access fails without scope', () => {
     const { baseDb, ctx } = makeStartupContextWithGuardedDb();
-
     expect(() => (ctx.db as unknown as { marker(): string }).marker()).toThrow(
       MissingTenantDatabaseScopeError
     );
@@ -284,6 +308,28 @@ describe('startup tenant database scope', () => {
     expect(tasksService.find).not.toHaveBeenCalledWith(
       expect.objectContaining({ query: expect.objectContaining({ status: TaskStatus.QUEUED }) })
     );
+  });
+
+  it('re-enters each discovered tenant instead of using the static fallback', async () => {
+    const discovery = vi
+      .spyOn(RuntimeRecoveryDiscoveryRepository.prototype, 'findRecoveryTenantIds')
+      .mockResolvedValue(['tenant-a', 'tenant-b'] as never);
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb();
+    (ctx.config.multi_tenancy as { mode: string }).mode = 'required_from_auth';
+    const seen: Array<string | undefined> = [];
+    tasksService.getOrphaned.mockImplementation(async () => {
+      const tenantId = getCurrentTenantId();
+      if (tenantId !== 'tenant-a' && tenantId !== 'tenant-b') {
+        throw new Error(`cross-tenant recovery scope: ${tenantId ?? 'missing'}`);
+      }
+      seen.push(tenantId);
+      return [];
+    });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(seen).toEqual(['tenant-a', 'tenant-b']);
+    discovery.mockRestore();
   });
 });
 

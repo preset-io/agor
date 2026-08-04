@@ -120,7 +120,7 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
     case 'codex':
       return 'allow-all'; // Maps to Codex sandbox=workspace-write + approval=never
     case 'opencode':
-      return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
+      return 'autoEdit'; // OpenCode allows edits and rejects other permission requests
     case 'copilot':
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
     case 'cursor':
@@ -384,6 +384,12 @@ export interface Session {
    * Used to highlight branch cards to show which sessions need attention.
    */
   ready_for_prompt: boolean;
+
+  /** Last terminal Task whose Session projection was applied atomically. */
+  runtime_projection?: {
+    terminal_task_id: TaskID;
+    applied_at: string;
+  };
 
   // ===== Callback Configuration =====
 

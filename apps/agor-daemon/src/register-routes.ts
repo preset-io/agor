@@ -73,7 +73,6 @@ import {
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
@@ -116,7 +115,7 @@ import {
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
-import { forceFailUnverifiedTask } from './termination-coordinator.js';
+import { forceFailUnverifiedTask, requestExecutorTermination } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
   requireActiveAgenticTool,
@@ -288,22 +287,6 @@ export interface RegisterRoutesContext {
     typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
   >;
   terminalsService: TerminalsService | null;
-}
-
-export async function authorizeTaskTerminalRoute(input: {
-  id: string;
-  params: RouteParams;
-  tasksService: Pick<TasksServiceImpl, 'get'>;
-}): Promise<RouteParams> {
-  const internalParams = { ...input.params, provider: undefined };
-  const userId = input.params.user?.user_id as UUID | undefined;
-  if (!userId) throw new NotAuthenticated('Authentication required to update tasks');
-  const task = await input.tasksService.get(input.id, internalParams);
-  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
-  if (task.created_by !== userId && !isAdmin) {
-    throw new Forbidden('Only the task creator or an admin can update this task');
-  }
-  return internalParams;
 }
 
 export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
@@ -954,31 +937,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
-  /**
-   * Helper: Safely patch an entity, returning false if it was deleted mid-execution
-   */
-  async function safePatch<T>(
-    serviceName: string,
-    id: string,
-    data: Partial<T>,
-    entityType: string,
-    params?: RouteParams
-  ): Promise<boolean> {
-    try {
-      await app.service(serviceName).patch(id, data, params || {});
-      return true;
-    } catch (error) {
-      if (
-        error instanceof NotFoundError ||
-        (error instanceof Error && error.message.includes('No record found'))
-      ) {
-        console.log(`⚠️  ${entityType} ${shortId(id)} was deleted mid-execution - skipping update`);
-        return false;
-      }
-      throw error;
-    }
-  }
-
   async function reconcileSessionPromptStateIfStuck(
     session: Session,
     taskRepo: TaskRepository,
@@ -1363,17 +1321,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
         );
-        await safePatch(
-          'tasks',
+        const termination = await requestExecutorTermination({
+          app,
           taskId,
-          {
-            status: TaskStatus.FAILED,
-            completed_at: new Date().toISOString(),
-            error_message: errorMessage,
-          },
-          'Task',
-          params
-        );
+          cause: 'startup_timeout',
+          errorMessage,
+          params,
+          absenceVerified: true,
+          expectedStatus: TaskStatus.DISPATCHING,
+          requireExecutorDisconnected: true,
+        });
+        if (termination.status === 'condition_changed') return;
 
         // Synthesize a system message so the chat surfaces *why* the agent
         // didn't respond. Without this the transcript shows only the user
@@ -3051,51 +3009,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.ADMIN, action: 'import tasks' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/:id/complete',
-    {
-      async create(
-        data: { git_state?: { sha_at_end?: string; commit_message?: string } },
-        params: RouteParams
-      ) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Task ID required');
-        const internalParams = await authorizeTaskTerminalRoute({
-          id,
-          params,
-          tasksService,
-        });
-        return tasksService.complete(id, data, internalParams);
-      },
-    },
-    {
-      create: { role: ROLES.MEMBER, action: 'complete tasks' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/:id/fail',
-    {
-      async create(data: { error?: string }, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Task ID required');
-        const internalParams = await authorizeTaskTerminalRoute({
-          id,
-          params,
-          tasksService,
-        });
-        return tasksService.fail(id, data, internalParams);
-      },
-    },
-    {
-      create: { role: ROLES.MEMBER, action: 'fail tasks' },
     },
     requireAuth
   );

@@ -568,6 +568,13 @@
       "when": 1786600000000,
       "tag": "0081_mcp_catalog_last_seen",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1786700000000,
+      "tag": "0082_task_runtime_recovery",
+      "breakpoints": true
     }
   ]
 }

@@ -117,6 +117,7 @@ describe('PermissionService interaction capability', () => {
         id: 'request-1',
         reason: 'permission',
         absoluteTimeoutMs: expectedTimeoutMs,
+        deadlineOwner: 'adapter',
       });
       service.resolvePermission({
         requestId: 'request-1',

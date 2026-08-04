@@ -41,27 +41,6 @@ describe('TasksService executor connection', () => {
     );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
-
-  it('publishes a startup warning only when the repository changes it', async () => {
-    const task = {
-      task_id: '018f0000-0000-7000-8000-000000000001',
-      status: TaskStatus.DISPATCHING,
-      error_message: 'still waiting',
-    } as Task;
-    const service = Object.create(TasksService.prototype) as TasksService;
-    const emit = vi.fn();
-    const recordExecutorStartupWarning = vi
-      .fn()
-      .mockResolvedValueOnce(task)
-      .mockResolvedValueOnce(null);
-    Reflect.set(service, 'taskRepo', { recordExecutorStartupWarning });
-    Reflect.set(service, 'app', { service: () => ({ emit }) });
-
-    await service.recordExecutorStartupWarning(task.task_id, task.error_message!);
-    await service.recordExecutorStartupWarning(task.task_id, task.error_message!);
-
-    expect(emit).toHaveBeenCalledOnce();
-  });
 });
 
 describe('TasksService executor patches', () => {
@@ -75,19 +54,6 @@ describe('TasksService executor patches', () => {
     await service.patch('task-1', { model: 'test-model' }, { provider: 'rest' });
 
     expect(updateFromExecutor).toHaveBeenCalledWith('task-1', { model: 'test-model' });
-  });
-
-  it('preserves explicit failure details', async () => {
-    const service = Object.create(TasksService.prototype) as TasksService;
-    service.patch = vi.fn().mockResolvedValue({ task_id: 'task-1', status: TaskStatus.FAILED });
-
-    await service.fail('task-1', { error: 'launch rejected' });
-
-    expect(service.patch).toHaveBeenCalledWith(
-      'task-1',
-      expect.objectContaining({ status: TaskStatus.FAILED, error_message: 'launch rejected' }),
-      undefined
-    );
   });
 
   it('commits a quiesced outcome and invokes the single Session reconciler', async () => {
@@ -112,7 +78,7 @@ describe('TasksService executor patches', () => {
     await service.reportExecutorSettlement({
       task_id: terminalTask.task_id,
       kind: 'quiesced',
-      status: TaskStatus.COMPLETED,
+      result: 'success',
       task_patch: { model: 'test-model' },
     });
 
@@ -150,7 +116,7 @@ describe('TasksService executor patches', () => {
     await service.reportExecutorSettlement({
       task_id: terminalTask.task_id,
       kind: 'quiesced',
-      status: TaskStatus.COMPLETED,
+      result: 'success',
     });
 
     expect(reconcileTerminalTask).toHaveBeenCalledOnce();
@@ -178,7 +144,7 @@ describe('TasksService executor patches', () => {
       service.reportExecutorSettlement({
         task_id: terminalTask.task_id,
         kind: 'quiesced',
-        status: TaskStatus.COMPLETED,
+        result: 'success',
       })
     ).rejects.toThrow('read failed');
   });
@@ -187,12 +153,12 @@ describe('TasksService executor patches', () => {
     {
       task_id: 'task-1',
       kind: 'quiesced',
-      status: TaskStatus.RUNNING,
+      result: TaskStatus.RUNNING,
     },
     {
       task_id: 'task-1',
       kind: 'quiesced',
-      status: TaskStatus.COMPLETED,
+      result: 'success',
       task_patch: { status: TaskStatus.FAILED },
     },
     {
