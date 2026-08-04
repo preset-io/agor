@@ -104,6 +104,7 @@ import {
   setupBranchFsAccessUsersService,
   setupBranchGroupGrantsService,
 } from './services/groups.js';
+import { createKnowledgeDocumentCommentsService } from './services/knowledge-document-comments.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
 import { createKnowledgeGraphService } from './services/knowledge-graph.js';
@@ -467,6 +468,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       methods: ['create'],
     }
   );
+  app.use('/kb/document-comments', createKnowledgeDocumentCommentsService(db, app), {
+    methods: ['find', 'get', 'create', 'patch', 'remove', 'toggleReaction'],
+  });
   app.use('/kb/versions', createKnowledgeVersionsService(db), {
     methods: ['find'],
   });

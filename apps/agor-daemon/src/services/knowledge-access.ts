@@ -99,6 +99,27 @@ export async function canWriteKnowledgeDocument(
   );
 }
 
+/**
+ * Commenting needs namespace `write` plus document read visibility — but not
+ * the document's `edit_policy`, which governs changing content rather than
+ * discussing it.
+ */
+export async function canCommentOnKnowledgeDocument(
+  namespaces: KnowledgeNamespaceRepository,
+  document: KnowledgeDocument,
+  user?: User
+): Promise<boolean> {
+  const namespacePermission = await resolveKnowledgeNamespacePermission(
+    namespaces,
+    document.namespace_id,
+    user
+  );
+  return (
+    hasKnowledgeNamespacePermission(namespacePermission, 'write') &&
+    canReadKnowledgeDocumentOverlay(document, user)
+  );
+}
+
 export async function canReadKnowledgeSearchResult(
   namespaces: KnowledgeNamespaceRepository,
   result: Awaited<ReturnType<KnowledgeSearchRepository['search']>>[number],

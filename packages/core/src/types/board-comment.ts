@@ -1,19 +1,5 @@
-import type { BoardID, BranchID, CommentID, MessageID, SessionID, TaskID, UserID } from './id';
-
-/**
- * Individual reaction on a comment
- * Stored as JSON array: [{ user_id: "abc", emoji: "👍" }, ...]
- */
-export interface CommentReaction {
-  user_id: string;
-  emoji: string;
-}
-
-/**
- * Reactions grouped by emoji for display
- * Example: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
- */
-export type ReactionSummary = Record<string, string[]>;
+import type { ThreadedComment } from './comment';
+import type { BoardID, BranchID, MessageID, SessionID, TaskID } from './id';
 
 /**
  * Board Comment - Human-to-human conversations and collaboration
@@ -27,21 +13,9 @@ export type ReactionSummary = Record<string, string[]>;
  * - Thread roots: parent_comment_id IS NULL, can be resolved, must have attachments
  * - Replies: parent_comment_id IS NOT NULL, cannot be resolved, inherit parent context
  */
-export interface BoardComment {
-  /** Unique comment identifier (UUIDv7) */
-  comment_id: CommentID;
-
+export interface BoardComment extends ThreadedComment {
   /** Board this comment belongs to */
   board_id: BoardID;
-
-  /** User who created the comment */
-  created_by: UserID;
-
-  /** Comment content (Markdown-supported) */
-  content: string;
-
-  /** First 200 chars for list views */
-  content_preview: string;
 
   // ============================================================================
   // Optional Attachments (Phase 2)
@@ -58,26 +32,6 @@ export interface BoardComment {
 
   /** Optional: Attached to branch */
   branch_id?: BranchID;
-
-  // ============================================================================
-  // Threading & Metadata
-  // ============================================================================
-
-  /** Optional: Parent comment for threaded replies */
-  parent_comment_id?: CommentID;
-
-  /** Whether comment is resolved (GitHub PR-style) */
-  resolved: boolean;
-
-  /** Whether comment was edited after creation */
-  edited: boolean;
-
-  // ============================================================================
-  // Reactions (Phase 2)
-  // ============================================================================
-
-  /** Emoji reactions (for both thread roots and replies) */
-  reactions: CommentReaction[];
 
   // ============================================================================
   // Spatial Positioning (Phase 3)
@@ -98,20 +52,6 @@ export interface BoardComment {
       offset_y: number;
     };
   };
-
-  // ============================================================================
-  // Mentions (Phase 4)
-  // ============================================================================
-
-  /** Optional: @mentioned user IDs */
-  mentions?: UserID[];
-
-  // ============================================================================
-  // Timestamps
-  // ============================================================================
-
-  created_at: Date;
-  updated_at?: Date;
 }
 
 /**
@@ -190,44 +130,5 @@ export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved
   edited?: boolean; // Auto-set to true when content is updated
 };
 
-// ============================================================================
-// Helper Functions (Phase 2: Threading + Reactions)
-// ============================================================================
-
-/**
- * Check if comment is a thread root (top-level comment)
- */
-export function isThreadRoot(comment: BoardComment): boolean {
-  return !comment.parent_comment_id;
-}
-
-/**
- * Check if comment is a reply (nested comment)
- */
-export function isReply(comment: BoardComment): boolean {
-  return !!comment.parent_comment_id;
-}
-
-/**
- * Check if comment can be resolved
- * Only thread roots can be resolved, replies cannot
- */
-export function isResolvable(comment: BoardComment): boolean {
-  return isThreadRoot(comment);
-}
-
-/**
- * Group reactions by emoji for display
- * Input: [{ user_id: "alice", emoji: "👍" }, { user_id: "bob", emoji: "👍" }, { user_id: "charlie", emoji: "🎉" }]
- * Output: { "👍": ["alice", "bob"], "🎉": ["charlie"] }
- */
-export function groupReactions(reactions: CommentReaction[]): ReactionSummary {
-  const grouped: Record<string, string[]> = {};
-  for (const { emoji, user_id } of reactions) {
-    if (!grouped[emoji]) {
-      grouped[emoji] = [];
-    }
-    grouped[emoji].push(user_id);
-  }
-  return grouped;
-}
+// Threading, reaction and preview helpers live in `./comment`, shared with the
+// other comment domains and re-exported from `types/index`.

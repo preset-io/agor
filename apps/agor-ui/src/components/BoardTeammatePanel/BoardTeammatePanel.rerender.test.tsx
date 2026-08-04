@@ -18,6 +18,7 @@ vi.mock('../CommentsPanel', () => ({
     panelRenders += 1;
     return null;
   },
+  useBoardCommentGroupResolver: () => () => ({ key: 'board', label: 'Board' }),
 }));
 
 const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as unknown as Board;

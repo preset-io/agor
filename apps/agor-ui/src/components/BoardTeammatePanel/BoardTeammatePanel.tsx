@@ -32,7 +32,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
-import { CommentsPanel } from '../CommentsPanel';
+import { CommentsPanel, useBoardCommentGroupResolver } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
@@ -172,6 +172,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         : [],
     [activeTab, commentById, board?.board_id]
   );
+  const boardCommentGroupResolver = useBoardCommentGroupResolver({ boardObjects, branchById });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when switching boards, even if the default tab string is unchanged.
   useEffect(() => {
@@ -482,12 +483,11 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <div style={{ height: 'calc(100vh - 112px)' }}>
                 <CommentsPanel
                   client={client}
-                  boardId={board.board_id}
                   comments={comments}
                   userById={userById}
                   currentUserId={currentUserId || 'unknown'}
-                  boardObjects={boardObjects}
-                  branchById={branchById}
+                  resolveGroup={boardCommentGroupResolver}
+                  emptyDescription="Start a conversation about this board"
                   onSendComment={(content) => onSendComment?.(content)}
                   onReplyComment={onReplyComment}
                   onResolveComment={onResolveComment}

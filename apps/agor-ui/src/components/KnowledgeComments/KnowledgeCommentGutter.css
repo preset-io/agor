@@ -1,0 +1,22 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: hover-reveal and :focus-within cannot be expressed with inline styles */
+
+/**
+ * Margin comment buttons for sections that have no threads yet: hidden until
+ * the reader hovers the document body, and always shown while focused so the
+ * affordance stays reachable by keyboard.
+ */
+.knowledge-comment-gutter-hoverable {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.knowledge-comment-body:hover .knowledge-comment-gutter-hoverable,
+.knowledge-comment-gutter-hoverable:focus-within {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-comment-gutter-hoverable {
+    transition: none;
+  }
+}

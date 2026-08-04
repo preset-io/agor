@@ -2128,6 +2128,49 @@ export const kbDocumentUnits = sqliteTable(
   })
 );
 
+/**
+ * Discussion threads on Knowledge documents, optionally anchored to one heading
+ * section. Access is gated by the document's namespace ACL, not board RBAC.
+ */
+export const kbDocumentComments = sqliteTable(
+  'kb_document_comments',
+  {
+    comment_id: text('comment_id', { length: 36 }).primaryKey(),
+    document_id: text('document_id', { length: 36 })
+      .notNull()
+      .references(() => kbDocuments.document_id, { onDelete: 'cascade' }),
+    created_by: text('created_by', { length: 36 }).notNull(),
+    content: text('content').notNull(),
+    content_preview: text('content_preview').notNull(),
+    parent_comment_id: text('parent_comment_id', { length: 36 }),
+    // Rendered heading slug, not a `kb_document_units.unit_id`: unit ids hash
+    // the version id and churn on every edit and re-chunk.
+    anchor_slug: text('anchor_slug'),
+    anchor_label: text('anchor_label'),
+    resolved: t.bool('resolved').notNull().default(false),
+    edited: t.bool('edited').notNull().default(false),
+    reactions: t
+      .json<unknown>('reactions')
+      .$type<Array<{ user_id: string; emoji: string }>>()
+      .notNull()
+      .default(sql`'[]'`),
+    mentions: t.json<unknown>('mentions').$type<string[]>(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+  },
+  (table) => ({
+    documentIdx: index('kb_document_comments_document_idx').on(table.document_id),
+    documentAnchorIdx: index('kb_document_comments_document_anchor_idx').on(
+      table.document_id,
+      table.anchor_slug
+    ),
+    parentIdx: index('kb_document_comments_parent_idx').on(table.parent_comment_id),
+    createdByIdx: index('kb_document_comments_created_by_idx').on(table.created_by),
+    createdIdx: index('kb_document_comments_created_idx').on(table.created_at),
+    resolvedIdx: index('kb_document_comments_resolved_idx').on(table.resolved),
+  })
+);
+
 /** Embedding spaces configured for Knowledge semantic search metadata. */
 export const kbEmbeddingSpaces = sqliteTable(
   'kb_embedding_spaces',
@@ -2367,6 +2410,8 @@ export type KBDocumentVersionRow = typeof kbDocumentVersions.$inferSelect;
 export type KBDocumentVersionInsert = typeof kbDocumentVersions.$inferInsert;
 export type KBDocumentUnitRow = typeof kbDocumentUnits.$inferSelect;
 export type KBDocumentUnitInsert = typeof kbDocumentUnits.$inferInsert;
+export type KBDocumentCommentRow = typeof kbDocumentComments.$inferSelect;
+export type KBDocumentCommentInsert = typeof kbDocumentComments.$inferInsert;
 export type KBEmbeddingSpaceRow = typeof kbEmbeddingSpaces.$inferSelect;
 export type KBEmbeddingSpaceInsert = typeof kbEmbeddingSpaces.$inferInsert;
 export type KBGraphNodeRow = typeof kbGraphNodes.$inferSelect;
