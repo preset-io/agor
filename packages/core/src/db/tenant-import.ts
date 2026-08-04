@@ -31,25 +31,27 @@ import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import {
+  assertManifestTablesMatchCatalog,
   filesDir,
   MalformedArchiveError,
   readManifest,
   readTableJsonl,
-  sha256Hex,
   type TenantArchiveManifest,
   verifyArchiveIntegrity,
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import {
-  exportTenantTableRows,
   insertTenantTableRows,
   parseTenantJsonl,
+  snapshotTenantTableHashes,
 } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import {
   publishTenantFilesystemAtomically,
   stageTenantFilesystem,
   summarizeTenantFilesystem,
+  type TenantFilesystemEntry,
+  tenantFilesystemEntriesEqual,
 } from './tenant-filesystem';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
@@ -96,23 +98,20 @@ async function classifyDatabase(
   manifest: TenantArchiveManifest,
   sameTenant: boolean
 ): Promise<{ state: PortionState; totalRows: number }> {
-  const insertOrder = buildTenantInsertOrder();
   const archivedByName = new Map(manifest.database.tables.map((table) => [table.name, table]));
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const snapshots = await snapshotTenantTableHashes(scoped, tenantId);
     let totalRows = 0;
     let anyMismatch = false;
-    for (const table of insertOrder) {
-      const { jsonl, rowCount } = await exportTenantTableRows(
-        scoped,
-        table.name,
-        tenantId,
-        table.tenantColumn
-      );
-      totalRows += rowCount;
+    for (const snapshot of snapshots) {
+      totalRows += snapshot.rowCount;
       if (sameTenant) {
-        const archived = archivedByName.get(table.name);
-        const liveHash = sha256Hex(Buffer.from(jsonl, 'utf8'));
-        if (!archived || archived.rowCount !== rowCount || archived.sha256 !== liveHash) {
+        const archived = archivedByName.get(snapshot.name);
+        if (
+          !archived ||
+          archived.rowCount !== snapshot.rowCount ||
+          archived.sha256 !== snapshot.sha256
+        ) {
           anyMismatch = true;
         }
       }
@@ -224,6 +223,10 @@ export async function importTenant(
     );
   }
 
+  // The archive must carry exactly the live catalog's movable tenant tables —
+  // no missing, extra, or duplicate — before we read or restore any of them.
+  assertManifestTablesMatchCatalog(manifest, identity.tenantTables);
+
   // Classify each destination portion.
   const dbClassification = await classifyDatabase(db, tenantId, manifest, sameTenant);
   if (dbClassification.state === 'conflict') {
@@ -310,29 +313,13 @@ export async function importTenant(
 /** Whether a live filesystem tree exactly matches the manifest's entries. */
 function filesystemMatches(
   manifest: TenantArchiveManifest,
-  live: {
-    path: string;
-    type: string;
-    size: number;
-    sha256?: string;
-    linkTarget?: string;
-    mode: number;
-  }[]
+  live: TenantFilesystemEntry[]
 ): boolean {
   if (live.length !== manifest.filesystem.entries.length) return false;
   const archived = new Map(manifest.filesystem.entries.map((entry) => [entry.path, entry]));
   for (const entry of live) {
     const match = archived.get(entry.path);
-    if (
-      !match ||
-      match.type !== entry.type ||
-      match.size !== entry.size ||
-      match.mode !== entry.mode ||
-      (match.sha256 ?? null) !== (entry.sha256 ?? null) ||
-      (match.linkTarget ?? null) !== (entry.linkTarget ?? null)
-    ) {
-      return false;
-    }
+    if (!match || !tenantFilesystemEntriesEqual(match, entry)) return false;
   }
   return true;
 }

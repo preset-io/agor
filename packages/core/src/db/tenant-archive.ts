@@ -27,7 +27,12 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
-import { resolveWithinRoot, type TenantFilesystemEntry } from './tenant-filesystem';
+import {
+  assertSafeRelativePath,
+  resolveWithinRoot,
+  type TenantFilesystemEntry,
+  type TenantFilesystemEntryType,
+} from './tenant-filesystem';
 
 /** Current manifest schema version. Bump on any incompatible layout change. */
 export const TENANT_ARCHIVE_MANIFEST_VERSION = 1;
@@ -209,37 +214,227 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Validate the parsed manifest against the contract, throwing on any mismatch. */
-export function assertManifestShape(parsed: unknown): TenantArchiveManifest {
-  if (!isRecord(parsed)) {
-    throw new MalformedArchiveError('Archive manifest must be a JSON object');
-  }
-  const version = parsed.manifestVersion;
-  if (version !== TENANT_ARCHIVE_MANIFEST_VERSION) {
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const SAFE_TABLE_NAME = /^[a-z_][a-z0-9_]*$/i;
+/** setuid/setgid/sticky + rwxrwxrwx — the only bits export preserves. */
+const MAX_PERMISSION_MODE = 0o7777;
+const FS_ENTRY_TYPES: readonly TenantFilesystemEntryType[] = ['file', 'directory', 'symlink'];
+
+/** Assert a validation predicate, throwing the malformed-archive error on false. */
+function assertManifest(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new MalformedArchiveError(message);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === 'string' && SHA256_HEX.test(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** Strictly validate the runtime-derived database identity embedded in a manifest. */
+function assertIdentityShape(identity: unknown): void {
+  assertManifest(isRecord(identity), 'Archive manifest database.identity must be an object');
+  assertManifest(
+    identity.dialect === 'postgresql',
+    'Archive manifest database.identity.dialect must be "postgresql"'
+  );
+  assertManifest(
+    typeof identity.schemaVersion === 'string' && identity.schemaVersion.length > 0,
+    'Archive manifest database.identity.schemaVersion must be a non-empty string'
+  );
+  assertManifest(
+    isStringArray(identity.migrations) &&
+      identity.migrations.length > 0 &&
+      identity.migrations.every((tag) => tag.length > 0),
+    'Archive manifest database.identity.migrations must be a non-empty array of migration tags'
+  );
+  assertManifest(
+    isStringArray(identity.tenantTables),
+    'Archive manifest database.identity.tenantTables must be an array of table names'
+  );
+  assertManifest(
+    isStringArray(identity.presentImperativeTables),
+    'Archive manifest database.identity.presentImperativeTables must be an array of table names'
+  );
+  assertManifest(
+    isSha256Hex(identity.fingerprint),
+    'Archive manifest database.identity.fingerprint must be a SHA-256 hex string'
+  );
+}
+
+/** Strictly validate a single per-table manifest entry. */
+function assertTableShape(table: unknown): void {
+  assertManifest(isRecord(table), 'Archive manifest database.tables entries must be objects');
+  assertManifest(
+    typeof table.name === 'string' && SAFE_TABLE_NAME.test(table.name),
+    `Archive manifest has an invalid table name: ${String(table.name)}`
+  );
+  assertManifest(
+    isNonNegativeSafeInteger(table.rowCount),
+    `Archive manifest table ${table.name} has an invalid rowCount`
+  );
+  assertManifest(
+    isNonNegativeSafeInteger(table.bytes),
+    `Archive manifest table ${table.name} has an invalid byte size`
+  );
+  assertManifest(
+    isSha256Hex(table.sha256),
+    `Archive manifest table ${table.name} has an invalid sha256`
+  );
+}
+
+/** Strictly validate a single filesystem entry, enforcing type-specific fields. */
+function assertFilesystemEntryShape(entry: unknown): void {
+  assertManifest(isRecord(entry), 'Archive manifest filesystem entry must be an object');
+  assertManifest(
+    typeof entry.type === 'string' && FS_ENTRY_TYPES.includes(entry.type as never),
+    `Archive manifest filesystem entry has an unknown type: ${String(entry.type)}`
+  );
+  assertManifest(
+    typeof entry.path === 'string',
+    'Archive manifest filesystem entry path must be a string'
+  );
+  try {
+    assertSafeRelativePath(entry.path);
+  } catch {
     throw new MalformedArchiveError(
-      `Unsupported archive manifest version ${String(version)}; this binary understands version ${TENANT_ARCHIVE_MANIFEST_VERSION}`
+      `Archive manifest filesystem entry has an unsafe path: ${entry.path}`
     );
   }
-  if (typeof parsed.tenantId !== 'string' || parsed.tenantId.length === 0) {
-    throw new MalformedArchiveError('Archive manifest is missing a tenantId');
+  assertManifest(
+    isNonNegativeSafeInteger(entry.mode) && entry.mode <= MAX_PERMISSION_MODE,
+    `Archive manifest filesystem entry ${entry.path} has an invalid mode`
+  );
+  if (entry.type === 'file') {
+    assertManifest(
+      isNonNegativeSafeInteger(entry.size),
+      `Archive manifest file entry ${entry.path} has an invalid size`
+    );
+    // A file entry MUST carry a content hash — integrity checking depends on it,
+    // so a missing/short hash is never silently skipped.
+    assertManifest(
+      isSha256Hex(entry.sha256),
+      `Archive manifest file entry ${entry.path} has an invalid sha256`
+    );
+    assertManifest(
+      entry.linkTarget === undefined,
+      `Archive manifest file entry ${entry.path} must not carry a linkTarget`
+    );
+    return;
   }
-  if (typeof parsed.operationId !== 'string' || parsed.operationId.length === 0) {
-    throw new MalformedArchiveError('Archive manifest is missing an operationId');
+  // Directory and symlink entries carry no bytes: size is fixed at 0 and they
+  // never carry a content hash.
+  assertManifest(
+    entry.size === 0,
+    `Archive manifest ${entry.type} entry ${entry.path} must be 0 bytes`
+  );
+  assertManifest(
+    entry.sha256 === undefined,
+    `Archive manifest ${entry.type} entry ${entry.path} must not carry a sha256`
+  );
+  if (entry.type === 'symlink') {
+    assertManifest(
+      typeof entry.linkTarget === 'string' &&
+        entry.linkTarget.length > 0 &&
+        !entry.linkTarget.includes('\0'),
+      `Archive manifest symlink entry ${entry.path} has an invalid linkTarget`
+    );
+  } else {
+    assertManifest(
+      entry.linkTarget === undefined,
+      `Archive manifest directory entry ${entry.path} must not carry a linkTarget`
+    );
   }
+}
+
+/**
+ * Strictly validate the parsed manifest against the version-1 contract before any
+ * caller may act on it: exact discriminants, type-specific required fields,
+ * SHA-256 formats, nonnegative safe-integer counts/sizes, safe permission modes,
+ * and no duplicate/unknown/malformed entries. Structural validation runs BEFORE
+ * the fingerprint recompute so a manifest whose attacker recomputed its own
+ * fingerprint over malformed fields is still rejected on the field checks rather
+ * than trusted. The exact expected TABLE SET is enforced separately, where live
+ * catalog context is available — see {@link assertManifestTablesMatchCatalog}.
+ */
+export function assertManifestShape(parsed: unknown): TenantArchiveManifest {
+  assertManifest(isRecord(parsed), 'Archive manifest must be a JSON object');
+  assertManifest(
+    parsed.manifestVersion === TENANT_ARCHIVE_MANIFEST_VERSION,
+    `Unsupported archive manifest version ${String(parsed.manifestVersion)}; this binary understands version ${TENANT_ARCHIVE_MANIFEST_VERSION}`
+  );
+  assertManifest(
+    typeof parsed.tenantId === 'string' && parsed.tenantId.length > 0,
+    'Archive manifest is missing a tenantId'
+  );
+  assertManifest(
+    typeof parsed.operationId === 'string' && parsed.operationId.length > 0,
+    'Archive manifest is missing an operationId'
+  );
   assertSafeOperationId(parsed.operationId);
-  if (typeof parsed.contentFingerprint !== 'string' || parsed.contentFingerprint.length === 0) {
-    throw new MalformedArchiveError('Archive manifest is missing a contentFingerprint');
+  assertManifest(
+    typeof parsed.createdAt === 'string' && parsed.createdAt.length > 0,
+    'Archive manifest is missing a createdAt'
+  );
+  assertManifest(
+    isSha256Hex(parsed.contentFingerprint),
+    'Archive manifest contentFingerprint must be a SHA-256 hex string'
+  );
+
+  assertManifest(isRecord(parsed.database), 'Archive manifest has a malformed database section');
+  assertIdentityShape(parsed.database.identity);
+  assertManifest(
+    Array.isArray(parsed.database.tables),
+    'Archive manifest database.tables must be an array'
+  );
+  const tableNames = new Set<string>();
+  for (const table of parsed.database.tables) {
+    assertTableShape(table);
+    const name = (table as { name: string }).name;
+    assertManifest(!tableNames.has(name), `Archive manifest lists table ${name} more than once`);
+    tableNames.add(name);
   }
-  const database = parsed.database;
-  if (!isRecord(database) || !isRecord(database.identity) || !Array.isArray(database.tables)) {
-    throw new MalformedArchiveError('Archive manifest has a malformed database section');
+
+  assertManifest(
+    isRecord(parsed.filesystem),
+    'Archive manifest has a malformed filesystem section'
+  );
+  assertManifest(
+    typeof parsed.filesystem.included === 'boolean',
+    'Archive manifest filesystem.included must be a boolean'
+  );
+  assertManifest(
+    Array.isArray(parsed.filesystem.entries),
+    'Archive manifest filesystem.entries must be an array'
+  );
+  assertManifest(
+    isNonNegativeSafeInteger(parsed.filesystem.skippedSpecialCount),
+    'Archive manifest filesystem.skippedSpecialCount must be a nonnegative integer'
+  );
+  assertManifest(
+    isNonNegativeSafeInteger(parsed.filesystem.unsafeSymlinkCount),
+    'Archive manifest filesystem.unsafeSymlinkCount must be a nonnegative integer'
+  );
+  const entryPaths = new Set<string>();
+  for (const entry of parsed.filesystem.entries) {
+    assertFilesystemEntryShape(entry);
+    const path = (entry as { path: string }).path;
+    assertManifest(
+      !entryPaths.has(path),
+      `Archive manifest lists filesystem path ${path} more than once`
+    );
+    entryPaths.add(path);
   }
-  const filesystem = parsed.filesystem;
-  if (!isRecord(filesystem) || !Array.isArray(filesystem.entries)) {
-    throw new MalformedArchiveError('Archive manifest has a malformed filesystem section');
-  }
-  // Recompute the content fingerprint and compare — a mismatch means the
-  // manifest's own metadata was tampered with or is internally inconsistent.
+
+  // Every field is now well-typed. Recompute the content fingerprint and compare
+  // — a mismatch means the manifest's own metadata is internally inconsistent or
+  // was tampered with without regenerating the fingerprint.
   const recomputed = computeContentFingerprint(parsed as unknown as TenantArchiveManifest);
   if (recomputed !== parsed.contentFingerprint) {
     throw new MalformedArchiveError(
@@ -247,6 +442,37 @@ export function assertManifestShape(parsed: unknown): TenantArchiveManifest {
     );
   }
   return parsed as unknown as TenantArchiveManifest;
+}
+
+/**
+ * Enforce that a validated manifest's table set exactly matches the live tenant
+ * catalog's expected movable tables — no missing, extra, or duplicate tables.
+ * Requires the caller to supply the expected set (import/verify resolve it from
+ * the runtime), so this lives outside the pure {@link assertManifestShape} which
+ * has no catalog context.
+ */
+export function assertManifestTablesMatchCatalog(
+  manifest: TenantArchiveManifest,
+  expectedTableNames: readonly string[]
+): void {
+  const expected = new Set(expectedTableNames);
+  const seen = new Set<string>();
+  for (const table of manifest.database.tables) {
+    assertManifest(
+      !seen.has(table.name),
+      `Archive manifest lists table ${table.name} more than once`
+    );
+    seen.add(table.name);
+    assertManifest(
+      expected.has(table.name),
+      `Archive manifest lists a table absent from the live tenant catalog: ${table.name}`
+    );
+  }
+  const missing = [...expected].filter((name) => !seen.has(name)).sort();
+  assertManifest(
+    missing.length === 0,
+    `Archive manifest is missing table(s) present in the live tenant catalog: ${missing.join(', ')}`
+  );
 }
 
 /** Read a table's JSONL payload from the archive as a UTF-8 string. */
@@ -362,7 +588,13 @@ export async function verifyArchiveIntegrity(
       record(`size mismatch for archived file: ${entry.path}`);
       continue;
     }
-    if (entry.sha256 && (await sha256FileHex(absolute)) !== entry.sha256) {
+    // A file entry without a content hash is not a pass — strict manifest
+    // validation forbids it, and standalone callers must not silently skip it.
+    if (!entry.sha256) {
+      record(`archived file has no content hash: ${entry.path}`);
+      continue;
+    }
+    if ((await sha256FileHex(absolute)) !== entry.sha256) {
       record(`hash mismatch for archived file: ${entry.path}`);
     }
   }

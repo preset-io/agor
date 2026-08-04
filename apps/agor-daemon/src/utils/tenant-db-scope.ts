@@ -75,9 +75,8 @@ export function deferWithTenantDatabaseScope(
   const schedule = () => {
     runWithoutTenantDatabaseScope(() => {
       setImmediate(() => {
-        // Deferred operator work (executor/queue/gateway) is a tenant writer and
-        // must fail closed while the tenant write gate is held. Assert inside the
-        // fresh tenant transaction before running the work.
+        // Deferred tenant writer: fail closed at the write gate (see
+        // assertTenantWritable) inside the fresh transaction before the work.
         void runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
           await assertTenantWritable(scoped, tenantId);
           await work();

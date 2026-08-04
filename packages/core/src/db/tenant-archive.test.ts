@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertManifestShape,
+  assertManifestTablesMatchCatalog,
   canonicalJson,
   computeContentFingerprint,
   databaseDir,
@@ -25,6 +26,9 @@ import {
   writeManifest,
 } from './tenant-archive';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
+
+/** A syntactically valid SHA-256 hex digest for fixtures that need one. */
+const HEX = sha256Hex('fixture');
 
 let scratch: string;
 
@@ -42,7 +46,7 @@ const identity: TenantDatabaseIdentity = {
   migrations: ['0000_a', '0001_b', '0072_example'],
   tenantTables: ['boards', 'sessions'],
   presentImperativeTables: [],
-  fingerprint: 'fake-identity-fingerprint',
+  fingerprint: sha256Hex('identity'),
 };
 
 function makeManifest(tables: TenantArchiveManifest['database']['tables']): TenantArchiveManifest {
@@ -109,7 +113,7 @@ describe('manifest validation', () => {
   it('rejects an operationId with a path separator or ".." (staging-path escape)', () => {
     // The content fingerprint excludes operationId, so a hostile id keeps the
     // manifest otherwise valid — the dedicated check is the only defense.
-    const good = makeManifest([{ name: 'sessions', rowCount: 1, sha256: 'h', bytes: 10 }]);
+    const good = makeManifest([{ name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 }]);
     expect(() => assertManifestShape({ ...good, operationId: 'x/../../../victim' })).toThrow(
       MalformedArchiveError
     );
@@ -165,11 +169,40 @@ describe('verifyArchiveIntegrity', () => {
   });
 
   it('reports a missing database file', async () => {
-    const manifest = makeManifest([{ name: 'sessions', rowCount: 1, sha256: 'h', bytes: 5 }]);
+    const manifest = makeManifest([{ name: 'sessions', rowCount: 1, sha256: HEX, bytes: 5 }]);
     await mkdir(databaseDir(scratch), { recursive: true });
     const result = await verifyArchiveIntegrity(scratch, manifest);
     expect(result.ok).toBe(false);
     expect(result.problems.join(' ')).toMatch(/missing database file/);
+  });
+
+  it('records a file entry that has no content hash instead of skipping it', async () => {
+    // A file present on disk but with no manifest sha256 must never pass silently.
+    const base: Pick<
+      TenantArchiveManifest,
+      'manifestVersion' | 'tenantId' | 'database' | 'filesystem'
+    > = {
+      manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+      tenantId: 'acme',
+      database: { identity, tables: [] },
+      filesystem: {
+        included: true,
+        entries: [{ path: 'f.txt', type: 'file', size: 3, mode: 0o644 }],
+        skippedSpecialCount: 0,
+        unsafeSymlinkCount: 0,
+      },
+    };
+    const manifest: TenantArchiveManifest = {
+      ...base,
+      operationId: 'op-nohash',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: computeContentFingerprint(base),
+    };
+    await mkdir(filesDir(scratch), { recursive: true });
+    await writeFile(join(filesDir(scratch), 'f.txt'), 'abc');
+    const result = await verifyArchiveIntegrity(scratch, manifest);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(' ')).toMatch(/no content hash/);
   });
 
   it('confirms directory and symlink entries exist with the expected type', async () => {
@@ -232,5 +265,143 @@ describe('verifyArchiveIntegrity', () => {
     const mismatch = await verifyArchiveIntegrity(scratch, wrong);
     expect(mismatch.ok).toBe(false);
     expect(mismatch.problems.join(' ')).toMatch(/expected a directory/);
+  });
+});
+
+describe('assertManifestShape strict field validation', () => {
+  /** A fully valid v1 manifest with one table and one filesystem file entry. */
+  function validManifest(): TenantArchiveManifest {
+    const base: Pick<
+      TenantArchiveManifest,
+      'manifestVersion' | 'tenantId' | 'database' | 'filesystem'
+    > = {
+      manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+      tenantId: 'acme',
+      database: {
+        identity,
+        tables: [{ name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 }],
+      },
+      filesystem: {
+        included: true,
+        entries: [{ path: 'f.txt', type: 'file', size: 3, sha256: HEX, mode: 0o644 }],
+        skippedSpecialCount: 0,
+        unsafeSymlinkCount: 0,
+      },
+    };
+    return {
+      ...base,
+      operationId: 'op-valid',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: computeContentFingerprint(base),
+    };
+  }
+
+  it('accepts a fully valid manifest', () => {
+    expect(() => assertManifestShape(validManifest())).not.toThrow();
+  });
+
+  it('rejects a non-hex contentFingerprint', () => {
+    expect(() => assertManifestShape({ ...validManifest(), contentFingerprint: 'zz' })).toThrow(
+      /contentFingerprint/
+    );
+  });
+
+  it('rejects an invalid identity fingerprint', () => {
+    const m = validManifest();
+    m.database.identity = { ...identity, fingerprint: 'not-a-hash' };
+    expect(() => assertManifestShape(m)).toThrow(/identity\.fingerprint/);
+  });
+
+  it('rejects a table with an invalid sha256', () => {
+    const m = validManifest();
+    m.database.tables = [{ name: 'sessions', rowCount: 1, sha256: 'nope', bytes: 10 }];
+    expect(() => assertManifestShape(m)).toThrow(/sha256/);
+  });
+
+  it('rejects negative and non-integer numeric fields', () => {
+    const neg = validManifest();
+    neg.database.tables = [{ name: 'sessions', rowCount: -1, sha256: HEX, bytes: 10 }];
+    expect(() => assertManifestShape(neg)).toThrow(/rowCount/);
+    const frac = validManifest();
+    frac.database.tables = [{ name: 'sessions', rowCount: 1, sha256: HEX, bytes: 1.5 }];
+    expect(() => assertManifestShape(frac)).toThrow(/byte size/);
+  });
+
+  it('rejects duplicate table names', () => {
+    const m = validManifest();
+    m.database.tables = [
+      { name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 },
+      { name: 'sessions', rowCount: 2, sha256: HEX, bytes: 20 },
+    ];
+    expect(() => assertManifestShape(m)).toThrow(/more than once/);
+  });
+
+  it('rejects an unknown filesystem entry type', () => {
+    const m = validManifest();
+    m.filesystem.entries = [{ path: 'x', type: 'block-device', size: 0, mode: 0o644 } as never];
+    expect(() => assertManifestShape(m)).toThrow(/unknown type/);
+  });
+
+  it('rejects a file entry missing its sha256', () => {
+    const m = validManifest();
+    m.filesystem.entries = [{ path: 'f.txt', type: 'file', size: 3, mode: 0o644 } as never];
+    expect(() => assertManifestShape(m)).toThrow(/sha256/);
+  });
+
+  it('rejects a symlink entry missing its linkTarget', () => {
+    const m = validManifest();
+    m.filesystem.entries = [{ path: 'l', type: 'symlink', size: 0, mode: 0o777 } as never];
+    expect(() => assertManifestShape(m)).toThrow(/linkTarget/);
+  });
+
+  it('rejects an out-of-range permission mode', () => {
+    const m = validManifest();
+    m.filesystem.entries = [
+      { path: 'f.txt', type: 'file', size: 3, sha256: HEX, mode: 0o10000 } as never,
+    ];
+    expect(() => assertManifestShape(m)).toThrow(/mode/);
+  });
+
+  it('rejects a filesystem path listed more than once', () => {
+    const m = validManifest();
+    m.filesystem.entries = [
+      { path: 'f.txt', type: 'file', size: 3, sha256: HEX, mode: 0o644 },
+      { path: 'f.txt', type: 'file', size: 3, sha256: HEX, mode: 0o644 },
+    ];
+    expect(() => assertManifestShape(m)).toThrow(/more than once/);
+  });
+});
+
+describe('assertManifestTablesMatchCatalog', () => {
+  const twoTables = makeManifest([
+    { name: 'boards', rowCount: 0, sha256: HEX, bytes: 0 },
+    { name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 },
+  ]);
+
+  it('accepts an exact set regardless of order', () => {
+    expect(() => assertManifestTablesMatchCatalog(twoTables, ['sessions', 'boards'])).not.toThrow();
+  });
+
+  it('rejects a missing table', () => {
+    expect(() =>
+      assertManifestTablesMatchCatalog(
+        makeManifest([{ name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 }]),
+        ['sessions', 'boards']
+      )
+    ).toThrow(/missing table/);
+  });
+
+  it('rejects an unexpected table', () => {
+    expect(() => assertManifestTablesMatchCatalog(twoTables, ['sessions'])).toThrow(
+      /absent from the live tenant catalog/
+    );
+  });
+
+  it('rejects a duplicate table', () => {
+    const dup = makeManifest([
+      { name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 },
+      { name: 'sessions', rowCount: 1, sha256: HEX, bytes: 10 },
+    ]);
+    expect(() => assertManifestTablesMatchCatalog(dup, ['sessions'])).toThrow(/more than once/);
   });
 });

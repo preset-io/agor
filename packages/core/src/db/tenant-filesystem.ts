@@ -8,9 +8,12 @@
  *
  * Safety contract:
  *
- *   - The tree walk never follows symlinks. Symbolic links are recorded as their
- *     own entries with the raw target string; directory symlinks are not
- *     descended, which also prevents cycles.
+ *   - The tree walk never follows symlinks. An internal symbolic link is recorded
+ *     as its own entry with its target normalised to a canonical link-relative
+ *     POSIX path (so an absolute source-internal target round-trips and restores
+ *     safely under any destination root); a link whose target escapes the tenant
+ *     root is skipped, not archived. Directory symlinks are not descended, which
+ *     also prevents cycles.
  *   - Regular-file reads (hash and copy) open with `O_NOFOLLOW` and then prove
  *     the opened inode's canonical path is inside the tenant root. A file whose
  *     terminal component OR an intermediate directory was swapped to a symlink so
@@ -59,7 +62,11 @@ export interface TenantFilesystemEntry {
   size: number;
   /** SHA-256 hex of file contents for regular files; absent otherwise. */
   sha256?: string;
-  /** Raw link target for symlinks; absent otherwise. */
+  /**
+   * Canonical link-relative POSIX target for symlinks; absent otherwise. Always
+   * relative to the link's own directory and proven to stay within the tenant
+   * root, so it restores correctly under any destination root.
+   */
   linkTarget?: string;
   /** POSIX file mode permission bits (lower 12 bits) preserved for restore. */
   mode: number;
@@ -78,6 +85,26 @@ export interface TenantFilesystemInventory {
   skippedSpecialCount: number;
   /** Count of symlinks whose target escapes the tenant root. */
   unsafeSymlinkCount: number;
+}
+
+/**
+ * Structural equality of two filesystem entries describing the SAME path:
+ * identical type, size, permission mode, content hash, and link target. Path is
+ * intentionally not compared — callers key entries by path and own how they
+ * aggregate mismatches into evidence. Shared by import (destination-matches
+ * classification) and verify (per-path comparison).
+ */
+export function tenantFilesystemEntriesEqual(
+  a: TenantFilesystemEntry,
+  b: TenantFilesystemEntry
+): boolean {
+  return (
+    a.type === b.type &&
+    a.size === b.size &&
+    a.mode === b.mode &&
+    (a.sha256 ?? null) === (b.sha256 ?? null) &&
+    (a.linkTarget ?? null) === (b.linkTarget ?? null)
+  );
 }
 
 /** Thrown when an archive path or link is unsafe (traversal, absolute, escape). */
@@ -243,12 +270,10 @@ async function sha256File(absolutePath: string, allowedRoot: string): Promise<st
 }
 
 /**
- * Copy a regular file into `destinationPath` reading through an `O_NOFOLLOW`
- * descriptor whose opened inode is proven to sit inside `allowedRoot` (the
- * canonical tenant filesystem root). A source swapped to a symlink after the
- * walk, or one whose ancestor directory was swapped so it resolves outside the
- * tenant root, is refused rather than copied. Exported for unit coverage of the
- * copy path's symlink and containment refusals.
+ * Copy a regular file into `destinationPath` through the symlink-safe,
+ * root-containment-checked open (see {@link openRegularFileNoFollow}): an
+ * out-of-root source is refused, not copied. Exported for unit coverage of the
+ * copy path's refusals.
  */
 export async function copyRegularFileNoFollow(
   sourcePath: string,
@@ -276,13 +301,39 @@ interface WalkAccumulator {
 }
 
 /**
- * Determine whether a symlink target stays within the tenant root. `linkTarget`
- * is resolved relative to the directory that contains the link.
+ * If `linkTarget` (resolved relative to the link's own directory) stays within
+ * `root`, return a canonical POSIX target RELATIVE TO THE LINK'S DIRECTORY that
+ * points at the same in-root location; otherwise return null.
+ *
+ * Normalising to a link-relative target is what makes an internal link portable.
+ * An absolute source-internal target (e.g. `/tenants/<id>/repos/x`) is accepted
+ * at export because it resolves inside the source root, but on restore it would
+ * be validated against a DIFFERENT staging/destination root and rejected — the
+ * round-trip asymmetry. Rewriting every accepted internal target to a
+ * link-relative path preserves the same in-root topology under any root, so the
+ * link stages and restores safely, while a target escaping the root still
+ * returns null (skipped, never archived).
+ */
+function internalSymlinkRelativeTarget(
+  root: string,
+  linkAbsoluteDir: string,
+  linkTarget: string
+): string | null {
+  const targetAbsolute = resolve(linkAbsoluteDir, linkTarget);
+  const relFromRoot = relative(root, targetAbsolute);
+  if (relFromRoot === '' || relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) {
+    return null;
+  }
+  return relative(linkAbsoluteDir, targetAbsolute).split(sep).join('/');
+}
+
+/**
+ * Whether a symlink target stays within the tenant root. Thin boolean wrapper
+ * over {@link internalSymlinkRelativeTarget}, used by the restore path to reject
+ * a link whose stored target would escape the destination root.
  */
 function isInternalSymlink(root: string, linkAbsoluteDir: string, linkTarget: string): boolean {
-  const targetAbsolute = resolve(linkAbsoluteDir, linkTarget);
-  const rel = relative(root, targetAbsolute);
-  return rel !== '' && !rel.startsWith('..') && resolve(rel) !== rel;
+  return internalSymlinkRelativeTarget(root, linkAbsoluteDir, linkTarget) !== null;
 }
 
 async function walkDirectory(
@@ -309,10 +360,13 @@ async function walkDirectory(
     const info = await lstat(absolutePath);
 
     if (info.isSymbolicLink()) {
-      const linkTarget = await readlink(absolutePath);
-      if (!isInternalSymlink(root, absoluteDir, linkTarget)) {
-        // A link pointing outside the tenant root is not tenant data and could
-        // exfiltrate unrelated files on restore — record and skip.
+      const rawTarget = await readlink(absolutePath);
+      // Normalise an accepted internal target to a canonical link-relative path
+      // so it round-trips and restores under any root; a link pointing outside
+      // the tenant root is not tenant data and could exfiltrate unrelated files
+      // on restore — record and skip.
+      const linkTarget = internalSymlinkRelativeTarget(root, absoluteDir, rawTarget);
+      if (linkTarget === null) {
         acc.unsafeSymlinkCount += 1;
         continue;
       }
@@ -473,10 +527,8 @@ export async function copyTenantFilesystemInto(
       await symlink(entry.linkTarget as string, destination);
     } else {
       await mkdir(dirname(destination), { recursive: true });
-      // Read through O_NOFOLLOW and prove the opened inode resolves inside the
-      // canonical tenant root: a file swapped to a symlink, or one whose ancestor
-      // directory was swapped so it resolves outside the root, is refused rather
-      // than copied (the export fails closed instead of archiving foreign bytes).
+      // Symlink-safe, root-contained read (see openRegularFileNoFollow): an
+      // out-of-root source fails the export closed instead of archiving it.
       await copyRegularFileNoFollow(
         join(root, entry.path.split('/').join(sep)),
         destination,

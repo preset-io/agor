@@ -1,5 +1,21 @@
 -- Exact schema-derived set of 91 foreign keys whose child and parent are both movable tenant-manifest tables.
 -- ALTER CONSTRAINT preserves every column and ON UPDATE/ON DELETE action; normal transactions remain initially immediate.
+--
+-- Each ALTER CONSTRAINT briefly needs ACCESS EXCLUSIVE on its table. Bound the
+-- wait to acquire that lock so a single busy table cannot make this migration
+-- queue behind a long-running transaction and, while queued, stall every new
+-- query on that table for up to statement_timeout (60s; see client.ts). The
+-- migrator runs all pending migrations in ONE transaction, so this SET LOCAL
+-- applies to the 91 ALTERs below (and auto-clears at commit — it never leaks
+-- onto the pooled connection). lock_timeout (3s) is deliberately far below the
+-- 60s statement_timeout so a contended lock fails fast and specifically rather
+-- than after a long statement-timeout stall.
+--
+-- Rollout: if any ALTER cannot acquire its lock within 3s the whole migration
+-- transaction rolls back with no partial application; retry during a quieter
+-- window. On an idle/low-traffic database every lock is uncontended and the
+-- migration completes in one pass.
+SET LOCAL lock_timeout = '3s';--> statement-breakpoint
 ALTER TABLE "app_variables" ALTER CONSTRAINT "app_variables_updated_by_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
 ALTER TABLE "artifact_trust_grants" ALTER CONSTRAINT "artifact_trust_grants_user_id_users_user_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint
 ALTER TABLE "artifacts" ALTER CONSTRAINT "artifacts_board_id_boards_board_id_fk" DEFERRABLE INITIALLY IMMEDIATE;--> statement-breakpoint

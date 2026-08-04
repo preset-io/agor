@@ -16,6 +16,7 @@ import {
   acquireTenantWriteGate,
   assertTenantWritable,
   inspectTenantWriteGate,
+  isTenantWriteMethodName,
   readTenantWriteGate,
   releaseTenantWriteGate,
   TENANT_WRITE_GATE_KEY,
@@ -62,6 +63,52 @@ describe('reserved coordinates', () => {
   it('are stable identifiers used to store the gate record', () => {
     expect(TENANT_WRITE_GATE_NAMESPACE).toBe('agor:tenant-write-gate');
     expect(TENANT_WRITE_GATE_KEY).toBe('state');
+  });
+});
+
+describe('isTenantWriteMethodName', () => {
+  it('classifies read methods as non-writes', () => {
+    for (const name of [
+      'get',
+      'getById',
+      'findAll',
+      'findEnabledTenantRefs',
+      'list',
+      'listServers',
+      'count',
+      'countBySession',
+      'exists',
+      'hasApiKey',
+      'isEnabled',
+      'canMutate',
+      'resolveUserAccess',
+      'searchStories',
+    ]) {
+      expect(isTenantWriteMethodName(name)).toBe(false);
+    }
+  });
+
+  it('classifies mutators as writes, failing closed on unknown names', () => {
+    for (const name of [
+      'create',
+      'update',
+      'delete',
+      'patch',
+      'remove',
+      'upsertBoardObject',
+      'markConsumed',
+      'setPrimaryTeammate',
+      'updateLastMessage',
+      'clearZoneReferences',
+      'revoke',
+      'unresolve',
+      // Compound mutator beginning with a read-ish verb still writes.
+      'getOrCreateNode',
+      // Unrecognised verb: fail closed to a write.
+      'frobnicate',
+    ]) {
+      expect(isTenantWriteMethodName(name)).toBe(true);
+    }
   });
 });
 

@@ -59,6 +59,58 @@ import { runWithTenantDatabaseScope } from './tenant-scope';
 export const TENANT_WRITE_GATE_NAMESPACE = 'agor:tenant-write-gate';
 export const TENANT_WRITE_GATE_KEY = 'state';
 
+/**
+ * Repository method-name prefixes that only read. Everything else is treated as
+ * a write so the tenant unit-of-work boundary ({@link
+ * bindRepositoryToTenantUnitOfWork}) enforces the gate on any mutator, including
+ * one whose name this list does not anticipate — fail closed, never fail open.
+ * A read whose name is not recognised is only over-gated while a freeze is
+ * actually held (a no-op otherwise), so the conservative default costs nothing
+ * in steady state.
+ */
+const READ_METHOD_PREFIXES = [
+  'get',
+  'find',
+  'list',
+  'count',
+  'exists',
+  'has',
+  'is',
+  'can',
+  'resolve',
+  'search',
+  'lookup',
+  'read',
+  'load',
+  'fetch',
+  'query',
+  'enrich',
+  'scan',
+  'neighbors',
+] as const;
+
+/**
+ * Classify a repository method name as a write (gated) or a read (never gated),
+ * the shared basis for enforcing the write gate at the tenant unit-of-work
+ * boundary. Fail closed: a name that matches no read prefix is a write. Compound
+ * mutators that begin with a read-ish verb (e.g. `getOrCreateNode`) are writes.
+ */
+export function isTenantWriteMethodName(name: string): boolean {
+  if (/^getOr[A-Z]/.test(name)) return true;
+  for (const prefix of READ_METHOD_PREFIXES) {
+    if (name === prefix) return false;
+    // Match a camelCase boundary so `get` matches `getFoo` but not `getaway`.
+    if (
+      name.length > prefix.length &&
+      name.startsWith(prefix) &&
+      name[prefix.length] === name[prefix.length].toUpperCase()
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Thrown by enforcement when a tenant write is attempted during a freeze. */
 export class TenantWriteGateActiveError extends Error {
   readonly tenantId: string;

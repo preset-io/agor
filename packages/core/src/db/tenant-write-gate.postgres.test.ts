@@ -13,7 +13,7 @@
 import { count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { UUID } from '../types/id';
+import type { BranchID, UUID } from '../types/id';
 import { createDatabase, type Database } from './client';
 import { isPostgresDatabase, select } from './database-wrapper';
 import { initializeDatabase } from './migrate';
@@ -22,7 +22,8 @@ import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import * as pg from './schema.postgres';
 import { deleteTenantData } from './tenant-deletion';
-import { runWithTenantDatabaseScope } from './tenant-scope';
+import { runWithTenantContext, runWithTenantDatabaseScope } from './tenant-scope';
+import { bindRepositoryToTenantUnitOfWork } from './tenant-unit-of-work';
 import {
   acquireTenantWriteGate,
   assertTenantWritable,
@@ -218,6 +219,64 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
     expect(released.reason).toBe('released');
     const after = await inspectTenantWriteGate(db, tenant);
     expect(after.active).toBe(false);
+
+    await deleteTenantData(db, tenant);
+  });
+
+  it('gates writes at the tenant unit-of-work boundary while reads pass (deferred-writer path)', async () => {
+    const tenant = `wg-${generateId()}`;
+    await seedTenant(db, tenant);
+
+    // Discover the seeded branch + session ids (reads).
+    const { branchId, sessionId } = await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      const branchRows = (await select(scoped, { id: pg.branches.branch_id })
+        .from(pg.branches)
+        .where(eq(pg.branches.tenant_id, tenant))
+        .all()) as Array<{ id: string }>;
+      const sessionRows = (await select(scoped, { id: pg.sessions.session_id })
+        .from(pg.sessions)
+        .where(eq(pg.sessions.tenant_id, tenant))
+        .all()) as Array<{ id: string }>;
+      return { branchId: branchRows[0].id as BranchID, sessionId: sessionRows[0].id };
+    });
+
+    // Bind a repository to the unit-of-work boundary and drive it with ONLY a
+    // tenant identity in context (no ambient DB scope) — the gateway / MCP /
+    // custom-route shape that never reaches the request-hook gate check.
+    const sessionRepo = bindRepositoryToTenantUnitOfWork(db as never, new SessionRepository(db));
+
+    const { generation } = await acquireTenantWriteGate(db, tenant, { reason: 'freeze' });
+
+    await runWithTenantContext(tenant, async () => {
+      // A read still resolves while the gate is held.
+      await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+        session_id: sessionId,
+      });
+      // A write fails closed at the boundary.
+      await expect(
+        sessionRepo.create({
+          session_id: generateId(),
+          branch_id: branchId,
+          agentic_tool: 'claude-code',
+          created_by: 'write-gate-test-user',
+        })
+      ).rejects.toBeInstanceOf(TenantWriteGateActiveError);
+    });
+
+    // Nothing was written while gated.
+    expect(await countTenantSessions(db, tenant)).toBe(1);
+
+    // After release the same boundary admits the write.
+    await releaseTenantWriteGate(db, tenant, { generation });
+    await runWithTenantContext(tenant, async () => {
+      await sessionRepo.create({
+        session_id: generateId(),
+        branch_id: branchId,
+        agentic_tool: 'claude-code',
+        created_by: 'write-gate-test-user',
+      });
+    });
+    expect(await countTenantSessions(db, tenant)).toBe(2);
 
     await deleteTenantData(db, tenant);
   });

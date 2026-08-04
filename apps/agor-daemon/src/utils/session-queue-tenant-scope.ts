@@ -107,9 +107,8 @@ export function deferWithSessionQueueTenantScope(
     console.error(`❌ [Queue] ${options.label} failed:`, error);
   };
 
-  // A queue drain is a tenant writer. Before running it, assert the tenant is
-  // not write-gated inside a short tenant transaction; a held gate fails closed
-  // and the work is deferred via handleError until the gate is released.
+  // A queue drain is a deferred tenant writer: fail closed at the write gate
+  // (see assertTenantWritable) before running; a held gate defers via handleError.
   const guarded = (tenantId: string, scopedParams: QueueTenantParams): Promise<void> =>
     runWithTenantDatabaseScope(options.db, tenantId, (scoped) =>
       assertTenantWritable(scoped, tenantId)

@@ -106,6 +106,67 @@ describe('walkTenantFilesystemTree', () => {
     expect(linkPaths).not.toContain('sub/escape.link');
     expect(walk.unsafeSymlinkCount).toBe(1);
   });
+
+  it('normalises an absolute internal symlink target to a link-relative path', async () => {
+    const root = join(scratch, 'tenant');
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await mkdir(join(root, 'uploads'), { recursive: true });
+    await writeFile(join(root, 'uploads', 'real.txt'), 'real');
+    // An ABSOLUTE target that happens to live inside the source root.
+    await symlink(join(root, 'uploads', 'real.txt'), join(root, 'sub', 'abs.link'));
+    const walk = await walkTenantFilesystemTree(root);
+    const link = walk.entries.find((e) => e.path === 'sub/abs.link');
+    expect(link?.type).toBe('symlink');
+    // Stored as a canonical link-relative POSIX path, not the absolute target.
+    expect(link?.linkTarget).toBe('../uploads/real.txt');
+    expect(walk.unsafeSymlinkCount).toBe(0);
+  });
+
+  it('skips an absolute symlink target that escapes the root', async () => {
+    const root = join(scratch, 'tenant');
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await symlink('/etc/passwd', join(root, 'sub', 'abs-escape.link'));
+    const walk = await walkTenantFilesystemTree(root);
+    expect(walk.entries.some((e) => e.path === 'sub/abs-escape.link')).toBe(false);
+    expect(walk.unsafeSymlinkCount).toBe(1);
+  });
+});
+
+describe('absolute-internal symlink round trip', () => {
+  it('restores an absolute-internal link safely under a different destination root', async () => {
+    // Export a tree whose link uses an ABSOLUTE target inside the source root,
+    // then stage into a DIFFERENT root. Before normalisation the absolute target
+    // would be validated against the new staging root and rejected; the
+    // link-relative rewrite makes it restore correctly and stay in-root.
+    const source = join(scratch, 'src');
+    await mkdir(join(source, 'sub'), { recursive: true });
+    await mkdir(join(source, 'uploads'), { recursive: true });
+    await writeFile(join(source, 'uploads', 'real.txt'), 'payload');
+    await symlink(join(source, 'uploads', 'real.txt'), join(source, 'sub', 'abs.link'));
+
+    const bundleFiles = join(scratch, 'bundle', 'files');
+    const walk = await copyTenantFilesystemInto(source, bundleFiles);
+
+    // Stage into a destination whose absolute path differs from the source.
+    const destination = join(scratch, 'restored-elsewhere');
+    await stageTenantFilesystem(walk.entries, bundleFiles, destination);
+
+    // The restored link resolves to the in-root file, not outside it.
+    expect(await readFile(join(destination, 'sub', 'abs.link'), 'utf8')).toBe('payload');
+    const restored = await walkTenantFilesystemTree(destination);
+    const link = restored.entries.find((e) => e.path === 'sub/abs.link');
+    expect(link?.linkTarget).toBe('../uploads/real.txt');
+  });
+
+  it('still refuses to stage a link whose target escapes the destination root', async () => {
+    await expect(
+      stageTenantFilesystem(
+        [{ path: 'sub/evil.link', type: 'symlink', size: 0, linkTarget: '../../etc', mode: 0o777 }],
+        join(scratch, 'bundle', 'files'),
+        join(scratch, '.staging-escape')
+      )
+    ).rejects.toThrow(UnsafeArchivePathError);
+  });
 });
 
 describe('summarizeTenantFilesystem', () => {

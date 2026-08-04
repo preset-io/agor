@@ -13,16 +13,19 @@
 
 import type { Database } from './client';
 import {
+  assertManifestTablesMatchCatalog,
   readManifest,
-  sha256Hex,
   type TenantArchiveManifest,
   verifyArchiveIntegrity,
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
-import { exportTenantTableRows } from './tenant-database-io';
+import { snapshotTenantTableHashes } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
-import { type TenantFilesystemEntry, walkTenantFilesystemTree } from './tenant-filesystem';
-import { buildTenantInsertOrder } from './tenant-portability-manifest';
+import {
+  type TenantFilesystemEntry,
+  tenantFilesystemEntriesEqual,
+  walkTenantFilesystemTree,
+} from './tenant-filesystem';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Strict, bounded evidence produced by {@link verifyTenant}. */
@@ -71,16 +74,6 @@ export interface TenantVerificationOptions {
   maxEvidence?: number;
 }
 
-function fsEntryMatches(a: TenantFilesystemEntry, b: TenantFilesystemEntry): boolean {
-  return (
-    a.type === b.type &&
-    a.size === b.size &&
-    a.mode === b.mode &&
-    (a.sha256 ?? null) === (b.sha256 ?? null) &&
-    (a.linkTarget ?? null) === (b.linkTarget ?? null)
-  );
-}
-
 function compareFilesystem(
   manifest: TenantArchiveManifest,
   live: TenantFilesystemEntry[],
@@ -97,7 +90,7 @@ function compareFilesystem(
 
   for (const [path, entry] of archived) {
     const liveEntry = liveByPath.get(path);
-    if (!liveEntry || !fsEntryMatches(entry, liveEntry)) record(path);
+    if (!liveEntry || !tenantFilesystemEntriesEqual(entry, liveEntry)) record(path);
   }
   for (const path of liveByPath.keys()) {
     if (!archived.has(path)) record(path);
@@ -142,25 +135,21 @@ export async function verifyTenant(
   const mismatchedTables: string[] = [];
   if (identityMatched) {
     dbChecked = true;
+    // With a matching schema, the archive must carry exactly the live catalog's
+    // movable tenant tables before any per-table comparison is meaningful.
+    assertManifestTablesMatchCatalog(manifest, identity.tenantTables);
     const archivedByName = new Map(manifest.database.tables.map((table) => [table.name, table]));
-    const insertOrder = buildTenantInsertOrder();
     await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-      for (const table of insertOrder) {
-        const { jsonl, rowCount } = await exportTenantTableRows(
-          scoped,
-          table.name,
-          tenantId,
-          table.tenantColumn
-        );
-        const archivedTable = archivedByName.get(table.name);
-        const liveHash = sha256Hex(Buffer.from(jsonl, 'utf8'));
+      const snapshots = await snapshotTenantTableHashes(scoped, tenantId);
+      for (const snapshot of snapshots) {
+        const archivedTable = archivedByName.get(snapshot.name);
         const matches =
           archivedTable !== undefined &&
-          archivedTable.rowCount === rowCount &&
-          archivedTable.sha256 === liveHash;
+          archivedTable.rowCount === snapshot.rowCount &&
+          archivedTable.sha256 === snapshot.sha256;
         if (!matches) {
           dbMismatchCount += 1;
-          if (mismatchedTables.length < maxEvidence) mismatchedTables.push(table.name);
+          if (mismatchedTables.length < maxEvidence) mismatchedTables.push(snapshot.name);
         }
       }
     });

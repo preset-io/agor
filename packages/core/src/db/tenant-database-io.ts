@@ -18,7 +18,8 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
-import { canonicalJson } from './tenant-archive';
+import { canonicalJson, sha256Hex } from './tenant-archive';
+import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { TENANT_WRITE_GATE_KEY, TENANT_WRITE_GATE_NAMESPACE } from './tenant-write-gate';
 
 const TENANT_SCHEMA = 'public';
@@ -99,6 +100,38 @@ export async function exportTenantTableRows(
     jsonl: lines.length > 0 ? `${lines.join('\n')}\n` : '',
     rowCount: lines.length,
   };
+}
+
+/** One live tenant table's re-derived row count and content hash. */
+export interface TenantTableSnapshot {
+  name: string;
+  rowCount: number;
+  /** SHA-256 hex of the canonical JSONL bytes of this table's tenant rows. */
+  sha256: string;
+}
+
+/**
+ * Re-derive every movable tenant table's row count and content hash from the
+ * live database for one tenant, in deterministic insert order — the minimal
+ * shared basis both import (destination classification) and verify (drift
+ * detection) build on. Must run inside an active tenant database scope; the
+ * caller owns comparison and evidence aggregation.
+ */
+export async function snapshotTenantTableHashes(
+  scoped: Database,
+  tenantId: string
+): Promise<TenantTableSnapshot[]> {
+  const snapshots: TenantTableSnapshot[] = [];
+  for (const table of buildTenantInsertOrder()) {
+    const { jsonl, rowCount } = await exportTenantTableRows(
+      scoped,
+      table.name,
+      tenantId,
+      table.tenantColumn
+    );
+    snapshots.push({ name: table.name, rowCount, sha256: sha256Hex(Buffer.from(jsonl, 'utf8')) });
+  }
+  return snapshots;
 }
 
 /**
