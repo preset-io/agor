@@ -352,13 +352,17 @@ export function useAgorData(
         // gate ignores them. We apply through the store's `applyMaps` (not the
         // per-entity setters), keeping fetchData's deps stable so the subscribe
         // effect doesn't re-fire.
-        void client
-          .service('agentic-tool-settings')
-          .findAll()
-          .then((settings) => agorStore.getState().setAgenticToolSettings(settings))
-          .catch((settingsError) =>
-            console.error('Failed to load workspace agentic-tool settings:', settingsError)
-          );
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        void runHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
 
         void runHydration(
           'mcp-servers',
@@ -1185,17 +1189,19 @@ export function useAgorData(
     usersService.on('removed', realtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
+    // A single-row realtime event is an INCREMENTAL upsert, not a complete
+    // snapshot — merge the row without flipping the hydration gate, so a patch
+    // that lands before the full fetch can't mark a partial map authoritative.
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
-      const current = agorStore.getState().agenticToolSettingsByName;
-      agorStore
-        .getState()
-        .setAgenticToolSettings(
-          [...current.values()].filter((item) => item.tool !== updated.tool).concat(updated)
-        );
+      // Bump the live-write revision so a background full-fetch that raced this
+      // upsert discards its (now-stale) snapshot instead of overwriting it.
+      bumpRevision('agenticToolSettings');
+      agorStore.getState().upsertAgenticToolSetting(updated);
     };
     agenticToolSettingsService.on('patched', agenticToolSettingsPatched);
+    agenticToolSettingsService.on('created', agenticToolSettingsPatched);
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
@@ -1441,6 +1447,7 @@ export function useAgorData(
       usersService.removeListener('removed', realtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
+      agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
 
       mcpServersService.removeListener('created', realtime.mcpServerCreated);
       mcpServersService.removeListener('patched', realtime.mcpServerPatched);

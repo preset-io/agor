@@ -1,8 +1,9 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp } from 'antd';
+import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
 import { type ReactNode, useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
 
 vi.mock('../ApiKeyFields', () => ({
@@ -10,7 +11,9 @@ vi.mock('../ApiKeyFields', () => ({
   TOOL_FIELD_CONFIGS: {
     'claude-code': [],
     codex: [{ field: 'OPENAI_API_KEY', label: 'OpenAI API Key' }],
-    gemini: [],
+    // A second provider with an Authentication pane, so tests can prove a
+    // sub-tab from one provider's search hit doesn't leak onto another.
+    gemini: [{ field: 'GEMINI_API_KEY', label: 'Gemini API Key' }],
     opencode: [],
     copilot: [],
     cursor: [],
@@ -38,7 +41,18 @@ vi.mock('../AgenticToolConfigForm', async () => {
     </Radio.Group>
   );
 
+  // Mirror the real rendered model/provider labels so the search index (which
+  // derives provider entries from this) stays findable in tests.
+  const MODEL_LABELS: Record<string, string> = {
+    codex: 'Codex Model',
+    gemini: 'Gemini Model',
+    opencode: 'OpenCode LLM Provider',
+    copilot: 'Copilot Model',
+    cursor: 'Cursor Model',
+  };
+
   return {
+    modelLabelForTool: (tool: string) => MODEL_LABELS[tool] ?? 'Claude Model',
     AgenticToolConfigForm: ({ agenticTool }: { agenticTool: AgenticToolName }) => (
       <>
         <Form.Item name="permissionMode" label="Permission Mode">
@@ -79,8 +93,63 @@ vi.mock('../AgenticToolConfigForm', async () => {
   };
 });
 
+// The MCP field is user-level but lives inside each provider form. Stand it in
+// with a Form-connected control so clicking it fires the form's onValuesChange
+// (how the real Select drives dirty-tracking + the mcp-edit-source tracking).
+vi.mock('../MCPServerSelect', async () => {
+  const { Form } = await import('antd');
+  const McpControl = ({ onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <button type="button" onClick={() => onChange?.(['mcp-picked'])}>
+      pick-mcp
+    </button>
+  );
+  return {
+    SessionMcpServersField: () => (
+      <Form.Item name="mcpServerIds" label="MCP servers">
+        <McpControl />
+      </Form.Item>
+    ),
+  };
+});
+
+// The real AudioSettingsTab renders an AntD Slider whose CSS-var `border`
+// shorthand crashes jsdom's cssstyle normaliser on re-render. This faithful
+// stand-in drives the SAME shared audio form (the `enabled` field the parent
+// hydrates and saves), so the parent's audio draft-preservation logic is
+// exercised without the environment crash.
+vi.mock('./AudioSettingsTab', async () => {
+  const { Form } = await import('antd');
+  // A plain checkbox (no AntD Wave/border rules) avoids the cssstyle crash while
+  // still binding to the shared audio form's `enabled` field.
+  return {
+    AudioSettingsTab: ({
+      form,
+      onValuesChange,
+    }: {
+      form: FormInstance;
+      onValuesChange?: () => void;
+    }) => (
+      <Form form={form} onValuesChange={onValuesChange}>
+        <Form.Item name="enabled" valuePropName="checked">
+          <input type="checkbox" aria-label="Enable chimes" />
+        </Form.Item>
+      </Form>
+    ),
+  };
+});
+
 function renderWithApp(children: ReactNode) {
-  return render(<AntApp>{children}</AntApp>);
+  // `hashed: false` drops AntD's per-class CSS-in-JS hash, which is the dominant
+  // cost of mounting this Form/Menu/Modal-heavy tree in jsdom (seconds per
+  // render otherwise). It only removes the `css-dev-only-*` hash suffix —
+  // semantic `.ant-*` classes and all component behaviour are unchanged — so it
+  // keeps these integration tests within the CI per-test timeout without
+  // altering what they exercise.
+  return render(
+    <ConfigProvider theme={{ hashed: false }}>
+      <AntApp>{children}</AntApp>
+    </ConfigProvider>
+  );
 }
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -122,7 +191,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code default')).toBeChecked();
     }, ASYNC);
@@ -130,7 +199,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
-    fireEvent.click(screen.getByText('Session Defaults'));
+    fireEvent.click(screen.getByText('Session defaults'));
     fireEvent.click(screen.getByLabelText('codex allow-all'));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -149,40 +218,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       });
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes without rewriting OpenCode defaults when provider settings are unchanged', async () => {
-    const user = makeUser({
-      default_agentic_config: {
-        opencode: {
-          permissionMode: 'yolo',
-          modelConfig: { mode: 'exact', provider: 'kimi-for-coding', model: 'k3' },
-        },
-      },
-      default_agentic_selection: {
-        opencode: { source: 'inline' },
-      },
-    });
-    const onUpdate = vi.fn();
-    const onClose = vi.fn();
-
-    renderWithApp(
-      <UserSettingsModal
-        open
-        onClose={onClose}
-        user={user}
-        currentUser={user}
-        client={null}
-        onUpdate={onUpdate}
-        initialTab="opencode"
-      />
-    );
-
-    await screen.findByRole('heading', { name: 'OpenCode' });
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
-
-    expect(onUpdate).not.toHaveBeenCalled();
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), ASYNC);
   });
 
   it('offers the three Codex authentication methods, defaulting to the sign-in view for a subscription', async () => {
@@ -235,7 +270,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
     await waitFor(() => {
       expect(screen.getByLabelText('claude-code model claude-sonnet-5')).toBeChecked();
     }, ASYNC);
@@ -263,7 +298,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('saves General settings and closes from the footer', async () => {
+  it('saves a new password from the Security panel and closes from the footer', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {});
     const onClose = vi.fn();
@@ -279,6 +314,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+
     const passwordInput = screen.getByPlaceholderText('••••••••') as HTMLInputElement;
     fireEvent.change(passwordInput, { target: { value: 'new-password' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -293,7 +331,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the modal open when saving General settings fails', async () => {
+  it('keeps the modal open when saving Profile settings fails', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {
       throw new Error('save failed');
@@ -323,7 +361,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     consoleError.mockRestore();
   });
 
-  it('keeps the modal open when saving Audio settings fails', async () => {
+  it('keeps the modal open when saving Preferences settings fails', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {
       throw new Error('save failed');
@@ -342,8 +380,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /audio/i }));
-    await screen.findByRole('heading', { name: 'Audio' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
@@ -406,8 +444,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     renderWithApp(<Harness />);
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /env vars/i }));
-    await screen.findByRole('heading', { name: 'Environment Variables' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /environment variables/i }));
+    await screen.findByRole('heading', { name: 'Environment variables' });
 
     fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
       target: { value: 'ALPHA_TOKEN' },
@@ -422,8 +460,608 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       });
     }, ASYNC);
 
-    expect(screen.getByRole('heading', { name: 'Environment Variables' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Environment variables' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the target-user identity and admin-only access when an admin edits another user', async () => {
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // Approved addition: the modal makes clear whose settings are being edited.
+    expect(screen.getByText('Editing Bob')).toBeInTheDocument();
+    // Personal API tokens are caller-scoped, so the entry is hidden here.
+    expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
+    // Groups & Access is admin-only nav; the force-password control lives there.
+    fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
+    await screen.findByRole('heading', { name: 'Groups & access' });
+    expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+  });
+
+  it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({
+      user_id: 'user-2',
+      name: 'Bob',
+      agentic_auth_methods: { codex: 'subscription' },
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    // Only the API-key path (which targets the edited user) is offered; the
+    // ChatGPT sign-in / import-login-file controls act on the caller's own
+    // login, so they must not appear when editing someone else.
+    expect(screen.queryByText('Sign in with ChatGPT')).not.toBeInTheDocument();
+    expect(screen.queryByText('Import login file')).not.toBeInTheDocument();
+  });
+
+  it('filters the sidebar via the search box', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'token' },
+    });
+
+    expect(screen.getByRole('menuitem', { name: /api tokens/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^profile$/i })).not.toBeInTheDocument();
+  });
+
+  it('surfaces a panel-content setting via global search and navigates on click', async () => {
+    const user = makeUser();
+    // "Volume" is a Preferences control, not a nav name — global search must find it.
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'volume' },
+    });
+    const hit = await screen.findByRole('menuitem', { name: /volume/i });
+    // Only setting hits (no page match) — no divider should render. (The modal
+    // is portaled to the document body, so query there, not the render root.)
+    expect(document.querySelector('.ant-menu-item-divider')).not.toBeInTheDocument();
+    fireEvent.click(hit);
+
+    // Clicking the hit lands on the hosting panel and clears the query.
+    await screen.findByRole('heading', { name: 'Preferences' });
+    expect(screen.getByPlaceholderText('Search settings')).toHaveValue('');
+  });
+
+  it('ranks tab-membership above label-vs-keyword and divides pages from settings', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // 'sec' matches: Security (page name), Password (only via keyword
+    // 'security', but it lives in the matched Security tab), Only-play-for
+    // (keyword 'seconds'), and Environment variables (page alias 'secrets').
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'sec' },
+    });
+
+    const texts = (await screen.findAllByRole('menuitem')).map((el) => el.textContent ?? '');
+    // Exact order: matched page, its own setting, then other-tab keyword-only
+    // hits (a specific setting ahead of a broad page-alias hit).
+    expect(texts).toHaveLength(4);
+    expect(texts[0]).toMatch(/^Security/);
+    expect(texts[1]).toMatch(/^Password/);
+    expect(texts[2]).toMatch(/Only play for tasks longer than/);
+    expect(texts[3]).toMatch(/Environment variables/);
+
+    // Exactly one divider, at the page/settings boundary.
+    expect(document.querySelectorAll('.ant-menu-item-divider')).toHaveLength(1);
+
+    // Clicking a post-divider (setting) result navigates to its panel.
+    fireEvent.click(screen.getByRole('menuitem', { name: /Only play for tasks longer than/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+  });
+
+  it('classifies multi-token page matches (every token must be in the page name)', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'code claude' },
+    });
+
+    // Both tokens occur in "Claude Code", so it's still classified as a page and
+    // ranks first — and a divider separates it from its settings.
+    const items = await screen.findAllByRole('menuitem');
+    expect(items[0].textContent).toMatch(/^Claude Code/);
+    expect(document.querySelectorAll('.ant-menu-item-divider')).toHaveLength(1);
+  });
+
+  it('indexes settings by their rendered label so on-screen text is findable', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    const search = screen.getByPlaceholderText('Search settings');
+    for (const label of ['Use Slack avatar when available', 'Only play for tasks longer than']) {
+      fireEvent.change(search, { target: { value: label } });
+      expect(
+        await screen.findByRole('menuitem', { name: new RegExp(label, 'i') })
+      ).toBeInTheDocument();
+    }
+  });
+
+  it('flushes edits from a panel the user navigated away from (no data loss)', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Edit Name on Profile, then move to Security and save from there.
+    fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'new-pass' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    // Both the Profile edit and the Security edit land in the flush.
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    const patch = onUpdate.mock.calls[0][1];
+    expect(patch.name).toBe('Renamed');
+    expect(patch.password).toBe('new-pass');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('flushes a dirty main-panel edit when saving from a provider tab', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Edit Name on Profile, then jump to a provider tab and save from there.
+    fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    await screen.findByRole('heading', { name: 'Claude Code' });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    // The provider Save path must still commit the dirty Profile edit.
+    await waitFor(() => {
+      expect(onUpdate.mock.calls.some(([, patch]) => patch?.name === 'Renamed')).toBe(true);
+    }, ASYNC);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists the most-recently-edited tool MCP servers, not the first dirty tool', async () => {
+    const user = makeUser({
+      default_agentic_config: {
+        'claude-code': { permissionMode: 'default' },
+        codex: { permissionMode: 'ask' },
+      },
+      default_agentic_selection: {
+        'claude-code': { source: 'inline' },
+        codex: { source: 'inline' },
+      },
+      default_mcp_server_ids: [],
+    });
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Dirty Claude first (so it sorts first in the dirty set), then edit the
+    // user-level MCP list from Codex — the newer edit must win on save.
+    // Claude Code has no credential fields in this mock, so its panel shows the
+    // session defaults directly (no Authentication tab strip).
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    await screen.findByRole('heading', { name: 'Claude Code' });
+    fireEvent.click(await screen.findByLabelText('claude-code acceptEdits'));
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    fireEvent.click(screen.getByText('Session defaults'));
+    fireEvent.click(await screen.findByRole('button', { name: 'pick-mcp' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      const patch = onUpdate.mock.calls.find(([, p]) => p?.default_mcp_server_ids)?.[1];
+      expect(patch?.default_mcp_server_ids).toEqual(['mcp-picked']);
+    }, ASYNC);
+  });
+
+  it('redirects an unauthorized deep-linked tab to Profile', async () => {
+    // A non-admin editing self deep-linked to the admin-only Groups & access
+    // panel must land on Profile, never rendering the admin content.
+    const user = makeUser({ role: 'member' });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+        initialTab="groups"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Groups & access' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Force password change on next login')).not.toBeInTheDocument();
+  });
+
+  it('never loads the caller API keys when an admin opens tokens while editing another user', async () => {
+    // A Feathers stub that records which services are touched. If the
+    // caller-scoped tokens panel ever mounts, PersonalApiKeysTab fetches the
+    // CALLER's keys under the edited user's identity — the leak we must prevent.
+    const services: string[] = [];
+    const client = {
+      service: (name: string) => {
+        services.push(name);
+        return {
+          findAll: vi.fn(async () => []),
+          find: vi.fn(async () => ({ data: [] })),
+          create: vi.fn(async () => ({})),
+          remove: vi.fn(async () => ({})),
+        };
+      },
+    } as unknown as AgorClient;
+
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="personal-api-keys"
+      />
+    );
+
+    // The deep link resolves to Profile synchronously — the tokens panel never
+    // mounts, so the api-keys service is never contacted.
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'API tokens' })).not.toBeInTheDocument();
+    expect(services).not.toContain('api/v1/user/api-keys');
+  });
+
+  it('falls back to Profile for a deep link to a tenant-disabled provider', async () => {
+    // Gemini is disabled for the tenant, so `provider:gemini` is not a visible
+    // panel; a stale deep link to it must not render its credential controls.
+    // Minimal seed — the modal only reads `.enabled` to decide visibility, and a
+    // disabled tool is filtered out before any other field is touched.
+    agorStore.getState().setAgenticToolSettings([{ tool: 'gemini', enabled: false }] as never);
+    const user = makeUser();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+        initialTab="gemini"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Gemini' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /gemini/i })).not.toBeInTheDocument();
+  });
+
+  it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="preferences"
+      />
+    );
+
+    // Enable chimes on Preferences (audio defaults to disabled), then leave and
+    // return: the draft must survive rather than reverting to persisted values.
+    // Queried via querySelector to avoid jsdom `getComputedStyle` (cssstyle
+    // 5.3.2 throws on AntD v6's `border: var()` rules).
+    const enableChimes = () =>
+      document.querySelector<HTMLInputElement>('input[aria-label="Enable chimes"]');
+    await waitFor(() => expect(enableChimes()).not.toBeNull());
+    expect(enableChimes()).not.toBeChecked();
+    fireEvent.click(enableChimes() as HTMLInputElement);
+    expect(enableChimes()).toBeChecked();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    await screen.findByRole('heading', { name: 'Security' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+    // Draft survived the round trip rather than reverting to disabled.
+    expect(enableChimes()).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => {
+      const patch = onUpdate.mock.calls.find(([, p]) => p?.preferences?.audio)?.[1];
+      expect(patch?.preferences?.audio?.enabled).toBe(true);
+    }, ASYNC);
+  });
+
+  it('opens a provider search hit on its own sub-tab (Session defaults, not Authentication)', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // 'Sandbox Mode' is a Codex Session-defaults control; its search hit must
+    // land on the Session defaults sub-tab, not the default Authentication view.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'Sandbox Mode' },
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Sandbox Mode/i }));
+
+    await screen.findByRole('heading', { name: 'Codex' });
+    expect(screen.getByRole('tab', { name: 'Session defaults' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('gives the dialog an accessible name even with the header hidden', () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('dialog', { name: 'User Settings' })).toBeInTheDocument();
+  });
+
+  it('fails closed for a disabled-provider deep link while tenant settings hydrate', async () => {
+    // Cold load: tenant tool settings have NOT hydrated yet, so the store reports
+    // every tool as enabled. A `provider:` deep link must not fail open.
+    agorStore.getState().reset();
+    const services: string[] = [];
+    const client = {
+      service: (name: string) => {
+        services.push(name);
+        return {
+          findAll: vi.fn(async () => []),
+          find: vi.fn(async () => ({ data: [] })),
+          create: vi.fn(async () => ({})),
+          remove: vi.fn(async () => ({})),
+          get: vi.fn(async () => ({})),
+        };
+      },
+    } as unknown as AgorClient;
+    const user = makeUser();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="codex"
+      />
+    );
+
+    // During the hydration window the deep link resolves to Profile — no Codex
+    // credential/default content mounts, so its services are never contacted.
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('heading', { name: 'Codex' })).not.toBeInTheDocument();
+    expect(services).not.toContain('agentic-tool-presets');
+    expect(services).not.toContain('check-auth');
+
+    // Settings arrive with Codex disabled — it stays closed.
+    agorStore.getState().setAgenticToolSettings([{ tool: 'codex', enabled: false }] as never);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument()
+    );
+    expect(screen.queryByRole('heading', { name: 'Codex' })).not.toBeInTheDocument();
+    expect(services).not.toContain('agentic-tool-presets');
+  });
+
+  it('does not leak a search sub-tab onto the next provider opened', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    // Codex is already active on its default Authentication sub-tab.
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    // A search hit for the ACTIVE provider's Session defaults switches its sub-tab.
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'Sandbox Mode' },
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Sandbox Mode/i }));
+    expect(screen.getByRole('tab', { name: 'Session defaults' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    // Opening a DIFFERENT provider must land on its own default (Authentication),
+    // not the sub-tab queued for Codex.
+    fireEvent.click(screen.getByRole('menuitem', { name: /gemini/i }));
+    await screen.findByRole('heading', { name: 'Gemini' });
+    expect(screen.getByRole('tab', { name: 'Authentication' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('does not index credential fields hidden by the effective auth method', async () => {
+    // On a ChatGPT subscription the OpenAI key field is not rendered, so a search
+    // for it must not surface a hit that would land on a control that isn't there.
+    const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'OpenAI API Key' },
+    });
+    await screen.findByText(/No settings match/i);
+    expect(screen.queryByRole('menuitem', { name: /OpenAI API Key/i })).not.toBeInTheDocument();
+  });
+  it('closes without rewriting OpenCode defaults when provider settings are unchanged', async () => {
+    const user = makeUser({
+      default_agentic_config: {
+        opencode: {
+          permissionMode: 'yolo',
+          modelConfig: { mode: 'exact', provider: 'kimi-for-coding', model: 'k3' },
+        },
+      },
+      default_agentic_selection: {
+        opencode: { source: 'inline' },
+      },
+    });
+    const onUpdate = vi.fn();
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        initialTab="opencode"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'OpenCode' });
+    fireEvent.click(screen.getByRole('button', { name: /^done$/i }));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), ASYNC);
   });
 
   it('resets OpenCode provider state when the authenticated subject changes', async () => {
@@ -603,4 +1241,14 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText('New User Provider')).toBeInTheDocument();
     expect(screen.queryByText('Delayed Old Provider')).not.toBeInTheDocument();
   });
+});
+
+// The tenant tool-settings store is module-global. Seed it as HYDRATED (empty =
+// every tool enabled) before each test so provider panels render, and clear any
+// per-test override afterwards so visibility never leaks between tests.
+beforeEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
+});
+afterEach(() => {
+  agorStore.getState().setAgenticToolSettings([]);
 });
