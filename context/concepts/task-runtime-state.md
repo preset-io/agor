@@ -125,10 +125,10 @@ The shared pulse vocabulary is:
 - `unknown_activity` — an unrecognized event that is retained as diagnostic
   evidence and fails open.
 
-Provider adapters own the translation from SDK-specific events into this
-vocabulary. The common task contract must not depend on raw provider event
-names. The SDK version manifest beside the mapping makes dependency upgrades
-an explicit mapping-review point.
+Agentic-tool runtime adapters own the translation from SDK-specific events into
+this vocabulary. The common task contract must not depend on raw agentic-tool
+event names. The SDK version manifest beside the mapping makes dependency
+upgrades an explicit mapping-review point.
 
 ## Two supervisors, two failure classes
 
@@ -185,8 +185,8 @@ The termination coordinator is the single owner for executor-backed:
 It first atomically claims `stopping` with a durable `termination_request`.
 The request timestamp fences late or duplicate executor quiescence reports.
 The task-scoped executor receives the committed request over its authenticated
-socket, aborts the provider SDK, runs provider cleanup, and reports quiescence.
-The durable task patch/read covers reconnect and delivery races.
+socket, aborts the agentic-tool runtime, runs adapter cleanup, and reports
+quiescence. The durable task patch/read covers reconnect and delivery races.
 
 Containment then depends on execution mode:
 

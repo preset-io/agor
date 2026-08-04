@@ -197,6 +197,12 @@ coordinator form the current `TaskController`, and existing completion side
 effects remain the incremental `SessionReconciler` seam. This PR does not add
 three framework classes or a second lifecycle.
 
+The slice advances the "Task terminal before runtime release" failure family,
+including interaction-timeout settlement. OpenCode provides cooperative
+cleanup evidence; the daemon maps a quiesced report or invokes containment for
+an unverified report. Existing behavior for other agentic tools remains
+unchanged until their runners adopt the same shared report contract.
+
 ### Authentication and model catalogs
 
 The host authorizes the caller, selects the tenant-scoped credential namespace,
@@ -333,10 +339,18 @@ containment work:
 - executor normalizer selection and the watchdog's native heartbeat filter; and
 - host-owned static presentation such as bundled tool artwork.
 
-The wider runtime migration also still needs stable identities for parallel
-tool/background operations, adoption of the runner report by legacy runners,
-and crash-repairable Session/gateway consequence reconciliation. Those are
-shared host changes from #2090, not OpenCode package behavior.
+The wider runtime migration still needs these shared host changes from #2090,
+not OpenCode package behavior:
+
+- stable identities for parallel tool and background operations;
+- named bounded wait profiles;
+- explicit adapter/version conformance modes, including classifying quiet
+  after unknown observations as adapter incompatibility rather than a semantic
+  stall;
+- adoption of the runner report by legacy runners;
+- crash-repairable Session and gateway consequence reconciliation;
+- one shared runtime-presentation derivation; and
+- removal of the startup-orphan logical-release gap.
 
 They are not extension points for new OpenCode behavior. Migrate each only when
 its host contract can express the behavior for every affected tool without
