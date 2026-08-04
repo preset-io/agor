@@ -127,9 +127,6 @@ export const sessions = sqliteTable(
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
 
-        // Git state
-        git_state: Session['git_state'];
-
         // Genealogy details (children array, fork/spawn points)
         genealogy: {
           fork_point_task_id?: string;

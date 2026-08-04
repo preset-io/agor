@@ -138,11 +138,6 @@ export default class SessionLoadClaude extends BaseCommand {
         last_updated: new Date().toISOString(),
         created_by: 'cli-import',
         branch_id: branch.branch_id,
-        git_state: {
-          ref: 'unknown',
-          base_sha: '',
-          current_sha: '',
-        },
         genealogy: {
           children: [],
         },

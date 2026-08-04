@@ -34,6 +34,12 @@
       "import": "./dist/db/index.js",
       "require": "./dist/db/index.cjs"
     },
+    "./tenant-portability": {
+      "source": "./src/tenant-portability/index.ts",
+      "types": "./dist/tenant-portability/index.d.ts",
+      "import": "./dist/tenant-portability/index.js",
+      "require": "./dist/tenant-portability/index.cjs"
+    },
     "./db/session-guard": {
       "source": "./src/db/session-guard.ts",
       "types": "./dist/db/session-guard.d.ts",

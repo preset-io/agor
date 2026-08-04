@@ -19,7 +19,7 @@
  * - `ExitPlanMode`: only meaningful inside Claude Code's interactive
  *   plan-mode UX. Agor doesn't expose plan-mode approval; the agent should
  *   produce plans as text in its response.
- * - `EnterBranch` / `ExitBranch`: Agor owns branch lifecycle. Letting
+ * - `EnterWorktree` / `ExitWorktree`: Agor owns branch lifecycle. Letting
  *   the agent create/switch/remove branches from inside its own session
  *   would nest branches on the same branch and could delete the session's
  *   CWD.
@@ -38,7 +38,8 @@
 export const CLAUDE_CODE_DISALLOWED_TOOLS = [
   'AskUserQuestion',
   'ExitPlanMode',
-  'EnterBranch',
-  'ExitBranch',
+  // External Claude Code CLI tool names; do not rename with Agor domain terminology.
+  'EnterWorktree',
+  'ExitWorktree',
   'ScheduleWakeup',
 ] as const satisfies readonly string[];

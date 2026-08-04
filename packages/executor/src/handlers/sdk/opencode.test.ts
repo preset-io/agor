@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   permissionServiceCtor: vi.fn(),
   permissionRegister: vi.fn(),
   permissionUnregister: vi.fn(),
+  configureGitSafeDirectories: vi.fn(),
+  stampGitStateAtTaskStart: vi.fn(),
+  stampGitStateAtTaskEnd: vi.fn(),
 }));
 
 vi.mock('../../sdk-handlers/opencode/index.js', () => ({
@@ -67,6 +70,12 @@ vi.mock('./base-executor.js', () => ({
     onStreamChunk: vi.fn(),
     onStreamEnd: vi.fn(),
   }),
+  stampGitStateAtTaskStart: mocks.stampGitStateAtTaskStart,
+  stampGitStateAtTaskEnd: mocks.stampGitStateAtTaskEnd,
+}));
+
+vi.mock('./git-safe-directory.js', () => ({
+  configureSessionGitSafeDirectories: mocks.configureGitSafeDirectories,
 }));
 
 function createClient(order: string[]) {
@@ -104,9 +113,12 @@ describe('executeOpenCodeTask', () => {
     mocks.branchFind.mockResolvedValue({ path: '/worktree' });
     mocks.messagesCreate.mockResolvedValue({});
     mocks.messagesFindBySession.mockResolvedValue([{}, {}]);
+    mocks.configureGitSafeDirectories.mockResolvedValue(undefined);
+    mocks.stampGitStateAtTaskStart.mockResolvedValue(undefined);
+    mocks.stampGitStateAtTaskEnd.mockResolvedValue(undefined);
   });
 
-  it('reports a legacy missing pair before branch, message, or runtime side effects', async () => {
+  it('reports a legacy missing pair before OpenCode branch, message, or runtime side effects', async () => {
     const { client, services } = createClient([]);
     services.sessions.get.mockResolvedValueOnce({
       session_id: '00000000-0000-7000-8000-000000000001',
@@ -138,11 +150,22 @@ describe('executeOpenCodeTask', () => {
     expect(mocks.messagesFindBySession).not.toHaveBeenCalled();
     expect(mocks.messagesCreate).not.toHaveBeenCalled();
     expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(mocks.stampGitStateAtTaskStart).toHaveBeenCalledOnce();
+    expect(mocks.stampGitStateAtTaskEnd).toHaveBeenCalledOnce();
   });
 
   it('uses runTurn as the single module boundary and persists a new provider session on request', async () => {
     const order: string[] = [];
     const { client, services } = createClient(order);
+    mocks.configureGitSafeDirectories.mockImplementationOnce(async () => {
+      order.push('safe-directory');
+    });
+    mocks.stampGitStateAtTaskStart.mockImplementationOnce(async () => {
+      order.push('git-start');
+    });
+    mocks.stampGitStateAtTaskEnd.mockImplementationOnce(async () => {
+      order.push('git-end');
+    });
     mocks.runTurn.mockImplementation(async (turnInput) => {
       order.push('runTurn');
       await turnInput.persistOpenCodeSessionId('oc-created');
@@ -204,7 +227,29 @@ describe('executeOpenCodeTask', () => {
       sessionsService: expect.anything(),
     });
     expect(mocks.permissionUnregister).toHaveBeenCalledWith('00000000-0000-7000-8000-000000000001');
-    expect(order).toEqual(['runTurn', 'persist', 'prompt']);
+    expect(order).toEqual([
+      'safe-directory',
+      'git-start',
+      'runTurn',
+      'persist',
+      'prompt',
+      'git-end',
+    ]);
+    expect(mocks.configureGitSafeDirectories).toHaveBeenCalledWith(
+      client,
+      '00000000-0000-7000-8000-000000000001',
+      '[opencode git.safe-directory]'
+    );
+    expect(mocks.stampGitStateAtTaskStart).toHaveBeenCalledWith(
+      client,
+      '00000000-0000-7000-8000-000000000001',
+      '00000000-0000-7000-8000-000000000002'
+    );
+    expect(mocks.stampGitStateAtTaskEnd).toHaveBeenCalledWith(
+      client,
+      '00000000-0000-7000-8000-000000000001',
+      '00000000-0000-7000-8000-000000000002'
+    );
     expect(services.sessions.patch).toHaveBeenCalledWith('00000000-0000-7000-8000-000000000001', {
       sdk_session_id: 'oc-created',
     });
@@ -364,6 +409,7 @@ describe('executeOpenCodeTask', () => {
     });
     expect(services.tasks.patch).not.toHaveBeenCalled();
     expect(order).toEqual(['managed cleanup settled']);
+    expect(mocks.stampGitStateAtTaskEnd).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -409,5 +455,10 @@ describe('executeOpenCodeTask', () => {
       runnerReport: { turn: scenario.turn, cleanup: scenario.cleanup },
     });
     expect(services.tasks.patch).not.toHaveBeenCalled();
+    if (scenario.cleanup.outcome === 'quiesced') {
+      expect(mocks.stampGitStateAtTaskEnd).toHaveBeenCalledOnce();
+    } else {
+      expect(mocks.stampGitStateAtTaskEnd).not.toHaveBeenCalled();
+    }
   });
 });

@@ -23,7 +23,6 @@ function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partia
     created_by: 'test-user',
     created_at: new Date().toISOString(),
     last_updated: new Date().toISOString(),
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
     tasks: [],
     contextFiles: [],
     genealogy: { children: [] },

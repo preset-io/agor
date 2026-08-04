@@ -615,6 +615,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         →
                       </Typography.Text>
                       <GitStatePill
+                        branch={task.git_state.ref_at_end}
                         sha={task.git_state.sha_at_end}
                         branchName={branchName}
                         showDirtyIndicator={true}

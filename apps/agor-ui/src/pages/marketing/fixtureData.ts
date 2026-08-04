@@ -456,11 +456,6 @@ export const demoSessions = branchFixtures.flatMap((fixture, branchIndex) =>
         branch_id: fixture.id as BranchID,
         branch_board_id: demoBoardId,
         url: `/ui/s/${shortId(fixture.id)}${sessionIndex}`,
-        git_state: {
-          ref: fixture.ref,
-          base_sha: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
-          current_sha: '8f14e45fceea167a5a36dedd4bea2543a6f7dabc',
-        },
         contextFiles: [],
         genealogy: { children: [] },
         tasks: [],

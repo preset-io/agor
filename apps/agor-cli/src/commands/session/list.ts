@@ -152,14 +152,13 @@ export default class SessionList extends BaseCommand {
           chalk.cyan('Status'),
           chalk.cyan('Tasks'),
           chalk.cyan('Branch'),
-          chalk.cyan('Git Ref'),
           chalk.cyan('Modified'),
         ],
         style: {
           head: [],
           border: ['dim'],
         },
-        colWidths: [10, 30, 13, 12, 8, 18, 15, 12],
+        colWidths: [10, 30, 13, 12, 8, 18, 12],
       });
 
       // Add rows
@@ -175,7 +174,6 @@ export default class SessionList extends BaseCommand {
         // Note: Session now uses branch_id, not nested repo object
         // For now, show branch_id if available, otherwise '-'
         const branch = session.branch_id ? shortId(session.branch_id) : '-';
-        const gitRef = session.git_state?.ref || '-';
         const modified = this.formatRelativeTime(session.last_updated || session.created_at);
 
         table.push([
@@ -185,7 +183,6 @@ export default class SessionList extends BaseCommand {
           this.formatStatus(session.status),
           `${completedTasks}/${taskCount}`,
           chalk.dim(branch),
-          chalk.dim(gitRef),
           chalk.dim(modified),
         ]);
       }

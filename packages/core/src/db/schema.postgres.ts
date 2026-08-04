@@ -140,9 +140,6 @@ export const sessions = pgTable(
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
 
-        // Git state
-        git_state: Session['git_state'];
-
         // Genealogy details (children array, fork/spawn points)
         genealogy: {
           fork_point_task_id?: string;
@@ -1495,7 +1492,9 @@ export const artifactTrustGrants = pgTable(
   {
     tenant_id: text('tenant_id').notNull().default('default'),
     grant_id: varchar('grant_id', { length: 36 }).primaryKey(),
-    user_id: varchar('user_id', { length: 36 }).notNull(),
+    user_id: varchar('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
     scope_type: text('scope_type').notNull(),
     scope_value: text('scope_value'),
     env_vars_set: t.json<string[]>('env_vars_set').notNull(),

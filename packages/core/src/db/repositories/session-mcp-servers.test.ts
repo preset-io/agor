@@ -29,11 +29,6 @@ function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partia
     created_by: overrides?.created_by ?? 'test-user',
     created_at: overrides?.created_at ?? new Date().toISOString(),
     last_updated: overrides?.last_updated ?? new Date().toISOString(),
-    git_state: overrides?.git_state ?? {
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'def456',
-    },
     tasks: overrides?.tasks ?? [],
     contextFiles: overrides?.contextFiles ?? [],
     genealogy: overrides?.genealogy ?? {

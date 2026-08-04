@@ -1,20 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { tenantDeleteErrorMessage } from './delete';
+import { tenantDeleteErrorMarker } from './delete';
 
-describe('tenantDeleteErrorMessage', () => {
-  it('redacts credentials from Error messages', () => {
-    expect(
-      tenantDeleteErrorMessage(
-        new Error('connect postgresql://operator:top-secret@db.example.test/agor failed')
-      )
-    ).toBe('connect postgresql://[redacted]@db.example.test/agor failed');
-  });
-
-  it('stringifies non-Error failures before redacting credentials', () => {
-    expect(
-      tenantDeleteErrorMessage(
-        'connect postgresql://operator:top-secret@db.example.test/agor failed'
-      )
-    ).toBe('connect postgresql://[redacted]@db.example.test/agor failed');
+describe('tenantDeleteErrorMarker', () => {
+  it('uses the shared machine-readable portability failure marker', () => {
+    expect(JSON.parse(tenantDeleteErrorMarker(new Error('do not expose me')))).toEqual({
+      marker: 'agor.tenant-portability.error',
+      version: 1,
+      category: 'unknown',
+    });
   });
 });

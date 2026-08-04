@@ -24,6 +24,7 @@ import {
   SessionRepository,
   TaskRepository,
 } from '../repositories';
+import { sanitizeDbError } from '../sanitize-error';
 
 // Test database path
 const TEST_DB_PATH = 'file:/tmp/agor-test.db';
@@ -85,11 +86,6 @@ async function testSessionRepository(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: {
-      ref: 'main',
-      base_sha: 'abc123',
-      current_sha: 'abc123',
-    },
     genealogy: {
       children: [],
     },
@@ -268,7 +264,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: TaskStatus.COMPLETED,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'def' },
     genealogy: { children: [] },
     contextFiles: [],
     tasks: [],
@@ -282,7 +277,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       forked_from_session_id: parent.session_id,
       fork_point_task_id: 'task-123' as TaskID,
@@ -300,7 +294,6 @@ async function testGenealogy(db: ReturnType<typeof createDatabase>) {
     status: SessionStatus.IDLE,
     created_by: 'test-user' as UserID,
     branch_id: 'test-branch-id' as BranchID,
-    git_state: { ref: 'main', base_sha: 'def', current_sha: 'def' },
     genealogy: {
       parent_session_id: parent.session_id,
       spawn_point_task_id: 'task-456' as TaskID,
@@ -376,11 +369,7 @@ async function main() {
 
     process.exit(0);
   } catch (error) {
-    console.error('\n❌ Test failed:', error instanceof Error ? error.message : String(error));
-    if (error instanceof Error && error.stack) {
-      console.error('\nStack trace:');
-      console.error(error.stack);
-    }
+    console.error('\n❌ Test failed:', sanitizeDbError(error));
     process.exit(1);
   }
 }

@@ -419,15 +419,6 @@ export interface MessagesService extends AgorService<Message> {
  */
 export interface ReposService extends AgorService<Repo> {
   /**
-   * Ask the daemon to synchronously dispatch the capability-scoped operator
-   * executor which resolves this repo's trusted path and applies Unix access.
-   */
-  handoffCloneUnixPermissions(
-    data: { repoId: string },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
-  /**
    * Create a git branch for a repository.
    *
    * Shape matches the daemon's `/repos/:id/branches` route + Feathers
@@ -566,15 +557,6 @@ export interface UsersService extends AgorService<User> {
  * Branches service with environment management
  */
 export interface BranchesService extends AgorService<Branch> {
-  /**
-   * Ask the daemon to synchronously dispatch the capability-scoped operator
-   * executor which resolves this branch's trusted path and applies Unix access.
-   */
-  handoffBranchUnixPermissions(
-    data: { branchId: string },
-    params?: Params
-  ): Promise<{ unixGroup: string }>;
-
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -946,9 +928,6 @@ function extendReposService(client: AgorClient): void {
     methods?: (...names: string[]) => unknown;
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
-  if (typeof reposService.methods === 'function') {
-    reposService.methods('handoffCloneUnixPermissions');
-  }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 
@@ -959,11 +938,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods(
-      'updateEnvironment',
-      'handoffBranchUnixPermissions',
-      'ensureTeammateKnowledgeNamespace'
-    );
+    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

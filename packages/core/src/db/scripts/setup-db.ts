@@ -16,6 +16,7 @@ import { sql } from 'drizzle-orm';
 import { createDatabase, DEFAULT_DB_PATH } from '../client';
 import { isSQLiteDatabase } from '../database-wrapper';
 import { initializeDatabase, seedInitialData } from '../migrate';
+import { sanitizeDbError } from '../sanitize-error';
 
 interface SetupOptions {
   path?: string;
@@ -106,12 +107,7 @@ async function main() {
 
     process.exit(0);
   } catch (error) {
-    console.error('❌ Setup failed:', error instanceof Error ? error.message : String(error));
-    if (error instanceof Error && error.stack) {
-      console.error('');
-      console.error('Stack trace:');
-      console.error(error.stack);
-    }
+    console.error('❌ Setup failed:', sanitizeDbError(error));
     process.exit(1);
   }
 }

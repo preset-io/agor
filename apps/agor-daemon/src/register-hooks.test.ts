@@ -20,6 +20,7 @@
 
 import { type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+
 import {
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -48,7 +49,6 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     tasks: [],
     genealogy: { children: [] },
     contextFiles: [],
-    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
     scheduled_from_branch: false,
     ready_for_prompt: false,
     archived: false,
@@ -493,13 +493,6 @@ describe('isPromptFlowPatchOnly', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
       // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
       expect(isPromptFlowPatchOnly({ status: 'idle', ready_for_prompt: true })).toBe(true);
-    });
-
-    it('accepts the executor git-SHA capture shape', () => {
-      // packages/executor/src/handlers/sdk/base-executor.ts patches current SHA
-      expect(isPromptFlowPatchOnly({ git_state: { current_sha: 'deadbeef', ref: 'main' } })).toBe(
-        true
-      );
     });
 
     it('accepts the executor opencode init shape', () => {

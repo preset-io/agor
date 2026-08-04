@@ -32,9 +32,7 @@ import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -389,7 +387,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current_context',
     {
       description:
-        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, git state, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
@@ -429,6 +427,28 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         user_role: user.role,
       };
 
+      const latestTaskId = session.tasks?.at(-1);
+      if (latestTaskId) {
+        try {
+          const latestTask = await ctx.app
+            .service('tasks')
+            .get(latestTaskId, ctx.baseServiceParams);
+          const gitState = latestTask.git_state;
+          result.latest_task_git_start = {
+            ref: gitState.ref_at_start,
+            sha: gitState.sha_at_start,
+          };
+          result.latest_task_git_end = gitState.sha_at_end
+            ? {
+                ref: gitState.ref_at_end ?? null,
+                sha: gitState.sha_at_end,
+              }
+            : null;
+        } catch {
+          // The latest task may have been removed or be outside the caller's tenant scope.
+        }
+      }
+
       // Creator info only when different from authenticated user
       if (session.created_by && session.created_by !== ctx.userId) {
         try {
@@ -451,11 +471,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           : 'root';
       result.parent_session_id = gen?.parent_session_id || gen?.forked_from_session_id || null;
       result.children_count = gen?.children?.length || 0;
-
-      // Git state (flat)
-      result.branch = session.git_state?.ref || null;
-      result.base_sha = session.git_state?.base_sha || null;
-      result.current_sha = session.git_state?.current_sha || null;
 
       if (session.branch_id) {
         try {
@@ -983,15 +998,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Get current git state via executor so the daemon does not run git in the branch checkout.
-      const asUser = await runWithMcpTenantDatabaseScope(ctx, (db) =>
-        resolveExecutorReadAsUser(db, user)
-      );
-      const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
-        asUser,
-        logPrefix: `[mcp.sessions.create ${branch.name}]`,
-      });
-
       // Resolve explicit short MCP IDs here; SessionsService owns model and
       // permission materialization, while MCP attachment remains transport
       // state rather than agentic configuration intent.
@@ -1117,11 +1123,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
-        git_state: {
-          ref: currentRef,
-          base_sha: currentSha,
-          current_sha: currentSha,
-        },
         genealogy: {
           ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
           children: [],

@@ -596,7 +596,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.knowledge.read');
     expect(commands).toContain('branch.gateway.slack-file-upload');
     expect(commands).toContain('branch.upload.materialize');
-    expect(commands).toContain('branch.inspect');
     expect(commands).toContain('branch.agor-yml.import');
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
@@ -611,6 +610,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(33);
+    expect(commands.length).toBe(32);
   });
 });

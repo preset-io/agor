@@ -602,7 +602,7 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
-      const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -614,9 +614,12 @@ export async function executeCursorTask(params: {
           toolCallMessageIds,
         },
       };
-      if (shaAtEnd) {
+      if (gitStateAtEnd) {
         // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
-        taskPatch.git_state = { sha_at_end: shaAtEnd };
+        taskPatch.git_state = {
+          ref_at_end: gitStateAtEnd.ref,
+          sha_at_end: gitStateAtEnd.sha,
+        };
       }
       await client.service('tasks').patch(taskId, taskPatch);
     } finally {
@@ -625,15 +628,18 @@ export async function executeCursorTask(params: {
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] Execution failed:', err);
-    const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
       error_message: err.message,
     };
-    if (shaAtEnd) {
+    if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
-      taskPatch.git_state = { sha_at_end: shaAtEnd };
+      taskPatch.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
+        sha_at_end: gitStateAtEnd.sha,
+      };
     }
     await client.service('tasks').patch(taskId, taskPatch);
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });

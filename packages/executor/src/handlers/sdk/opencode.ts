@@ -28,7 +28,12 @@ import {
   OpenCodeTool,
 } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { createStreamingCallbacks } from './base-executor.js';
+import {
+  createStreamingCallbacks,
+  stampGitStateAtTaskEnd,
+  stampGitStateAtTaskStart,
+} from './base-executor.js';
+import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 import type { ToolExecutionResult } from './tool-registry.js';
 
 export async function executeOpenCodeTask(params: {
@@ -53,7 +58,11 @@ export async function executeOpenCodeTask(params: {
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
 
+  let execution: ToolExecutionResult;
   try {
+    await configureSessionGitSafeDirectories(client, sessionId, '[opencode git.safe-directory]');
+    await stampGitStateAtTaskStart(client, sessionId, taskId);
+
     const session = await client.service('sessions').get(sessionId);
     console.log('[opencode] Session loaded:', {
       sessionId: shortId(sessionId),
@@ -134,18 +143,19 @@ export async function executeOpenCodeTask(params: {
           result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
         metadata: result.finalMessage.metadata,
       });
-      return {
+      execution = {
         runnerReport: {
           turn: { outcome: 'success', model: modelIdentifier },
           cleanup: { outcome: 'quiesced' },
         },
       };
+    } else {
+      execution = {};
     }
-    return {};
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[opencode] Execution failed:', err);
-    return {
+    execution = {
       runnerReport: {
         turn:
           err.name === 'OpenCodeInteractionTimeoutError'
@@ -159,4 +169,10 @@ export async function executeOpenCodeTask(params: {
   } finally {
     globalPermissionManager.unregister(sessionId);
   }
+
+  if (execution.runnerReport?.cleanup.outcome === 'quiesced') {
+    await stampGitStateAtTaskEnd(client, sessionId, taskId);
+  }
+
+  return execution;
 }

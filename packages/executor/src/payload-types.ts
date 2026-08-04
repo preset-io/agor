@@ -235,6 +235,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
   }),
 });
 
@@ -284,6 +287,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
     initUnixGroup: z.boolean().optional().default(false),
+
+    /** Daemon Unix identity that must retain explicit ACL access. */
+    daemonUser: z.string().optional(),
 
     /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
     fixBasicPermissions: z.boolean().optional().default(false),
@@ -530,27 +536,6 @@ export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
   }),
 });
 export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
-
-// ═══════════════════════════════════════════════════════════
-// Branch Inspect Payload
-// ═══════════════════════════════════════════════════════════
-
-/**
- * Branch inspect payload - read current git ref/SHA from a branch checkout.
- */
-export const BranchInspectPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('branch.inspect'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** Branch ID whose checkout should be inspected */
-    branchId: z.string().uuid(),
-  }),
-});
-
-export type BranchInspectPayload = z.infer<typeof BranchInspectPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Branch .agor.yml Payloads
@@ -987,7 +972,6 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   BranchKnowledgeReadPayloadSchema,
   BranchSlackFileUploadPayloadSchema,
   BranchUploadMaterializePayloadSchema,
-  BranchInspectPayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
@@ -1068,7 +1052,6 @@ export function getSupportedCommands(): string[] {
     'branch.knowledge.read',
     'branch.gateway.slack-file-upload',
     'branch.upload.materialize',
-    'branch.inspect',
     'branch.agor-yml.import',
     'branch.agor-yml.export',
     'environment.lifecycle',

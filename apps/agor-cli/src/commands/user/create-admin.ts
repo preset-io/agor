@@ -13,6 +13,7 @@ import {
   getUserByEmail,
   runMigrations,
   runWithTenantDatabaseScope,
+  sanitizeDbError,
   shortId,
 } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
@@ -166,23 +167,8 @@ export default class UserCreateAdmin extends Command {
     } catch (error) {
       this.log('');
       this.log(chalk.red('✗ Failed to create admin user'));
-      if (error instanceof Error) {
-        this.log(chalk.red(`  ${error.message}`));
-        if (error.stack) {
-          this.log(chalk.gray(error.stack));
-        }
-        // Check for nested errors
-        if ('cause' in error && error.cause) {
-          this.log(chalk.red('  Caused by:'));
-          if (error.cause instanceof Error) {
-            this.log(chalk.red(`    ${error.cause.message}`));
-          } else {
-            this.log(chalk.red(`    ${String(error.cause)}`));
-          }
-        }
-      } else {
-        this.log(chalk.red(`  ${String(error)}`));
-      }
+      const safeError = sanitizeDbError(error);
+      this.log(chalk.red(`  ${safeError.message}`));
       process.exit(1);
     }
   }

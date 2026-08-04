@@ -27,6 +27,7 @@ export {
   NotAuthenticated,
   NotFound,
   TooManyRequests,
+  Unavailable,
 } from '@feathersjs/errors';
 export type { Application as ExpressApplication } from '@feathersjs/express';
 // Express Integration

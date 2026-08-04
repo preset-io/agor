@@ -183,57 +183,6 @@ export interface StartInteractiveExecutorOptions extends RunExecutorCommandOptio
     input: Pick<InteractiveExecutorHandle, 'deliver' | 'endInput'>
   ) => void;
 }
-
-type OperatorUnixCommand = 'unix.sync-repo' | 'unix.sync-branch';
-export const OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS = 15 * 60_000;
-
-/**
- * Run a narrowly-scoped operator-runtime filesystem capability.
- *
- * Unlike user executor launches, this deliberately uses the configured
- * executor lifecycle identity (and the hosted command template's trusted
- * tenant mount). Callers may provide only a tenant record ID plus the daemon
- * identity hint; workspace paths/cwd and arbitrary commands are rejected here.
- */
-export function runOperatorUnixPermissionCommand(
-  payload: {
-    command: OperatorUnixCommand;
-    sessionToken: string;
-    daemonUrl: string;
-    params: {
-      repoId?: string;
-      branchId?: string;
-      daemonUser?: string;
-      initialize?: boolean;
-      creatorUserId?: string;
-    };
-  },
-  options: Omit<RunExecutorCommandOptions, 'asUser' | 'cwd'> = {}
-): Promise<ExecutorCommandResult> {
-  const keys = Object.keys(payload.params);
-  const expectedId = payload.command === 'unix.sync-repo' ? 'repoId' : 'branchId';
-  if (
-    typeof payload.params[expectedId] !== 'string' ||
-    keys.some(
-      (key) =>
-        ![
-          expectedId,
-          'daemonUser',
-          ...(payload.command === 'unix.sync-repo' ? ['initialize', 'creatorUserId'] : []),
-        ].includes(key)
-    )
-  ) {
-    throw new Error(`Invalid ${payload.command} operator capability payload`);
-  }
-  if ('cwd' in options) {
-    throw new Error(`Invalid ${payload.command} operator capability options`);
-  }
-  return runExecutorCommand(payload, {
-    timeoutMs: OPERATOR_UNIX_LIFECYCLE_TIMEOUT_MS,
-    ...options,
-  });
-}
-
 /**
  * Substitute template variables in the executor command template.
  *

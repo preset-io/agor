@@ -282,17 +282,6 @@ async function captureGitStateForSession(
       `[Git SHA Capture] Captured git state at task ${phase}: ${sha.substring(0, 8)}${sha.endsWith('-dirty') ? ' (dirty)' : ''} ref=${ref}`
     );
 
-    // Update session's current_sha to keep it in sync as tasks complete.
-    if (phase === 'end' && sha && sha !== 'unknown') {
-      try {
-        await client.service('sessions').patch(sessionId, {
-          git_state: { ...session.git_state, current_sha: sha, ref },
-        });
-      } catch (sessionPatchError) {
-        console.warn('[Git SHA Capture] Failed to update session current_sha:', sessionPatchError);
-      }
-    }
-
     return { sha, ref };
   } catch (error) {
     console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);
@@ -303,9 +292,8 @@ async function captureGitStateForSession(
 export async function captureGitStateAtTaskEnd(
   client: AgorClient,
   sessionId: SessionID
-): Promise<string | undefined> {
-  const gitState = await captureGitStateForSession(client, sessionId, 'end');
-  return gitState?.sha;
+): Promise<CapturedGitState | undefined> {
+  return captureGitStateForSession(client, sessionId, 'end');
 }
 
 export async function stampGitStateAtTaskStart(
@@ -325,6 +313,28 @@ export async function stampGitStateAtTaskStart(
     });
   } catch (error) {
     console.warn('[Git SHA Capture] Failed to stamp task start git state:', error);
+  }
+}
+
+export async function stampGitStateAtTaskEnd(
+  client: AgorClient,
+  sessionId: SessionID,
+  taskId: TaskID
+): Promise<void> {
+  const gitState = await captureGitStateAtTaskEnd(client, sessionId);
+  if (!gitState) return;
+
+  try {
+    await client.service('tasks').patch(taskId, {
+      // Task patches deep-merge nested git state; the service type models a
+      // complete Task instead of this supported partial nested update.
+      git_state: {
+        ref_at_end: gitState.ref,
+        sha_at_end: gitState.sha,
+      } as Task['git_state'],
+    });
+  } catch (error) {
+    console.warn('[Git SHA Capture] Failed to stamp task end git state:', error);
   }
 }
 
@@ -553,6 +563,7 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }
@@ -654,6 +665,7 @@ export async function executeToolTask(params: {
     if (gitStateAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       patchData.git_state = {
+        ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
     }

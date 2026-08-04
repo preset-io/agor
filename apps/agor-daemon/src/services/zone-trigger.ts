@@ -2,17 +2,16 @@
  * Shared zone-trigger orchestration.
  *
  * `fireAlwaysNewZoneTrigger()` runs the always_new flow end-to-end:
- *   render template → validate non-empty → resolve session defaults →
- *   create session → attach MCP servers → send prompt.
+ *   render template → validate non-empty → create session through canonical
+ *   agentic-configuration materialization → attach MCP servers → send prompt.
  *
  * Both `POST /branches/:id/fire-zone-trigger` (UI path) and
  * `agor_branches_set_zone(triggerTemplate: true)` always_new branch (MCP
  * path) call this helper so they stay in lockstep — same render context,
- * same session-defaults resolution, same MCP-attach behaviour.
+ * same SessionsService configuration materialization, same MCP-attach behaviour.
  */
 
 import { resolveExecutionSecurityMode } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
 import type {
@@ -25,8 +24,6 @@ import type {
 } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
@@ -98,14 +95,6 @@ export async function fireAlwaysNewZoneTrigger(
     ? branch.mcp_server_ids
     : (user.default_mcp_server_ids ?? []);
 
-  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
-  const asUser = db ? await resolveExecutorReadAsUser(db, user) : undefined;
-
-  const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
-    asUser,
-    logPrefix: `[zone-trigger ${branch.name}]`,
-  });
-
   // In strict/delegated, refuse to create a zone-triggered session for a user
   // without a unix_username — it would fail at prompt time (or silently share
   // an identity in hosted deployments).
@@ -123,11 +112,6 @@ export async function fireAlwaysNewZoneTrigger(
       description: `Session from zone "${zone.label ?? ''}"`,
       created_by: userId,
       unix_username: user.unix_username,
-      git_state: {
-        ref: currentRef,
-        base_sha: currentSha,
-        current_sha: currentSha,
-      },
       genealogy: { children: [] },
       tasks: [],
     },

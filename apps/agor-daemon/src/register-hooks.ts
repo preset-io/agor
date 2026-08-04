@@ -23,13 +23,16 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
+  assertTenantWritable,
   BoardRepository,
   type BranchRepository,
+  getCurrentTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -40,7 +43,7 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -131,9 +134,7 @@ import {
   setSessionUnixUsername,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
-import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
   redactMCPServerSecrets,
@@ -292,7 +293,6 @@ function validateBranchEnvPolicyHook() {
  *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
- *   - executor git-SHA capture → `git_state` (per-message current_sha)
  *   - executor runtime init    → `sdk_session_id` (SDK session handle)
  *
  * When a `patch` touches ONLY these fields, the sessions hook chain downgrades
@@ -306,7 +306,7 @@ function validateBranchEnvPolicyHook() {
  * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
  * so widening the whitelist here cannot accidentally leak metadata writes.
  *
- * NOTE: `git_state` and `sdk_session_id` are on this list because the executor
+ * NOTE: `sdk_session_id` is on this list because the executor
  * authenticates as the session creator (see auth/session-token-strategy.ts),
  * not as a service account. Proper long-term fix is to give the executor a
  * service-account token so these patches bypass RBAC entirely.
@@ -317,7 +317,6 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'archived_reason',
   'status',
   'ready_for_prompt',
-  'git_state',
   'sdk_session_id',
 ];
 
@@ -651,13 +650,42 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  // Enforce the per-tenant write gate on request-driven writes. Runs after
+  // scopeTenantBefore has resolved the trusted tenant. Reads are never gated;
+  // only create/update/patch/remove are blocked while a freeze is held. This is
+  // the request-traffic enforcement point for the generic write gate; deferred
+  // operators (scheduler/gateway/executor/queue) enforce at their own entry
+  // points. Fails closed with 503 so an orchestrator sees a transient block.
+  const WRITE_METHODS = new Set(['create', 'update', 'patch', 'remove']);
+  const writeGateBefore = async (context: HookContext): Promise<HookContext> => {
+    if (!WRITE_METHODS.has(context.method)) return context;
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) return context;
+    // Only enforce inside an active tenant database scope — the one the around
+    // hook (`tenantDatabaseScopeAround`) opens before these before-hooks run.
+    // The gate read joins that transaction; without an active scope there is no
+    // tenant transaction to read against (e.g. identity-only services, or a unit
+    // test that invokes the before-hooks directly), so there is nothing to
+    // enforce here and we must not open a stray transaction.
+    if (!getCurrentTenantDatabaseScope()) return context;
+    try {
+      await assertTenantWritable(db, tenantId);
+    } catch (error) {
+      if (error instanceof TenantWriteGateActiveError) {
+        throw new Unavailable(error.message);
+      }
+      throw error;
+    }
+    return context;
+  };
+
   const registerTenantHooks = (): void => {
     for (const path of tenantOwnedServicePaths) {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
         around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
-        before: { all: [scopeTenantBefore] },
+        before: { all: [scopeTenantBefore, writeGateBefore] },
         after: { all: [assertTenantAfter] },
       });
     }
@@ -2470,7 +2498,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         injectCreatedBy(),
         async (context) => {
-          // Populate repo field and auto-populate git_state from branch_id
+          // Populate repo field from branch_id.
           if (!Array.isArray(context.data) && context.data?.branch_id) {
             try {
               const branch = await context.app.service('branches').get(context.data.branch_id);
@@ -2485,41 +2513,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                     managed_branch: true,
                   };
                   console.log(`✅ Populated repo.cwd from branch: ${branch.path}`);
-                }
-
-                // Auto-populate git_state if not provided (UI and gateway don't set it).
-                // Branch git reads go through the executor so the daemon never
-                // runs git inside the managed checkout.
-                const existingGitState = (context.data as Record<string, unknown>).git_state as
-                  | { base_sha?: string }
-                  | undefined;
-                if (!existingGitState?.base_sha && branch.path) {
-                  try {
-                    const { currentSha, currentRef } = await inspectBranchViaExecutor(
-                      context.app as Application,
-                      branch.branch_id,
-                      {
-                        asUser: await resolveExecutorReadAsUser(
-                          db,
-                          (context.params as AuthenticatedParams).user?.user_id as
-                            | UserID
-                            | undefined
-                        ),
-                        logPrefix: `[sessions.create ${branch.name}]`,
-                      }
-                    );
-                    (context.data as Record<string, unknown>).git_state = {
-                      ref: currentRef || branch.name || 'unknown',
-                      base_sha: currentSha,
-                      current_sha: currentSha,
-                    };
-                    console.log(
-                      `✅ Auto-populated git_state from branch: ref=${currentRef}, sha=${currentSha.substring(0, 8)}`
-                    );
-                  } catch (gitError) {
-                    const message = gitError instanceof Error ? gitError.message : String(gitError);
-                    console.warn(`Failed to auto-populate git_state from branch: ${message}`);
-                  }
                 }
               }
             } catch (error) {
@@ -3005,7 +2998,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               board_id: shortId(result.board_id),
               objectId,
               objectsCount: Object.keys(result.objects || {}).length,
-              objects: result.objects,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
             emitServiceEvent(app, {

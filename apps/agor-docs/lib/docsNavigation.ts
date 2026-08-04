@@ -50,6 +50,7 @@ export const guideNavigation: Record<string, NavigationItem> = {
     title: 'Deployment',
   },
   'multi-tenant-filesystem': 'Multi-Tenant Filesystem',
+  'tenant-data-portability': 'Tenant Data Portability',
   'multiplayer-unix-isolation': 'Full Multiplayer Mode',
   'containerized-execution': 'Containerized Execution',
 };

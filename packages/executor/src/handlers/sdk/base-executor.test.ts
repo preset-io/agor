@@ -3,7 +3,15 @@ import {
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
+  stampGitStateAtTaskEnd,
 } from './base-executor.js';
+
+const gitMocks = vi.hoisted(() => ({
+  getCurrentBranch: vi.fn(),
+  getGitState: vi.fn(),
+}));
+
+vi.mock('../../git/index.js', () => gitMocks);
 
 vi.mock('./git-safe-directory.js', () => ({
   configureSessionGitSafeDirectories: vi.fn().mockResolvedValue(undefined),
@@ -86,6 +94,36 @@ describe('resolveApiKeyForTask', () => {
         'codex' as never
       )
     ).rejects.toThrow('fetch failed');
+  });
+});
+
+describe('stampGitStateAtTaskEnd', () => {
+  it('keeps task finalization best-effort when the metadata patch is rejected', async () => {
+    gitMocks.getGitState.mockResolvedValueOnce('def456-dirty');
+    gitMocks.getCurrentBranch.mockResolvedValueOnce('feature/opencode');
+    const taskPatch = vi.fn().mockRejectedValueOnce(new Error('task no longer executor-owned'));
+    const client = {
+      service(name: string) {
+        if (name === 'sessions') {
+          return { get: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) };
+        }
+        if (name === 'branches') {
+          return { get: vi.fn().mockResolvedValue({ path: '/worktree' }) };
+        }
+        if (name === 'tasks') return { patch: taskPatch };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      stampGitStateAtTaskEnd(client, 'session-1' as never, 'task-1' as never)
+    ).resolves.toBeUndefined();
+    expect(taskPatch).toHaveBeenCalledWith('task-1', {
+      git_state: {
+        ref_at_end: 'feature/opencode',
+        sha_at_end: 'def456-dirty',
+      },
+    });
   });
 });
 

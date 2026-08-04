@@ -72,6 +72,10 @@ interface FakeIO {
   excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
   middlewares: Array<(socket: FakeSocket, next: (err?: Error) => void) => void>;
+  engine: {
+    closeHandler?: () => void;
+    once(event: string, fn: () => void): void;
+  };
   on(event: string, fn: any): void;
   use(fn: any): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
@@ -146,6 +150,11 @@ function makeIO(): FakeIO {
     excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
+    engine: {
+      once(event, fn) {
+        if (event === 'close') this.closeHandler = fn;
+      },
+    },
     on(event, fn) {
       if (event === 'connection') {
         this.connectionHandler = fn;
@@ -169,12 +178,13 @@ function makeIO(): FakeIO {
 
 function makeApp(): Application {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
-  // app.on('login'), and app.emit for the terminal:ready/error relay. Tests
-  // don't exercise the login event path.
+  // app.on('login'), and app.emit for the terminal:ready/error relay.
+  const eventHandlers = new Map<string, (...args: any[]) => void>();
   return {
-    service: () => ({ get: async () => ({ user_id: 'u' }) }),
-    on: () => {},
+    service: () => ({ get: async (userId: string) => ({ user_id: userId }) }),
+    on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
+    eventHandlers,
   } as any;
 }
 
@@ -283,6 +293,114 @@ describe('Socket.IO transport ceiling', () => {
     expect(config.serverOptions).toMatchObject({
       maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     });
+  });
+});
+
+describe('Socket.IO lifecycle logging', () => {
+  let debugSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    debugSpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs post-connect authentication once at info with only the short user ID', () => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('alice-sock');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE, email: 'alice@example.com' } },
+      { connection }
+    );
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+  });
+
+  it('uses the same single authentication signal for handshake-authenticated users', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('handshake-sock');
+    socket.handshake.auth = {
+      token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    connect(io, socket);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      'socket authenticated: handshake-sock user:11111111aaaaaaaaaaaa1111'
+    );
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
+  });
+
+  it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+
+    vi.advanceTimersByTime(5_000);
+    expect(logSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+
+    io.engine.closeHandler?.();
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['transport close', 'client namespace disconnect'])(
+    'demotes benign disconnect reason %s below info',
+    (reason) => {
+      const { io } = buildHarness();
+      const socket = makeSocket('browser-sock');
+      connect(io, socket);
+
+      socket.handlers.get('disconnect')?.(reason);
+
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining(`reason: ${reason}`));
+    }
+  );
+
+  it('warns on transport errors while retaining ping timeouts at info', () => {
+    const { io } = buildHarness();
+    const transportErrorSocket = makeSocket('transport-error');
+    const pingTimeoutSocket = makeSocket('ping-timeout');
+    connect(io, transportErrorSocket);
+    connect(io, pingTimeoutSocket);
+
+    transportErrorSocket.handlers.get('disconnect')?.('transport error');
+    pingTimeoutSocket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
   });
 });
 
