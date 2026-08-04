@@ -328,6 +328,7 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  syncEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   renderEnvironment(
     id: BranchID,
     data: { variant?: string } | undefined,

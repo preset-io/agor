@@ -2386,19 +2386,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return branch;
     }
 
-    // Check if we have a health check URL (static field, not template)
-    if (!branch.health_check_url) {
+    // Effective health probe target. Local envs freeze a `health_check_url` at
+    // branch creation. Remote/managed envs (e.g. a Codespace) have no static URL
+    // — their reachable address only exists after `start` — so we fall back to a
+    // `health` fact the lifecycle command emits (AGOR_FACT health=<url>). Either
+    // source feeds the same probe below, which is the real readiness signal:
+    // during a long first build the probe fails and the env stays `starting`;
+    // once the app answers it transitions to `running`.
+    const factsHealthUrl = branch.environment_instance?.facts?.health;
+    const effectiveHealthUrl = branch.health_check_url || factsHealthUrl;
+
+    // No probe available at all (neither a frozen URL nor a health fact).
+    if (!effectiveHealthUrl) {
       const managedProcess = this.processes.get(id);
       const isProcessAlive = managedProcess?.process && !managedProcess.process.killed;
 
-      // Remote / managed environments (e.g. a Codespace) have no local health
-      // URL Agor can poll: the reachable address only exists after start and
-      // sits behind the provider's auth. For these, the lifecycle command is
-      // the source of truth — a start that SUCCEEDED and reported facts (an
-      // address) means the environment is up, so transition starting → running
-      // instead of spinning on 'starting' forever. Local envs always render a
-      // health_check_url and never reach this branch, so their behavior (health
-      // must confirm before 'running') is unchanged.
+      // Fallback for remote / managed environments (e.g. a Codespace) that
+      // report NO health fact: Agor has nothing to poll, so the lifecycle
+      // command is the source of truth — a start that SUCCEEDED and reported
+      // facts (an address) means the environment is up, so transition
+      // starting → running instead of spinning on 'starting' forever. This is
+      // optimistic (it cannot confirm the app is actually serving); a variant
+      // that DOES emit `AGOR_FACT health=<url>` skips this branch entirely and
+      // gets true readiness gating via the probe below. Local envs always
+      // render a health_check_url and never reach this branch either.
       const lastCommand = branch.environment_instance?.last_command;
       const facts = branch.environment_instance?.facts;
       const startReportedUp =
@@ -2432,8 +2443,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    // Use static health_check_url (initialized from template at branch creation)
-    const healthUrl = branch.health_check_url;
+    // Probe the effective URL: the frozen health_check_url for local envs, or the
+    // `health` fact for remote envs like a Codespace.
+    const healthUrl = effectiveHealthUrl;
 
     // Validate URL to prevent SSRF against cloud metadata or internal services
     if (!isAllowedHealthCheckUrl(healthUrl)) {
@@ -2484,6 +2496,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       if (shouldTransitionToRunning) {
         console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
+        // Catch-up sync: the environment just became reachable for the first
+        // time (or recovered from error). Commits that landed while it was still
+        // building/starting were never pushed into it — the task-completion
+        // auto-sync no-ops against an unreachable remote and nothing retries it.
+        // Fire one sync now so the running env reflects the branch's latest
+        // committed state. Fire-and-forget; syncEnvironment throws for variants
+        // without a `sync` command (e.g. local), which we swallow. Reuses the
+        // params the health monitor already runs under (tenant context, no
+        // executor token), so no extra plumbing is required.
+        void this.syncEnvironment(id, params).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('defines no sync command')) return;
+          console.warn(`⚠️ Catch-up sync after readiness failed for ${branch.name}: ${message}`);
+        });
       }
 
       return await this.updateEnvironment(
@@ -2711,16 +2737,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           stop_command: snapshot.stop || undefined,
           // Coerce absent optional fields to null (not undefined) so switching
           // to a variant that omits a field CLEARS the previous variant's value.
-          // undefined is dropped by patch and would leave a stale command/URL —
-          // e.g. switching local → codespaces (no health) previously left the
-          // local health_check_url, so the monitor probed a dead local port and
-          // the env never left 'starting'.
+          // deepMerge (repository update) treats null as "write NULL" and
+          // undefined as "skip" — undefined would leave a stale command/URL, e.g.
+          // switching local → codespaces (no health) previously left the local
+          // health_check_url, so the monitor probed a dead local port and the env
+          // never left 'starting'. Branch types these columns as `string |
+          // undefined` for readers (rows coerce NULL → undefined), so passing the
+          // null clear-sentinel is a deliberate read/write asymmetry; cast at the
+          // patch boundary rather than widening the reader type everywhere.
           nuke_command: snapshot.nuke ?? null,
           logs_command: snapshot.logs ?? null,
           health_check_url: snapshot.health ?? null,
           app_url: snapshot.app ?? null,
           updated_at: new Date().toISOString(),
-        },
+        } as Partial<Branch>,
         params
       )
     );
