@@ -1,5 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createReconnectGrace, waitForZellijReady } from './zellij.js';
+import { createReconnectGrace, forceZellijRepaint, waitForZellijReady } from './zellij.js';
+
+describe('forceZellijRepaint', () => {
+  it('shrinks the row count then restores it to force a SIGWINCH repaint', () => {
+    const resize = vi.fn();
+    let restore: (() => void) | undefined;
+    forceZellijRepaint({ resize }, 100, 40, (fn) => {
+      restore = fn;
+    });
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenCalledWith(100, 39);
+    restore?.();
+    expect(resize).toHaveBeenLastCalledWith(100, 40);
+  });
+
+  it('never shrinks rows below 1', () => {
+    const resize = vi.fn();
+    forceZellijRepaint({ resize }, 80, 1, (fn) => fn());
+    expect(resize).toHaveBeenCalledWith(80, 1);
+  });
+
+  it('is a no-op when there is no pty', () => {
+    expect(() => forceZellijRepaint(null, 80, 24, (fn) => fn())).not.toThrow();
+  });
+
+  it('swallows a resize on a pty that died before restore', () => {
+    const resize = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('pty gone');
+      });
+    expect(() => forceZellijRepaint({ resize }, 80, 24, (fn) => fn())).not.toThrow();
+  });
+});
 
 describe('createReconnectGrace', () => {
   beforeEach(() => {
