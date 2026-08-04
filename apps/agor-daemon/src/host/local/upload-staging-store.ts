@@ -41,7 +41,7 @@ function forbidden(message = 'Upload not found'): Error {
 export class LocalUploadStagingStore implements UploadStagingStore {
   constructor(
     private readonly rootForTenant: (tenantId: string) => string,
-    private readonly options: { maxBytes?: number; ttlMs?: number } = {}
+    private readonly options: { maxBytes?: number; ttlMs?: number; directWrite?: boolean } = {}
   ) {
     const maxBytes = options.maxBytes ?? DEFAULT_UPLOAD_MAX_BYTES;
     const ttlMs = options.ttlMs ?? DEFAULT_UPLOAD_TTL_MS;
@@ -92,7 +92,10 @@ export class LocalUploadStagingStore implements UploadStagingStore {
     const ref = `upl_${randomUUID()}` as UploadRef;
     const paths = this.paths(input.owner, ref);
     await mkdir(paths.dir, { recursive: true, mode: 0o700 });
-    const temporary = `${paths.data}.${randomUUID()}.partial`;
+    // Mountpoint S3 cannot rename or O_EXCL-create; write the object/sidecar directly
+    // (it uploads on close, so atomicity holds). A real filesystem keeps temp+rename.
+    const direct = this.options.directWrite === true;
+    const temporary = direct ? paths.data : `${paths.data}.${randomUUID()}.partial`;
     let size = 0;
     const limiter = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
@@ -110,9 +113,9 @@ export class LocalUploadStagingStore implements UploadStagingStore {
       await pipeline(
         input.body,
         limiter,
-        createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
+        createWriteStream(temporary, { flags: direct ? 'w' : 'wx', mode: 0o600 })
       );
-      await rename(temporary, paths.data);
+      if (!direct) await rename(temporary, paths.data);
       const now = new Date();
       const metadata: StoredMetadata = {
         ref,
@@ -127,7 +130,10 @@ export class LocalUploadStagingStore implements UploadStagingStore {
         branchId: input.owner.branchId,
         createdBy: input.owner.createdBy,
       };
-      await writeFile(paths.meta, JSON.stringify(metadata), { flag: 'wx', mode: 0o600 });
+      await writeFile(paths.meta, JSON.stringify(metadata), {
+        flag: direct ? 'w' : 'wx',
+        mode: 0o600,
+      });
       const {
         tenantId: _tenant,
         sessionId: _session,

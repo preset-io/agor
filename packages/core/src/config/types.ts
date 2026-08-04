@@ -980,6 +980,13 @@ export interface AgorUploadSettings {
 
   /** Maximum bytes accepted for one file, expressed in MiB. */
   max_file_size_mb?: number;
+
+  /**
+   * Write staged objects directly to `location` instead of temp-file + rename.
+   * Required when `location` is a Mountpoint S3 mount (no rename / O_EXCL). Leave
+   * false for a POSIX filesystem, where temp+rename gives crash-atomic staging.
+   */
+  direct_write?: boolean;
 }
 
 /**

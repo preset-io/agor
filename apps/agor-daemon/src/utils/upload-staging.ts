@@ -59,7 +59,7 @@ export function configureUploadStagingStoreFromConfig(
   configureUploadStagingStore(() => {
     const adapter = new LocalUploadStagingStore(
       (tenantId) => resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated),
-      { maxBytes, ttlMs }
+      { maxBytes, ttlMs, directWrite: config.uploads?.direct_write === true }
     );
     return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
   });

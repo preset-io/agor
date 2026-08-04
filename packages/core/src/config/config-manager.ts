@@ -333,7 +333,7 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
-  only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
+  only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb', 'direct_write']);
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',

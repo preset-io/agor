@@ -45,6 +45,22 @@ describe('LocalUploadStagingStore boundary B', () => {
     expect(stored.provenance).toBe('browser');
   });
 
+  it('directWrite (Mountpoint-safe): stages with no temp/rename and round-trips', async () => {
+    const store = await setup({ directWrite: true });
+    const stored = await stage(store, 'mountpoint');
+    const bucket = join(root, tenantA, 'objects', stored.ref.slice(4, 6));
+    const files = await readdir(bucket);
+    expect(files.some((f) => f.endsWith('.partial'))).toBe(false);
+    expect(files).toContain(`${stored.ref}.data`);
+    expect(files).toContain(`${stored.ref}.json`);
+    const key = { tenantId: tenantA, sessionId: sessionA, branchId: branchA, ref: stored.ref };
+    let out = '';
+    for await (const chunk of await store.read(key)) out += chunk;
+    expect(out).toBe('mountpoint');
+    await store.delete(key);
+    expect(await readdir(bucket)).toEqual([]);
+  });
+
   it('denies cross-tenant and cross-session reuse without disclosing ownership', async () => {
     const store = await setup();
     const stored = await stage(store);
