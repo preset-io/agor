@@ -45,6 +45,11 @@ vi.mock('@agor/core/db', () => ({
       repositoryState.rows = repositoryState.rows.filter((row) => row.ref !== ref);
     }
   },
+  UsersRepository: class {
+    async findById(_id: string) {
+      return { unix_username: 'jose_garcia' };
+    }
+  },
 }));
 vi.mock('@aws-sdk/lib-storage', () => ({
   Upload: class {
@@ -157,7 +162,7 @@ describe('S3UploadStagingStore', () => {
     });
     expect(metadata.name).toBe('report.txt');
     expect([...client.objects.keys()][0]).toMatch(
-      /^uploads\/agor\/tenants\/tenant-a\/uploads\/objects\/[0-9a-f]{2}\/upl_/
+      /^uploads\/agor\/tenants\/tenant-a\/home\/_shared\/upl_/
     );
     const stream = await store.read({ ...owner, ref: metadata.ref, offset: 3, length: 4 });
     expect(await readText(stream)).toBe('3456');
@@ -263,6 +268,9 @@ describe('S3UploadStagingStore', () => {
     });
     expect(adapterCleanup).not.toHaveBeenCalled();
     expect(repositoryState.rows).toHaveLength(1);
+    expect([...client.objects.keys()][0]).toMatch(
+      /^uploads\/tenants\/tenant-a\/home\/jose_garcia\/upl_/
+    );
     vi.setSystemTime(new Date('2026-01-01T00:00:02Z'));
     expect(await store.cleanupExpired(owner, new Date())).toBe(1);
     expect(repositoryState.rows).toHaveLength(0);

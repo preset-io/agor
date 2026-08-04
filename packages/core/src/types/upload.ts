@@ -91,6 +91,8 @@ export interface UploadStageInput {
   body: NodeJS.ReadableStream;
   sizeHint?: number;
   ttlMs?: number;
+  // Resolved unix home segment for the owner; scopes the physical key under the user's home.
+  homeSegment?: string;
 }
 
 export interface UploadReadInput {
@@ -98,6 +100,7 @@ export interface UploadReadInput {
   sessionId: SessionID;
   branchId: BranchID;
   ref: UploadRef;
+  homeSegment?: string;
 }
 
 /**

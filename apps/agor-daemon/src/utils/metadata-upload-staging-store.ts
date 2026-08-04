@@ -1,11 +1,19 @@
-import { runWithTenantDatabaseScope, UploadRepository } from '@agor/core/db';
+import { runWithTenantDatabaseScope, UploadRepository, UsersRepository } from '@agor/core/db';
 import type {
+  TenantID,
   UploadMetadata,
   UploadOwner,
   UploadReadInput,
   UploadStageInput,
   UploadStagingStore,
+  UserID,
 } from '@agor/core/types';
+
+function sanitizeHomeSegment(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const cleaned = value.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
 
 /**
  * Application-level composition of the byte-store port and the database
@@ -13,23 +21,38 @@ import type {
  */
 export class MetadataUploadStagingStore implements UploadStagingStore {
   private readonly repository: UploadRepository;
+  private readonly users: UsersRepository;
 
   constructor(
     private readonly db: ConstructorParameters<typeof UploadRepository>[0],
     private readonly bytes: UploadStagingStore
   ) {
     this.repository = new UploadRepository(db);
+    this.users = new UsersRepository(db);
+  }
+
+  // The physical key lives under the uploader's home segment, matching the EFS
+  // /home/<user> layout. It must be derivable on read, so it is resolved from
+  // the owner's unix_username (falling back to the user id, then '_shared').
+  private async resolveHomeSegment(tenantId: TenantID, createdBy: UserID): Promise<string> {
+    const user = await runWithTenantDatabaseScope(this.db, tenantId, () =>
+      this.users.findById(createdBy)
+    );
+    return sanitizeHomeSegment(user?.unix_username) ?? sanitizeHomeSegment(createdBy) ?? '_shared';
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    const metadata = await this.bytes.stage(input);
+    const homeSegment = await this.resolveHomeSegment(input.owner.tenantId, input.owner.createdBy);
+    const metadata = await this.bytes.stage({ ...input, homeSegment });
     try {
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
         this.repository.create(input.owner, metadata)
       );
       return metadata;
     } catch (error) {
-      await this.bytes.delete({ ...input.owner, ref: metadata.ref }).catch(() => undefined);
+      await this.bytes
+        .delete({ ...input.owner, ref: metadata.ref, homeSegment })
+        .catch(() => undefined);
       throw error;
     }
   }
@@ -49,15 +72,17 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   }
 
   async inspect(input: UploadReadInput): Promise<UploadMetadata> {
-    await this.authorize(input);
-    return this.bytes.inspect(input);
+    const upload = await this.authorize(input);
+    const homeSegment = await this.resolveHomeSegment(input.tenantId, upload.createdBy);
+    return this.bytes.inspect({ ...input, homeSegment });
   }
 
   async read(
     input: UploadReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream> {
-    await this.authorize(input);
-    return this.bytes.read(input);
+    const upload = await this.authorize(input);
+    const homeSegment = await this.resolveHomeSegment(input.tenantId, upload.createdBy);
+    return this.bytes.read({ ...input, homeSegment });
   }
 
   async consume(input: UploadReadInput): Promise<void> {
@@ -68,7 +93,8 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    await this.bytes.consume(input);
+    const homeSegment = await this.resolveHomeSegment(input.tenantId, existing.createdBy);
+    await this.bytes.consume({ ...input, homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
@@ -82,7 +108,8 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    await this.bytes.delete(input);
+    const homeSegment = await this.resolveHomeSegment(input.tenantId, existing.createdBy);
+    await this.bytes.delete({ ...input, homeSegment });
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );

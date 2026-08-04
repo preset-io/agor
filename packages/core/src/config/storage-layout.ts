@@ -32,10 +32,14 @@ function requireStorageNamespace(value: string): string {
  */
 export function getManagedStorageSegments(
   namespace: string,
-  options: { tenantId?: string; tenantSeparated: boolean }
+  options: { tenantId?: string; tenantSeparated: boolean; userSegment?: string }
 ): string[] {
   const safeNamespace = requireStorageNamespace(namespace);
   if (!options.tenantSeparated) return [safeNamespace];
 
-  return ['tenants', requireStorageSegment(options.tenantId ?? '', 'Tenant id'), safeNamespace];
+  const tenant = requireStorageSegment(options.tenantId ?? '', 'Tenant id');
+  if (options.userSegment) {
+    return ['tenants', tenant, 'home', requireStorageSegment(options.userSegment, 'User segment')];
+  }
+  return ['tenants', tenant, safeNamespace];
 }

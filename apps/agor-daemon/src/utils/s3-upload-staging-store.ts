@@ -144,18 +144,19 @@ export class S3UploadStagingStore implements UploadStagingStore {
     this.client = options.client ?? new S3Client(options.clientConfig ?? {});
   }
 
-  private tenantPrefix(tenantId: string): string {
+  private homePrefix(tenantId: string, homeSegment: string | undefined): string {
     const base = this.location.prefix ? `${this.location.prefix}/` : '';
     const managed = getManagedStorageSegments('uploads', {
       tenantId,
       tenantSeparated: true,
+      userSegment: homeSegment ?? '_shared',
     }).join('/');
-    return `${base}${managed}/objects/`;
+    return `${base}${managed}/`;
   }
 
-  private key(tenantId: string, ref: UploadRef): string {
+  private key(tenantId: string, homeSegment: string | undefined, ref: UploadRef): string {
     if (!HANDLE_PATTERN.test(ref)) throw forbidden();
-    return `${this.tenantPrefix(tenantId)}${ref.slice(4, 6)}/${ref}`;
+    return `${this.homePrefix(tenantId, homeSegment)}${ref}`;
   }
 
   private logical(metadata: S3Metadata, size: number, ref: UploadRef): UploadMetadata {
@@ -188,7 +189,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
   }
 
   private async head(input: UploadReadInput, allowExpired = false) {
-    const Key = this.key(input.tenantId, input.ref);
+    const Key = this.key(input.tenantId, input.homeSegment, input.ref);
     try {
       const result = await this.client.send(
         new HeadObjectCommand({ Bucket: this.location.bucket, Key })
@@ -209,7 +210,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
     const ttlMs = input.ttlMs ?? this.ttlMs;
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 0) throw new Error('Invalid upload ttlMs');
     const ref = `upl_${randomUUID()}` as UploadRef;
-    const Key = this.key(input.owner.tenantId, ref);
+    const Key = this.key(input.owner.tenantId, input.homeSegment, ref);
     const now = new Date();
     const expiresAt = ttlMs === 0 ? null : new Date(now.getTime() + ttlMs).toISOString();
     let size = 0;
@@ -281,7 +282,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
           ? `bytes=${offset}-`
           : undefined
         : `bytes=${offset}-${offset + input.length - 1}`;
-    const Key = this.key(input.tenantId, input.ref);
+    const Key = this.key(input.tenantId, input.homeSegment, input.ref);
     let result: GetObjectCommandOutput;
     try {
       result = await this.client.send(
