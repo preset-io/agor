@@ -243,11 +243,14 @@ Shared UI renders stable slots rather than switching on tool names:
 ```text
 model selector slot
 settings/authentication slot
+provider-readiness status slot
 configuration summary slot
 ```
 
 An integration supplies a contribution only when it needs custom UI. The host
 retains layout, accessibility, loading/error boundaries, and authorization.
+Readiness contributions own tool-specific semantics and reuse their existing
+authorized resources; the host renders their normalized status consistently.
 
 ## Package shape
 

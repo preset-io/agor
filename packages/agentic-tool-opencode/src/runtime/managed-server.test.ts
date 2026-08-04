@@ -42,6 +42,35 @@ describe('OpenCode native data boundary', () => {
     expect(await readFile(authPath, 'utf8')).toBe('{"synthetic":true}');
   });
 
+  it('tightens a safe legacy native directory without rewriting its auth file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-legacy-mode-'));
+    roots.push(root);
+    const dataHome = nativeDataHome(root);
+    await ensureOpenCodeDataHome(dataHome);
+    const authDir = join(dataHome, 'opencode');
+    const authPath = join(authDir, 'auth.json');
+    await writeFile(authPath, '{"legacy":true}', { mode: 0o600 });
+    await chmod(authDir, 0o755);
+
+    await ensureOpenCodeDataHome(dataHome);
+
+    expect((await stat(authDir)).mode & 0o777).toBe(0o700);
+    expect((await stat(authPath)).mode & 0o777).toBe(0o600);
+    expect(await readFile(authPath, 'utf8')).toBe('{"legacy":true}');
+  });
+
+  it('does not repair a group-writable native directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-writable-mode-'));
+    roots.push(root);
+    const dataHome = nativeDataHome(root);
+    await ensureOpenCodeDataHome(dataHome);
+    const authDir = join(dataHome, 'opencode');
+    await chmod(authDir, 0o770);
+
+    await expect(ensureOpenCodeDataHome(dataHome)).rejects.toThrow(/group- or world-writable/i);
+    expect((await stat(authDir)).mode & 0o777).toBe(0o770);
+  });
+
   it('rejects a symlink instead of provisioning through it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-opencode-symlink-'));
     roots.push(root);

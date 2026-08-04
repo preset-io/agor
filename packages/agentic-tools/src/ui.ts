@@ -1,7 +1,7 @@
 import { OPENCODE_UI_CONTRIBUTION } from '@agor/agentic-tool-opencode/ui';
 import type { AgorClient } from '@agor/core/client';
 import type { AgenticToolName, PermissionMode } from '@agor/core/types';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 export interface AgenticToolModelSelection {
   provider: string;
@@ -18,6 +18,17 @@ export interface AgenticToolModelSelectorProps {
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
 }
 
+export interface AgenticToolReadiness {
+  tone: 'positive' | 'neutral' | 'info';
+  label: string;
+}
+
+export interface AgenticToolReadinessProps {
+  client?: AgorClient | null;
+  canLoadReadiness?: boolean;
+  children: (status: AgenticToolReadiness) => ReactNode;
+}
+
 export interface AgenticToolUIIntegration {
   agentSelectionOption?: {
     icon: string;
@@ -32,6 +43,7 @@ export interface AgenticToolUIIntegration {
   modelLabel?: string;
   ModelSelector?: ComponentType<AgenticToolModelSelectorProps>;
   ProviderSettings?: ComponentType<{ client: AgorClient }>;
+  Readiness?: ComponentType<AgenticToolReadinessProps>;
   permissionModes?: readonly {
     mode: PermissionMode;
     label: string;

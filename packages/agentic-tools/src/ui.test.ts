@@ -16,6 +16,7 @@ describe('agentic-tool UI registry', () => {
     });
     expect(integration?.ModelSelector).toBeTypeOf('function');
     expect(integration?.ProviderSettings).toBeTypeOf('function');
+    expect(integration?.Readiness).toBeTypeOf('function');
     expect(integration?.permissionModes?.map(({ mode }) => mode)).toEqual([
       'default',
       'autoEdit',

@@ -1064,6 +1064,48 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), ASYNC);
   });
 
+  it('renders package-owned OpenCode availability in the sidebar and provider header', async () => {
+    const user = makeUser();
+    const modelFind = vi.fn().mockResolvedValue({
+      runtimeVersion: '1.14.33',
+      providers: [{ id: 'opencode', availableForSelection: true, models: [] }],
+    });
+    const authFind = vi.fn().mockResolvedValue({
+      runtime: 'available',
+      runtimeVersion: '1.14.33',
+      isolation: { mode: 'simple', boundary: 'logical' },
+      providers: [],
+    });
+    const authentication = { accessToken: 'self' };
+    const client = {
+      service: vi.fn((path: string) =>
+        path === 'opencode-models'
+          ? { find: modelFind }
+          : { find: authFind, get: vi.fn(), create: vi.fn(), patch: vi.fn(), remove: vi.fn() }
+      ),
+      get: vi.fn(() => authentication),
+      on: vi.fn(),
+    } as unknown as AgorClient;
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="opencode"
+      />
+    );
+
+    const menuItem = await screen.findByRole('menuitem', { name: /OpenCode Available/i });
+    const heading = await screen.findByRole('heading', { name: 'OpenCode' });
+    expect(menuItem).toBeInTheDocument();
+    expect(heading.parentElement).toHaveTextContent('Available');
+    expect(modelFind).toHaveBeenCalledOnce();
+  });
+
   it('resets OpenCode provider state when the authenticated subject changes', async () => {
     const oldSettings = {
       runtime: 'available' as const,
@@ -1112,9 +1154,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       patch: vi.fn(),
       remove: vi.fn(),
     };
+    const modelService = {
+      find: vi.fn().mockResolvedValue({ runtimeVersion: '1.14.33', providers: [] }),
+    };
     let authentication: unknown = { accessToken: 'old-subject' };
     const client = {
-      service: vi.fn(() => service),
+      service: vi.fn((path: string) => (path === 'opencode-models' ? modelService : service)),
       get: vi.fn(() => authentication),
       on: vi.fn(),
     } as unknown as AgorClient;
@@ -1201,9 +1246,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       patch: vi.fn(),
       remove: vi.fn(),
     };
+    const modelService = {
+      find: vi.fn().mockResolvedValue({ runtimeVersion: '1.14.33', providers: [] }),
+    };
     let authentication: unknown = { accessToken: 'old-subject' };
     const client = {
-      service: vi.fn(() => service),
+      service: vi.fn((path: string) => (path === 'opencode-models' ? modelService : service)),
       get: vi.fn(() => authentication),
       on: vi.fn(),
     } as unknown as AgorClient;

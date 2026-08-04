@@ -1,5 +1,6 @@
 import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
 import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
+import { OpenCodeReadiness } from './OpenCodeReadiness.js';
 
 export {
   type OpenCodeModelConfig,
@@ -7,6 +8,7 @@ export {
   type OpenCodeModelSelectorProps,
 } from './OpenCodeModelSelector.js';
 export { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
+export { OpenCodeReadiness } from './OpenCodeReadiness.js';
 
 export const OPENCODE_UI_CONTRIBUTION = {
   name: 'opencode',
@@ -22,6 +24,7 @@ export const OPENCODE_UI_CONTRIBUTION = {
   modelLabel: 'OpenCode LLM Provider',
   ModelSelector: OpenCodeModelSelector,
   ProviderSettings: OpenCodeProviderSettings,
+  Readiness: OpenCodeReadiness,
   permissionModes: [
     {
       mode: 'default',

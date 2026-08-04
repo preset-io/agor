@@ -254,19 +254,18 @@ async function assertOwnedDirectoryChain(boundary: string, target: string): Prom
 
 async function ensureOwnedPrivateDirectory(boundary: string, directory: string): Promise<void> {
   await assertOwnedDirectoryChain(boundary, directory);
-  let created = false;
+  let entry: Awaited<ReturnType<typeof lstat>>;
   try {
-    await lstat(directory);
+    entry = await lstat(directory);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    created = true;
+    entry = await lstat(directory);
   }
-  if (created) await chmod(directory, 0o700);
-  await assertOwnedDirectoryChain(boundary, directory);
-  const entry = await lstat(directory);
   if (!entry.isDirectory()) throw new Error('OpenCode native data path must be a directory');
-  assertOwnedPrivatePath(entry, 0o700);
+  if ((Number(entry.mode) & 0o777) !== 0o700) await chmod(directory, 0o700);
+  await assertOwnedDirectoryChain(boundary, directory);
+  assertOwnedPrivatePath(await lstat(directory), 0o700);
 }
 
 export async function ensureOpenCodeDataHome(dataHome: string): Promise<void> {
