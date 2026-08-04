@@ -2,7 +2,7 @@
 
 > Agor is the command center for AI enablement — a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
 
-Agor is source-available software licensed under BSL 1.1. Production use is permitted by its Additional Use Grant; offering Agor itself as the defined hosted or managed service is not. Each version later converts to Apache License 2.0 under the license terms.
+Agor is source-available software licensed under BSL 1.1. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
 
 - Website: https://agor.live
 - GitHub: https://github.com/preset-io/agor

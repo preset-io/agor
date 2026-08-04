@@ -284,11 +284,12 @@ for the agent-oriented map of the codebase.
 not open source, before the Change Date.
 
 The Additional Use Grant permits production use, including internal and
-self-hosted commercial use. It does not permit offering Agor itself as a hosted
-or managed service whose primary function is to let third parties directly use
-Agor's interfaces or APIs to orchestrate or manage AI coding agents. Consulting,
-support, integration, modification, use within a broader product or service, and
-single-customer deployments remain permitted subject to the license terms.
+self-hosted commercial use. It does not permit commercializing Agor itself by
+offering its agent-orchestration functionality to third parties as a product or
+service, whether hosted, managed, or bundled for customers to operate.
+Consulting, support, integration, modification, use within a broader product or
+service, and single-customer internal deployments remain permitted subject to
+the license terms. Contact Preset, Inc. about alternative commercial licensing.
 
 On **January 15, 2029**, or the fourth anniversary of the first public BSL
 distribution of a particular version (whichever comes first), that version

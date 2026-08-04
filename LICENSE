@@ -11,24 +11,24 @@ Licensor:             Maxime Beauchemin
 Licensed Work:        Agor
                       The Licensed Work is (c) 2025 Maxime Beauchemin
 Additional Use Grant: You may make production use of the Licensed Work,
-                      provided that you do not offer the Licensed Work as a
-                      Hosted or Managed Agor Service.
+                      provided that you may not use the Licensed Work for an
+                      Agor Offering.
 
-                      A "Hosted or Managed Agor Service" is a service made
-                      available to third parties in which (a) the Licensed
-                      Work is the primary software used to provide the service
-                      and (b) third parties directly access the Licensed
-                      Work's user interfaces or APIs to orchestrate or manage
-                      AI coding agents.
+                      An "Agor Offering" is a commercial product or service
+                      offered to third parties whose primary purpose is to
+                      provide the functionality of the Licensed Work to
+                      orchestrate or manage AI coding agents. This includes
+                      offering the Licensed Work on a hosted or managed basis,
+                      or bundling the Licensed Work in a product for customers
+                      to operate.
 
-                      For clarity, this grant permits internal use, commercial
-                      use, consulting, support, integration, modification, use
-                      as a component of a broader product or service, and
+                      Consulting, support, and integration services, including
                       operating a deployment solely for a specific customer's
-                      own use, provided that the use is not a Hosted or Managed
-                      Agor Service as defined above.
+                      own internal use, are not an Agor Offering.
 Change Date:          2029-01-15
 Change License:       Apache License, Version 2.0
+
+For alternative commercial licensing arrangements, contact Preset, Inc.
 
 ---
 
