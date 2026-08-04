@@ -125,7 +125,7 @@ export class OpenCodeAuthService {
     });
     const result = await handle.result;
     if (result.error?.code === 'EXECUTOR_CLEANUP_UNVERIFIED') {
-      blockOpenCodeNativeStateNamespace(context.namespaceKey, () => handle.verifyAbsence());
+      await blockOpenCodeNativeStateNamespace(context.namespaceKey, handle);
     }
     if (!result.success || !result.data) {
       throw new BadRequest('OpenCode provider operation failed. Try again.');
@@ -286,7 +286,7 @@ export class OpenCodeAuthService {
 
       const result = await handle.result;
       if (result.error?.code === 'OPENCODE_OAUTH_CLEANUP_UNVERIFIED') {
-        blockOpenCodeNativeStateNamespace(context.namespaceKey, () => handle.verifyAbsence());
+        await blockOpenCodeNativeStateNamespace(context.namespaceKey, handle);
       }
       this.settleAttempt(attempt, result, context);
       scheduleAttemptPrune(attempt);

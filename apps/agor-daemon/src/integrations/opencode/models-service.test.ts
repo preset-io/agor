@@ -35,6 +35,7 @@ vi.mock('../../utils/spawn-executor.js', () => ({
   startContainedExecutorCommand: (payload: unknown, options: unknown) => ({
     result: runCommand(payload, options),
     verifyAbsence: vi.fn(async () => true),
+    retainContainmentFence: vi.fn(async () => undefined),
   }),
 }));
 

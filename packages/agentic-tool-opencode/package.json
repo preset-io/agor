@@ -43,22 +43,38 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "@ant-design/icons": "^6.3.2",
     "@opencode-ai/sdk": "1.14.33",
-    "antd": "^6.5.0",
     "opencode-ai": "1.14.33",
-    "react": "^19.2.7",
     "zod": "^4.4.3"
   },
+  "peerDependencies": {
+    "@ant-design/icons": "^6.3.2",
+    "antd": "^6.5.0",
+    "react": "^19.2.7"
+  },
+  "peerDependenciesMeta": {
+    "@ant-design/icons": {
+      "optional": true
+    },
+    "antd": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@ant-design/icons": "^6.3.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "antd": "^6.5.0",
     "concurrently": "^9.2.1",
     "jsdom": "^27.1.0",
+    "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tsup": "^8.5.1",
     "tsx": "^4.23.0",

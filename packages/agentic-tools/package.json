@@ -36,8 +36,7 @@
   },
   "dependencies": {
     "@agor/agentic-tool-opencode": "workspace:*",
-    "@agor/core": "workspace:*",
-    "react": "^19.2.7"
+    "@agor/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

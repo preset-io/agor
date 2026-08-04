@@ -37,9 +37,9 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 - Call identity uses the nearest named function/method plus an occurrence number. Refactors can require registry updates even when authority is unchanged.
 - The checker verifies declared syntactic capabilities, not path provenance, tenant scoping, authorization, cleanup correctness, TOCTOU safety, or command argument safety. Those require runtime design and negative tests at the owning boundary.
 
-## Closure status (2026-08-03)
+## Closure status (2026-08-04)
 
-The final registry contains **101** exact capabilities (**74 A, 27 B, 0 C, 0 D**). The apparent increase from the prior **93** (**66 A, 27 B**) is eight newly detected pre-existing higher-order aliases: four first-run operator credential-file operations and four operator Unix identity command executions. No tenant-path authority was reclassified. The only B entries remain the local upload adapter.
+The registry contains **110** exact capabilities (**83 A, 27 B, 0 C, 0 D**). The increase from the prior **93** (**66 A, 27 B**) comprises eight newly detected pre-existing higher-order aliases, two local interactive-executor capabilities, five daemon-owned durable-containment-fence operations, and two platform boot-identity probes. No tenant-path authority was reclassified. The only B entries remain the local upload adapter.
 
 Unix permission initialization no longer dynamically loads daemon `unix-group-init` code or runs daemon-side `chgrp`/`chmod`/`setfacl`. After Git materialization, the same tenant-mounted Git lifecycle executor invokes the existing `unix.sync-repo` or `unix.sync-branch` handler. The handler resolves paths from trusted tenant-scoped records; paths never cross into the daemon process. Keeping permission work in the existing lifecycle executor avoids nested-executor capacity starvation. Local insulated/strict deployments retain required group setup; simple/delegated modes skip it because host Unix groups are not part of those modes. Sync is idempotent, awaited, and fail-closed: a resource cannot become `ready` when required isolation fails.
 

@@ -1,11 +1,16 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   containExecutorProcess,
   markExecutorProcessExited,
+  retainExecutorContainmentFence,
   trackExecutorProcess,
   untrackExecutorProcess,
+  verifyExecutorContainmentFence,
 } from './executor-tracking.js';
 
 describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
@@ -91,6 +96,45 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       } finally {
         process.kill(-leader.pid, 'SIGKILL');
         untrackExecutorProcess('session-uid');
+      }
+    });
+
+    it('reconciles a durable containment fence after in-memory tracking is lost', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-containment-fence-'));
+      const leader = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      if (!leader.pid) throw new Error('leader PID missing');
+      await once(leader, 'spawn');
+      trackExecutorProcess({
+        sessionId: 'session-restart',
+        taskId: 'task-restart',
+        pid: leader.pid,
+      });
+      try {
+        await retainExecutorContainmentFence(
+          'opencode-native-state:subject',
+          'session-restart',
+          'task-restart',
+          root
+        );
+        untrackExecutorProcess('session-restart', 'task-restart');
+        const exited = once(leader, 'exit');
+
+        await expect(
+          verifyExecutorContainmentFence('opencode-native-state:subject', root)
+        ).resolves.toBe(true);
+        await exited;
+        const [fenceDirectory] = await readdir(root);
+        if (!fenceDirectory) throw new Error('containment fence directory missing');
+        await expect(readdir(join(root, fenceDirectory))).resolves.toEqual([]);
+      } finally {
+        try {
+          process.kill(-leader.pid, 'SIGKILL');
+        } catch {}
+        untrackExecutorProcess('session-restart');
+        await rm(root, { recursive: true, force: true });
       }
     });
   }

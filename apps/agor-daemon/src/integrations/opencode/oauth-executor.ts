@@ -19,6 +19,7 @@ export interface OpenCodeOAuthExecutorHandle {
   cancel(): Promise<ExecutorCommandResult>;
   submitCode(code: string): Promise<boolean>;
   verifyAbsence(): Promise<boolean>;
+  retainContainmentFence(key: string): Promise<void>;
 }
 
 function failure(code: string, message: string, details?: unknown): ExecutorCommandResult {
@@ -114,5 +115,6 @@ export function startOpenCodeOAuthExecutor(
       return transport.deliver({ code }, true);
     },
     verifyAbsence: transport.verifyAbsence,
+    retainContainmentFence: transport.retainContainmentFence,
   };
 }

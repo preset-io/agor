@@ -24,15 +24,9 @@ const sourceManifests = [
 const skipDeps = new Set([
   '@agor/agentic-tool-opencode',
   '@agor/agentic-tools',
-  // These are used only by the packages' browser entrypoints. agor-live ships
-  // the already-bundled UI and must not install a second browser dependency
-  // graph for daemon/executor imports.
-  '@ant-design/icons',
   '@agor/core',
   '@agor/daemon',
   '@agor/git',
-  'antd',
-  'react',
 ]);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
 

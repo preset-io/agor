@@ -817,30 +817,29 @@ describe('OpenCodeTool managed turn', () => {
       status: 'denied',
       error: 'OpenCode permission was rejected',
     },
-  ])('maps $name to reject and patches the existing request state', async ({
-    decision,
-    status,
-    error,
-  }) => {
-    const scenario = makePermissionTurn({
-      decision: {
-        requestId: 'agor-request',
-        taskId: '00000000-0000-7000-8000-000000000002',
-        ...decision,
-      },
-    });
+  ])(
+    'maps $name to reject and patches the existing request state',
+    async ({ decision, status, error }) => {
+      const scenario = makePermissionTurn({
+        decision: {
+          requestId: 'agor-request',
+          taskId: '00000000-0000-7000-8000-000000000002',
+          ...decision,
+        },
+      });
 
-    await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(error);
-    expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
-      expect.objectContaining({ body: { response: 'reject' } })
-    );
-    expect(scenario.messagesService.patch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        content: expect.objectContaining({ status }),
-      })
-    );
-  });
+      await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(error);
+      expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
+        expect.objectContaining({ body: { response: 'reject' } })
+      );
+      expect(scenario.messagesService.patch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          content: expect.objectContaining({ status }),
+        })
+      );
+    }
+  );
 
   it('fails closed in headless mode even when configured to allow all', async () => {
     const scenario = makePermissionTurn({

@@ -57,6 +57,10 @@ export interface ToolConfig {
   loadAuxiliaryAdapter?: () => Promise<AgenticToolAuxiliaryAdapter>;
 }
 
+type ToolConfigRegistry = {
+  [Name in Tool]: ToolConfig & { tool: Name };
+};
+
 export interface AgenticToolAuxiliaryInput {
   context: unknown;
   request: unknown;
@@ -197,39 +201,41 @@ export class ToolRegistry {
  * Initialize tool registry with all available tools
  */
 export async function initializeToolRegistry(): Promise<void> {
+  // claude-code, codex, gemini, copilot, and cursor keep their legacy terminal
+  // writes until they incrementally adopt the shared runner report in #2090.
   const legacyRunner =
     (runner: (params: Parameters<ToolRunner>[0]) => Promise<void>): ToolRunner =>
     async (params) => {
       await runner(params);
       return {};
     };
-  const adapters: ToolConfig[] = [
-    {
+  const adapters = {
+    'claude-code': {
       tool: 'claude-code',
       loadRunner: async () => legacyRunner((await import('./claude.js')).executeClaudeCodeTask),
     },
-    {
+    codex: {
       tool: 'codex',
       loadRunner: async () => legacyRunner((await import('./codex.js')).executeCodexTask),
     },
-    {
+    gemini: {
       tool: 'gemini',
       loadRunner: async () => legacyRunner((await import('./gemini.js')).executeGeminiTask),
     },
-    {
+    opencode: {
       tool: 'opencode',
       loadRunner: async () => (await import('./opencode.js')).executeOpenCodeTask,
       loadAuxiliaryAdapter: async () =>
         (await import('@agor/agentic-tool-opencode/runtime')).OPENCODE_AUXILIARY_ADAPTER,
     },
-    {
+    copilot: {
       tool: 'copilot',
       loadRunner: async () => legacyRunner((await import('./copilot.js')).executeCopilotTask),
     },
-    {
+    cursor: {
       tool: 'cursor',
       loadRunner: async () => legacyRunner((await import('./cursor.js')).executeCursorTask),
     },
-  ];
-  for (const adapter of adapters) ToolRegistry.register(adapter);
+  } satisfies ToolConfigRegistry;
+  for (const adapter of Object.values(adapters)) ToolRegistry.register(adapter);
 }

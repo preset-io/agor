@@ -41,6 +41,7 @@ import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   containExecutorProcess,
   markExecutorProcessExited,
+  retainExecutorContainmentFence,
   trackExecutorProcess,
   untrackExecutorProcess,
 } from '../executor-tracking.js';
@@ -164,11 +165,13 @@ export interface InteractiveExecutorHandle {
   deliver(value: unknown, end?: boolean): Promise<boolean>;
   endInput(): boolean;
   verifyAbsence(): Promise<boolean>;
+  retainContainmentFence(key: string): Promise<void>;
 }
 
 export interface ContainedExecutorCommandHandle {
   result: Promise<ExecutorCommandResult>;
   verifyAbsence(): Promise<boolean>;
+  retainContainmentFence(key: string): Promise<void>;
 }
 
 export interface InteractiveExecutorFailures {
@@ -657,6 +660,9 @@ function failedInteractiveExecutorHandle(
     deliver: async () => false,
     endInput: () => false,
     verifyAbsence: async () => true,
+    retainContainmentFence: async () => {
+      throw new Error('Cannot retain a containment fence for an executor that did not start');
+    },
   };
 }
 
@@ -893,6 +899,7 @@ export function startInteractiveExecutor(
       untrackExecutorProcess(attemptId, taskId);
       return true;
     },
+    retainContainmentFence: (key) => retainExecutorContainmentFence(key, attemptId, taskId),
   };
 }
 
@@ -962,6 +969,7 @@ export function startContainedExecutorCommand(
   return {
     result: transport.result,
     verifyAbsence: transport.verifyAbsence,
+    retainContainmentFence: transport.retainContainmentFence,
   };
 }
 

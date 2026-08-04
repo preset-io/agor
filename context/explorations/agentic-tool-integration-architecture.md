@@ -139,6 +139,10 @@ or stale selections. It is not consulted while executing or resuming an
 existing Session; execution validates the exact persisted pair and never
 silently substitutes another model.
 
+No database migration is required. A legacy `serverUrl` key may remain inert
+inside existing JSON configuration until that configuration is rewritten; no
+current resolver or runtime consumes it.
+
 ### Runtime
 
 The runtime adapter reports a normalized outcome and cooperative cleanup
@@ -317,7 +321,14 @@ Every local OpenCode auxiliary command, interactive or one-shot, uses tracked
 process-group containment before releasing its result or credential-mutation
 slot. Templated execution is rejected for native-state operations until the
 remote substrate supplies equivalent fenced cleanup evidence. An unverified
-local cleanup retains a namespace verifier that blocks later mutations.
+local cleanup durably retains the wrapper's containment identity under the
+daemon's private runtime state before releasing the mutation slot. The next
+mutation resumes containment and removes the marker only after verified
+absence; a daemon restart is not cleanup proof. The marker stays with the
+daemon containment owner rather than granting the daemon access to the
+executor-owned native home. Enabling native-state operations on a remote or
+multi-replica substrate first requires moving this fence to shared controller
+state.
 
 ## Native-state and concurrency contract
 
@@ -329,6 +340,9 @@ rechecks the credential file after mutations.
 The host-provided subject and Unix identity remain authoritative. This is an
 OS-enforced boundary only in strict mode; shared-UID modes provide logical
 separation, not protection from another same-UID process.
+Hosted `required_from_auth` and delegated Unix-user modes fail admission for
+OpenCode authentication and task execution until the execution substrate can
+provide a durable per-user native-state home boundary.
 
 OpenCode's native database supports simultaneous task servers for the same
 subject. Credential mutations and OAuth attempts are serialized by
@@ -365,7 +379,13 @@ not OpenCode package behavior:
 - explicit adapter/version conformance modes, including classifying quiet
   after unknown observations as adapter incompatibility rather than a semantic
   stall;
-- adoption of the runner report by legacy runners;
+- incremental adoption of the runner report by the five legacy runners, in an
+  order chosen by #2090 implementation work:
+  - Claude Code;
+  - Codex;
+  - Gemini;
+  - Copilot; and
+  - Cursor;
 - crash-repairable Session and gateway consequence reconciliation;
 - one shared runtime-presentation derivation; and
 - removal of the startup-orphan logical-release gap.

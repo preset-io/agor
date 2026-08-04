@@ -38,6 +38,7 @@ vi.mock('../../utils/spawn-executor.js', () => ({
   startContainedExecutorCommand: (payload: unknown, options: unknown) => ({
     result: runCommand(payload, options),
     verifyAbsence: vi.fn(async () => true),
+    retainContainmentFence: vi.fn(async () => undefined),
   }),
 }));
 
@@ -701,6 +702,7 @@ describe('OpenCode provider auth service', () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
+    const retainContainmentFence = vi.fn(async () => undefined);
     startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
       emit = onEvent;
       return {
@@ -710,6 +712,7 @@ describe('OpenCode provider auth service', () => {
         cancel,
         submitCode: vi.fn(),
         verifyAbsence,
+        retainContainmentFence,
       };
     });
     const authService = service();
@@ -755,6 +758,7 @@ describe('OpenCode provider auth service', () => {
     );
     expect(blockedOAuth).toMatchObject({ providerId: 'another-provider', phase: 'failed' });
     expect(startOAuth).toHaveBeenCalledOnce();
+    expect(retainContainmentFence).toHaveBeenCalledOnce();
     expect(runCommand).not.toHaveBeenCalled();
 
     await expect(

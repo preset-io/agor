@@ -26,19 +26,32 @@ interface DaemonAgenticToolIntegration {
   registerServices(context: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>): void;
 }
 
-const INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS = [
-  OPENCODE_DAEMON_INTEGRATION,
-] as const satisfies readonly DaemonAgenticToolIntegration[];
+type DaemonAgenticToolIntegrationRegistry = {
+  [Name in AgenticToolName]: (DaemonAgenticToolIntegration & { name: Name }) | null;
+};
+
+const DAEMON_AGENTIC_TOOL_INTEGRATIONS = {
+  'claude-code': null,
+  codex: null,
+  gemini: null,
+  opencode: OPENCODE_DAEMON_INTEGRATION,
+  copilot: null,
+  cursor: null,
+} as const satisfies DaemonAgenticToolIntegrationRegistry;
+
+const installedDaemonAgenticToolIntegrations = Object.values(
+  DAEMON_AGENTIC_TOOL_INTEGRATIONS
+).filter((integration) => integration !== null);
 
 export const AGENTIC_TOOL_TENANT_IDENTITY_ONLY_SERVICE_PATHS =
-  INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS.flatMap(
+  installedDaemonAgenticToolIntegrations.flatMap(
     (integration) => integration.tenantIdentityOnlyServicePaths
   );
 
 export function registerAgenticToolIntegrationServices(
   context: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>
 ): void {
-  for (const integration of INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS) {
+  for (const integration of installedDaemonAgenticToolIntegrations) {
     integration.registerServices(context);
   }
 }
@@ -51,9 +64,10 @@ export async function admitAgenticToolExecutor<T>(
   },
   admitted: () => Promise<T>
 ): Promise<T> {
-  INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS.find(
-    (integration) => integration.name === input.tool
-  )?.admitExecutor?.({ tenantId: input.tenantId, config: input.config });
+  DAEMON_AGENTIC_TOOL_INTEGRATIONS[input.tool]?.admitExecutor?.({
+    tenantId: input.tenantId,
+    config: input.config,
+  });
   return admitted();
 }
 
@@ -65,11 +79,7 @@ export function getAgenticToolExecutorPayload(
     homeDir: string;
   }
 ): Record<string, unknown> {
-  return (
-    INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS.find(
-      (integration) => integration.name === tool
-    )?.getExecutorPayload?.(input) ?? {}
-  );
+  return DAEMON_AGENTIC_TOOL_INTEGRATIONS[tool]?.getExecutorPayload?.(input) ?? {};
 }
 
 export async function resolveAgenticToolCreateModelFallback(input: {
@@ -79,7 +89,5 @@ export async function resolveAgenticToolCreateModelFallback(input: {
   executionOwnerId: UserID;
   params: AuthenticatedParams;
 }): Promise<ModelConfigInput | undefined> {
-  return INSTALLED_DAEMON_AGENTIC_TOOL_INTEGRATIONS.find(
-    (integration) => integration.name === input.tool
-  )?.resolveCreateModelFallback?.(input);
+  return DAEMON_AGENTIC_TOOL_INTEGRATIONS[input.tool]?.resolveCreateModelFallback?.(input);
 }

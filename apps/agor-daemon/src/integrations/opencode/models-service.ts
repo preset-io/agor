@@ -29,7 +29,7 @@ async function readModelCatalog(
     );
     result = await handle.result;
     if (result.error?.code === 'EXECUTOR_CLEANUP_UNVERIFIED') {
-      blockOpenCodeNativeStateNamespace(context.namespaceKey, () => handle.verifyAbsence());
+      await blockOpenCodeNativeStateNamespace(context.namespaceKey, handle);
     }
   } catch {
     throw new BadRequest(MODEL_CATALOG_FAILURE);

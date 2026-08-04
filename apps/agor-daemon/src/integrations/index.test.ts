@@ -61,6 +61,21 @@ describe('OpenCode executor admission', () => {
     expect(payload).not.toHaveProperty('dataHome');
   });
 
+  it('makes legacy daemon integration opt-outs explicit without changing admission', async () => {
+    const admitted = vi.fn(async () => 'admitted');
+
+    await expect(
+      admitAgenticToolExecutor({ tool: 'codex', tenantId: 'tenant-a', config: {} }, admitted)
+    ).resolves.toBe('admitted');
+    expect(
+      getAgenticToolExecutorPayload('codex', {
+        tenantId: 'tenant-a',
+        session: { created_by: 'user-1', unix_username: null } as never,
+        homeDir: '/home/alice',
+      })
+    ).toEqual({});
+  });
+
   it("does not discover a create fallback from another user's native credentials", async () => {
     await expect(
       OPENCODE_DAEMON_INTEGRATION.resolveCreateModelFallback({
