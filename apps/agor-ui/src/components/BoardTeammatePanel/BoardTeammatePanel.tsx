@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, SpawnConfig, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -181,6 +181,32 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
+  const [branchOwners, setBranchOwners] = useState<User[]>([]);
+  useEffect(() => {
+    if (!client || !primaryTeammateBranch) {
+      setBranchOwners([]);
+      return;
+    }
+    const branchId = primaryTeammateBranch.branch_id;
+    let cancelled = false;
+    client
+      .service('branches/:id/owners')
+      .find({ route: { id: branchId } })
+      .then((response) => {
+        if (!cancelled) setBranchOwners(response as User[]);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // RBAC disabled (404) or network error — fall back to created_by
+        const creator =
+          primaryTeammateBranch.created_by && userById.get(primaryTeammateBranch.created_by);
+        setBranchOwners(creator ? [creator] : []);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, primaryTeammateBranch, userById]);
+
   const teammateOptions = useMemo(() => {
     if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
 
@@ -306,7 +332,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             <BranchMetadataRow
               branch={primaryTeammateBranch}
               repo={primaryTeammateRepo}
-              userById={userById}
+              owners={branchOwners}
               currentUserId={currentUserId}
               style={{ minWidth: 0 }}
             >
