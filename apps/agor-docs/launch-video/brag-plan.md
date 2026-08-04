@@ -117,7 +117,7 @@ Transition: soft → Scene 7.
 
 Back to dark-teal + settling constellation. The `agor` wordmark (heavy display, teal "o"
 glyph) resolves on the **38.05s** hit, with tagline **"Team command center for all things
-agentic."** and **"open · agor.live"**. One clean bell; music fades 38.8→40.0s.
+agentic."** and **"fairly open · agor.live"**. One clean bell; music fades 38.8→40.0s.
 This is the only scene that may fade elements out.
 
 **Audio summary:** A soft epic intro under the terminal blooms into a warm cinematic swell
