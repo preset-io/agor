@@ -1,9 +1,44 @@
+import {
+  getCurrentTenantDatabaseScope,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+  TaskRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
 describe('TasksService termination request publication', () => {
+  it('uses short database units for internal orchestration calls', async () => {
+    const db = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
+    const scopes: unknown[] = [];
+    const findOrphaned = vi
+      .spyOn(TaskRepository.prototype, 'findOrphaned')
+      .mockImplementation(async () => {
+        scopes.push(getCurrentTenantDatabaseScope());
+        return [];
+      });
+    const service = new TasksService(db, { get: vi.fn() } as never);
+
+    await runWithTenantContext('tenant-a', async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      await service.getOrphaned();
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+        const outerScope = getCurrentTenantDatabaseScope();
+        await service.getOrphaned();
+        expect(scopes.at(-1)).toBe(outerScope);
+      });
+    });
+
+    expect(findOrphaned).toHaveBeenCalledTimes(2);
+    expect(scopes[0]).toBeTruthy();
+    expect(scopes[0]).not.toBe(scopes[1]);
+    findOrphaned.mockRestore();
+  });
+
   it('publishes durable state and the task-scoped executor control event', async () => {
     const task = {
       task_id: '018f0000-0000-7000-8000-000000000001',

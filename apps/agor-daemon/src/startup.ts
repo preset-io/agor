@@ -279,18 +279,22 @@ async function recoverTenantRuntime(
   const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl;
   const sessions = ctx.sessionsService;
   const params = startupTenantParams(ctx.config, tenantId);
-  const orphanedTasks = await tasks.getOrphaned(params as never);
+  const inDatabaseScope = <T>(work: () => Promise<T>) =>
+    runStartupTenantDatabaseScope(ctx, work, tenantId);
+  const orphanedTasks = await inDatabaseScope(() => tasks.getOrphaned(params as never));
 
   for (const task of orphanedTasks) {
     const runtime = task.metadata?.executor_runtime;
     if (runtime) restoreExecutorProcess(task.session_id, task.task_id, runtime, ctx.app);
-    await claimExecutorTermination({
-      app: ctx.app,
-      taskId: task.task_id,
-      cause: 'daemon_restart',
-      errorMessage: 'Daemon restart requires executor containment before this Task can settle.',
-      params: params as never,
-    });
+    await inDatabaseScope(() =>
+      claimExecutorTermination({
+        app: ctx.app,
+        taskId: task.task_id,
+        cause: 'daemon_restart',
+        errorMessage: 'Daemon restart requires executor containment before this Task can settle.',
+        params: params as never,
+      })
+    );
   }
 
   // QUEUED Tasks are durable user intent. Leave them intact for the fleet-wide
@@ -304,21 +308,25 @@ async function recoverTenantRuntime(
     SessionStatus.TIMED_OUT,
   ]) {
     orphanedSessions.push(
-      ...(await collectAllPages<Session>(
-        (skip) =>
-          sessions.find({
-            query: { status, $limit: 1000, $skip: skip },
-            ...params,
-          }) as Promise<Session[] | Paginated<Session>>
+      ...(await collectAllPages<Session>((skip) =>
+        inDatabaseScope(
+          () =>
+            sessions.find({
+              query: { status, $limit: 1000, $skip: skip },
+              ...params,
+            }) as Promise<Session[] | Paginated<Session>>
+        )
       ))
     );
   }
 
   for (const session of orphanedSessions) {
-    await tasks.reconcileSessionState(session.session_id, {
-      ...params,
-      suppressTerminalQueueProcessing: true,
-    } as never);
+    await inDatabaseScope(() =>
+      tasks.reconcileSessionState(session.session_id, {
+        ...params,
+        suppressTerminalQueueProcessing: true,
+      } as never)
+    );
     startupDebug(
       `   ✓ Reconciled session ${shortId(session.session_id)} from Task truth (was: ${session.status})`
     );
@@ -327,17 +335,19 @@ async function recoverTenantRuntime(
   const sessionIdsWithOrphanedTasks = new Set(orphanedTasks.map((task) => String(task.session_id)));
   let sessionsResetFromOrphanedTasks = 0;
   for (const sessionId of sessionIdsWithOrphanedTasks) {
-    const session = await sessions.get(sessionId as Id, params as never);
+    const session = await inDatabaseScope(() => sessions.get(sessionId as Id, params as never));
     if (
       session.status === SessionStatus.RUNNING ||
       session.status === SessionStatus.STOPPING ||
       session.status === SessionStatus.AWAITING_PERMISSION ||
       session.status === SessionStatus.TIMED_OUT
     ) {
-      await tasks.reconcileSessionState(sessionId, {
-        ...params,
-        suppressTerminalQueueProcessing: true,
-      } as never);
+      await inDatabaseScope(() =>
+        tasks.reconcileSessionState(sessionId, {
+          ...params,
+          suppressTerminalQueueProcessing: true,
+        } as never)
+      );
       sessionsResetFromOrphanedTasks += 1;
     }
   }
@@ -345,12 +355,19 @@ async function recoverTenantRuntime(
   // IDLE + ready=false is normally a read/attention state. Repair only rows
   // whose latest Task was active at boot or remains nonterminal.
   const bootInterruptedTaskIds = new Set(orphanedTasks.map((task) => String(task.task_id)));
-  const idleNotReadySessions = await collectAllPages<Session>(
-    (skip) =>
-      sessions.find({
-        query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000, $skip: skip },
-        ...params,
-      }) as Promise<Session[] | Paginated<Session>>
+  const idleNotReadySessions = await collectAllPages<Session>((skip) =>
+    inDatabaseScope(
+      () =>
+        sessions.find({
+          query: {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: false,
+            $limit: 1000,
+            $skip: skip,
+          },
+          ...params,
+        }) as Promise<Session[] | Paginated<Session>>
+    )
   );
   const stuckIdleSessions: Session[] = [];
   for (const session of idleNotReadySessions) {
@@ -360,7 +377,7 @@ async function recoverTenantRuntime(
     let wasInterrupted = bootInterruptedTaskIds.has(String(latestTaskId));
     if (!wasInterrupted) {
       try {
-        const latestTask = await tasks.get(latestTaskId, params as never);
+        const latestTask = await inDatabaseScope(() => tasks.get(latestTaskId, params as never));
         wasInterrupted = !isTerminalTaskStatus(latestTask.status);
       } catch {
         // Missing or invisible Task truth fails closed.
@@ -369,10 +386,12 @@ async function recoverTenantRuntime(
     if (!wasInterrupted) continue;
 
     stuckIdleSessions.push(session);
-    await tasks.reconcileSessionState(session.session_id, {
-      ...params,
-      suppressTerminalQueueProcessing: true,
-    } as never);
+    await inDatabaseScope(() =>
+      tasks.reconcileSessionState(session.session_id, {
+        ...params,
+        suppressTerminalQueueProcessing: true,
+      } as never)
+    );
   }
 
   return {
@@ -389,9 +408,7 @@ export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<Orphan
   const recoveries: TenantRuntimeRecovery[] = [];
   for (const tenantId of await startupTenantIds(ctx)) {
     recoveries.push(
-      await runWithTenantContext(tenantId, () =>
-        runStartupTenantDatabaseScope(ctx, () => recoverTenantRuntime(ctx, tenantId), tenantId)
-      )
+      await runWithTenantContext(tenantId, () => recoverTenantRuntime(ctx, tenantId))
     );
   }
 
@@ -426,63 +443,56 @@ export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<Orphan
   };
 }
 
-async function resumeOrphanContainment(
+export async function resumeRuntimeRecovery(
   ctx: StartupContext,
   cleanup: OrphanCleanupResult
 ): Promise<void> {
+  const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl;
   for (const recovery of cleanup.recoveries) {
     const params = startupTenantParams(ctx.config, recovery.tenantId);
     await runWithTenantContext(recovery.tenantId, async () => {
       for (const task of recovery.orphanedTasks) {
-        await requestExecutorTermination({
-          app: ctx.app,
-          taskId: task.task_id,
-          cause: 'daemon_restart',
-          errorMessage: 'Daemon restart requires executor containment before this Task can settle.',
-          params: params as never,
-          withTenantDatabase: (work) =>
-            runStartupTenantDatabaseScope(ctx, work, recovery.tenantId),
-        });
+        try {
+          await requestExecutorTermination({
+            app: ctx.app,
+            taskId: task.task_id,
+            cause: 'daemon_restart',
+            errorMessage:
+              'Daemon restart requires executor containment before this Task can settle.',
+            params: { ...params, suppressTerminalQueueProcessing: true } as never,
+            withTenantDatabase: (work) =>
+              runStartupTenantDatabaseScope(ctx, work, recovery.tenantId),
+          });
+        } catch (error) {
+          console.warn(
+            `[startup] Failed to resume containment for Task ${shortId(task.task_id)}:`,
+            error
+          );
+        }
+      }
+
+      try {
+        await injectRestartNotices(ctx, cleanup.wasGraceful, recovery);
+      } catch (error) {
+        console.warn(`[startup] Failed to record restart notices for ${recovery.tenantId}:`, error);
+      }
+      try {
+        await runStartupTenantDatabaseScope(
+          ctx,
+          () => tasks.repairTerminalConsequences(100, params),
+          recovery.tenantId
+        );
+      } catch (error) {
+        console.warn(
+          `[startup] Failed to repair terminal consequences for ${recovery.tenantId}:`,
+          error
+        );
       }
     });
   }
 }
 
-async function repairTerminalConsequences(
-  ctx: StartupContext,
-  cleanup: OrphanCleanupResult
-): Promise<void> {
-  const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl & {
-    repairTerminalConsequences(limit?: number, params?: unknown): Promise<void>;
-  };
-  for (const recovery of cleanup.recoveries) {
-    const params = startupTenantParams(ctx.config, recovery.tenantId);
-    await runWithTenantContext(recovery.tenantId, () =>
-      runStartupTenantDatabaseScope(
-        ctx,
-        () => tasks.repairTerminalConsequences(100, params),
-        recovery.tenantId
-      )
-    );
-  }
-}
-
 async function injectRestartNotices(
-  ctx: StartupContext,
-  cleanupResult: OrphanCleanupResult
-): Promise<void> {
-  for (const recovery of cleanupResult.recoveries) {
-    await runWithTenantContext(recovery.tenantId, () =>
-      runStartupTenantDatabaseScope(
-        ctx,
-        () => injectRestartNoticesInTenantScope(ctx, cleanupResult.wasGraceful, recovery),
-        recovery.tenantId
-      )
-    );
-  }
-}
-
-async function injectRestartNoticesInTenantScope(
   ctx: StartupContext,
   wasGraceful: boolean,
   recovery: TenantRuntimeRecovery
@@ -536,63 +546,71 @@ async function injectRestartNoticesInTenantScope(
 
   for (const sessionId of affectedSessionIds) {
     try {
-      // Resolve the task to attach the notice to
-      let attachTask = lastOrphanedTaskBySession.get(sessionId);
-      if (!attachTask) {
-        // Sessions maintain an ordered task-ID list; the last entry is the most
-        // recent task without relying on TasksService.find() sort behavior.
-        const session = await sessionsService.get(sessionId as Id, startupParams as never);
-        const latestTaskId = session.tasks?.at(-1);
-        if (latestTaskId) {
-          attachTask = await tasksService.get(latestTaskId, startupParams as never);
-        }
-      }
-      if (!attachTask) {
-        // No task exists — message would be invisible (transcript is task-scoped).
-        // This session has never had any work, so there is nothing for the user to resume.
-        console.log(`   ⏭  Session ${shortId(sessionId)} has no tasks — skipping restart notice`);
-        continue;
-      }
+      await runStartupTenantDatabaseScope(
+        ctx,
+        async () => {
+          // Resolve the task to attach the notice to
+          let attachTask = lastOrphanedTaskBySession.get(sessionId);
+          if (!attachTask) {
+            // Sessions maintain an ordered task-ID list; the last entry is the most
+            // recent task without relying on TasksService.find() sort behavior.
+            const session = await sessionsService.get(sessionId as Id, startupParams as never);
+            const latestTaskId = session.tasks?.at(-1);
+            if (latestTaskId) {
+              attachTask = await tasksService.get(latestTaskId, startupParams as never);
+            }
+          }
+          if (!attachTask) {
+            // No task exists — message would be invisible (transcript is task-scoped).
+            // This session has never had any work, so there is nothing for the user to resume.
+            console.log(
+              `   ⏭  Session ${shortId(sessionId)} has no tasks — skipping restart notice`
+            );
+            return;
+          }
 
-      // Idempotency: skip if the last message is already a daemon restart notice
-      // (guards against rapid restart cycles piling up notices before the user responds)
-      const messageCount = await sessionRepo.countMessages(sessionId);
-      if (messageCount > 0) {
-        const lastMessages = await messageRepo.findByRange(
-          sessionId as SessionID,
-          messageCount - 1,
-          messageCount - 1
-        );
-        const last = lastMessages[0];
-        if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
-          console.log(
-            `   ⏭  Session ${shortId(sessionId)} already has a restart notice — skipping`
-          );
-          continue;
-        }
-      }
+          // Idempotency: skip if the last message is already a daemon restart notice
+          // (guards against rapid restart cycles piling up notices before the user responds)
+          const messageCount = await sessionRepo.countMessages(sessionId);
+          if (messageCount > 0) {
+            const lastMessages = await messageRepo.findByRange(
+              sessionId as SessionID,
+              messageCount - 1,
+              messageCount - 1
+            );
+            const last = lastMessages[0];
+            if (last?.type === 'daemon_restart' || last?.type === 'daemon_crash') {
+              console.log(
+                `   ⏭  Session ${shortId(sessionId)} already has a restart notice — skipping`
+              );
+              return;
+            }
+          }
 
-      const injectedMessage = await appendSystemMessage({
-        app,
-        db,
-        sessionId,
-        taskId: attachTask.task_id,
-        type: restartType,
-        content: messageText,
-        metadata: { source: 'agor' },
-      });
+          const injectedMessage = await appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId: attachTask.task_id,
+            type: restartType,
+            content: messageText,
+            metadata: { source: 'agor' },
+          });
 
-      // Extend the task's message_range.end_index so the notice is counted
-      // and loaded within the task's window in the UI.
-      // Pass only end_index: TaskRepository.update() deep-merges with the live
-      // DB row, preserving fields written by the STOPPED patch (e.g. end_timestamp).
-      if (attachTask.message_range) {
-        await tasksService.patch(attachTask.task_id, {
-          message_range: { end_index: injectedMessage.index } as Task['message_range'],
-        });
-      }
+          // Extend the task's message_range.end_index so the notice is counted
+          // and loaded within the task's window in the UI.
+          // Pass only end_index: TaskRepository.update() deep-merges with the live
+          // DB row, preserving fields written by the STOPPED patch (e.g. end_timestamp).
+          if (attachTask.message_range) {
+            await tasksService.patch(attachTask.task_id, {
+              message_range: { end_index: injectedMessage.index } as Task['message_range'],
+            });
+          }
 
-      console.log(`   ✉  Injected ${restartType} notice into session ${shortId(sessionId)}`);
+          console.log(`   ✉  Injected ${restartType} notice into session ${shortId(sessionId)}`);
+        },
+        tenantId
+      );
     } catch (err) {
       console.warn(
         `   ⚠️  Failed to inject restart notice into session ${shortId(sessionId)}:`,
@@ -682,15 +700,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
   );
 
   initializeEnvironmentHealthMonitor(healthMonitor);
-  if (orphanCleanupResult) {
-    runPostStartJob('runtime-containment-resume', () =>
-      resumeOrphanContainment(ctx, orphanCleanupResult)
-    );
-    runPostStartJob('terminal-consequence-repair', () =>
-      repairTerminalConsequences(ctx, orphanCleanupResult)
-    );
-    runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
-  }
 
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
   // git remote URL while the daemon was down, scrub persisted repo metadata
@@ -768,12 +777,28 @@ export async function startup(ctx: StartupContext): Promise<void> {
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
-  taskRuntimeReconciler.start();
-  console.log(
-    heartbeatConfig.enabled
-      ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
-      : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
-  );
+  const startTaskRuntimeReconciler = () => {
+    taskRuntimeReconciler.start();
+    console.log(
+      heartbeatConfig.enabled
+        ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
+        : `💓 Task runtime reconciler started with heartbeat expiry disabled (policy: ${ctx.taskRuntimePolicy})`
+    );
+  };
+  if (orphanCleanupResult) {
+    runPostStartJob('task-runtime-recovery', async () => {
+      try {
+        await resumeRuntimeRecovery(ctx, orphanCleanupResult);
+      } finally {
+        // Recovery owns every orphan until its ordered containment/repair pass
+        // finishes. Starting the fleet reconciler earlier would let it race the
+        // same STOPPING Tasks without startup's queue-suppression contract.
+        startTaskRuntimeReconciler();
+      }
+    });
+  } else {
+    startTaskRuntimeReconciler();
+  }
 
   // 6. Start the all-daemon durable Session queue scanner. Discovery is
   // bounded and may overlap freely; the database dispatch claim, not this

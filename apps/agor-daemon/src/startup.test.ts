@@ -1,21 +1,28 @@
 import {
   createTenantScopedDatabaseProxy,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   MissingTenantDatabaseScopeError,
   RuntimeRecoveryDiscoveryRepository,
+  SessionRepository,
 } from '@agor/core/db';
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   cleanupOrphanStatuses,
   createEnvironmentHealthMonitor,
   initializeEnvironmentHealthMonitor,
   prepareTaskRuntimeStartup,
+  resumeRuntimeRecovery,
   type StartupContext,
   shouldContainLocalExecutorsOnShutdown,
   shouldReconnectSocketClientsOnShutdown,
 } from './startup.js';
+import * as terminationCoordinator from './termination-coordinator.js';
+import * as systemMessages from './utils/append-system-message.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 interface StartupFixtures {
   orphanedTasks?: Task[];
@@ -66,6 +73,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
       task: (fixtures.orphanedTasks ?? []).find((task) => task.task_id === input.taskId),
     })),
     reconcileSessionState: vi.fn(),
+    repairTerminalConsequences: vi.fn(),
   };
   const sessionsService = {
     find: vi.fn(
@@ -237,7 +245,7 @@ describe('startup tenant database scope', () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
-  it('runs orphan cleanup inside an explicit startup tenant DB scope', async () => {
+  it('runs recovery inside short configured tenant DB scopes', async () => {
     const { ctx, baseDb } = makeStartupContextWithGuardedDb();
 
     await expect(cleanupOrphanStatuses(ctx)).resolves.toMatchObject({
@@ -246,6 +254,42 @@ describe('startup tenant database scope', () => {
       sessionsResetFromOrphanedTasks: 0,
     });
     expect(baseDb.marker).toHaveBeenCalled();
+  });
+
+  it('does not share one database scope across runtime recovery units', async () => {
+    const task = makeTask({});
+    const session = makeSession({ status: SessionStatus.RUNNING, tasks: [task.task_id] as never });
+    const { ctx, tasksService, sessionsService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      sessionsById: { [session.session_id]: session },
+    });
+    const scopes: unknown[] = [];
+    const captureScope = () => {
+      const scope = getCurrentTenantDatabaseScope();
+      expect(scope).toBeTruthy();
+      scopes.push(scope);
+    };
+    tasksService.getOrphaned.mockImplementation(async () => {
+      captureScope();
+      return [task];
+    });
+    tasksService.claimTermination.mockImplementation(async () => {
+      captureScope();
+      return { outcome: 'claimed', task };
+    });
+    sessionsService.find.mockImplementation(async (params: { query?: { status?: string } }) => {
+      captureScope();
+      const matches = params.query?.status === SessionStatus.RUNNING ? [session] : [];
+      return { data: matches, total: matches.length };
+    });
+    tasksService.reconcileSessionState.mockImplementation(async () => {
+      captureScope();
+      return session;
+    });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(new Set(scopes).size).toBe(scopes.length);
   });
 
   it('claims orphaned execution for containment without terminalizing it or wiping its queue', async () => {
@@ -330,6 +374,92 @@ describe('startup tenant database scope', () => {
 
     expect(seen).toEqual(['tenant-a', 'tenant-b']);
     discovery.mockRestore();
+  });
+
+  it('contains outside a transaction before recording notices and repairing consequences', async () => {
+    const task = makeTask({});
+    const session = makeSession({
+      status: SessionStatus.RUNNING,
+      tasks: [task.task_id] as never,
+    });
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      sessionsById: { [session.session_id]: session },
+    });
+    const order: string[] = [];
+    let finishContainment: () => void = () => undefined;
+    const containmentGate = new Promise<void>((resolve) => {
+      finishContainment = resolve;
+    });
+    const containment = vi
+      .spyOn(terminationCoordinator, 'requestExecutorTermination')
+      .mockImplementation(async (input) => {
+        order.push('containment-start');
+        expect(getCurrentTenantId()).toBe('startup-tenant');
+        expect(() => (ctx.db as unknown as { marker(): string }).marker()).toThrow(
+          MissingTenantDatabaseScopeError
+        );
+        expect(input.params).toMatchObject({ suppressTerminalQueueProcessing: true });
+        await containmentGate;
+        order.push('containment-end');
+        return { status: 'terminal', task };
+      });
+    const countMessages = vi
+      .spyOn(SessionRepository.prototype, 'countMessages')
+      .mockImplementation(async () => {
+        expect((ctx.db as unknown as { marker(): string }).marker()).toBe('scoped');
+        order.push('notice');
+        return 0;
+      });
+    const appendNotice = vi
+      .spyOn(systemMessages, 'appendSystemMessage')
+      .mockResolvedValue({ index: 0 } as never);
+    tasksService.repairTerminalConsequences.mockImplementation(async () => {
+      order.push('repair');
+    });
+
+    const recovery = resumeRuntimeRecovery(ctx, {
+      wasGraceful: false,
+      recoveries: [
+        {
+          tenantId: 'startup-tenant',
+          orphanedTasks: [task],
+          orphanedSessions: [session],
+        },
+      ],
+    } as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
+    await vi.waitFor(() => expect(order).toEqual(['containment-start']));
+    finishContainment();
+    await recovery;
+
+    expect(order).toEqual(['containment-start', 'containment-end', 'notice', 'repair']);
+    expect(appendNotice).toHaveBeenCalledOnce();
+    expect(containment).toHaveBeenCalledOnce();
+    expect(countMessages).toHaveBeenCalledOnce();
+  });
+
+  it('continues restart repair when one containment attempt fails', async () => {
+    const task = makeTask({});
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({ orphanedTasks: [task] });
+    vi.spyOn(terminationCoordinator, 'requestExecutorTermination').mockRejectedValue(
+      new Error('transient containment failure')
+    );
+    vi.spyOn(SessionRepository.prototype, 'countMessages').mockResolvedValue(0);
+    vi.spyOn(systemMessages, 'appendSystemMessage').mockResolvedValue({ index: 0 } as never);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await resumeRuntimeRecovery(ctx, {
+      wasGraceful: false,
+      recoveries: [
+        {
+          tenantId: 'startup-tenant',
+          orphanedTasks: [task],
+          orphanedSessions: [],
+        },
+      ],
+    } as Awaited<ReturnType<typeof cleanupOrphanStatuses>>);
+
+    expect(tasksService.repairTerminalConsequences).toHaveBeenCalledOnce();
   });
 });
 

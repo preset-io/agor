@@ -379,11 +379,18 @@ admission/UI projection:
 - generic Session patch hooks do not independently drain the queue or finalize
   gateways.
 
-Standalone recovery performs narrow tenant-ID discovery, re-enters each tenant,
-and runs bounded containment and consequence repair after listening. Queued
-prompts behind unverifiable work remain ordered and blocked; they are neither
-discarded nor replayed. Session projection records the terminal Task it applied
-under the Session row lock, so repair preserves a later
+Standalone startup performs narrow tenant-ID discovery and re-enters each
+tenant for one ordered post-listen recovery path: resume containment, record
+restart notices, then run the bounded terminal-consequence repair sweep.
+Containment keeps only tenant identity while it waits on the runtime; claims,
+notices, and repair work use explicit short database scopes. Queue processing
+is suppressed during restart settlement and resumes through the final
+reconciliation step. The fleet Task runtime reconciler starts after this path
+so it cannot compete for the same stopping Tasks; shared PostgreSQL skips
+startup orphan recovery and starts the reconciler immediately.
+Queued prompts behind an unverifiable orphan remain ordered and blocked; they
+are neither discarded nor replayed. Session projection records the terminal
+Task it applied under the Session row lock, so repair preserves a later
 `ready_for_prompt=false` acknowledgement.
 
 UI and gateway consumers use the shared runtime presentation projection derived

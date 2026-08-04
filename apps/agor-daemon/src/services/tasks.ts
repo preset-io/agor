@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  bindRepositoryToTenantUnitOfWork,
   type ExecutorOutcomeSettlementResult,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
@@ -125,7 +126,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
-    const taskRepo = new TaskRepository(db);
+    const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
     super(taskRepo, {
       id: 'task_id',
       resourceType: 'Task',
