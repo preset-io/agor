@@ -609,4 +609,101 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     await deleteTenantData(db, source);
     await deleteTenantData(db, occupied);
   });
+
+  it('preserves JSON/numeric precision beyond 2^53 through export → verify → import', async () => {
+    // Values that a JavaScript Number cannot hold exactly. If any hop parsed the
+    // persisted JSON through JS, these would be silently rounded; the lossless
+    // server-text path must carry the exact digits end to end — including the
+    // re-home derivation that classifies an already-applied restore.
+    const bigInt = '9007199254740993'; // 2^53 + 1
+    const bigNumeric = '123456789012345678901234567890';
+    const readSessionBig = (tenantId: string): Promise<{ big: string; nested: string }> =>
+      runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const result = await executeRaw(
+          scoped,
+          sql`SELECT data->>'big' AS big, data->'nested'->>'n' AS nested
+              FROM public.sessions WHERE tenant_id = ${tenantId} LIMIT 1`
+        );
+        const row = rowsOf(result)[0] ?? {};
+        return { big: String(row.big), nested: String(row.nested) };
+      });
+
+    const source = `tpp-src-${generateId()}`;
+    const rehomed = `tpp-dst-${generateId()}`;
+    await seedTenant(db, source);
+    await runWithTenantDatabaseScope(db, source, async (scoped) => {
+      await executeRaw(
+        scoped,
+        sql`UPDATE public.sessions
+            SET data = ${`{"big":${bigInt},"nested":{"n":${bigNumeric}}}`}::jsonb
+            WHERE tenant_id = ${source}`
+      );
+    });
+
+    const archive = join(scratch, `${source}-precision`);
+    await exportTenant(db, source, { archivePath: archive });
+
+    // The archived text carries the exact digits — nothing rounded through a JS Number.
+    const sessionsJsonl = await readFile(join(archive, 'database', 'sessions.jsonl'), 'utf8');
+    expect(sessionsJsonl).toContain(bigInt);
+    expect(sessionsJsonl).toContain(bigNumeric);
+
+    // The saved proof still matches the live tenant (re-derives the same bytes).
+    expect((await verifyTenant(db, { archivePath: archive })).match).toBe(true);
+
+    // Same-tenant restore keeps the values byte-exact.
+    await deleteTenantData(db, source);
+    await importTenant(db, { archivePath: archive });
+    expect(await readSessionBig(source)).toEqual({ big: bigInt, nested: bigNumeric });
+
+    // Re-home into a fresh tenant id: values survive, and a second run is an
+    // idempotent no-op — which only holds if the archive-derived expected snapshot
+    // is exactly as lossless as the live re-export it is compared against.
+    await deleteTenantData(db, source);
+    const rehomedImport = await importTenant(db, { archivePath: archive, tenantId: rehomed });
+    expect(rehomedImport.database.restored).toBe(true);
+    expect(await readSessionBig(rehomed)).toEqual({ big: bigInt, nested: bigNumeric });
+    const again = await importTenant(db, { archivePath: archive, tenantId: rehomed });
+    expect(again.alreadyApplied).toBe(true);
+    expect(again.database.restored).toBe(false);
+
+    await deleteTenantData(db, rehomed);
+  });
+
+  it('verifies a full archive under database-only scope and stays fail-closed without a root', async () => {
+    const tenant = `tpv-${generateId()}`;
+    await seedTenant(db, tenant);
+    const fsRoot = join(scratch, `${tenant}-fs`);
+    await seedFilesystem(fsRoot);
+    const archive = join(scratch, `${tenant}-scope`);
+    await exportTenant(db, tenant, { archivePath: archive, filesystemRoot: fsRoot });
+
+    // database scope: the filesystem is skipped by request, so a full archive
+    // matches on the database alone (the bug: it used to always mismatch).
+    const dbOnly = await verifyTenant(db, { archivePath: archive, scope: 'database' });
+    expect(dbOnly.scope).toBe('database');
+    expect(dbOnly.match).toBe(true);
+    expect(dbOnly.filesystem.requested).toBe(false);
+    expect(dbOnly.filesystem.checked).toBe(false);
+
+    // full scope with the root: full match, filesystem checked.
+    const full = await verifyTenant(db, {
+      archivePath: archive,
+      scope: 'full',
+      filesystemRoot: fsRoot,
+    });
+    expect(full.match).toBe(true);
+    expect(full.filesystem.requested).toBe(true);
+    expect(full.filesystem.checked).toBe(true);
+
+    // full scope (default) without a root for a filesystem archive: fail-closed.
+    const missingRoot = await verifyTenant(db, { archivePath: archive });
+    expect(missingRoot.database.matched).toBe(true);
+    expect(missingRoot.filesystem.requested).toBe(true);
+    expect(missingRoot.filesystem.checked).toBe(false);
+    expect(missingRoot.match).toBe(false);
+
+    await deleteTenantData(db, tenant);
+    await rm(fsRoot, { recursive: true, force: true });
+  });
 });

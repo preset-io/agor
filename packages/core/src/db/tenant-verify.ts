@@ -28,10 +28,22 @@ import {
 } from './tenant-filesystem';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
+/**
+ * Which categories a verification was asked to check. `full` (the default)
+ * verifies the database and — when the archive carries one — the filesystem tree;
+ * `database` verifies only the database and treats the filesystem as
+ * intentionally skipped. This is an explicit request, never inferred from which
+ * paths a caller happened to supply, so an omitted filesystem root can stay
+ * fail-closed under `full` while being a deliberate skip under `database`.
+ */
+export type TenantVerificationScope = 'full' | 'database';
+
 /** Strict, bounded evidence produced by {@link verifyTenant}. */
 export interface TenantVerificationResult {
   tenantId: string;
-  /** True only when every checked category matched exactly. */
+  /** The scope that was requested (echoed so evidence is self-describing). */
+  scope: TenantVerificationScope;
+  /** True only when every REQUESTED category matched exactly. */
   match: boolean;
   contentFingerprint: string;
   archiveIntegrity: { ok: boolean; problemCount: number; problems: string[] };
@@ -49,6 +61,14 @@ export interface TenantVerificationResult {
     mismatchedTables: string[];
   };
   filesystem: {
+    /**
+     * Whether the filesystem was in scope: true only under `full` verification of
+     * an archive that includes a filesystem tree. When `requested` is true but
+     * `checked` is false the category could not be verified and `match` is
+     * fail-closed to false; when `requested` is false the filesystem was
+     * legitimately skipped and does not affect `match`.
+     */
+    requested: boolean;
     checked: boolean;
     matched: boolean;
     mismatchCount: number;
@@ -66,8 +86,15 @@ export interface TenantVerificationOptions {
    */
   tenantId?: string;
   /**
+   * Categories to verify. Defaults to `full` (database + filesystem when the
+   * archive carries one). Pass `database` to verify only the database and skip
+   * the filesystem tree deliberately.
+   */
+  scope?: TenantVerificationScope;
+  /**
    * Absolute tenant filesystem root to compare (as resolved by
-   * `getTenantDataRoot(tenantId)`). Required to verify the filesystem portion.
+   * `getTenantDataRoot(tenantId)`). Required to verify the filesystem portion
+   * under `full` scope; ignored under `database` scope.
    */
   filesystemRoot?: string;
   /** Cap on the number of mismatch descriptions emitted per category. */
@@ -109,6 +136,7 @@ export async function verifyTenant(
   options: TenantVerificationOptions
 ): Promise<TenantVerificationResult> {
   const maxEvidence = options.maxEvidence ?? 50;
+  const scope = options.scope ?? 'full';
   const manifest = await readManifest(options.archivePath);
   const tenantId = options.tenantId ?? manifest.tenantId;
   assertValidTenantId(tenantId);
@@ -156,11 +184,16 @@ export async function verifyTenant(
     dbMatched = dbMismatchCount === 0;
   }
 
+  // The filesystem is only in scope under `full` verification of an archive that
+  // actually carries a tree. A `database` scope skips it by request (not by an
+  // absent root), so a database-only verification of a full archive no longer
+  // mismatches spuriously.
+  const fsRequested = scope === 'full' && manifest.filesystem.included;
   let fsChecked = false;
   let fsMatched = false;
   let fsMismatchCount = 0;
   let fsMismatchedPaths: string[] = [];
-  if (manifest.filesystem.included && typeof options.filesystemRoot === 'string') {
+  if (fsRequested && typeof options.filesystemRoot === 'string') {
     fsChecked = true;
     const walk = await walkTenantFilesystemTree(options.filesystemRoot);
     const comparison = compareFilesystem(manifest, walk.entries, maxEvidence);
@@ -169,14 +202,16 @@ export async function verifyTenant(
     fsMatched = fsMismatchCount === 0;
   }
 
-  const match =
-    integrity.ok &&
-    identityMatched &&
-    (dbChecked ? dbMatched : false) &&
-    (manifest.filesystem.included ? fsChecked && fsMatched : true);
+  // Overall match is computed from the REQUESTED categories only. The database is
+  // always required. The filesystem is required exactly when in scope; if it is
+  // in scope but could not be checked (no root supplied), the result stays
+  // fail-closed rather than silently passing.
+  const filesystemMatched = fsRequested ? fsChecked && fsMatched : true;
+  const match = integrity.ok && identityMatched && dbChecked && dbMatched && filesystemMatched;
 
   return {
     tenantId,
+    scope,
     match,
     contentFingerprint: manifest.contentFingerprint,
     archiveIntegrity: {
@@ -197,6 +232,7 @@ export async function verifyTenant(
       mismatchedTables,
     },
     filesystem: {
+      requested: fsRequested,
       checked: fsChecked,
       matched: fsMatched,
       mismatchCount: fsMismatchCount,

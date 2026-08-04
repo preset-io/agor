@@ -27,6 +27,7 @@ import { bindRepositoryToTenantUnitOfWork } from './tenant-unit-of-work';
 import {
   acquireTenantWriteGate,
   assertTenantWritable,
+  assertTenantWriteGateGeneration,
   inspectTenantWriteGate,
   releaseTenantWriteGate,
   TenantWriteGateActiveError,
@@ -277,6 +278,54 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
       });
     });
     expect(await countTenantSessions(db, tenant)).toBe(2);
+
+    await deleteTenantData(db, tenant);
+  });
+
+  it('holds the asserted gate generation under a row lock until the destructive commit', async () => {
+    // The destructive generation assertion locks the gate row (FOR UPDATE) and
+    // keeps it locked through its own commit. A concurrent forced re-acquire must
+    // therefore BLOCK until that transaction ends and cannot swap in a new
+    // generation mid-transaction — the continuously-held invariant a destructive
+    // operation relies on.
+    const tenant = `wgl-${generateId()}`;
+    await seedTenant(db, tenant);
+    const { generation } = await acquireTenantWriteGate(db, tenant);
+
+    // A second connection so the forced re-acquire genuinely races on locks
+    // rather than reusing this transaction's own connection.
+    const other = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+    try {
+      let forcedSettled = false;
+      let forced: Promise<{ generation: string; replacedGeneration?: string }> | undefined;
+
+      await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+        // Assert (and lock) the gate generation inside this open transaction.
+        await assertTenantWriteGateGeneration(scoped, tenant, generation);
+
+        // Kick off a forced re-acquire from the other connection; it must block.
+        forced = acquireTenantWriteGate(other, tenant, { force: true }).then((result) => {
+          forcedSettled = true;
+          return result;
+        });
+
+        // Give the blocked acquire ample time to prove it cannot proceed.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(forcedSettled).toBe(false);
+      });
+
+      // Once the assertion's transaction commits, the re-acquire completes and
+      // replaces EXACTLY the generation the assertion held — proof it was never
+      // invalidated while the destructive transaction was open.
+      const result = await forced!;
+      expect(forcedSettled).toBe(true);
+      expect(result.replacedGeneration).toBe(generation);
+      expect(result.generation).not.toBe(generation);
+
+      await releaseTenantWriteGate(db, tenant, { generation: result.generation });
+    } finally {
+      await closePostgresDatabase(other);
+    }
 
     await deleteTenantData(db, tenant);
   });

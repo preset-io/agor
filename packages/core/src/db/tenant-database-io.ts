@@ -1,9 +1,20 @@
 /**
- * Type-faithful, deterministic movement of a single tenant's rows in and out of
- * the archive, one table at a time. Rows are read with PostgreSQL's own
- * `to_jsonb(row)` and restored with `jsonb_populate_recordset(NULL::table, ...)`,
- * so every column type round-trips through the server's own input/output
- * functions rather than lossy JavaScript coercion.
+ * Type-faithful, deterministic, LOSSLESS movement of a single tenant's rows in
+ * and out of the archive, one table at a time.
+ *
+ * Every row is rendered to canonical JSON *text* by PostgreSQL itself
+ * (`to_jsonb(row)::text`) and that text is what the archive stores, what the
+ * content hash covers, what verification re-derives, and what restore feeds back
+ * to the server. The persisted JSON never passes through a JavaScript `Number`,
+ * so JSON/numeric content beyond `2^53` (bigint columns, arbitrary-precision
+ * numbers inside jsonb) round-trips byte-for-byte. The only JavaScript parsing of
+ * an archived line is a discard-only structural check (is it a JSON object?); the
+ * exact bytes are never reconstructed in JS.
+ *
+ * The tenant-id rewrite a re-home needs is likewise performed server-side with
+ * `jsonb_set`, so it too is lossless and cannot drift from what the database
+ * actually stores. `restoreDatabase` and re-home classification share the SAME
+ * rewrite expression ({@link rewrittenRowJsonb}) so their bytes cannot diverge.
  *
  * All statements are tenant-scoped: an explicit `WHERE tenant_id = $1` predicate
  * plus the ambient row-level-security policy, and — on restore — every row's
@@ -15,15 +26,10 @@
  * (`runWithTenantDatabaseScope`); the caller owns the transaction boundary.
  */
 
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
-import {
-  canonicalJson,
-  readTableJsonl,
-  sha256Hex,
-  type TenantArchiveTable,
-} from './tenant-archive';
+import { readTableJsonl, sha256Hex, type TenantArchiveTable } from './tenant-archive';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { TENANT_WRITE_GATE_KEY, TENANT_WRITE_GATE_NAMESPACE } from './tenant-write-gate';
 
@@ -32,6 +38,14 @@ const TENANT_SCOPE_COLUMN = 'tenant_id';
 
 /** Rows are inserted in batches to bound statement/parameter size. */
 const IMPORT_BATCH_SIZE = 500;
+
+/**
+ * Lossless, deterministic canonical text of the aliased row `t`: PostgreSQL
+ * renders `to_jsonb(t)` to text on the server, so arbitrary-precision numeric and
+ * JSON content is never coerced through a JavaScript `Number`. This is the single
+ * expression that defines both the exported bytes and their ordering.
+ */
+const TENANT_ROW_CANONICAL_TEXT = sql`pg_catalog.to_jsonb(t)::pg_catalog.text`;
 
 /**
  * Deterministic, cross-runtime ordering key for a tenant table export. Rows are
@@ -44,7 +58,10 @@ const IMPORT_BATCH_SIZE = 500;
  * the archive fingerprint — depend only on the row bytes, never on the server
  * locale. Exported so a test can assert the collation is present in the query.
  */
-export const TENANT_EXPORT_ORDER_BY = sql`ORDER BY pg_catalog.to_jsonb(t)::pg_catalog.text COLLATE "C"`;
+export const TENANT_EXPORT_ORDER_BY = sql`ORDER BY ${TENANT_ROW_CANONICAL_TEXT} COLLATE "C"`;
+
+/** Top-level jsonb path of the tenant discriminator, as a `text[]` for `jsonb_set`. */
+const TENANT_ID_JSONB_PATH = sql.raw(`'{${TENANT_SCOPE_COLUMN}}'`);
 
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
@@ -54,6 +71,31 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
 
 function qualifiedTable(name: string) {
   return sql`${sql.identifier(TENANT_SCHEMA)}.${sql.identifier(name)}`;
+}
+
+/** Join canonical JSON lines into JSONL bytes: one line each, trailing newline. */
+function joinJsonlLines(lines: string[]): string {
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
+}
+
+/**
+ * Server-side, lossless rewrite of one archived row's tenant discriminator to
+ * `destinationTenantId`, applied to the jsonb value referenced by `elem`. Shared
+ * by restore (populate + insert) and re-home derivation (populate + re-emit) so
+ * the transformed bytes each produces cannot drift.
+ */
+function rewrittenRowJsonb(elem: SQL, destinationTenantId: string): SQL {
+  return sql`pg_catalog.jsonb_set(${elem}, ${TENANT_ID_JSONB_PATH}::pg_catalog.text[], pg_catalog.to_jsonb(${destinationTenantId}::pg_catalog.text))`;
+}
+
+/**
+ * Wrap validated archived lines as a single jsonb array *text* — purely by string
+ * concatenation, so no line's numeric content is parsed through JavaScript. Each
+ * line is already a valid JSON object, so `[line,line,…]` is valid JSON array
+ * text the server re-parses losslessly into arbitrary-precision jsonb.
+ */
+function linesToJsonbArrayText(lines: string[]): string {
+  return `[${lines.join(',')}]`;
 }
 
 /** Count the rows a table holds for one tenant. */
@@ -79,7 +121,9 @@ export async function countTenantTableRows(
 
 /**
  * Read every row a table holds for one tenant as canonical JSON lines (JSONL),
- * ordered deterministically. Returns the serialized text and the row count.
+ * ordered deterministically. PostgreSQL produces each line's text
+ * ({@link TENANT_ROW_CANONICAL_TEXT}); JavaScript only concatenates the strings,
+ * so the bytes are lossless. Returns the serialized text and the row count.
  */
 export async function exportTenantTableRows(
   db: Database,
@@ -102,20 +146,14 @@ export async function exportTenantTableRows(
   const result = await executeRaw(
     db,
     sql`
-      SELECT pg_catalog.to_jsonb(t) AS row
+      SELECT ${TENANT_ROW_CANONICAL_TEXT} AS row
       FROM ${qualifiedTable(tableName)} t
       WHERE ${column} = ${tenantId}${excludeGateRow}
       ${TENANT_EXPORT_ORDER_BY}
     `
   );
-  const rows = rowsOf(result);
-  // postgres.js parses jsonb into a JS value; the shared serializer canonicalises
-  // each row for stable bytes — the same path re-home derivation uses, so export
-  // and classification bytes cannot drift.
-  const jsonl = serializeTenantTableJsonl(
-    rows.map((record) => record.row as Record<string, unknown>)
-  );
-  return { jsonl, rowCount: rows.length };
+  const lines = rowsOf(result).map((record) => String(record.row));
+  return { jsonl: joinJsonlLines(lines), rowCount: lines.length };
 }
 
 /** One live tenant table's re-derived row count and content hash. */
@@ -157,27 +195,45 @@ export async function snapshotTenantTableHashes(
 const EMPTY_TABLE_SHA256 = sha256Hex(Buffer.from('', 'utf8'));
 
 /**
- * Serialise a table's tenant rows to the exact canonical JSONL bytes an export
- * writes: one {@link canonicalJson} line per row, newline-separated with a
- * trailing newline, or empty for zero rows. Shared by the archive reader (source
- * bytes on export) and re-home derivation so their byte semantics cannot drift.
+ * Split JSONL text into its non-empty lines, validating that each is a JSON
+ * object and returning the RAW line strings unchanged. The `JSON.parse` here is
+ * a structural gate only — its result is discarded — so a line's numeric content
+ * is never reconstructed through a JavaScript `Number`; the exact server-produced
+ * bytes flow onward untouched. Splitting on `\n` is safe because a JSON string
+ * escapes any embedded newline.
  */
-export function serializeTenantTableJsonl(rows: Record<string, unknown>[]): string {
-  if (rows.length === 0) return '';
-  return `${rows.map((row) => canonicalJson(row)).join('\n')}\n`;
+export function splitTenantJsonlLines(jsonl: string): string[] {
+  const lines: string[] = [];
+  for (const line of jsonl.split('\n')) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error('Archive database file contains a line that is not valid JSON');
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Archive database file contains a row that is not a JSON object');
+    }
+    lines.push(line);
+  }
+  return lines;
 }
 
 /**
- * Derive, from the validated archive alone, the per-table row count and content
- * hash the destination database will hold once {@link parseTenantJsonl} rewrites
- * every row to `destinationTenantId` and it is restored. This applies the SAME
- * tenant-id rewrite and canonical serialization `restoreDatabase` uses, so the
- * result is the exact snapshot a post-restore {@link snapshotTenantTableHashes}
- * re-derives — for a same-tenant import the rewrite is the identity, so it equals
- * the archive's own per-table hashes; for a re-home it is the hash bound to the
- * destination tenant id. Import classification compares live snapshots against
- * these to prove an exact (possibly re-homed) restore, so a database committed
- * before a filesystem-tail failure is recognised as already applied on retry.
+ * Derive, from the validated archive, the per-table row count and content hash
+ * the destination database will hold once every row is rewritten to
+ * `destinationTenantId` and restored. The rewrite and canonicalisation run
+ * ENTIRELY in PostgreSQL — each archived line is re-parsed to jsonb, its tenant
+ * discriminator rewritten with {@link rewrittenRowJsonb}, populated into the
+ * table's own row type, and re-emitted as canonical text — the exact transform
+ * {@link restoreDatabase} applies, so the result is byte-identical to the
+ * snapshot a post-restore {@link snapshotTenantTableHashes} re-derives. For a
+ * same-tenant import the rewrite is the identity, so it equals the archive's own
+ * per-table hashes; for a re-home it is the hash bound to the destination tenant.
+ * Import classification compares live snapshots against these to prove an exact
+ * (possibly re-homed) restore, so a database committed before a filesystem-tail
+ * failure is recognised as already applied on retry.
  *
  * Row ORDER is preserved from the archive, which the export ordered by the
  * server's `to_jsonb(row)::text COLLATE "C"`. Rewriting the tenant discriminator
@@ -185,8 +241,12 @@ export function serializeTenantTableJsonl(rows: Record<string, unknown>[]): stri
  * ordering key) cannot reorder two distinct rows, so the archive order equals the
  * order a live re-export of the rewritten rows produces — the bytes, and thus the
  * hash, match exactly. Any mismatch is fail-closed: it classifies as a conflict.
+ *
+ * Requires a PostgreSQL database; it constructs the destination row type but
+ * reads no tenant rows, so it needs no tenant scope.
  */
 export async function deriveExpectedTenantTableSnapshots(
+  db: Database,
   archivePath: string,
   archivedTables: readonly TenantArchiveTable[],
   destinationTenantId: string
@@ -199,67 +259,77 @@ export async function deriveExpectedTenantTableSnapshots(
       snapshots.push({ name: table.name, rowCount: 0, sha256: EMPTY_TABLE_SHA256 });
       continue;
     }
-    const jsonl = await readTableJsonl(archivePath, table.name);
-    const rows = parseTenantJsonl(jsonl, destinationTenantId);
-    const bytes = serializeTenantTableJsonl(rows);
+    const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
+    const rewritten = await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId);
     snapshots.push({
       name: table.name,
-      rowCount: rows.length,
-      sha256: sha256Hex(Buffer.from(bytes, 'utf8')),
+      rowCount: rewritten.length,
+      sha256: sha256Hex(Buffer.from(joinJsonlLines(rewritten), 'utf8')),
     });
   }
   return snapshots;
 }
 
 /**
- * Parse JSONL text into row objects, rewriting each row's tenant discriminator
- * to the destination tenant. Rejects lines that are not JSON objects.
+ * Transform archived lines to the canonical text the destination will hold once
+ * restored under `destinationTenantId`, preserving archive order. Each line is
+ * re-parsed to jsonb, tenant-rewritten, populated into the table's row type, and
+ * re-emitted — the identical expression `restoreDatabase` inserts and a live
+ * re-export re-derives — so the two cannot drift.
  */
-export function parseTenantJsonl(
-  jsonl: string,
+async function rewriteRowsToCanonicalText(
+  db: Database,
+  tableName: string,
+  lines: string[],
   destinationTenantId: string
-): Record<string, unknown>[] {
-  const rows: Record<string, unknown>[] = [];
-  const lines = jsonl.split('\n');
-  for (const line of lines) {
-    if (line.length === 0) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      throw new Error('Archive database file contains a line that is not valid JSON');
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('Archive database file contains a row that is not a JSON object');
-    }
-    const row = parsed as Record<string, unknown>;
-    row[TENANT_SCOPE_COLUMN] = destinationTenantId;
-    rows.push(row);
-  }
-  return rows;
+): Promise<string[]> {
+  const arrayText = linesToJsonbArrayText(lines);
+  const result = await executeRaw(
+    db,
+    sql`
+      SELECT pg_catalog.to_jsonb(
+        pg_catalog.jsonb_populate_record(
+          NULL::${qualifiedTable(tableName)},
+          ${rewrittenRowJsonb(sql`element.value`, destinationTenantId)}
+        )
+      )::pg_catalog.text AS row
+      FROM pg_catalog.jsonb_array_elements(${arrayText}::pg_catalog.jsonb)
+        WITH ORDINALITY AS element(value, ord)
+      ORDER BY element.ord
+    `
+  );
+  return rowsOf(result).map((record) => String(record.row));
 }
 
 /**
- * Insert tenant rows into a table using the table's own row type to reconstruct
- * every column value. Rows must already be scoped to the destination tenant
- * (see {@link parseTenantJsonl}). Returns the number of rows inserted.
+ * Insert a table's archived JSONL lines for the destination tenant. The lines are
+ * handed to PostgreSQL as jsonb array text and rewritten to `destinationTenantId`
+ * server-side ({@link rewrittenRowJsonb}) before being populated into the table's
+ * own row type, so no persisted value is coerced through a JavaScript `Number`.
+ * Returns the number of rows inserted.
  */
 export async function insertTenantTableRows(
   db: Database,
   tableName: string,
-  rows: Record<string, unknown>[]
+  lines: string[],
+  destinationTenantId: string
 ): Promise<number> {
   let inserted = 0;
-  for (let offset = 0; offset < rows.length; offset += IMPORT_BATCH_SIZE) {
-    const chunk = rows.slice(offset, offset + IMPORT_BATCH_SIZE);
-    const payload = JSON.stringify(chunk);
+  for (let offset = 0; offset < lines.length; offset += IMPORT_BATCH_SIZE) {
+    const chunk = lines.slice(offset, offset + IMPORT_BATCH_SIZE);
+    const arrayText = linesToJsonbArrayText(chunk);
     await executeRaw(
       db,
       sql`
         INSERT INTO ${qualifiedTable(tableName)}
         SELECT * FROM pg_catalog.jsonb_populate_recordset(
           NULL::${qualifiedTable(tableName)},
-          ${payload}::pg_catalog.jsonb
+          (
+            SELECT pg_catalog.jsonb_agg(
+              ${rewrittenRowJsonb(sql`element.value`, destinationTenantId)}
+            )
+            FROM pg_catalog.jsonb_array_elements(${arrayText}::pg_catalog.jsonb) AS element(value)
+          )
         )
       `
     );

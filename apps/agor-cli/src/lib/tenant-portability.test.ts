@@ -138,6 +138,7 @@ describe('tenant command stdout contracts', () => {
   it('preserves the verify result shape', () => {
     expectContract({
       tenantId: 'tenant-a',
+      scope: 'full',
       match: true,
       contentFingerprint: 'verify-fingerprint',
       archiveIntegrity: { ok: true, problemCount: 0, problems: [] },
@@ -153,7 +154,13 @@ describe('tenant command stdout contracts', () => {
         mismatchCount: 0,
         mismatchedTables: [],
       },
-      filesystem: { checked: true, matched: true, mismatchCount: 0, mismatchedPaths: [] },
+      filesystem: {
+        requested: true,
+        checked: true,
+        matched: true,
+        mismatchCount: 0,
+        mismatchedPaths: [],
+      },
     } satisfies TenantVerificationResult);
   });
 

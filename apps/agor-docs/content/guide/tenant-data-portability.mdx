@@ -97,6 +97,13 @@ The destination must be empty or not yet exist. Two exports of identical tenant
 data produce the same content fingerprint. Quiesce tenant writes for the duration
 so the archive is internally consistent.
 
+Row movement is lossless: PostgreSQL renders each row to canonical JSON text on
+the server, and that text is what the archive stores, what hashing and
+verification re-derive, and what restore feeds back — including the tenant-id
+rewrite a re-home applies, done server-side. Persisted JSON and numeric values
+never pass through a JavaScript number, so content beyond 2^53 round-trips
+exactly.
+
 Archive layout:
 
 ```text
@@ -155,7 +162,16 @@ match and `3` on a mismatch.
 
 ```bash
 agor tenant verify --archive /path/to/archive
+agor tenant verify --archive /path/to/archive --database-only
 ```
+
+The verification scope is explicit. By default (`full`) the database and — when
+the archive carries one — the filesystem tree are both checked; a full
+verification is **fail-closed** if the archive includes filesystem content that
+cannot be checked (for example the tenant root is unavailable). `--database-only`
+verifies just the database and reports the filesystem as skipped
+(`filesystem.requested: false`), so it matches a full archive on the database
+alone rather than always mismatching.
 
 ### `agor tenant delete`
 

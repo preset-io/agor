@@ -55,8 +55,9 @@ export default class TenantVerify extends Command {
     try {
       this.logToStderr(chalk.bold(`🔎 Verifying tenant against ${flags.archive}`));
       const manifest = await readManifest(flags.archive);
+      const scope = flags['database-only'] ? 'database' : 'full';
       let filesystemRoot: string | undefined;
-      if (!flags['database-only'] && manifest.filesystem.included) {
+      if (scope === 'full' && manifest.filesystem.included) {
         const resolved = await resolveTenantFilesystem(manifest.tenantId);
         if (resolved) filesystemRoot = resolved.root;
       }
@@ -64,6 +65,7 @@ export default class TenantVerify extends Command {
       const db = createDatabase({ url: getDatabaseUrl() });
       const result = await verifyTenant(db, {
         archivePath: flags.archive,
+        scope,
         ...(filesystemRoot ? { filesystemRoot } : {}),
       });
       await writeStdoutJson(result);

@@ -196,8 +196,12 @@ function appVariablesTable() {
  * until the surrounding transaction commits (`_xact_` variant).
  *
  * Only the mutation paths ({@link acquireTenantWriteGate} /
- * {@link releaseTenantWriteGate}) take it; the read-only enforcement paths stay
- * lock-free so reads never block.
+ * {@link releaseTenantWriteGate}) take it; the read-only enforcement path
+ * ({@link assertTenantWritable}) stays lock-free so reads never block. The
+ * destructive generation assertion ({@link assertTenantWriteGateGeneration}) does
+ * not take the advisory lock: it always finds an existing gate row and locks it
+ * with `FOR UPDATE`, which alone serializes a concurrent release/acquire through
+ * its transaction.
  */
 async function lockTenantGateMutation(scopedDb: Database, tenantId: string): Promise<void> {
   const lockKey = `${TENANT_WRITE_GATE_NAMESPACE}:${tenantId}`;
@@ -260,12 +264,14 @@ async function readGateRowScoped(
  * no gap/predicate lock), so it does not by itself serialize two initial
  * acquires racing from an empty gate. The empty-state race is closed separately
  * by {@link lockTenantGateMutation} (a per-tenant advisory lock the mutation
- * paths take first). Used ONLY by {@link acquireTenantWriteGate} and
- * {@link releaseTenantWriteGate}; the read-only paths
- * ({@link readTenantWriteGate}/{@link assertTenantWritable} and
- * {@link assertTenantWriteGateGeneration}) stay unlocked so enforcement reads
- * never block. The caller owns the transaction (the surrounding tenant scope),
- * so the lock is held until that transaction commits.
+ * paths take first). Used by {@link acquireTenantWriteGate},
+ * {@link releaseTenantWriteGate}, and the destructive
+ * {@link assertTenantWriteGateGeneration} — which relies on the row lock to keep
+ * a source gate continuously held through its deletion commit. The cheap
+ * read-only enforcement paths ({@link readTenantWriteGate} /
+ * {@link assertTenantWritable}) stay unlocked so enforcement reads never block.
+ * The caller owns the transaction (the surrounding tenant scope), so the lock is
+ * held until that transaction commits.
  */
 async function readGateRowScopedForUpdate(
   scopedDb: Database,
@@ -491,13 +497,29 @@ export async function releaseTenantWriteGate(
  * that the write gate is active at exactly `generation`. Throws otherwise. Used
  * by destructive operations to bind their commit to a continuously-held source
  * gate. The caller must already be inside the tenant transaction.
+ *
+ * The read takes `FOR UPDATE` on the gate row (via {@link
+ * readGateRowScopedForUpdate}) rather than a bare read. This is the load-bearing
+ * difference from ordinary {@link assertTenantWritable}: the destructive caller
+ * proceeds to delete inside the SAME transaction, so holding the row lock from
+ * assertion through commit means a concurrent release or forced re-acquire — both
+ * of which lock the gate row before mutating it — blocks until this transaction
+ * commits and cannot slip a replacement generation in between the check and the
+ * destructive commit. Ordinary enforcement reads stay lock-free so they never
+ * block; only this generation assertion is serialized.
+ *
+ * Deadlock ordering: this assertion takes the gate-row lock FIRST, then the
+ * destructive plan takes its table locks; acquire/release take the per-tenant
+ * advisory lock, then the gate-row lock. The destructive path never waits on the
+ * advisory lock, so no lock-order cycle exists — a blocked acquire/release simply
+ * waits for the destructive commit.
  */
 export async function assertTenantWriteGateGeneration(
   scopedDb: Database,
   tenantId: string,
   generation: string
 ): Promise<void> {
-  const existing = await readGateRowScoped(scopedDb, tenantId);
+  const existing = await readGateRowScopedForUpdate(scopedDb, tenantId);
   if (!existing || existing.generation !== generation) {
     throw new TenantWriteGateGenerationError(tenantId, generation, existing?.generation);
   }

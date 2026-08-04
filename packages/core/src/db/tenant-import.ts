@@ -50,8 +50,8 @@ import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import {
   deriveExpectedTenantTableSnapshots,
   insertTenantTableRows,
-  parseTenantJsonl,
   snapshotTenantTableHashes,
+  splitTenantJsonlLines,
 } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import {
@@ -165,16 +165,15 @@ async function restoreDatabase(
     for (const table of insertOrder) {
       const archived = archivedByName.get(table.name);
       if (!archived || archived.rowCount === 0) continue;
-      const jsonl = await readTableJsonl(archivePath, table.name);
-      const rows = parseTenantJsonl(jsonl, tenantId);
-      if (rows.length !== archived.rowCount) {
+      const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
+      if (lines.length !== archived.rowCount) {
         throw new MalformedArchiveError(
-          `Archive table ${table.name} declares ${archived.rowCount} row(s) but contains ${rows.length}`
+          `Archive table ${table.name} declares ${archived.rowCount} row(s) but contains ${lines.length}`
         );
       }
       let count: number;
       try {
-        count = await insertTenantTableRows(scoped, table.name, rows);
+        count = await insertTenantTableRows(scoped, table.name, lines, tenantId);
       } catch (error) {
         if (isUniqueViolation(error)) {
           // Row identifiers (UUID primary keys) are globally unique across a
@@ -257,6 +256,7 @@ export async function importTenant(
   // restore, so a database committed before a filesystem-tail failure is not
   // stranded as an unretryable conflict.
   const expectedSnapshots = await deriveExpectedTenantTableSnapshots(
+    db,
     options.archivePath,
     manifest.database.tables,
     tenantId
