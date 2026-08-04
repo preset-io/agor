@@ -47,6 +47,7 @@ import {
 } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import {
+  assertSymlinkTargetWithinRoot,
   publishTenantFilesystemAtomically,
   stageTenantFilesystem,
   summarizeTenantFilesystem,
@@ -209,6 +210,19 @@ export async function importTenant(
     throw new MalformedArchiveError(
       `Refusing to import: archive failed integrity check (${integrity.problemCount} problem(s)); first: ${integrity.problems[0] ?? 'unknown'}`
     );
+  }
+
+  // Prove every stored symlink target is root-contained BEFORE any database
+  // write. Structural manifest validation checks each entry's own path but not
+  // its symlink target, so a self-consistent (correctly-fingerprinted) archive
+  // could otherwise carry an escaping link that is only caught later by staging
+  // — after the database has already been mutated. Validating targets here keeps
+  // the "rejected before any data was modified" guarantee honest for this class
+  // of crafted archive; staging re-checks as a last line of defense.
+  for (const entry of manifest.filesystem.entries) {
+    if (entry.type === 'symlink') {
+      assertSymlinkTargetWithinRoot(entry.path, entry.linkTarget ?? '');
+    }
   }
 
   // The live schema must be exactly the schema the archive was produced against.

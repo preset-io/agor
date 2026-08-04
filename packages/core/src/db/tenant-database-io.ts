@@ -28,6 +28,19 @@ const TENANT_SCOPE_COLUMN = 'tenant_id';
 /** Rows are inserted in batches to bound statement/parameter size. */
 const IMPORT_BATCH_SIZE = 500;
 
+/**
+ * Deterministic, cross-runtime ordering key for a tenant table export. Rows are
+ * ordered by the canonical text of `to_jsonb(row)` under the byte-wise
+ * `COLLATE "C"` collation. The explicit collation is load-bearing: without it,
+ * PostgreSQL orders text under the database's default locale/ICU collation, so
+ * two runtimes with different `lc_collate` (or ICU versions) could order the
+ * same rows differently and produce diverging per-table content hashes for
+ * identical data. Pinning `COLLATE "C"` makes the export byte order — and thus
+ * the archive fingerprint — depend only on the row bytes, never on the server
+ * locale. Exported so a test can assert the collation is present in the query.
+ */
+export const TENANT_EXPORT_ORDER_BY = sql`ORDER BY pg_catalog.to_jsonb(t)::pg_catalog.text COLLATE "C"`;
+
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
@@ -87,7 +100,7 @@ export async function exportTenantTableRows(
       SELECT pg_catalog.to_jsonb(t) AS row
       FROM ${qualifiedTable(tableName)} t
       WHERE ${column} = ${tenantId}${excludeGateRow}
-      ORDER BY pg_catalog.to_jsonb(t)::pg_catalog.text
+      ${TENANT_EXPORT_ORDER_BY}
     `
   );
   const rows = rowsOf(result);

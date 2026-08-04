@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertSafeRelativePath,
+  assertSymlinkTargetWithinRoot,
   copyRegularFileNoFollow,
   copyTenantFilesystemInto,
   deleteTenantFilesystemTree,
@@ -54,6 +55,30 @@ describe('resolveWithinRoot', () => {
     const root = join(scratch, 'root');
     expect(resolveWithinRoot(root, 'x/y')).toBe(join(root, 'x', 'y'));
     expect(() => resolveWithinRoot(root, '../y')).toThrow(UnsafeArchivePathError);
+  });
+});
+
+describe('assertSymlinkTargetWithinRoot', () => {
+  it('accepts a link-relative target that stays within the root', () => {
+    expect(() => assertSymlinkTargetWithinRoot('sub/link', 'real.txt')).not.toThrow();
+    expect(() => assertSymlinkTargetWithinRoot('sub/link', '../uploads/real.txt')).not.toThrow();
+    expect(() => assertSymlinkTargetWithinRoot('top.link', 'a/b/c')).not.toThrow();
+  });
+
+  it('rejects a target that climbs above the root', () => {
+    expect(() => assertSymlinkTargetWithinRoot('sub/link', '../../etc/passwd')).toThrow(
+      UnsafeArchivePathError
+    );
+    expect(() => assertSymlinkTargetWithinRoot('top.link', '../outside')).toThrow(
+      UnsafeArchivePathError
+    );
+  });
+
+  it('rejects absolute, empty, and NUL targets', () => {
+    expect(() => assertSymlinkTargetWithinRoot('l', '/etc/passwd')).toThrow(UnsafeArchivePathError);
+    expect(() => assertSymlinkTargetWithinRoot('l', 'C:/win')).toThrow(UnsafeArchivePathError);
+    expect(() => assertSymlinkTargetWithinRoot('l', '')).toThrow(UnsafeArchivePathError);
+    expect(() => assertSymlinkTargetWithinRoot('l', 'a\0b')).toThrow(UnsafeArchivePathError);
   });
 });
 
@@ -267,6 +292,94 @@ describe('copy → stage → publish round trip', () => {
       copyRegularFileNoFollow(join(root, 'sub', 'file.txt'), destination, root)
     ).rejects.toThrow(UnsafeArchivePathError);
   });
+});
+
+describe('special permission bits', () => {
+  it.skipIf(process.platform === 'win32')(
+    'strips setuid/setgid/sticky at export and never restores them',
+    async () => {
+      const source = join(scratch, 'src');
+      await mkdir(source, { recursive: true });
+      await writeFile(join(source, 'tool'), 'bin');
+      // 04755 — setuid + rwxr-xr-x. Our masking must drop the special bit
+      // regardless of whether the OS retained it on disk.
+      await chmod(join(source, 'tool'), 0o4755);
+
+      const walk = await walkTenantFilesystemTree(source);
+      const entry = walk.entries.find((e) => e.path === 'tool');
+      expect(entry?.mode).toBe(0o755);
+      expect((entry?.mode ?? 0) & 0o7000).toBe(0);
+
+      const bundleFiles = join(scratch, 'bundle', 'files');
+      await copyTenantFilesystemInto(source, bundleFiles);
+      const staging = join(scratch, '.staging-setuid');
+      await stageTenantFilesystem(walk.entries, bundleFiles, staging);
+      const destination = join(scratch, 'restored-setuid');
+      await publishTenantFilesystemAtomically(staging, destination);
+
+      // The restored file carries only ordinary bits — no setuid escalation.
+      expect((await stat(join(destination, 'tool'))).mode & 0o7777).toBe(0o755);
+    }
+  );
+});
+
+describe('restrictive directory modes', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'round-trips content nested under a read-only (0o500) directory',
+    async () => {
+      const source = join(scratch, 'src');
+      const bundleFiles = join(scratch, 'bundle', 'files');
+      const destination = join(scratch, 'restored-ro');
+      await mkdir(join(source, 'restricted'), { recursive: true });
+      await writeFile(join(source, 'restricted', 'secret.txt'), 'classified');
+      // Read-only, non-writable directory. With modes applied before children,
+      // export-copy (and later staging) into it would fail for a non-root user;
+      // deferring the mode until after contents exist fixes that.
+      await chmod(join(source, 'restricted'), 0o500);
+      try {
+        const walk = await copyTenantFilesystemInto(source, bundleFiles);
+        const staging = join(scratch, '.staging-ro');
+        await stageTenantFilesystem(walk.entries, bundleFiles, staging);
+        await publishTenantFilesystemAtomically(staging, destination);
+
+        expect(await readFile(join(destination, 'restricted', 'secret.txt'), 'utf8')).toBe(
+          'classified'
+        );
+        expect((await stat(join(destination, 'restricted'))).mode & 0o777).toBe(0o500);
+      } finally {
+        // Re-open every restricted directory the round trip created so afterEach
+        // can remove the temp tree even if an assertion failed.
+        for (const dir of [source, bundleFiles, destination]) {
+          await chmod(join(dir, 'restricted'), 0o700).catch(() => {});
+        }
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'stages children of an unreadable (0o000) directory before locking it',
+    async () => {
+      // Bundle the payload with a readable directory so staging can copy it in;
+      // the ARCHIVED mode for that directory is 0o000.
+      const bundleFiles = join(scratch, 'bundle', 'files');
+      await mkdir(join(bundleFiles, 'locked'), { recursive: true });
+      await writeFile(join(bundleFiles, 'locked', 'inner.txt'), 'hidden');
+
+      const staging = join(scratch, '.staging-locked');
+      const entries = [
+        { path: 'locked', type: 'directory' as const, size: 0, mode: 0o000 },
+        { path: 'locked/inner.txt', type: 'file' as const, size: 6, mode: 0o644 },
+      ];
+      // Must not throw: the child is written while the directory is still
+      // owner-accessible, and the 0o000 mode is applied only afterwards.
+      await stageTenantFilesystem(entries, bundleFiles, staging);
+
+      expect((await stat(join(staging, 'locked'))).mode & 0o777).toBe(0o000);
+      // Re-open the directory to confirm the child really landed inside it.
+      await chmod(join(staging, 'locked'), 0o700);
+      expect(await readFile(join(staging, 'locked', 'inner.txt'), 'utf8')).toBe('hidden');
+    }
+  );
 });
 
 describe('deleteTenantFilesystemTree', () => {

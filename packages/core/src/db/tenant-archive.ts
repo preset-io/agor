@@ -216,8 +216,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const SAFE_TABLE_NAME = /^[a-z_][a-z0-9_]*$/i;
-/** setuid/setgid/sticky + rwxrwxrwx — the only bits export preserves. */
-const MAX_PERMISSION_MODE = 0o7777;
+/**
+ * rwxrwxrwx — the only permission bits a portable archive carries. Export strips
+ * setuid/setgid/sticky, so any mode above this range in a manifest means an
+ * attacker hand-authored a special bit; such an entry is REJECTED here rather
+ * than silently normalised, so a hostile mode never reaches the staging chmod.
+ */
+const MAX_PERMISSION_MODE = 0o777;
 const FS_ENTRY_TYPES: readonly TenantFilesystemEntryType[] = ['file', 'directory', 'symlink'];
 
 /** Assert a validation predicate, throwing the malformed-archive error on false. */
@@ -309,7 +314,7 @@ function assertFilesystemEntryShape(entry: unknown): void {
   }
   assertManifest(
     isNonNegativeSafeInteger(entry.mode) && entry.mode <= MAX_PERMISSION_MODE,
-    `Archive manifest filesystem entry ${entry.path} has an invalid mode`
+    `Archive manifest filesystem entry ${entry.path} has an invalid or special-bit permission mode`
   );
   if (entry.type === 'file') {
     assertManifest(

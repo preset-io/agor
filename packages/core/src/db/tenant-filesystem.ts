@@ -68,7 +68,10 @@ export interface TenantFilesystemEntry {
    * root, so it restores correctly under any destination root.
    */
   linkTarget?: string;
-  /** POSIX file mode permission bits (lower 12 bits) preserved for restore. */
+  /**
+   * Ordinary POSIX permission bits (rwxrwxrwx, lower 9) preserved for restore.
+   * setuid/setgid/sticky are never carried across a portable archive.
+   */
   mode: number;
 }
 
@@ -162,6 +165,40 @@ export function resolveWithinRoot(root: string, relativePath: string): string {
     throw new UnsafeArchivePathError(`Archive path escapes the destination root: ${relativePath}`);
   }
   return absolute;
+}
+
+/**
+ * Prove a stored symlink's canonical link-relative target stays within the
+ * virtual tenant root, using ONLY the entry's own relative path and target — no
+ * filesystem access. The link lives at `entryPath`; its target is resolved
+ * relative to the link's parent directory in POSIX virtual space and must not be
+ * absolute nor climb above the root.
+ *
+ * This is the pure, root-independent counterpart to staging's real-root check.
+ * Because it needs no live root, the importer can invoke it BEFORE any database
+ * write to reject a crafted archive whose symlink escapes — which is what keeps
+ * the "rejected before any data was modified" guarantee true for every archive
+ * category, not just those the terminal staging step happens to reach.
+ */
+export function assertSymlinkTargetWithinRoot(entryPath: string, linkTarget: string): void {
+  if (typeof linkTarget !== 'string' || linkTarget.length === 0 || linkTarget.includes('\0')) {
+    throw new UnsafeArchivePathError(`Archive symlink ${entryPath} has an invalid target`);
+  }
+  // An absolute target can never be re-rooted safely on restore.
+  if (linkTarget.startsWith('/') || linkTarget.startsWith('\\') || /^[a-zA-Z]:/.test(linkTarget)) {
+    throw new UnsafeArchivePathError(
+      `Archive symlink ${entryPath} has an absolute target: ${linkTarget}`
+    );
+  }
+  const linkParent = posix.dirname(entryPath);
+  const resolved = posix.normalize(
+    linkParent === '.' ? linkTarget : posix.join(linkParent, linkTarget)
+  );
+  if (resolved === '..' || resolved.startsWith('../') || posix.isAbsolute(resolved)) {
+    throw new UnsafeArchivePathError(
+      `Archive symlink ${entryPath} targets a path outside the tenant root: ${linkTarget}`
+    );
+  }
 }
 
 /**
@@ -289,9 +326,14 @@ export async function copyRegularFileNoFollow(
 }
 
 function permissionBits(mode: number): number {
-  // Keep the lower 12 bits (setuid/setgid/sticky + rwx). Ownership is never
-  // preserved across a portable archive; that is a deployment concern.
-  return mode & 0o7777;
+  // Keep ONLY the ordinary rwxrwxrwx bits (lower 9). The setuid/setgid/sticky
+  // bits are deliberately dropped: a portable archive must never carry
+  // privilege-escalation bits across a trust boundary, and re-applying an
+  // attacker-influenced setuid bit on restore would be a local escalation
+  // primitive. Ownership is likewise never preserved — that is a deployment
+  // concern. Strict manifest validation additionally REJECTS (rather than
+  // silently normalises) any entry whose stored mode carries a special bit.
+  return mode & 0o777;
 }
 
 interface WalkAccumulator {
@@ -325,15 +367,6 @@ function internalSymlinkRelativeTarget(
     return null;
   }
   return relative(linkAbsoluteDir, targetAbsolute).split(sep).join('/');
-}
-
-/**
- * Whether a symlink target stays within the tenant root. Thin boolean wrapper
- * over {@link internalSymlinkRelativeTarget}, used by the restore path to reject
- * a link whose stored target would escape the destination root.
- */
-function isInternalSymlink(root: string, linkAbsoluteDir: string, linkTarget: string): boolean {
-  return internalSymlinkRelativeTarget(root, linkAbsoluteDir, linkTarget) !== null;
 }
 
 async function walkDirectory(
@@ -497,9 +530,66 @@ export async function summarizeTenantFilesystem(root: string): Promise<TenantFil
 }
 
 /**
+ * Owner-accessible temporary mode a directory is created with while its contents
+ * are materialised. Its archived mode is applied only AFTER every child exists
+ * (see {@link materializeEntries}), so an exported read-only or unreadable
+ * directory (0o500 / 0o000) never blocks a non-root process from writing the
+ * files that belong inside it.
+ */
+const DIRECTORY_STAGING_MODE = 0o700;
+
+/**
+ * Materialise a validated, path-sorted list of filesystem entries under
+ * `targetRoot`, deferring directory permission modes until every child exists.
+ *
+ * Directories are created with an owner-accessible temporary mode; files and
+ * symlinks are written through caller-supplied handlers (which differ by
+ * direction — a root-contained copy on export, a plain copy plus target
+ * re-validation on restore). Only once the whole tree is present are the
+ * archived directory modes applied, DEEPEST-FIRST, so a restrictive parent mode
+ * (0o500/0o000) is never set before its own children are finalised — otherwise a
+ * non-root process could not chmod, or even reach, the contents underneath it.
+ * Files receive their archived (special-bit-stripped) mode as they are written,
+ * while their parent is still writable.
+ */
+async function materializeEntries(
+  entries: TenantFilesystemEntry[],
+  targetRoot: string,
+  handlers: {
+    writeFile: (entry: TenantFilesystemEntry, destination: string) => Promise<void>;
+    writeSymlink: (entry: TenantFilesystemEntry, destination: string) => Promise<void>;
+  }
+): Promise<void> {
+  const deferredDirectoryModes: Array<{ absolute: string; mode: number; depth: number }> = [];
+  for (const entry of entries) {
+    const destination = resolveWithinRoot(targetRoot, entry.path);
+    if (entry.type === 'directory') {
+      await mkdir(destination, { recursive: true });
+      await chmod(destination, DIRECTORY_STAGING_MODE);
+      deferredDirectoryModes.push({
+        absolute: destination,
+        mode: permissionBits(entry.mode),
+        depth: entry.path.split('/').length,
+      });
+    } else if (entry.type === 'symlink') {
+      await mkdir(dirname(destination), { recursive: true });
+      await handlers.writeSymlink(entry, destination);
+    } else {
+      await mkdir(dirname(destination), { recursive: true });
+      await handlers.writeFile(entry, destination);
+      await chmod(destination, permissionBits(entry.mode));
+    }
+  }
+  deferredDirectoryModes.sort((a, b) => b.depth - a.depth);
+  for (const directory of deferredDirectoryModes) {
+    await chmod(directory.absolute, directory.mode);
+  }
+}
+
+/**
  * Copy a tenant filesystem tree into a bundle's `files/` directory, preserving
- * structure, permissions, and internal symlinks. Returns the walk result so the
- * caller can record entries in the manifest.
+ * structure, ordinary permissions, and internal symlinks. Returns the walk
+ * result so the caller can record entries in the manifest.
  */
 export async function copyTenantFilesystemInto(
   root: string,
@@ -517,34 +607,26 @@ export async function copyTenantFilesystemInto(
   const allowedRoot = walk.entries.some((entry) => entry.type === 'file')
     ? await realpath(root)
     : root;
-  for (const entry of walk.entries) {
-    const destination = resolveWithinRoot(destinationFilesDir, entry.path);
-    if (entry.type === 'directory') {
-      await mkdir(destination, { recursive: true });
-      await chmod(destination, entry.mode);
-    } else if (entry.type === 'symlink') {
-      await mkdir(dirname(destination), { recursive: true });
-      await symlink(entry.linkTarget as string, destination);
-    } else {
-      await mkdir(dirname(destination), { recursive: true });
-      // Symlink-safe, root-contained read (see openRegularFileNoFollow): an
-      // out-of-root source fails the export closed instead of archiving it.
-      await copyRegularFileNoFollow(
+  await materializeEntries(walk.entries, destinationFilesDir, {
+    // Symlink-safe, root-contained read (see openRegularFileNoFollow): an
+    // out-of-root source fails the export closed instead of archiving it.
+    writeFile: (entry, destination) =>
+      copyRegularFileNoFollow(
         join(root, entry.path.split('/').join(sep)),
         destination,
         allowedRoot
-      );
-      await chmod(destination, entry.mode);
-    }
-  }
+      ),
+    writeSymlink: (entry, destination) => symlink(entry.linkTarget as string, destination),
+  });
   return walk;
 }
 
 /**
  * Materialise a validated set of archive entries into a staging directory,
  * reading file bytes from the bundle's `files/` directory. Every path (entry and
- * symlink target) is re-validated to stay within the staging root. This does not
- * touch the live destination — publication is a separate atomic step.
+ * symlink target) is re-validated to stay within the staging root, and directory
+ * modes are applied only after contents exist. This does not touch the live
+ * destination — publication is a separate atomic step.
  */
 export async function stageTenantFilesystem(
   entries: TenantFilesystemEntry[],
@@ -552,30 +634,18 @@ export async function stageTenantFilesystem(
   stagingRoot: string
 ): Promise<void> {
   await mkdir(stagingRoot, { recursive: true });
-  // Directories first (sorted order already parent-before-child) so files land
-  // into an existing tree; entries are pre-sorted by path.
-  for (const entry of entries) {
-    const destination = resolveWithinRoot(stagingRoot, entry.path);
-    if (entry.type === 'directory') {
-      await mkdir(destination, { recursive: true });
-      await chmod(destination, permissionBits(entry.mode));
-    } else if (entry.type === 'symlink') {
+  await materializeEntries(entries, stagingRoot, {
+    writeFile: (entry, destination) =>
+      copyFile(resolveWithinRoot(bundleFilesDir, entry.path), destination),
+    writeSymlink: async (entry, destination) => {
       const linkTarget = entry.linkTarget ?? '';
-      // Reject a link whose resolved target would escape the destination root.
-      if (!isInternalSymlink(stagingRoot, dirname(destination), linkTarget)) {
-        throw new UnsafeArchivePathError(
-          `Refusing to restore symlink escaping the tenant root: ${entry.path}`
-        );
-      }
-      await mkdir(dirname(destination), { recursive: true });
+      // Last-line defense: reject a link whose stored target would escape the
+      // destination root (the importer already validates every target up front,
+      // before any database write — see assertSymlinkTargetWithinRoot).
+      assertSymlinkTargetWithinRoot(entry.path, linkTarget);
       await symlink(linkTarget, destination);
-    } else {
-      const source = resolveWithinRoot(bundleFilesDir, entry.path);
-      await mkdir(dirname(destination), { recursive: true });
-      await copyFile(source, destination);
-      await chmod(destination, permissionBits(entry.mode));
-    }
-  }
+    },
+  });
 }
 
 async function isDirectoryEmpty(path: string): Promise<boolean> {

@@ -362,6 +362,21 @@ describe('assertManifestShape strict field validation', () => {
     expect(() => assertManifestShape(m)).toThrow(/mode/);
   });
 
+  it('rejects a special-bit permission mode (e.g. setuid 04755) rather than normalising it', () => {
+    // A portable archive never carries setuid/setgid/sticky bits (export strips
+    // them), so their presence signals a hand-authored, hostile manifest. The
+    // strict validator must refuse it, not silently mask it down.
+    for (const mode of [0o4755, 0o2755, 0o1777]) {
+      const m = validManifest();
+      m.filesystem.entries = [{ path: 'f.txt', type: 'file', size: 3, sha256: HEX, mode } as never];
+      // The mode field check runs before the fingerprint recompute, so a stale
+      // fingerprint is irrelevant — the special bit is what is rejected.
+      expect(() => assertManifestShape(m)).toThrow(/mode/);
+    }
+    // The equivalent ordinary mode (the default in validManifest) is accepted.
+    expect(() => assertManifestShape(validManifest())).not.toThrow();
+  });
+
   it('rejects a filesystem path listed more than once', () => {
     const m = validManifest();
     m.filesystem.entries = [
