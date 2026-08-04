@@ -13,6 +13,7 @@ import type {
   PermissionMode,
   SessionID,
   TaskID,
+  TaskRunnerReport,
 } from '@agor/core/types';
 import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -23,9 +24,8 @@ import type { AgorClient } from '../../services/feathers-client.js';
 export type Tool = AgenticToolName;
 
 export interface ToolExecutionResult {
-  completion?: {
-    model?: string;
-  };
+  /** Present only for runners that delegate durable settlement to the host. */
+  runnerReport?: TaskRunnerReport;
 }
 
 /**

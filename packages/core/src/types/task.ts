@@ -79,7 +79,8 @@ export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
   | 'heartbeat_lost'
-  | 'sdk_health_failure';
+  | 'sdk_health_failure'
+  | 'runtime_cleanup_failed';
 
 export interface TerminationRequest {
   cause: TerminationCause;
@@ -355,8 +356,23 @@ export interface Task {
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }
 
-/** Facts supplied when an executor successfully settles a task. */
-export interface TaskCompletionInput {
-  report?: Task['report'];
-  model?: string;
+/** Provider-neutral facts returned after one agentic-tool runner invocation. */
+export type TaskRunnerTurnResult =
+  | { outcome: 'success'; model?: string }
+  | { outcome: 'failure'; error_message: string }
+  | { outcome: 'interaction_timeout'; error_message: string };
+
+/** Cooperative release evidence; unverified cleanup is never terminal proof. */
+export type TaskRunnerCleanupResult =
+  | { outcome: 'quiesced' }
+  | { outcome: 'unverified'; reason: string };
+
+export interface TaskRunnerReport {
+  turn: TaskRunnerTurnResult;
+  cleanup: TaskRunnerCleanupResult;
+}
+
+/** Authenticated executor payload for the daemon-owned runtime release gate. */
+export interface TaskRunnerReportInput extends TaskRunnerReport {
+  task_id: string;
 }

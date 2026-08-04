@@ -208,8 +208,15 @@ describe('OpenCode event translator', () => {
       type: 'session.status',
       properties: { sessionID: 'session-active', status: { type: 'idle' } },
     };
+    const busy = {
+      type: 'session.status',
+      properties: { sessionID: 'session-active', status: { type: 'busy' } },
+    };
 
     expect(events.translate(idle)).toEqual([]);
+    expect(events.translate(busy)).toEqual([
+      { type: 'runtime-activity', detail: 'session.status.busy' },
+    ]);
     events.translate(messageUpdated('assistant-before-turn'));
     expect(events.translate(idle)).toEqual([]);
     events.translate(messageUpdated('assistant-current'));
@@ -247,6 +254,39 @@ describe('OpenCode event translator', () => {
         properties: { sessionID: ACTIVE_SESSION },
       })
     ).toEqual([{ type: 'unknown-activity' }]);
+  });
+
+  it('fails closed for unknown interaction or terminal control vocabulary', () => {
+    const events = translator();
+
+    expect(
+      events.translate({
+        type: 'session.status',
+        properties: { sessionID: ACTIVE_SESSION, status: { type: 'paused' } },
+      })
+    ).toEqual([
+      { type: 'error', message: 'Unsupported OpenCode control event: session.status.paused' },
+    ]);
+    expect(
+      events.translate({
+        type: 'permission.asked',
+        properties: { sessionID: ACTIVE_SESSION, permission: 'bash' },
+      })
+    ).toEqual([{ type: 'error', message: 'Unsupported OpenCode control event: permission.asked' }]);
+    expect(
+      events.translate({
+        type: 'question.changed',
+        properties: { sessionID: ACTIVE_SESSION },
+      })
+    ).toEqual([{ type: 'error', message: 'Unsupported OpenCode control event: question.changed' }]);
+    expect(
+      events.translate({
+        type: 'session.completed',
+        properties: { sessionID: ACTIVE_SESSION },
+      })
+    ).toEqual([
+      { type: 'error', message: 'Unsupported OpenCode control event: session.completed' },
+    ]);
   });
 });
 

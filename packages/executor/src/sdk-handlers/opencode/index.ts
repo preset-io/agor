@@ -12,4 +12,10 @@ export type {
   OpenCodeTurnResult,
   RunOpenCodeTurnInput,
 } from './opencode-tool.js';
-export { OpenCodePermissionRejectedError, OpenCodeTool } from './opencode-tool.js';
+export {
+  isOpenCodeCleanupUnverifiedError,
+  OpenCodeCleanupUnverifiedError,
+  OpenCodeInteractionTimeoutError,
+  OpenCodePermissionRejectedError,
+  OpenCodeTool,
+} from './opencode-tool.js';

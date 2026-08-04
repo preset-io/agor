@@ -43,10 +43,10 @@ export function createCanUseToolCallback(
     mcpServerRepo: MCPServerRepository;
     sessionMCPRepo: SessionMCPServerRepository;
     /**
-     * Managed runtimes may need to finish process containment before a denied
-     * task becomes terminal/promptable. Their outer owner performs settlement.
+     * Managed runtimes must report timeout/denial only after cooperative
+     * cleanup. Their outer runner and the daemon release gate own settlement.
      */
-    deferDeniedTerminalState?: boolean;
+    deferTerminalState?: boolean;
   }
 ) {
   return async (
@@ -63,6 +63,7 @@ export function createCanUseToolCallback(
       destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
     }>;
     message?: string;
+    timedOut?: boolean;
   }> => {
     // Auto-approve MCP tools only if they belong to an attached MCP server
     // MCP tool names follow pattern: mcp__<server_name>__<tool_name>
@@ -249,39 +250,42 @@ export function createCanUseToolCallback(
         console.log(`✅ [canUseTool] Permission request updated: ${permissionStatus}`);
       }
 
-      // Handle timeout: set task/session to timed_out, deny the tool call
-      // The executor will exit cleanly and the user can re-prompt to retry.
+      // Legacy runtimes settle here. Managed runtimes keep the wait active and
+      // report timeout only after their cleanup has settled.
       if (decision.timedOut) {
-        console.log(
-          `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
-        );
-
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.TIMED_OUT,
-          completed_at: new Date().toISOString(),
-        });
-
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.TIMED_OUT,
-            ready_for_prompt: true,
-          });
+        if (!deps.deferTerminalState) {
           console.log(
-            `✅ [canUseTool] Session ${sessionId} set to timed_out after permission timeout`
+            `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
           );
+          await deps.tasksService.patch(taskId, {
+            status: TaskStatus.TIMED_OUT,
+            completed_at: new Date().toISOString(),
+          });
+          if (deps.sessionsService) {
+            await deps.sessionsService.patch(sessionId, {
+              status: SessionStatus.TIMED_OUT,
+              ready_for_prompt: true,
+            });
+            console.log(
+              `✅ [canUseTool] Session ${sessionId} set to timed_out after permission timeout`
+            );
+          }
         }
 
         return {
           behavior: 'deny' as const,
           message: `Permission request timed out for tool: ${toolName}. Send a new prompt to retry.`,
+          timedOut: true,
         };
       }
 
-      // Update task status
-      await deps.tasksService.patch(taskId, {
-        status:
-          decision.allow || deps.deferDeniedTerminalState ? TaskStatus.RUNNING : TaskStatus.FAILED,
-      });
+      // An approved interaction resumes the active Task. A managed denial
+      // remains awaiting until the runner reports its post-cleanup outcome.
+      if (decision.allow || !deps.deferTerminalState) {
+        await deps.tasksService.patch(taskId, {
+          status: decision.allow ? TaskStatus.RUNNING : TaskStatus.FAILED,
+        });
+      }
 
       // If permission was denied, stop execution
       if (!decision.allow) {
@@ -291,7 +295,7 @@ export function createCanUseToolCallback(
         deps.permissionService.cancelPendingRequests(sessionId);
 
         // Set session status to idle
-        if (deps.sessionsService && !deps.deferDeniedTerminalState) {
+        if (deps.sessionsService && !deps.deferTerminalState) {
           await deps.sessionsService.patch(sessionId, {
             status: 'idle' as const,
           });
@@ -361,17 +365,16 @@ export function createCanUseToolCallback(
     } catch (error) {
       console.error('[canUseTool] Error in permission flow:', error);
 
-      try {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const timestamp = new Date().toISOString();
-
-        // Update task status to failed
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.FAILED,
-          report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
-        });
-      } catch (updateError) {
-        console.error('[canUseTool] Failed to update task status:', updateError);
+      if (!deps.deferTerminalState) {
+        try {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          await deps.tasksService.patch(taskId, {
+            status: TaskStatus.FAILED,
+            report: `Error: ${errorMessage}\nTimestamp: ${new Date().toISOString()}`,
+          });
+        } catch (updateError) {
+          console.error('[canUseTool] Failed to update task status:', updateError);
+        }
       }
 
       return {

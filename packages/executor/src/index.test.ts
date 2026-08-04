@@ -100,10 +100,16 @@ describe('AgorExecutor watchdog handoff', () => {
     );
   });
 
-  it('settles adapter completion only after the runner returns from runtime cleanup', async () => {
-    const complete = vi.fn().mockResolvedValue({});
+  it('reports the adapter turn and release evidence only after the runner returns', async () => {
+    const reportRunnerResult = vi.fn().mockResolvedValue({
+      task_id: 'task-1',
+      status: 'completed',
+    });
     runtime.execute.mockResolvedValueOnce({
-      completion: { model: 'provider/model' },
+      runnerReport: {
+        turn: { outcome: 'success', model: 'provider/model' },
+        cleanup: { outcome: 'quiesced' },
+      },
     });
     const executor = new AgorExecutor({
       sessionToken: 'token',
@@ -114,16 +120,20 @@ describe('AgorExecutor watchdog handoff', () => {
       agenticToolContext: { dataHome: '/opaque/opencode-home' },
       daemonUrl: 'http://daemon',
     }) as unknown as {
-      client: { tasks: { complete: typeof complete } };
+      client: { service: () => { reportRunnerResult: typeof reportRunnerResult } };
       executeTask(): Promise<void>;
     };
-    executor.client = { tasks: { complete } };
+    executor.client = { service: () => ({ reportRunnerResult }) };
 
     await executor.executeTask();
 
-    expect(complete).toHaveBeenCalledWith('task-1', { model: 'provider/model' });
+    expect(reportRunnerResult).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      turn: { outcome: 'success', model: 'provider/model' },
+      cleanup: { outcome: 'quiesced' },
+    });
     expect(runtime.execute.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      complete.mock.invocationCallOrder[0]!
+      reportRunnerResult.mock.invocationCallOrder[0]!
     );
   });
 
@@ -181,6 +191,41 @@ describe('AgorExecutor watchdog handoff', () => {
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',
     });
+  });
+
+  it('does not duplicate release after the runner report already carried quiescence', async () => {
+    const reportTerminationComplete = vi.fn();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service: () => { reportTerminationComplete: typeof reportTerminationComplete };
+      };
+      terminationRequest: { cause: 'user_stop'; requested_at: string };
+      runnerReport: {
+        turn: { outcome: 'failure'; error_message: string };
+        cleanup: { outcome: 'quiesced' };
+      };
+      reportTerminationComplete(): Promise<void>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete }) };
+    executor.terminationRequest = {
+      cause: 'user_stop',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    };
+    executor.runnerReport = {
+      turn: { outcome: 'failure', error_message: 'failed' },
+      cleanup: { outcome: 'quiesced' },
+    };
+
+    await executor.reportTerminationComplete();
+
+    expect(reportTerminationComplete).not.toHaveBeenCalled();
   });
 
   it('handles the private task-scoped termination socket event', () => {

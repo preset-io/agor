@@ -23,7 +23,10 @@ import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
-import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
+import {
+  isOpenCodeCleanupUnverifiedError,
+  OpenCodeTool,
+} from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
 import type { ToolExecutionResult } from './tool-registry.js';
@@ -131,13 +134,28 @@ export async function executeOpenCodeTask(params: {
           result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
         metadata: result.finalMessage.metadata,
       });
-      return { completion: { model: modelIdentifier } };
+      return {
+        runnerReport: {
+          turn: { outcome: 'success', model: modelIdentifier },
+          cleanup: { outcome: 'quiesced' },
+        },
+      };
     }
     return {};
   } catch (error) {
-    const err = error as Error;
+    const err = error instanceof Error ? error : new Error(String(error));
     console.error('[opencode] Execution failed:', err);
-    throw err;
+    return {
+      runnerReport: {
+        turn:
+          err.name === 'OpenCodeInteractionTimeoutError'
+            ? { outcome: 'interaction_timeout', error_message: err.message }
+            : { outcome: 'failure', error_message: err.message },
+        cleanup: isOpenCodeCleanupUnverifiedError(err)
+          ? { outcome: 'unverified', reason: err.message }
+          : { outcome: 'quiesced' },
+      },
+    };
   } finally {
     globalPermissionManager.unregister(sessionId);
   }

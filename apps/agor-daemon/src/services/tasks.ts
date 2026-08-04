@@ -38,8 +38,8 @@ import type {
   Session,
   SessionID,
   Task,
-  TaskCompletionInput,
   TaskID,
+  TaskRunnerReportInput,
   UUID,
 } from '@agor/core/types';
 import {
@@ -73,6 +73,37 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.FAILED,
   TaskStatus.STOPPED,
 ]);
+const MAX_RUNNER_DIAGNOSTIC_BYTES = 4_096;
+
+function validateRunnerDiagnostic(value: unknown, name: string): asserts value is string {
+  if (
+    typeof value !== 'string' ||
+    value.trim().length === 0 ||
+    Buffer.byteLength(value, 'utf8') > MAX_RUNNER_DIAGNOSTIC_BYTES
+  ) {
+    throw new BadRequest(`${name} must be a non-empty bounded string`);
+  }
+}
+
+function validateRunnerReport(data: TaskRunnerReportInput): void {
+  if (!data || typeof data.task_id !== 'string' || data.task_id.length === 0) {
+    throw new BadRequest('task_id is required');
+  }
+  if (!['success', 'failure', 'interaction_timeout'].includes(data.turn?.outcome)) {
+    throw new BadRequest('invalid runner turn outcome');
+  }
+  if (data.turn.outcome === 'success' && data.turn.model !== undefined) {
+    validateRunnerDiagnostic(data.turn.model, 'turn model');
+  } else if (data.turn.outcome !== 'success') {
+    validateRunnerDiagnostic(data.turn.error_message, 'turn error_message');
+  }
+  if (!['quiesced', 'unverified'].includes(data.cleanup?.outcome)) {
+    throw new BadRequest('invalid runner cleanup outcome');
+  }
+  if (data.cleanup.outcome === 'unverified') {
+    validateRunnerDiagnostic(data.cleanup.reason, 'cleanup reason');
+  }
+}
 
 function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
   return isTerminalTaskStatus(status);
@@ -516,10 +547,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     status: Task['status'],
     params?: TaskParams
   ): Promise<Session> {
+    const sessionStatus =
+      status === TaskStatus.FAILED
+        ? SessionStatus.FAILED
+        : status === TaskStatus.TIMED_OUT
+          ? SessionStatus.TIMED_OUT
+          : SessionStatus.IDLE;
     return this.app.service('sessions').patch(
       task.session_id,
       {
-        status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+        status: sessionStatus,
         ready_for_prompt: true,
       },
       params
@@ -1220,8 +1257,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `Task ${shortId(data.task_id)} has no matching active termination request`
       );
     }
-    const terminationRequest = task.termination_request;
+    return this.acceptExecutorQuiescence(task, params);
+  }
 
+  private acceptExecutorQuiescence(task: Task, params?: TaskParams): Task {
+    const terminationRequest = task.termination_request!;
     emitServiceEvent(this.app, {
       path: 'tasks',
       event: 'patched',
@@ -1253,6 +1293,81 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         )
     );
 
+    return task;
+  }
+
+  async reportRunnerResult(data: TaskRunnerReportInput, params?: TaskParams): Promise<Task> {
+    validateRunnerReport(data);
+    if (data.cleanup.outcome === 'unverified') {
+      const turnFailure =
+        data.turn.outcome === 'success' ||
+        data.turn.error_message.trim() === data.cleanup.reason.trim()
+          ? ''
+          : `${data.turn.error_message.trim()} `;
+      return beginExecutorTermination({
+        app: this.app,
+        taskId: data.task_id,
+        cause: 'runtime_cleanup_failed',
+        errorMessage: `${turnFailure}Runtime cleanup could not be verified: ${data.cleanup.reason.trim()}`,
+        params,
+      });
+    }
+
+    const terminalStatus =
+      data.turn.outcome === 'success'
+        ? TaskStatus.COMPLETED
+        : data.turn.outcome === 'interaction_timeout'
+          ? TaskStatus.TIMED_OUT
+          : TaskStatus.FAILED;
+    const updates: Partial<Task> = {
+      status: terminalStatus,
+      ...(data.turn.outcome === 'success'
+        ? data.turn.model
+          ? { model: data.turn.model.trim() }
+          : {}
+        : { error_message: data.turn.error_message.trim() }),
+    };
+
+    let task: Task;
+    try {
+      task = await this.taskRepo.updateFromExecutor(data.task_id, updates);
+    } catch (error) {
+      const current = await this.taskRepo.findById(data.task_id);
+      if (current && isTerminalTaskStatus(current.status)) return current;
+      const request = current?.termination_request;
+      if (current?.status !== TaskStatus.STOPPING || !request) throw error;
+      const quiesced = await this.taskRepo.recordExecutorQuiescence({
+        task_id: data.task_id,
+        requested_at: request.requested_at,
+      });
+      if (!quiesced) {
+        throw new Conflict(`Task ${shortId(data.task_id)} termination state changed`);
+      }
+      return this.acceptExecutorQuiescence(quiesced, params);
+    }
+
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: task,
+      id: task.task_id,
+      params,
+    });
+    this.trackTaskCompleted(task);
+
+    const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
+    if (terminalStatus === TaskStatus.TIMED_OUT) {
+      try {
+        await this.projectTerminalSession(task, terminalStatus, internalParams);
+      } catch (error) {
+        console.warn(
+          `[runner] Failed to project timeout onto session ${shortId(task.session_id)}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return task;
+    }
+    await this.processCompletionSideEffects(task, terminalStatus, internalParams);
     return task;
   }
 
@@ -1398,44 +1513,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async createMany(taskList: Partial<Task>[]): Promise<Task[]> {
     return this.taskRepo.createMany(taskList);
-  }
-
-  /**
-   * Custom method: Complete a task
-   */
-  async complete(id: string, data: TaskCompletionInput, params?: TaskParams): Promise<Task> {
-    // Terminal timing is computed atomically by TaskRepository.update().
-    const completedTask = (await this.patch(
-      id,
-      {
-        status: TaskStatus.COMPLETED,
-        completed_at: new Date().toISOString(),
-        report: data.report,
-        ...(data.model ? { model: data.model } : {}),
-      },
-      params
-    )) as Task;
-
-    // Set the session's ready_for_prompt flag to true when task completes successfully
-    if (completedTask.session_id && this.app) {
-      try {
-        await this.app.service('sessions').patch(
-          completedTask.session_id,
-          {
-            ready_for_prompt: true,
-          },
-          params
-        );
-      } catch (error) {
-        console.error('❌ Failed to set ready_for_prompt flag:', error);
-      }
-    } else {
-      console.warn(
-        `⚠️ Cannot set ready_for_prompt: session_id=${completedTask.session_id}, app=${!!this.app}`
-      );
-    }
-
-    return completedTask;
   }
 
   /**

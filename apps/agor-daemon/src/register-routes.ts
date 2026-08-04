@@ -61,7 +61,6 @@ import type {
   SessionMCPServer,
   StreamingEventType,
   Task,
-  TaskCompletionInput,
   User,
   UUID,
 } from '@agor/core/types';
@@ -2852,27 +2851,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.ADMIN, action: 'import tasks' },
-    },
-    requireAuth
-  );
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/:id/complete',
-    {
-      async create(data: TaskCompletionInput, params: RouteParams) {
-        const id = params.route?.id;
-        if (!id) throw new Error('Task ID required');
-        const internalParams = await authorizeTaskTerminalRoute({
-          id,
-          params,
-          tasksService,
-        });
-        return tasksService.complete(id, data, internalParams);
-      },
-    },
-    {
-      create: { role: ROLES.MEMBER, action: 'complete tasks' },
     },
     requireAuth
   );

@@ -23,23 +23,11 @@ function ctx(overrides: Partial<HookContext>): HookContext {
   } as HookContext;
 }
 
-function taskCompletionCtx(routeTaskId?: string, method = 'create'): HookContext {
-  return ctx({
-    path: 'tasks/:id/complete',
-    method,
-    params: {
-      authentication: { payload },
-      query: {},
-      route: routeTaskId ? { id: routeTaskId } : {},
-      provider: 'socketio',
-    },
-  });
-}
-
 describe('executorRuntimeScopeGuard', () => {
   it.each([
     'connectExecutor',
     'reportTerminationComplete',
+    'reportRunnerResult',
     'reportRuntimeTelemetry',
     'reportSdkHealthFailure',
   ])('accepts scoped %s and rejects a different task', async (method) => {
@@ -67,24 +55,6 @@ describe('executorRuntimeScopeGuard', () => {
 
     await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
     await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
-  });
-
-  it('allows the executor to complete only its scoped task', async () => {
-    const matching = taskCompletionCtx('task-1');
-    const otherTask = taskCompletionCtx('task-2');
-
-    await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
-    await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
-  });
-
-  it('rejects an unscoped or non-create task completion route', async () => {
-    const missingTask = taskCompletionCtx();
-    const wrongMethod = taskCompletionCtx('task-1', 'find');
-
-    await expect(executorRuntimeScopeGuard()(missingTask)).rejects.toThrow(/task scope/);
-    await expect(executorRuntimeScopeGuard()(wrongMethod)).rejects.toThrow(
-      /not valid for this endpoint/
-    );
   });
 
   it('narrows find queries to executor token scope', async () => {

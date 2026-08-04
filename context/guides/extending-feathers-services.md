@@ -350,7 +350,6 @@ registerAuthenticatedRoute(
 - `/sessions/:id/fork` - Fork a session
 - `/sessions/:id/spawn` - Spawn a child session
 - `/sessions/:id/prompt` - Execute a prompt
-- `/tasks/:id/complete` - Complete a task
 
 **What they do right:**
 

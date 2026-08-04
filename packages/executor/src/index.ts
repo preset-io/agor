@@ -24,6 +24,7 @@ import type {
   SessionID,
   Task,
   TaskID,
+  TaskRunnerReport,
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
@@ -32,7 +33,7 @@ import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
-import { completeTaskAfterRuntimeCleanup, tryMarkTaskTerminal } from './terminal-task.js';
+import { reportTaskRunnerResult, tryMarkTaskTerminal } from './terminal-task.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
@@ -69,6 +70,7 @@ export class AgorExecutor {
   private watchdog: SdkWatchdog | null = null;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
+  private runnerReport: TaskRunnerReport | undefined;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -83,7 +85,7 @@ export class AgorExecutor {
     status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
     errorMessage?: string
   ): Promise<void> {
-    if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
+    if (!this.client || this.runnerReport || isDaemonOwnedAbort(this.abortController)) return;
     await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
   }
 
@@ -217,6 +219,9 @@ export class AgorExecutor {
 
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
+    // A runner report already carries its release evidence. The daemon either
+    // consumed quiescence or claimed containment for an unverified cleanup.
+    if (this.runnerReport) return;
     if (!this.terminationReport) {
       const report = this.client
         .service('tasks')
@@ -302,8 +307,14 @@ export class AgorExecutor {
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });
-      if (result?.completion && !this.terminationRequest && !this.abortController.signal.aborted) {
-        await completeTaskAfterRuntimeCleanup(this.client, this.config.taskId, result.completion);
+      if (result?.runnerReport) {
+        this.runnerReport = result.runnerReport;
+        const task = await reportTaskRunnerResult(
+          this.client,
+          this.config.taskId,
+          result.runnerReport
+        );
+        this.handleTaskLifecycleUpdate(task);
       }
     } finally {
       this.watchdog?.stop();

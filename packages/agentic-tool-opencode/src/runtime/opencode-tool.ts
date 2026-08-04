@@ -32,6 +32,7 @@ import {
   createOpenCodeSanitizer,
   type ManagedChild,
   type ManagedOpenCodeServer,
+  OpenCodeCleanupUnverifiedError,
   type OpenCodeSanitizer,
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
@@ -64,7 +65,12 @@ const AGOR_MANAGED_AGENT = 'agor-managed';
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
 
-export class OpenCodePermissionRejectedError extends Error {}
+export class OpenCodePermissionRejectedError extends Error {
+  override name = 'OpenCodePermissionRejectedError';
+}
+export class OpenCodeInteractionTimeoutError extends Error {
+  override name = 'OpenCodeInteractionTimeoutError';
+}
 
 export type RunOpenCodeTurnInput = {
   agorSessionId: SessionID;
@@ -133,6 +139,7 @@ export type OpenCodeCanUseToolCallback = (
     destination: 'session' | 'projectSettings' | 'userSettings' | 'localSettings';
   }>;
   message?: string;
+  timedOut?: boolean;
 }>;
 
 export type OpenCodeToolDependencies = {
@@ -216,6 +223,7 @@ async function applyPermissionEffect(input: {
   const { client, turn, context, effect, canUseTool } = input;
   let response: 'once' | 'always' | 'reject' = 'reject';
   let handledByAgor = false;
+  let interactionTimedOut = false;
 
   if (canUseTool) {
     if (automaticallyAllowsOpenCodePermission(turn.permissionMode, effect.request.permission)) {
@@ -233,6 +241,7 @@ async function applyPermissionEffect(input: {
         );
         response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
       }
+      interactionTimedOut = decision.timedOut === true;
     }
   }
 
@@ -246,6 +255,9 @@ async function applyPermissionEffect(input: {
   });
   if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
   if (response === 'reject') {
+    if (interactionTimedOut) {
+      throw new OpenCodeInteractionTimeoutError('OpenCode permission request timed out');
+    }
     throw handledByAgor
       ? new OpenCodePermissionRejectedError('OpenCode permission was rejected')
       : new Error('OpenCode permission was rejected');
@@ -327,6 +339,9 @@ function createOpenCodeEffectConsumer(input: {
               effect,
               canUseTool: input.canUseTool,
             });
+            break;
+          case 'runtime-activity':
+            input.streamingCallbacks?.onPulse?.('sdk_started', effect.detail);
             break;
           case 'unknown-activity':
             input.streamingCallbacks?.onPulse?.('unknown_activity', 'unknown.event');
@@ -644,7 +659,11 @@ export class OpenCodeTool {
     try {
       await cleanup();
     } catch (error) {
-      turnFailure = sanitizer.error(error);
+      turnFailure = sanitizer.error(
+        new OpenCodeCleanupUnverifiedError(error instanceof Error ? error.message : String(error), {
+          cause: error,
+        })
+      );
     }
 
     if (turnFailure) throw turnFailure;

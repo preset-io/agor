@@ -210,6 +210,29 @@ describe('createCanUseToolCallback', () => {
       );
     });
 
+    it('defers a managed runtime timeout until its outer cleanup report', async () => {
+      const deps = { ...createBaseDeps(), deferTerminalState: true };
+      deps.permissionService.waitForDecision.mockResolvedValue({
+        allow: false,
+        timedOut: true,
+        remember: false,
+        decidedBy: 'system',
+      });
+
+      const callback = createCanUseToolCallback(sessionId, taskId, deps);
+      const result = await callback('Bash', { command: 'ls' }, noopOptions);
+
+      expect(result).toMatchObject({ behavior: 'deny', timedOut: true });
+      expect(deps.tasksService.patch).toHaveBeenCalledWith(taskId, {
+        status: 'awaiting_permission',
+      });
+      expect(deps.tasksService.patch).toHaveBeenCalledTimes(1);
+      expect(deps.sessionsService.patch).not.toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({ status: 'timed_out' })
+      );
+    });
+
     it('always releases the per-session permission lock, even on timeout', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({

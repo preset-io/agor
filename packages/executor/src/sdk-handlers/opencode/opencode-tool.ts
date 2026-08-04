@@ -18,7 +18,10 @@ import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
 
 export {
+  isOpenCodeCleanupUnverifiedError,
   type OpenCodeCanUseToolCallback,
+  OpenCodeCleanupUnverifiedError,
+  OpenCodeInteractionTimeoutError,
   type OpenCodeInvocationConfig,
   OpenCodePermissionRejectedError,
   type OpenCodeStreamingCallbacks,
@@ -95,7 +98,7 @@ export class OpenCodeTool extends OpenCodeRuntime {
             permissionLocks,
             mcpServerRepo,
             sessionMCPRepo,
-            deferDeniedTerminalState: true,
+            deferTerminalState: true,
           });
         }),
       cancelPendingPermissions:

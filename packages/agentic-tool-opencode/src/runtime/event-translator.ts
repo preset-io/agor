@@ -7,6 +7,7 @@ export type OpenCodeEventEffect =
   | { type: 'text-delta'; delta: string }
   | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-activity'; tool: string; status: string }
+  | { type: 'runtime-activity'; detail: string }
   | {
       type: 'permission';
       request: {
@@ -43,6 +44,10 @@ function string(value: unknown): string | undefined {
 
 function number(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function compatibilityFailure(event: string): OpenCodeEventEffect[] {
+  return [{ type: 'error', message: `Unsupported OpenCode control event: ${event}` }];
 }
 
 export function createOpenCodeEventTranslator(input: {
@@ -136,7 +141,7 @@ export function createOpenCodeEventTranslator(input: {
     if (string(properties.sessionID) !== input.sessionId) return [];
     const id = string(properties.id);
     const permissionName = string(shape === 'asked' ? properties.permission : properties.type);
-    if (!id || !permissionName) return [];
+    if (!id || !permissionName) return compatibilityFailure(`permission.${shape}`);
     const patternValue = shape === 'asked' ? properties.patterns : properties.pattern;
     const patterns = Array.isArray(patternValue)
       ? patternValue.filter((value): value is string => typeof value === 'string')
@@ -160,9 +165,13 @@ export function createOpenCodeEventTranslator(input: {
     properties: RecordValue,
     type: 'status' | 'idle'
   ): OpenCodeEventEffect[] => {
-    if (string(properties.sessionID) !== input.sessionId || !activeAssistantSeen) return [];
+    if (string(properties.sessionID) !== input.sessionId) return [];
     const status = type === 'idle' ? 'idle' : string(record(properties.status)?.type);
-    return status === 'idle' ? [{ type: 'idle' }] : [];
+    if (status === 'idle') return activeAssistantSeen ? [{ type: 'idle' }] : [];
+    if (status === 'busy' || status === 'retry') {
+      return [{ type: 'runtime-activity', detail: `session.status.${status}` }];
+    }
+    return compatibilityFailure(`session.status.${status ?? 'missing'}`);
   };
 
   const sessionError = (properties: RecordValue): OpenCodeEventEffect[] => {
@@ -195,7 +204,15 @@ export function createOpenCodeEventTranslator(input: {
         string(properties.sessionID) ??
         string(record(properties.info)?.sessionID) ??
         string(record(properties.part)?.sessionID);
-      return sessionId === input.sessionId ? [{ type: 'unknown-activity' }] : [];
+      if (sessionId !== input.sessionId) return [];
+      if (
+        type.startsWith('permission.') ||
+        type.startsWith('question.') ||
+        /^session\.(?:completed|failed|aborted|cancelled)$/.test(type)
+      ) {
+        return compatibilityFailure(type);
+      }
+      return [{ type: 'unknown-activity' }];
     },
   };
 }

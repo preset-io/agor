@@ -763,6 +763,7 @@ describe('OpenCodeTool managed turn', () => {
         timedOut: true,
       },
       status: 'timed_out',
+      error: 'OpenCode permission request timed out',
     },
     {
       name: 'cancellation',
@@ -774,10 +775,11 @@ describe('OpenCodeTool managed turn', () => {
         reason: 'Cancelled',
       },
       status: 'denied',
+      error: 'OpenCode permission was rejected',
     },
   ])(
     'maps $name to reject and patches the existing request state',
-    async ({ decision, status }) => {
+    async ({ decision, status, error }) => {
       const scenario = makePermissionTurn({
         decision: {
           requestId: 'agor-request',
@@ -786,9 +788,7 @@ describe('OpenCodeTool managed turn', () => {
         },
       });
 
-      await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(
-        'OpenCode permission was rejected'
-      );
+      await expect(scenario.tool.runTurn(scenario.turnInput)).rejects.toThrow(error);
       expect(scenario.client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith(
         expect.objectContaining({ body: { response: 'reject' } })
       );
@@ -970,6 +970,7 @@ describe('OpenCodeTool managed turn', () => {
 
     expect(rejection).toBeInstanceOf(Error);
     expect(rejection).not.toBe(rawCleanupError);
+    expect((rejection as Error).name).toBe('OpenCodeCleanupUnverifiedError');
     expect(inspect(rejection, { depth: null })).not.toContain('mcp-secret');
     expect(child.kills).toEqual(['SIGTERM']);
   });
@@ -1003,9 +1004,10 @@ describe('OpenCodeTool managed turn', () => {
       shutdownTimeoutMs: 5,
     });
 
-    await expect(tool.runTurn(input())).rejects.toThrow(
-      'OpenCode event collector did not settle within the shutdown timeout'
-    );
+    await expect(tool.runTurn(input())).rejects.toMatchObject({
+      name: 'OpenCodeCleanupUnverifiedError',
+      message: 'OpenCode event collector did not settle within the shutdown timeout',
+    });
     expect(child.kills).toEqual(['SIGTERM']);
   });
 
@@ -1788,9 +1790,10 @@ describe('OpenCodeTool managed turn', () => {
     const { tool } = makeTool({ client, child, shutdownTimeoutMs: 1, permissionService });
 
     try {
-      await expect(tool.runTurn(input({ signal: abortController.signal }))).rejects.toThrow(
-        'OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup'
-      );
+      await expect(tool.runTurn(input({ signal: abortController.signal }))).rejects.toMatchObject({
+        name: 'OpenCodeCleanupUnverifiedError',
+        message: 'OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup',
+      });
       expect(unhandled).toEqual([]);
       expect(client.session.abort).toHaveBeenCalledOnce();
       expect(permissionService.cancelPendingRequests).toHaveBeenCalledOnce();

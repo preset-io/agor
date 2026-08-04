@@ -51,7 +51,7 @@ import type {
   Session,
   SessionUpdate,
   Task,
-  TaskCompletionInput,
+  TaskRunnerReportInput,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
@@ -173,9 +173,6 @@ export interface TasksClientHelpers {
    * and queues the task atomically).
    */
   run(taskId: string, options?: TaskRunOptions): Promise<Task>;
-
-  /** Settle a successfully cleaned-up executor task through the authenticated route. */
-  complete(taskId: string, data: TaskCompletionInput, params?: Params): Promise<Task>;
 }
 
 /**
@@ -393,6 +390,8 @@ export interface TasksService extends AgorService<Task> {
     data: import('../types/task').ExecutorTerminationCompleteInput,
     params?: Params
   ): Promise<Task>;
+  /** Report the runner's turn result and cooperative cleanup evidence. */
+  reportRunnerResult(data: TaskRunnerReportInput, params?: Params): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
@@ -979,6 +978,7 @@ function extendTasksService(client: AgorClient): void {
     tasksService.methods(
       'connectExecutor',
       'reportTerminationComplete',
+      'reportRunnerResult',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure'
     );
@@ -1043,10 +1043,6 @@ function extendTasksHelpers(client: AgorClient): void {
       const response = await client
         .service(`tasks/${taskId}/run`)
         .create(requestOptions as TaskRunRequest, params);
-      return response as Task;
-    },
-    complete: async (taskId: string, data: TaskCompletionInput, params?: Params) => {
-      const response = await client.service(`tasks/${taskId}/complete`).create(data, params);
       return response as Task;
     },
   };

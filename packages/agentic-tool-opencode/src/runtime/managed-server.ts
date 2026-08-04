@@ -15,6 +15,14 @@ const READINESS_POLL_INTERVAL_MS = 25;
 const HEALTH_REQUEST_TIMEOUT_MS = 500;
 const MAX_STARTUP_OUTPUT = 4_096;
 
+export class OpenCodeCleanupUnverifiedError extends Error {
+  override name = 'OpenCodeCleanupUnverifiedError';
+}
+
+export function isOpenCodeCleanupUnverifiedError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError';
+}
+
 export type ManagedChild = {
   stdout: NodeJS.ReadableStream | null;
   stderr: NodeJS.ReadableStream | null;
@@ -256,7 +264,9 @@ function createBoundedClose(child: ManagedChild, shutdownTimeoutMs: number): () 
       if (await settlesWithin(exited, shutdownTimeoutMs)) return;
       child.kill('SIGKILL');
       if (!(await settlesWithin(exited, shutdownTimeoutMs))) {
-        throw new Error('OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup');
+        throw new OpenCodeCleanupUnverifiedError(
+          'OpenCode server did not exit after bounded SIGTERM/SIGKILL cleanup'
+        );
       }
     })();
     return closePromise;
@@ -455,7 +465,12 @@ export async function startManagedOpenCodeServer(
       await close();
     } catch (closeError) {
       throw sanitizer.error(
-        new AggregateError([error, closeError], 'OpenCode startup and cleanup both failed')
+        new OpenCodeCleanupUnverifiedError('OpenCode startup cleanup could not be verified', {
+          cause: new AggregateError(
+            [error, closeError],
+            'OpenCode startup and cleanup both failed'
+          ),
+        })
       );
     }
     throw sanitizer.error(error);

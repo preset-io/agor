@@ -9,9 +9,11 @@ export {
 export {
   createOpenCodeSanitizer,
   ensureOpenCodeDataHome,
+  isOpenCodeCleanupUnverifiedError,
   type ManagedChild,
   type ManagedOpenCodeServer,
   OPENCODE_VERSION,
+  OpenCodeCleanupUnverifiedError,
   type OpenCodeSanitizer,
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
@@ -19,6 +21,7 @@ export {
 } from './managed-server.js';
 export {
   type OpenCodeCanUseToolCallback,
+  OpenCodeInteractionTimeoutError,
   type OpenCodeInvocationConfig,
   OpenCodePermissionRejectedError,
   type OpenCodeStreamingCallbacks,

@@ -142,11 +142,16 @@ silently substitutes another model.
 ### Runtime
 
 The runtime adapter reports a normalized outcome and cooperative cleanup
-evidence:
+evidence without speaking durable Task statuses:
 
 ```ts
-execute(context): Promise<NormalizedTurnOutcome>
-abort(context): Promise<QuiescenceResult>
+interface TaskRunnerReport {
+  turn:
+    | { outcome: 'success'; model?: string }
+    | { outcome: 'failure'; error_message: string }
+    | { outcome: 'interaction_timeout'; error_message: string };
+  cleanup: { outcome: 'quiesced' } | { outcome: 'unverified'; reason: string };
+}
 ```
 
 The concrete TypeScript shape may reuse the existing executor runner while the
@@ -176,11 +181,21 @@ lifecycle. The daemon supplies authorized context, the selected adapter parses
 its opaque request, and the transport remains unaware of tool-specific
 protocols.
 
-For OpenCode, the runtime handler returns completion facts only after managed
-cleanup. The executor's top-level finalizer then asks the daemon-owned Task
-service to settle the durable Task. Runtime failures likewise unwind through
-the executor fail-safe or the daemon termination coordinator rather than being
-patched terminal inside the OpenCode adapter.
+For OpenCode, every expected exit returns one runner report after managed
+cleanup. The authenticated executor submits it through the generic Task service.
+The daemon maps a quiesced success, failure, or interaction timeout to the
+durable terminal Task state. Unverified cleanup instead enters the existing
+termination coordinator and keeps the Task `stopping` until containment is
+verified. A termination request that wins the race consumes a quiesced runner
+report as cooperative release evidence rather than allowing the turn result to
+overwrite the winning cause.
+
+This is the focused #2078 slice of the desired
+[task runtime architecture](https://github.com/preset-io/agor/pull/2090): the
+existing executor is the `TaskRunner`, the Task service plus termination
+coordinator form the current `TaskController`, and existing completion side
+effects remain the incremental `SessionReconciler` seam. This PR does not add
+three framework classes or a second lifecycle.
 
 ### Authentication and model catalogs
 
@@ -280,10 +295,8 @@ service registration and hook files do not name OpenCode.
 Interactive executor commands use one generic bounded JSON-lines transport.
 The transport only frames payloads, events, and control messages; the
 OpenCode command adapter owns OAuth payload validation and event semantics.
-This separation is compatible with the proposed
-[task runtime architecture](https://github.com/preset-io/agor/pull/2090): Task
-execution still settles through the host finalizer and daemon containment,
-while auxiliary operations remain bounded non-Task commands.
+This separation preserves the TaskRunner boundary above: auxiliary operations
+remain bounded non-Task commands and never submit runner reports.
 
 ## Native-state and concurrency contract
 
@@ -319,6 +332,11 @@ containment work:
 - core default-permission selection and permission-mode mapping;
 - executor normalizer selection and the watchdog's native heartbeat filter; and
 - host-owned static presentation such as bundled tool artwork.
+
+The wider runtime migration also still needs stable identities for parallel
+tool/background operations, adoption of the runner report by legacy runners,
+and crash-repairable Session/gateway consequence reconciliation. Those are
+shared host changes from #2090, not OpenCode package behavior.
 
 They are not extension points for new OpenCode behavior. Migrate each only when
 its host contract can express the behavior for every affected tool without

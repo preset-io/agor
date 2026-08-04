@@ -16,11 +16,7 @@
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgorClient } from './services/feathers-client.js';
-import {
-  completeTaskAfterRuntimeCleanup,
-  TERMINAL_STATUSES,
-  tryMarkTaskTerminal,
-} from './terminal-task.js';
+import { reportTaskRunnerResult, TERMINAL_STATUSES, tryMarkTaskTerminal } from './terminal-task.js';
 
 type TaskShape = { task_id: string; status: TaskStatus };
 
@@ -29,43 +25,43 @@ interface MockTaskService {
   patch: ReturnType<
     typeof vi.fn<(id: string, data: Record<string, unknown>) => Promise<TaskShape>>
   >;
-}
-
-type MockTaskHelpers = {
-  complete: ReturnType<
-    typeof vi.fn<(id: string, data: Record<string, unknown>) => Promise<TaskShape>>
+  reportRunnerResult: ReturnType<
+    typeof vi.fn<(data: Record<string, unknown>) => Promise<TaskShape>>
   >;
-};
+}
 
 function makeClient(currentStatus: TaskStatus): {
   client: AgorClient;
   tasks: MockTaskService;
-  taskHelpers: MockTaskHelpers;
 } {
   const tasks: MockTaskService = {
     get: vi.fn(async (id: string) => ({ task_id: id, status: currentStatus })),
     patch: vi.fn(async (id: string) => ({ task_id: id, status: currentStatus })),
-  };
-  const taskHelpers: MockTaskHelpers = {
-    complete: vi.fn(async (id: string) => ({ task_id: id, status: TaskStatus.COMPLETED })),
+    reportRunnerResult: vi.fn(async (data) => ({
+      task_id: String(data.task_id),
+      status: TaskStatus.COMPLETED,
+    })),
   };
   const client = {
-    tasks: taskHelpers,
     service: vi.fn((name: string) => {
       if (name !== 'tasks') throw new Error(`unexpected service: ${name}`);
       return tasks;
     }),
   } as unknown as AgorClient;
-  return { client, tasks, taskHelpers };
+  return { client, tasks };
 }
 
-describe('completeTaskAfterRuntimeCleanup', () => {
-  it('delegates successful terminal settlement to the daemon task finalizer', async () => {
-    const { client, tasks, taskHelpers } = makeClient(TaskStatus.RUNNING);
+describe('reportTaskRunnerResult', () => {
+  it('delegates turn and cleanup evidence to the daemon release gate', async () => {
+    const { client, tasks } = makeClient(TaskStatus.RUNNING);
+    const report = {
+      turn: { outcome: 'success' as const, model: 'provider/model' },
+      cleanup: { outcome: 'quiesced' as const },
+    };
 
-    await completeTaskAfterRuntimeCleanup(client, 't1', { model: 'provider/model' });
+    await reportTaskRunnerResult(client, 't1', report);
 
-    expect(taskHelpers.complete).toHaveBeenCalledWith('t1', { model: 'provider/model' });
+    expect(tasks.reportRunnerResult).toHaveBeenCalledWith({ task_id: 't1', ...report });
     expect(tasks.patch).not.toHaveBeenCalled();
   });
 });

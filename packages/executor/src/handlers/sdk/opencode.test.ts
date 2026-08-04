@@ -13,7 +13,17 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../sdk-handlers/opencode/index.js', () => ({
-  OpenCodePermissionRejectedError: class extends Error {},
+  isOpenCodeCleanupUnverifiedError: (error: unknown) =>
+    error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError',
+  OpenCodeCleanupUnverifiedError: class extends Error {
+    override name = 'OpenCodeCleanupUnverifiedError';
+  },
+  OpenCodeInteractionTimeoutError: class extends Error {
+    override name = 'OpenCodeInteractionTimeoutError';
+  },
+  OpenCodePermissionRejectedError: class extends Error {
+    override name = 'OpenCodePermissionRejectedError';
+  },
   OpenCodeTool: class {
     constructor(deps: unknown) {
       mocks.toolDeps = deps;
@@ -96,7 +106,7 @@ describe('executeOpenCodeTask', () => {
     mocks.messagesFindBySession.mockResolvedValue([{}, {}]);
   });
 
-  it('rejects a legacy missing pair before branch, message, or runtime side effects', async () => {
+  it('reports a legacy missing pair before branch, message, or runtime side effects', async () => {
     const { client, services } = createClient([]);
     services.sessions.get.mockResolvedValueOnce({
       session_id: '00000000-0000-7000-8000-000000000001',
@@ -105,16 +115,24 @@ describe('executeOpenCodeTask', () => {
       model_config: null,
     } as never);
 
-    await expect(
-      executeOpenCodeTask({
-        client: client as never,
-        sessionId: '00000000-0000-7000-8000-000000000001' as never,
-        taskId: '00000000-0000-7000-8000-000000000002' as never,
-        prompt: 'Do not run',
-        abortController: new AbortController(),
-        agenticToolContext: { dataHome: '/opaque/opencode-home' },
-      })
-    ).rejects.toThrow(/select.*provider.*model/i);
+    const result = await executeOpenCodeTask({
+      client: client as never,
+      sessionId: '00000000-0000-7000-8000-000000000001' as never,
+      taskId: '00000000-0000-7000-8000-000000000002' as never,
+      prompt: 'Do not run',
+      abortController: new AbortController(),
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
+    });
+
+    expect(result).toEqual({
+      runnerReport: {
+        turn: {
+          outcome: 'failure',
+          error_message: expect.stringMatching(/select.*provider.*model/i),
+        },
+        cleanup: { outcome: 'quiesced' },
+      },
+    });
 
     expect(mocks.branchFind).not.toHaveBeenCalled();
     expect(mocks.messagesFindBySession).not.toHaveBeenCalled();
@@ -216,7 +234,12 @@ describe('executeOpenCodeTask', () => {
         tool_uses: [{ id: 'call-1', name: 'bash', input: { command: 'pwd' } }],
       })
     );
-    expect(execution).toEqual({ completion: { model: 'openai/gpt-test' } });
+    expect(execution).toEqual({
+      runnerReport: {
+        turn: { outcome: 'success', model: 'openai/gpt-test' },
+        cleanup: { outcome: 'quiesced' },
+      },
+    });
     expect(services.tasks.patch).not.toHaveBeenCalled();
   });
 
@@ -321,18 +344,70 @@ describe('executeOpenCodeTask', () => {
       order.push('managed cleanup settled');
       throw new OpenCodePermissionRejectedError('OpenCode permission was rejected');
     });
-    await expect(
-      executeOpenCodeTask({
-        client: client as never,
-        sessionId: '00000000-0000-7000-8000-000000000001' as never,
-        taskId: '00000000-0000-7000-8000-000000000002' as never,
-        prompt: 'Needs permission',
-        abortController: new AbortController(),
-        agenticToolContext: { dataHome: '/opaque/opencode-home' },
-      })
-    ).rejects.toThrow('OpenCode permission was rejected');
+    const result = await executeOpenCodeTask({
+      client: client as never,
+      sessionId: '00000000-0000-7000-8000-000000000001' as never,
+      taskId: '00000000-0000-7000-8000-000000000002' as never,
+      prompt: 'Needs permission',
+      abortController: new AbortController(),
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
+    });
 
+    expect(result).toEqual({
+      runnerReport: {
+        turn: {
+          outcome: 'failure',
+          error_message: 'OpenCode permission was rejected',
+        },
+        cleanup: { outcome: 'quiesced' },
+      },
+    });
     expect(services.tasks.patch).not.toHaveBeenCalled();
     expect(order).toEqual(['managed cleanup settled']);
+  });
+
+  it.each([
+    {
+      name: 'interaction timeout',
+      errorName: 'OpenCodeInteractionTimeoutError',
+      message: 'OpenCode permission request timed out',
+      turn: {
+        outcome: 'interaction_timeout',
+        error_message: 'OpenCode permission request timed out',
+      },
+      cleanup: { outcome: 'quiesced' },
+    },
+    {
+      name: 'unverified cleanup',
+      errorName: 'OpenCodeCleanupUnverifiedError',
+      message: 'OpenCode runtime cleanup could not be verified',
+      turn: {
+        outcome: 'failure',
+        error_message: 'OpenCode runtime cleanup could not be verified',
+      },
+      cleanup: {
+        outcome: 'unverified',
+        reason: 'OpenCode runtime cleanup could not be verified',
+      },
+    },
+  ])('normalizes $name without patching durable task state', async (scenario) => {
+    const { client, services } = createClient([]);
+    const error = new Error(scenario.message);
+    error.name = scenario.errorName;
+    mocks.runTurn.mockRejectedValueOnce(error);
+
+    const result = await executeOpenCodeTask({
+      client: client as never,
+      sessionId: '00000000-0000-7000-8000-000000000001' as never,
+      taskId: '00000000-0000-7000-8000-000000000002' as never,
+      prompt: 'Needs permission',
+      abortController: new AbortController(),
+      agenticToolContext: { dataHome: '/opaque/opencode-home' },
+    });
+
+    expect(result).toEqual({
+      runnerReport: { turn: scenario.turn, cleanup: scenario.cleanup },
+    });
+    expect(services.tasks.patch).not.toHaveBeenCalled();
   });
 });

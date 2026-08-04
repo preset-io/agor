@@ -33,7 +33,7 @@ import type {
   Session,
   SessionUpdate,
   Task,
-  TaskCompletionInput,
+  TaskRunnerReportInput,
 } from '@agor/core/types';
 import type {
   ExecuteTaskData,
@@ -146,6 +146,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,
     params?: FeathersParams
   ): Promise<Task>;
+  reportRunnerResult(data: TaskRunnerReportInput, params?: FeathersParams): Promise<Task>;
   recordExecutorStartupWarning(
     taskId: string,
     warning: string,
@@ -155,7 +156,6 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
-  complete(id: string, data: TaskCompletionInput, params?: FeathersParams): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;

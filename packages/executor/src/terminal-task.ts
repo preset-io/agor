@@ -5,8 +5,8 @@
  * the top-level catch in `AgorExecutor.start()`, the SIGTERM/SIGINT
  * shutdown handler, the `uncaughtException` handler, and the
  * `unhandledRejection` handler. Legacy SDK handlers still write their normal
- * terminal payloads. Runtime adapters that return completion facts are
- * finalized here only after their cleanup has settled. In either case,
+ * terminal payloads. Runtime adapters that return a runner report are
+ * finalized here through the daemon-owned release gate. In either case,
  * fail-safe paths must NOT redundantly emit a second `'patched'` event —
  * that's the bug the UI saw as "chime plays twice".
  *
@@ -15,16 +15,16 @@
  * import from the file that bootstraps the executor.
  */
 import { shortId } from '@agor/core/db';
-import type { Task, TaskCompletionInput } from '@agor/core/types';
+import type { Task, TaskRunnerReport } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
-export async function completeTaskAfterRuntimeCleanup(
+export async function reportTaskRunnerResult(
   client: AgorClient,
   taskId: string,
-  data: TaskCompletionInput
-): Promise<void> {
-  await client.tasks.complete(taskId, data);
+  report: TaskRunnerReport
+): Promise<Task> {
+  return client.service('tasks').reportRunnerResult({ task_id: taskId, ...report });
 }
 
 /**
