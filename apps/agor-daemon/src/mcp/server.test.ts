@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
@@ -8,16 +7,6 @@ import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
-
-it('debugs routine MCP transport expiry while warning on capacity eviction', () => {
-  const source = readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
-  expect(source).toMatch(
-    /console\.debug\(`MCP streamable HTTP session expired: \$\{mcpSessionId\}`\);/
-  );
-  expect(source).toMatch(
-    /console\.warn\(`⚠️ {2}MCP streamable HTTP session limit reached; evicting \$\{oldestId\}`\);/
-  );
-});
 
 function testSqliteDb() {
   // Tenant scopes are transaction-free on SQLite. The MCP route tests mock the
@@ -494,6 +483,58 @@ describe('POST /mcp with personal API keys', () => {
     const parsed = parseMcpResponse(await resp.text());
     return { resp, parsed };
   }
+
+  it('debugs routine stateful MCP transport expiry without warning', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const mcpSessionId = await initializeStatefulMcp(baseUrl);
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      await markStatefulMcpInitialized(baseUrl, mcpSessionId);
+      const ttlTimerCall = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30 * 60 * 1000);
+      setTimeoutSpy.mockRestore();
+      if (!ttlTimerCall || typeof ttlTimerCall[0] !== 'function') {
+        throw new Error('stateful MCP transport TTL was not re-armed');
+      }
+
+      const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      ttlTimerCall[0]();
+
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(debug).toHaveBeenCalledWith(`MCP streamable HTTP session expired: ${mcpSessionId}`);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it('warns exactly when stateful MCP transport capacity evicts the oldest session', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+
+    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
+      const sessionIds: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        sessionIds.push(await initializeStatefulMcp(baseUrl));
+      }
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await initializeStatefulMcp(baseUrl);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        `⚠️  MCP streamable HTTP session limit reached; evicting ${sessionIds[0]}`
+      );
+    });
+  });
 
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
