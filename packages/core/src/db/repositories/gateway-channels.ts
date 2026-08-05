@@ -18,6 +18,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
+  isAgenticToolDefaultConfigurationReference,
   prefixToLikePattern,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
@@ -209,6 +210,7 @@ export class GatewayChannelRepository
               ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
               presetId:
                 (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
+                (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
                 undefined,
             } as PersistedGatewayAgenticConfig)
           : null,
@@ -232,7 +234,14 @@ export class GatewayChannelRepository
       throw new RepositoryError('GatewayChannel must have a created_by');
     }
 
-    const { presetId: _presetId, ...storedAgenticConfig } = data.agentic_config ?? {};
+    const presetId = data.agentic_config?.presetId;
+    const storesDefaultReference = Boolean(
+      presetId && isAgenticToolDefaultConfigurationReference(presetId)
+    );
+    const { presetId: _presetId, ...agenticConfigWithoutPreset } = data.agentic_config ?? {};
+    const storedAgenticConfig = storesDefaultReference
+      ? (data.agentic_config ?? {})
+      : agenticConfigWithoutPreset;
     const encryptedAgenticConfig = encryptAgenticConfig(
       Object.keys(storedAgenticConfig).length > 0
         ? (storedAgenticConfig as unknown as Record<string, unknown>)
@@ -253,7 +262,7 @@ export class GatewayChannelRepository
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
       agentic_config: encryptedAgenticConfig,
-      agentic_tool_preset_id: data.agentic_config?.presetId ?? null,
+      agentic_tool_preset_id: storesDefaultReference ? null : (presetId ?? null),
       mcp_server_ids: data.mcp_server_ids ?? null,
     };
   }

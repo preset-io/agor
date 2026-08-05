@@ -131,6 +131,15 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const storedExecutionOwner = editingSchedule?.created_by
+    ? userById.get(editingSchedule.created_by)
+    : undefined;
+  const executionOwner =
+    !editingSchedule?.created_by || editingSchedule.created_by === currentUser?.user_id
+      ? currentUser
+      : storedExecutionOwner?.user_id === editingSchedule.created_by
+        ? storedExecutionOwner
+        : null;
 
   const fetchSchedules = useCallback(async () => {
     if (!client) return;
@@ -458,11 +467,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         schedule={editingSchedule}
         mcpServerById={mcpServerById}
         client={client}
-        executionOwner={
-          !editingSchedule?.created_by || editingSchedule.created_by === currentUser?.user_id
-            ? currentUser
-            : (userById.get(editingSchedule.created_by) ?? null)
-        }
+        executionOwner={executionOwner}
         currentUser={currentUser}
         onSaved={() => fetchSchedules()}
       />

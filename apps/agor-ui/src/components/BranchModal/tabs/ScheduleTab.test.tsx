@@ -136,4 +136,21 @@ describe('ScheduleTab compact list', () => {
       executionOwner: expectedOwnerId ? owner : null,
     });
   });
+
+  it('keeps a different-owner editor fail-closed for stale or caller-only user state', async () => {
+    const caller = { user_id: 'caller', email: 'caller@example.com' } as User;
+    const staleOwner = { user_id: 'stale-owner', email: 'stale@example.com' } as User;
+    renderScheduleTab({
+      schedules: [makeSchedule({ created_by: 'owner' })],
+      currentUser: caller,
+      userById: new Map([
+        ['caller', caller],
+        ['owner', staleOwner],
+      ]),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
+
+    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
+  });
 });

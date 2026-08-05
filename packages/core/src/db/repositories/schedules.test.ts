@@ -8,16 +8,24 @@
  *   - basic CRUD round-trip + agentic_tool_config jsonb/text roundtrip
  */
 
+import { normalizePersistedScheduleAgenticToolConfig } from '@agor/core/config';
 import {
+  type AgenticToolPresetID,
   type BranchID,
+  type PersistedScheduleAgenticToolConfig,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
+  type UserID,
   type UUID,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { select, update } from '../database-wrapper';
+import { schedules } from '../schema';
 import { dbTest } from '../test-helpers';
+import { AgenticToolPresetRepository } from './agentic-tool-presets';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
@@ -135,6 +143,94 @@ describe('ScheduleRepository.create + findById', () => {
     // agentic_tool_config round-trips through text/jsonb cleanly
     expect(fetched?.agentic_tool_config).toEqual({ agentic_tool: 'claude-code' });
     expect(fetched?.mcp_server_ids).toEqual(['mcp-one', 'mcp-two']);
+  });
+
+  for (const [storedReference, canonicalReference] of [
+    [USER_DEFAULT_AGENTIC_CONFIGURATION, USER_DEFAULT_AGENTIC_CONFIGURATION],
+    [WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION],
+    ['___workspace_default___', WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION],
+  ] as const) {
+    dbTest(
+      `reads and updates a raw legacy ${storedReference} row without moving it into the preset FK`,
+      async ({ db }) => {
+        const ctx = await setupContext(db);
+        const created = await ctx.scheduleRepo.create({
+          ...scheduleData(),
+          branch_id: ctx.branchId,
+          created_by: ctx.userId,
+        });
+        const storedConfig = {
+          agentic_tool: 'codex',
+          preset_id: storedReference,
+          context_files: ['AGENTS.md'],
+          model_config: { mode: 'exact', model: 'gpt-5.4' },
+        } as unknown as PersistedScheduleAgenticToolConfig;
+
+        await update(db, schedules)
+          .set({ agentic_tool_config: storedConfig, agentic_tool_preset_id: null })
+          .where(eq(schedules.schedule_id, created.schedule_id))
+          .run();
+
+        const read = await ctx.scheduleRepo.findById(created.schedule_id);
+        expect(read?.agentic_tool_config).toEqual(storedConfig);
+
+        const updated = await ctx.scheduleRepo.update(created.schedule_id, { name: 'updated' });
+        expect(updated.agentic_tool_config).toEqual(storedConfig);
+        expect(normalizePersistedScheduleAgenticToolConfig(updated.agentic_tool_config)).toEqual({
+          agentic_tool: 'codex',
+          configuration_reference: canonicalReference,
+          context_files: ['AGENTS.md'],
+          model_config: { mode: 'exact', model: 'gpt-5.4' },
+        });
+
+        const raw = await select(db)
+          .from(schedules)
+          .where(eq(schedules.schedule_id, created.schedule_id))
+          .one();
+        expect(raw?.agentic_tool_preset_id).toBeNull();
+        expect(raw?.agentic_tool_config).toEqual(storedConfig);
+      }
+    );
+  }
+
+  dbTest('prefers a non-null preset FK without dropping the stored snapshot', async ({ db }) => {
+    const ctx = await setupContext(db);
+    const preset = await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'codex',
+        name: 'Canonical preset',
+        configuration: { modelConfig: { mode: 'exact', model: 'gpt-5.4' } },
+      },
+      ctx.userId as UserID
+    );
+    const created = await ctx.scheduleRepo.create({
+      ...scheduleData(),
+      branch_id: ctx.branchId,
+      created_by: ctx.userId,
+    });
+    await update(db, schedules)
+      .set({
+        agentic_tool_config: {
+          agentic_tool: 'codex',
+          preset_id: USER_DEFAULT_AGENTIC_CONFIGURATION,
+          context_files: ['AGENTS.md'],
+          model_config: { mode: 'exact', model: 'snapshot-model' },
+        },
+        agentic_tool_preset_id: preset.preset_id,
+      })
+      .where(eq(schedules.schedule_id, created.schedule_id))
+      .run();
+
+    const read = await ctx.scheduleRepo.findById(created.schedule_id);
+    expect(read?.agentic_tool_config).toEqual({
+      agentic_tool: 'codex',
+      preset_id: preset.preset_id as AgenticToolPresetID,
+      context_files: ['AGENTS.md'],
+      model_config: { mode: 'exact', model: 'snapshot-model' },
+    });
+
+    const updated = await ctx.scheduleRepo.update(created.schedule_id, { name: 'updated' });
+    expect(updated.agentic_tool_config).toEqual(read?.agentic_tool_config);
   });
 
   dbTest('rejects schedule without required fields', async ({ db }) => {

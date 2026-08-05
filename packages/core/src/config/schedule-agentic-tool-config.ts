@@ -22,7 +22,7 @@ export class InvalidScheduleAgenticToolConfigError extends Error {
   }
 }
 
-function normalizeDefaultReference(reference: string) {
+export function normalizeScheduleAgenticToolDefaultReference(reference: string) {
   return (
     normalizeAgenticToolDefaultConfigurationReference(reference) ??
     (reference === LEGACY_WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
@@ -49,7 +49,7 @@ export function normalizePersistedScheduleAgenticToolConfig(
     );
   }
   const normalizedReference = config.configuration_reference
-    ? normalizeDefaultReference(config.configuration_reference)
+    ? normalizeScheduleAgenticToolDefaultReference(config.configuration_reference)
     : undefined;
   if (config.configuration_reference && !normalizedReference) {
     throw new InvalidScheduleAgenticToolConfigError(
@@ -57,7 +57,7 @@ export function normalizePersistedScheduleAgenticToolConfig(
     );
   }
   const normalizedPresetReference = config.preset_id
-    ? normalizeDefaultReference(config.preset_id)
+    ? normalizeScheduleAgenticToolDefaultReference(config.preset_id)
     : undefined;
   const configurationReference = normalizedReference ?? normalizedPresetReference;
   const { preset_id: _presetId, ...snapshot } = config;
@@ -87,7 +87,9 @@ export function normalizeScheduleAgenticToolConfig(
         'Default-backed schedules cannot contain a preset or inline overrides'
       );
     }
-    const reference = normalizeDefaultReference(config.configuration_reference as string);
+    const reference = normalizeScheduleAgenticToolDefaultReference(
+      config.configuration_reference as string
+    );
     if (!reference) {
       throw new InvalidScheduleAgenticToolConfigError(
         `Invalid default configuration reference: ${String(config.configuration_reference)}`
@@ -122,7 +124,7 @@ export function normalizeScheduleAgenticToolConfig(
       'Preset-backed schedules cannot contain inline overrides'
     );
   }
-  const reference = normalizeDefaultReference(config.preset_id as string);
+  const reference = normalizeScheduleAgenticToolDefaultReference(config.preset_id as string);
   if (!reference) {
     return {
       agentic_tool: config.agentic_tool,

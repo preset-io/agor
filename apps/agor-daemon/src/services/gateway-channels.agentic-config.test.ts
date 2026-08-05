@@ -1,16 +1,25 @@
 import {
+  AgenticToolPresetRepository,
   BranchRepository,
+  eq,
   GatewayChannelRepository,
+  gatewayChannels,
   generateId,
+  isEncrypted,
   RepoRepository,
+  select,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { BranchID, GatewayChannel, UUID } from '@agor/core/types';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { GatewayChannelsService } from './gateway-channels';
+
+beforeAll(() => {
+  process.env.AGOR_MASTER_SECRET ||= 'gateway-channel-agentic-config-test-secret';
+});
 
 describe('GatewayChannelsService exact agentic configuration', () => {
   it('rejects My default when execution-owner alignment is unstable', async () => {
@@ -58,6 +67,91 @@ describe('GatewayChannelsService exact agentic configuration', () => {
         updated_at: expect.any(String),
       },
     });
+  });
+
+  dbTest('round-trips a stable-owner My default create outside the preset FK', async ({ db }) => {
+    const { data, owner } = await channelData(db, true);
+    const created = await new GatewayChannelsService(db).create(
+      {
+        ...data,
+        agentic_config: {
+          agent: 'opencode',
+          presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+          envVars: [{ key: 'TOKEN', value: 'secret-value', forceOverride: false }],
+        },
+      },
+      { user: owner } as never
+    );
+
+    expect(created.agentic_config).toMatchObject({
+      presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      envVars: [{ key: 'TOKEN', value: 'secret-value', forceOverride: false }],
+    });
+    const raw = await select(db)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, created.id))
+      .one();
+    const stored = raw?.agentic_config as Record<string, unknown>;
+    expect(raw?.agentic_tool_preset_id).toBeNull();
+    expect(stored.presetId).toBe(USER_DEFAULT_AGENTIC_CONFIGURATION);
+    expect(isEncrypted((stored.envVars as Array<{ value: string }>)[0]?.value ?? '')).toBe(true);
+  });
+
+  dbTest('round-trips a stable-owner My default patch outside the preset FK', async ({ db }) => {
+    const { data, owner } = await channelData(db, true);
+    const service = new GatewayChannelsService(db);
+    const created = await service.create(data, { user: owner } as never);
+    const patched = await service.patch(
+      created.id,
+      {
+        agentic_config: {
+          agent: 'opencode',
+          presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+        },
+      },
+      { user: owner } as never
+    );
+
+    expect(patched.agentic_config?.presetId).toBe(USER_DEFAULT_AGENTIC_CONFIGURATION);
+    const raw = await select(db)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, created.id))
+      .one();
+    expect(raw).toBeDefined();
+    expect(raw?.agentic_tool_preset_id).toBeNull();
+    expect((raw?.agentic_config as Record<string, unknown> | undefined)?.presetId).toBe(
+      USER_DEFAULT_AGENTIC_CONFIGURATION
+    );
+  });
+
+  dbTest('stores a real preset only in the preset FK', async ({ db }) => {
+    const { data, owner } = await channelData(db);
+    const preset = await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'opencode',
+        name: 'Gateway preset',
+        configuration: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-preset' },
+        },
+      },
+      owner.user_id
+    );
+    const created = await new GatewayChannelsService(db).create(
+      {
+        ...data,
+        agentic_config: { agent: 'opencode', presetId: preset.preset_id },
+      },
+      { user: owner } as never
+    );
+
+    expect(created.agentic_config?.presetId).toBe(preset.preset_id);
+    const raw = await select(db)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, created.id))
+      .one();
+    expect(raw).toBeDefined();
+    expect(raw?.agentic_tool_preset_id).toBe(preset.preset_id);
+    expect((raw?.agentic_config as Record<string, unknown> | undefined)?.presetId).toBeUndefined();
   });
 });
 

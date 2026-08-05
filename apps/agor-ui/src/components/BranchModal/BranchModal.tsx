@@ -4,7 +4,7 @@ import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById, selectMcpServerById } from '../../store/selectors';
+import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
@@ -74,6 +74,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // the App shell doesn't have to forward them into every modal.
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
+  const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
@@ -84,10 +85,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
-  const userById = useMemo(
-    () => new Map(form.allUsers.map((user) => [user.user_id, user])),
-    [form.allUsers]
-  );
   const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general

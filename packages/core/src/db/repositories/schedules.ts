@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { normalizeScheduleAgenticToolDefaultReference } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -67,7 +68,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       ...storedConfig,
       preset_id:
         (row.agentic_tool_preset_id as PersistedScheduleAgenticToolConfig['preset_id']) ??
-        undefined,
+        storedConfig.preset_id,
     };
 
     return attachHiddenTenant(
@@ -109,7 +110,13 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       throw new RepositoryError('Schedule must have an agentic_tool_config');
     }
 
-    const { preset_id, ...storedAgenticToolConfig } = s.agentic_tool_config;
+    const { preset_id, ...configWithoutPreset } = s.agentic_tool_config;
+    const storesDefaultReference = Boolean(
+      preset_id && normalizeScheduleAgenticToolDefaultReference(preset_id)
+    );
+    const storedAgenticToolConfig = storesDefaultReference
+      ? s.agentic_tool_config
+      : configWithoutPreset;
     return {
       schedule_id: scheduleId,
       branch_id: s.branch_id,
@@ -122,7 +129,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       // Drizzle's jsonb / text-with-json roundtrip handles this for us;
       // pass the object through.
       agentic_tool_config: storedAgenticToolConfig as unknown,
-      agentic_tool_preset_id: preset_id ?? null,
+      agentic_tool_preset_id: storesDefaultReference ? null : (preset_id ?? null),
       mcp_server_ids: s.mcp_server_ids ?? null,
       enabled: s.enabled ?? true,
       allow_concurrent_runs: s.allow_concurrent_runs ?? false,
