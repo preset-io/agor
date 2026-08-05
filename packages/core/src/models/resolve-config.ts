@@ -46,10 +46,16 @@ export type ModelConfigInput = {
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
 export class InvalidModelConfigError extends Error {
+  readonly code = 'INVALID_MODEL_CONFIG' as const;
+
   constructor(message: string) {
     super(message);
     this.name = 'InvalidModelConfigError';
   }
+}
+
+export function isInvalidModelConfigError(error: unknown): error is InvalidModelConfigError {
+  return (error as { code?: unknown } | null)?.code === 'INVALID_MODEL_CONFIG';
 }
 
 /** Tool-owned model semantics injected by the integration registry. */

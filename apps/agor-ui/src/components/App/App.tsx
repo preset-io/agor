@@ -72,6 +72,7 @@ import {
   buildTeammateOnboardingSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -883,7 +884,12 @@ export const App: React.FC<AppProps> = ({
       const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
 
       const sessionId = await onCreateSession?.(
-        { branch_id: branchId, agent: tool, mcpServerIds },
+        {
+          branch_id: branchId,
+          agent: tool,
+          agenticToolPresetId: getUserDefaultConfigurationSource(user, tool),
+          mcpServerIds,
+        },
         currentBoardId
       );
       if (!sessionId) return null;

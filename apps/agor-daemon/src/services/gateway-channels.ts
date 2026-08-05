@@ -10,7 +10,7 @@ import { AgenticConfigurationResolutionError, PAGINATION } from '@agor/core/conf
 import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
-import { InvalidModelConfigError } from '@agor/core/models';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import {
   type AgenticToolConfigurationSource,
   type AuthenticatedParams,
@@ -113,7 +113,7 @@ export class GatewayChannelsService extends DrizzleService<
       return materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
     } catch (error) {
       if (
-        error instanceof InvalidModelConfigError ||
+        isInvalidModelConfigError(error) ||
         error instanceof AgenticConfigurationResolutionError
       ) {
         throw new BadRequest(error.message);

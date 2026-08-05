@@ -9,7 +9,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import { InvalidModelConfigError } from '@agor/core/models';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolPreset,
   CreateAgenticToolPreset,
@@ -73,7 +73,7 @@ function normalizeConfiguration(
         : {}),
     };
   } catch (error) {
-    if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+    if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
     throw error;
   }
 }

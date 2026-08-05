@@ -36,7 +36,7 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git/pure';
-import { InvalidModelConfigError } from '@agor/core/models';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
@@ -550,7 +550,7 @@ export class UsersService {
             };
           }
         } catch (error) {
-          if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+          if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
           throw error;
         }
       }

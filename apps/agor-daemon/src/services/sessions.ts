@@ -38,7 +38,7 @@ import {
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
-  InvalidModelConfigError,
+  isInvalidModelConfigError,
   isResolvedModelConfig,
   lintModelToolMatch,
 } from '@agor/core/models';
@@ -363,7 +363,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           executionOwnerId: data.created_by as import('@agor/core/types').UserID | undefined,
         });
       } catch (error) {
-        if (!(error instanceof InvalidModelConfigError) || configurationReference) throw error;
+        if (!isInvalidModelConfigError(error) || configurationReference) throw error;
         const modelFallback = await this.resolveDirectCreateModelFallback(
           agenticTool,
           data as CreateSessionInput,
@@ -815,7 +815,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         parent,
       });
     } catch (error) {
-      if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+      if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
       throw error;
     }
     const permissionConfig = resolved.permission_config;

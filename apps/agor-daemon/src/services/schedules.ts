@@ -23,7 +23,7 @@ import {
 } from '@agor/core/config';
 import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import { InvalidModelConfigError } from '@agor/core/models';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AuthenticatedParams,
   BranchID,
@@ -99,7 +99,7 @@ export class SchedulesService extends DrizzleService<
       if (error instanceof AgenticConfigurationResolutionError) {
         throw new BadRequest('Selected agentic configuration is not available');
       }
-      if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+      if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
       throw error;
     }
   }
