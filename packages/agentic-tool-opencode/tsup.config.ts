@@ -5,6 +5,7 @@ export default defineConfig({
     'shared/index': 'src/shared/index.ts',
     'daemon/index': 'src/daemon/index.ts',
     'runtime/index': 'src/runtime/index.ts',
+    'runtime/binary': 'src/runtime/binary.ts',
     'ui/index': 'src/ui/index.ts',
   },
   format: ['cjs', 'esm'],

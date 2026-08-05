@@ -857,6 +857,70 @@ describe('OpenCode provider auth service', () => {
     await expect(codePatch).resolves.toMatchObject({ phase: 'cancelled' });
   });
 
+  it('cancels the same OAuth child after delayed fence attachment completes', async () => {
+    let emit!: Parameters<typeof startOpenCodeOAuthExecutor>[3];
+    let finish!: (value: { success: boolean; error: { code: string; message: string } }) => void;
+    let releaseAttachment!: () => void;
+    const cancelledResult = {
+      success: false,
+      error: { code: 'OPENCODE_OAUTH_CANCELLED', message: 'safe' },
+    };
+    const retainContainmentFence = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseAttachment = resolve;
+        })
+    );
+    const cancel = vi.fn(async () => {
+      expect(containment.release).toHaveBeenCalledWith(
+        expect.stringMatching(/^opencode-native-state:/),
+        'test-intent'
+      );
+      finish(cancelledResult);
+      return cancelledResult;
+    });
+    startOAuth.mockImplementation((_dataHome, _request, _options, onEvent) => {
+      emit = onEvent;
+      return {
+        verifyAbsence: vi.fn(async () => true),
+        retainContainmentFence,
+        result: new Promise((resolve) => {
+          finish = resolve;
+        }),
+        cancel,
+        submitCode: vi.fn(),
+      };
+    });
+    const authService = service();
+    const pending = runWithTenantContext('tenant-a', () =>
+      authService.create({ operation: 'connect-oauth', providerId: 'openai', method: 1 }, params)
+    );
+    await vi.waitFor(() => expect(retainContainmentFence).toHaveBeenCalledOnce());
+    emit({
+      type: 'authorized',
+      authorization: {
+        url: 'http://127.0.0.1:9898/authorize',
+        method: 'auto',
+        instructions: 'Synthetic',
+      },
+    });
+    const started = (await pending) as { attemptId: string };
+
+    const cancellation = runWithTenantContext('tenant-a', () =>
+      authService.patch(started.attemptId, { cancel: true }, params)
+    );
+    await Promise.resolve();
+    expect(cancel).not.toHaveBeenCalled();
+
+    releaseAttachment();
+    await expect(cancellation).resolves.toMatchObject({ phase: 'cancelled' });
+    await expect(
+      runWithTenantContext('tenant-a', () => authService.get(started.attemptId, params))
+    ).resolves.toMatchObject({ phase: 'cancelled' });
+    expect(startOAuth).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalled();
+  });
+
   it('reports logical isolation in simple and insulated modes and OS isolation only in strict', async () => {
     const modes = [
       { mode: 'simple', boundary: 'logical' },

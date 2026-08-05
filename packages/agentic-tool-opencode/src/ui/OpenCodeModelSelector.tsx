@@ -58,11 +58,12 @@ const modelPairValue = (providerId: string, modelId: string) =>
 function compactModelOptions(
   catalog: OpenCodeModelCatalog | null,
   value: OpenCodeModelConfig | undefined,
-  storedUnavailable: boolean
+  storedUnavailable: boolean,
+  availabilityResolved: boolean
 ) {
   const groups =
-    catalog?.providers
-      .filter((provider) => provider.availableForSelection && provider.models.length > 0)
+    (availabilityResolved ? catalog?.providers : undefined)
+      ?.filter((provider) => provider.availableForSelection && provider.models.length > 0)
       .map((provider) => ({
         label: provider.name,
         options: provider.models.map((model) => ({
@@ -100,6 +101,7 @@ interface CompactOpenCodeModelSelectorProps {
   catalogEnabled: boolean;
   client?: AgorClient | null;
   loading: boolean;
+  availabilityResolved: boolean;
   refreshFailed: boolean;
   storedCatalogState: StoredCatalogState;
   manualFields: React.ReactNode;
@@ -116,6 +118,7 @@ function CompactOpenCodeModelSelector({
   catalogEnabled,
   client,
   loading,
+  availabilityResolved,
   refreshFailed,
   storedCatalogState,
   manualFields,
@@ -126,7 +129,12 @@ function CompactOpenCodeModelSelector({
   getPopupContainer,
 }: CompactOpenCodeModelSelectorProps) {
   const storedUnavailable = storedCatalogState === 'unavailable';
-  const { groups, selectedValue } = compactModelOptions(catalog, value, storedUnavailable);
+  const { groups, selectedValue } = compactModelOptions(
+    catalog,
+    value,
+    storedUnavailable,
+    availabilityResolved
+  );
   const warning = compactWarning(catalogEnabled, refreshFailed, storedCatalogState);
 
   return (
@@ -247,7 +255,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   };
 
   useEffect(() => {
-    if (value || !catalog?.suggestedSelection) return;
+    if (value || !availabilityResolved || !catalog?.suggestedSelection) return;
     const { providerId, modelId } = catalog.suggestedSelection;
     const suggestionKey = `${branchId ?? ''}\0${providerId}\0${modelId}`;
     if (appliedSuggestionRef.current === suggestionKey) return;
@@ -257,28 +265,29 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     setManualOpen(false);
     setCompactManualOpen(false);
     onChange?.({ provider: providerId, model: modelId });
-  }, [branchId, catalog?.suggestedSelection, onChange, value]);
+  }, [availabilityResolved, branchId, catalog?.suggestedSelection, onChange, value]);
 
   const selectedCatalogProvider = catalog?.providers.find((entry) => entry.id === provider);
   const providerOptions =
-    catalog?.providers
-      .filter((entry) => entry.availableForSelection)
+    (availabilityResolved ? catalog?.providers : undefined)
+      ?.filter((entry) => entry.availableForSelection)
       .map((entry) => ({
         value: entry.id,
         label: entry.name,
         searchText: `${entry.name} ${entry.id}`.toLowerCase(),
       })) ?? [];
-  const modelOptions = selectedCatalogProvider?.availableForSelection
-    ? selectedCatalogProvider.models.map((candidate) => ({
-        value: candidate.id,
-        label:
-          candidate.status === 'active'
-            ? candidate.name
-            : `${candidate.name} · ${candidate.status}`,
-        searchText:
-          `${candidate.name} ${candidate.id} ${candidate.status} ${selectedCatalogProvider.name} ${selectedCatalogProvider.id}`.toLowerCase(),
-      }))
-    : [];
+  const modelOptions =
+    availabilityResolved && selectedCatalogProvider?.availableForSelection
+      ? selectedCatalogProvider.models.map((candidate) => ({
+          value: candidate.id,
+          label:
+            candidate.status === 'active'
+              ? candidate.name
+              : `${candidate.name} · ${candidate.status}`,
+          searchText:
+            `${candidate.name} ${candidate.id} ${candidate.status} ${selectedCatalogProvider.name} ${selectedCatalogProvider.id}`.toLowerCase(),
+        }))
+      : [];
 
   const manualFields = (
     <Space orientation="vertical" style={{ width: '100%' }} size={8}>
@@ -328,6 +337,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         catalogEnabled={catalogEnabled}
         client={client}
         loading={loading}
+        availabilityResolved={availabilityResolved}
         refreshFailed={refreshFailed}
         storedCatalogState={storedCatalogState}
         manualFields={manualFields}
@@ -370,7 +380,11 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           <Select
             aria-label="OpenCode provider"
             showSearch
-            value={selectedCatalogProvider?.availableForSelection ? provider : undefined}
+            value={
+              availabilityResolved && selectedCatalogProvider?.availableForSelection
+                ? provider
+                : undefined
+            }
             placeholder="Select a provider"
             options={providerOptions}
             optionFilterProp="searchText"
@@ -387,10 +401,20 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           <Select
             aria-label="OpenCode model"
             showSearch
-            disabled={!selectedCatalogProvider?.availableForSelection || modelOptions.length === 0}
-            value={selectedCatalogProvider?.availableForSelection && model ? model : undefined}
+            disabled={
+              !availabilityResolved ||
+              !selectedCatalogProvider?.availableForSelection ||
+              modelOptions.length === 0
+            }
+            value={
+              availabilityResolved && selectedCatalogProvider?.availableForSelection && model
+                ? model
+                : undefined
+            }
             placeholder={
-              selectedCatalogProvider?.availableForSelection && modelOptions.length === 0
+              availabilityResolved &&
+              selectedCatalogProvider?.availableForSelection &&
+              modelOptions.length === 0
                 ? 'Enter an exact model ID below'
                 : selectedCatalogProvider
                   ? 'Select a model'

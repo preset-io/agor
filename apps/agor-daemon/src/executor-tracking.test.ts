@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, open, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   containExecutorProcess,
   markExecutorProcessExited,
@@ -156,6 +156,27 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
         await releaseExecutorContainmentFenceIntent(fenceKey, intentId, root);
         await expect(verifyExecutorContainmentFence(fenceKey, root)).resolves.toBe(true);
       } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('does not publish a first intent before its namespace entry is durable', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-containment-order-'));
+      const probe = await open(root, 'r');
+      const sync = vi
+        .spyOn(Object.getPrototypeOf(probe) as { sync(): Promise<void> }, 'sync')
+        .mockRejectedValueOnce(new Error('synthetic parent fsync failure'));
+      await probe.close();
+      try {
+        await expect(
+          reserveExecutorContainmentFence('opencode-native-state:first-create', root)
+        ).rejects.toThrow(/parent fsync failure/i);
+
+        const [fenceDirectory] = await readdir(root);
+        if (!fenceDirectory) throw new Error('containment namespace directory missing');
+        await expect(readdir(join(root, fenceDirectory))).resolves.toEqual([]);
+      } finally {
+        sync.mockRestore();
         await rm(root, { recursive: true, force: true });
       }
     });

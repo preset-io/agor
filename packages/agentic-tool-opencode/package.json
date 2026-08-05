@@ -24,6 +24,12 @@
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.cjs"
     },
+    "./runtime/binary": {
+      "source": "./src/runtime/binary.ts",
+      "types": "./dist/runtime/binary.d.ts",
+      "import": "./dist/runtime/binary.js",
+      "require": "./dist/runtime/binary.cjs"
+    },
     "./ui": {
       "source": "./src/ui/index.ts",
       "types": "./dist/ui/index.d.ts",

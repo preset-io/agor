@@ -77,6 +77,21 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
   });
 
+  it('keeps immediate catalog entries unselectable until availability resolves', async () => {
+    const pending = deferred<typeof catalog>();
+    const { client } = clientWithCatalog(pending.promise);
+    render(<OpenCodeModelSelector client={client as never} />);
+
+    const providerSelect = screen.getByLabelText('OpenCode provider');
+    fireEvent.mouseDown(providerSelect);
+    expect(screen.queryByText('OpenAI')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter exact ids manually/i })).toBeInTheDocument();
+
+    await act(async () => pending.resolve(catalog));
+    fireEvent.mouseDown(providerSelect);
+    expect(await screen.findByText('OpenAI')).toBeInTheDocument();
+  });
+
   it('applies a safe catalog suggestion only while the selection is empty', async () => {
     const onChange = vi.fn();
     const { client } = clientWithCatalog({

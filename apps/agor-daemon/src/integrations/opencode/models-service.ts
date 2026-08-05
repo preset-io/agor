@@ -1,3 +1,4 @@
+import { resolvePackagedOpenCodeBinary } from '@agor/agentic-tool-opencode/runtime/binary';
 import { loadConfigSync } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -17,6 +18,7 @@ async function readModelCatalog(
   const context = await resolveAuthenticatedOpenCodeSubjectContext(db, params, config);
   let result: ExecutorCommandResult;
   try {
+    await resolvePackagedOpenCodeBinary();
     const handle = startOpenCodeExecutorInvocation(
       context.dataHome,
       { operation: 'read-model-catalog' },

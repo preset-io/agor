@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import { buildSpawnArgs } from '@agor/core/unix';
@@ -81,6 +81,24 @@ async function syncDirectory(path: string): Promise<void> {
   } finally {
     await directory.close();
   }
+}
+
+async function ensureDurableDirectory(path: string): Promise<void> {
+  try {
+    await mkdir(path, { mode: 0o700 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      const parent = dirname(path);
+      if (parent === path) throw error;
+      await ensureDurableDirectory(parent);
+      return ensureDurableDirectory(path);
+    }
+    if (code !== 'EEXIST') throw error;
+  }
+  // Sync even after EEXIST so a concurrent first creator cannot let this
+  // caller publish a child before the directory entry is durable.
+  await syncDirectory(dirname(path));
 }
 
 function parseStoredContainmentFence(value: unknown): StoredContainmentFence | undefined {
@@ -353,7 +371,7 @@ export async function retainExecutorContainmentFence(
   }
 
   const directory = containmentFenceDirectory(fenceKey, root);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await ensureDurableDirectory(directory);
   await writeDurableFence(containmentFencePath(fenceKey, executor, root), {
     version: CONTAINMENT_FENCE_VERSION,
     executor,
@@ -373,7 +391,7 @@ export async function reserveExecutorContainmentFence(
 ): Promise<string> {
   const intentId = randomUUID();
   const directory = containmentFenceDirectory(fenceKey, root);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await ensureDurableDirectory(directory);
   await writeDurableFence(containmentIntentPath(fenceKey, intentId, root), {
     version: CONTAINMENT_FENCE_VERSION,
     intent: intentId,

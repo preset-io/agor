@@ -39,6 +39,7 @@ function assertOptionalStringRecord(
 type StoredOAuthAttempt = OpenCodeOAuthAttempt & {
   namespaceKey: string;
   handle?: OpenCodeOAuthExecutorHandle;
+  attachment?: Promise<void>;
   cancelRequested: boolean;
   ready: Promise<void>;
   resolveReady: () => void;
@@ -210,6 +211,7 @@ export class OpenCodeAuthService {
     result: Awaited<OpenCodeOAuthExecutorHandle['result']>,
     context: AuthenticatedOpenCodeSubjectContext
   ): void {
+    if (isTerminalAttempt(attempt)) return;
     if (result.success && result.data) {
       const discovery = result.data as OpenCodeProviderDiscovery;
       const savedCredentialPresent = discovery.providers.some(
@@ -285,8 +287,11 @@ export class OpenCodeAuthService {
           attempt.phase = 'completing';
         }
       );
-      await fence.attach(handle);
       attempt.handle = handle;
+      const attachment = fence.attach(handle);
+      attempt.attachment = attachment;
+      await attachment;
+      if (attempt.cancelRequested) await handle.cancel();
 
       const result = await handle.result;
       this.settleAttempt(attempt, result, context);
@@ -367,6 +372,7 @@ export class OpenCodeAuthService {
       attempt.resolveReady();
       return this.publicAttempt(attempt);
     }
+    await attempt.attachment?.catch(() => undefined);
     const result = await attempt.handle.cancel();
     this.settleAttempt(attempt, result, await this.credentialContext(params));
     return this.publicAttempt(attempt);

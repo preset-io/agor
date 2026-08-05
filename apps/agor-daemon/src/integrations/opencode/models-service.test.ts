@@ -3,6 +3,11 @@ import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCodeModelsService } from './models-service';
 
+const resolveBinary = vi.hoisted(() => vi.fn());
+vi.mock('@agor/agentic-tool-opencode/runtime/binary', () => ({
+  resolvePackagedOpenCodeBinary: resolveBinary,
+}));
+
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
   return {
@@ -43,6 +48,7 @@ const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
 const usersRepository = vi.mocked(UsersRepository);
 const db = { run: vi.fn() } as never;
+const MODEL_CATALOG_ERROR = 'OpenCode model catalog could not be loaded. Try again.';
 const params = {
   user: { user_id: 'same-user', email: 'user@example.com', role: 'member' },
 } as never;
@@ -73,6 +79,7 @@ beforeEach(() => {
     return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
   } as never);
   runCommand.mockResolvedValue({ success: true, data: catalog });
+  resolveBinary.mockResolvedValue('/packaged/opencode');
 });
 
 describe('OpenCode model catalog service', () => {
@@ -94,6 +101,10 @@ describe('OpenCode model catalog service', () => {
     const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
     expect(result).toEqual(catalog);
+    expect(resolveBinary).toHaveBeenCalledOnce();
+    expect(resolveBinary.mock.invocationCallOrder[0]).toBeLessThan(
+      runCommand.mock.invocationCallOrder[0] ?? Infinity
+    );
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'agentic-tool.invoke',
@@ -106,6 +117,27 @@ describe('OpenCode model catalog service', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  it.each(['missing', 'not executable'])(
+    'uses catalog readiness failure when the packaged binary is %s',
+    async () => {
+      resolveBinary.mockRejectedValueOnce(new Error('private binary detail'));
+
+      await runWithTenantContext('tenant-a', async () => {
+        await expect(service().find(params)).rejects.toThrow(MODEL_CATALOG_ERROR);
+      });
+      expect(runCommand).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses catalog readiness failure for an SDK/CLI version mismatch', async () => {
+    resolveBinary.mockRejectedValueOnce(new Error('private SDK/CLI versions'));
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).rejects.toThrow(MODEL_CATALOG_ERROR);
+    });
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it('routes identical user IDs in different tenants to isolated opaque namespaces', async () => {
