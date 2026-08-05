@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@agor/core/client": ["../core/src/client/index.ts"],
+      "@agor/core/models": ["../core/src/models/index.ts"],
+      "@agor/core/config": ["../core/src/config/index.ts"],
+      "@agor/core/feathers": ["../core/src/feathers/index.ts"],
+      "@agor/core/tools/mcp/http-headers": ["../core/src/tools/mcp/http-headers.ts"],
+      "@agor/core/tools/mcp/jwt-auth": ["../core/src/tools/mcp/jwt-auth.ts"],
+      "@agor/core/types": ["../core/src/types/index.ts"],
+      "@agor/core": ["../core/src/index.ts"],
+      "@agor/core/mcp": ["../core/src/mcp/index.ts"]
+    }
+  }
+}

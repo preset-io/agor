@@ -18,11 +18,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agor/agentic-tool-opencode": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
     "@cursor/sdk": "^1.0.23",
     "@github/copilot-sdk": "^0.2.2",
-    "@opencode-ai/sdk": "^1.2.20",
     "diff": "^8.0.3",
     "node-pty": "^1.2.0-beta.12",
     "zod": "^4.4.3"

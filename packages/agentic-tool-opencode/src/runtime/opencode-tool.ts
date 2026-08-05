@@ -1,7 +1,7 @@
 /**
  * OpenCode Tool Implementation
  *
- * Implements the ITool interface for OpenCode.ai integration.
+ * Owns the OpenCode.ai protocol integration behind a package-local interface.
  * OpenCode is an open-source terminal-based AI coding assistant supporting 75+ LLM providers.
  *
  * Current capabilities:
@@ -15,32 +15,29 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import { getMcpServersForSession } from '@agor/core/mcp';
+import {
+  getMcpServersForSession,
+  type MCPAuthHeadersRepository,
+  type MCPScopingServerRepository,
+  type MCPScopingSessionRepository,
+} from '@agor/core/mcp';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { Event as OpenCodeEvent, Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
-import { getDaemonUrl } from '../../config.js';
+import { reportOpenCodeActivity } from './activity.js';
 import type {
-  MCPOAuthAuthHeadersRepository,
-  MCPServerRepository,
-  SessionMCPServerRepository,
-} from '../../db/feathers-repositories.js';
-import { reportSdkActivity } from '../../sdk-watchdog.js';
-import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
-import { enrichContentBlocks } from '../base/diff-enrichment.js';
-import type {
-  CreateSessionConfig,
-  MessagesService,
-  SessionHandle,
-  SessionMetadata,
-  StreamingCallbacks,
-  TaskResult,
-  ToolCapabilities,
-} from '../base/index.js';
-import type { ITool } from '../base/tool.interface.js';
+  OpenCodeCreateSessionConfig,
+  OpenCodeMessagesService,
+  OpenCodeRuntimeDependencies,
+  OpenCodeSessionHandle,
+  OpenCodeSessionMetadata,
+  OpenCodeStreamingCallbacks,
+  OpenCodeTaskResult,
+  OpenCodeToolCapabilities,
+} from './contracts.js';
 
 export function isOpenCodeSessionEvent(event: OpenCodeEvent, sessionId: string): boolean {
   const properties = event.properties as Record<string, unknown>;
@@ -76,7 +73,7 @@ interface SessionContext {
   mcpToken?: string;
 }
 
-export class OpenCodeTool implements ITool {
+export class OpenCodeTool {
   readonly toolType = 'opencode' as const;
   readonly name = 'OpenCode';
 
@@ -85,13 +82,13 @@ export class OpenCodeTool implements ITool {
   /** Directory-scoped clients keyed by branch path */
   private directoryClients: Map<string, ReturnType<typeof createOpencodeClient>> = new Map();
   private config: OpenCodeConfig;
-  private messagesService?: MessagesService;
+  private messagesService?: OpenCodeMessagesService;
   private sessionContexts: Map<string, SessionContext> = new Map(); // Agor session ID → session context
   /** Tracks which sessions have had MCP servers injected (hash-based) */
   private injectedMcpHash: Map<string, string> = new Map();
   /** MCP repository dependencies for resolving user-defined MCP servers */
-  private sessionMCPRepo?: SessionMCPServerRepository;
-  private mcpServerRepo?: MCPServerRepository;
+  private sessionMCPRepo?: MCPScopingSessionRepository;
+  private mcpServerRepo?: MCPScopingServerRepository;
 
   /**
    * Extract user-facing response text from OpenCode parts.
@@ -117,10 +114,11 @@ export class OpenCodeTool implements ITool {
 
   constructor(
     config: OpenCodeConfig,
-    messagesService?: MessagesService,
-    sessionMCPRepo?: SessionMCPServerRepository,
-    mcpServerRepo?: MCPServerRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    messagesService?: OpenCodeMessagesService,
+    sessionMCPRepo?: MCPScopingSessionRepository,
+    mcpServerRepo?: MCPScopingServerRepository,
+    private mcpOAuthAuthHeadersRepo?: MCPAuthHeadersRepository,
+    private runtimeDependencies: OpenCodeRuntimeDependencies = {}
   ) {
     this.config = config;
     this.messagesService = messagesService;
@@ -223,7 +221,12 @@ export class OpenCodeTool implements ITool {
       const mcpName = `agor_${sessionShort}`;
 
       try {
-        const daemonUrl = await getDaemonUrl();
+        const daemonUrl = this.runtimeDependencies.getDaemonUrl
+          ? await this.runtimeDependencies.getDaemonUrl()
+          : process.env.DAEMON_URL;
+        if (!daemonUrl) {
+          throw new Error('OpenCode runtime requires the daemon URL for Agor MCP injection');
+        }
         const mcpUrl = `${daemonUrl}/mcp`;
 
         const mcpResult = await client.mcp.add({
@@ -385,7 +388,7 @@ export class OpenCodeTool implements ITool {
   /**
    * Get tool capabilities
    */
-  getCapabilities(): ToolCapabilities {
+  getCapabilities(): OpenCodeToolCapabilities {
     return {
       supportsSessionImport: false, // Future: add when OpenCode provides export API
       supportsSessionCreate: true,
@@ -432,7 +435,7 @@ export class OpenCodeTool implements ITool {
   /**
    * Create a new OpenCode session
    */
-  async createSession?(config: CreateSessionConfig): Promise<SessionHandle> {
+  async createSession?(config: OpenCodeCreateSessionConfig): Promise<OpenCodeSessionHandle> {
     // Use directory-scoped client if workingDirectory is provided (branch path)
     const client = this.getClientForDirectory(config.workingDirectory);
 
@@ -482,9 +485,9 @@ export class OpenCodeTool implements ITool {
     sessionId: string,
     prompt: string,
     taskId?: string,
-    streamingCallbacks?: StreamingCallbacks,
+    streamingCallbacks?: OpenCodeStreamingCallbacks,
     messageIndex?: number
-  ): Promise<TaskResult> {
+  ): Promise<OpenCodeTaskResult> {
     try {
       // Get session context (OpenCode session ID, model, provider)
       const context = this.getSessionContext(sessionId);
@@ -606,7 +609,7 @@ export class OpenCodeTool implements ITool {
 
           // Log event type (skip noisy heartbeats)
           const eventType = event.type as string;
-          reportSdkActivity(streamingCallbacks.onPulse, 'opencode', eventType);
+          reportOpenCodeActivity(streamingCallbacks.onPulse, eventType);
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }
@@ -904,7 +907,7 @@ export class OpenCodeTool implements ITool {
       );
 
       // Best-effort diff enrichment for Edit/Write tool results
-      enrichContentBlocks(contentBlocks);
+      this.runtimeDependencies.enrichContentBlocks?.(contentBlocks);
 
       const message = await this.messagesService.create({
         message_id: (currentTextMessageId || generateId()) as MessageID,
@@ -964,7 +967,7 @@ export class OpenCodeTool implements ITool {
     },
     opencodeSessionId: string,
     messageIndex?: number
-  ): Promise<TaskResult> {
+  ): Promise<OpenCodeTaskResult> {
     const response = await client.session.prompt(promptOptions);
 
     if (response.error) {
@@ -1079,7 +1082,7 @@ export class OpenCodeTool implements ITool {
   /**
    * Get session metadata
    */
-  async getSessionMetadata?(sessionId: string): Promise<SessionMetadata> {
+  async getSessionMetadata?(sessionId: string): Promise<OpenCodeSessionMetadata> {
     const client = this.getClient();
 
     try {
@@ -1134,7 +1137,7 @@ export class OpenCodeTool implements ITool {
   /**
    * List all available sessions
    */
-  async listSessions?(): Promise<SessionMetadata[]> {
+  async listSessions?(): Promise<OpenCodeSessionMetadata[]> {
     const client = this.getClient();
 
     try {
@@ -1158,21 +1161,5 @@ export class OpenCodeTool implements ITool {
         `Failed to list sessions: ${error instanceof Error ? error.message : String(error)}`
       );
     }
-  }
-
-  // ============================================================
-  // Token Accounting (NEW)
-  // ============================================================
-
-  /**
-   * Normalize OpenCode SDK response to common format
-   *
-   * @deprecated This method is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead
-   * This stub remains for API compatibility but should not be used.
-   */
-  normalizedSdkResponse(_rawResponse: RawSdkResponse): NormalizedSdkResponse {
-    throw new Error(
-      'normalizedSdkResponse() is deprecated - use normalizeRawSdkResponse() from utils/sdk-normalizer instead'
-    );
   }
 }

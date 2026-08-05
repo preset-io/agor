@@ -39,6 +39,3 @@ export * as GenAI from '@google/genai';
 export type { CodexOptions, Thread, ThreadItem } from '@openai/codex-sdk';
 // Codex SDK - namespace export
 export * as Codex from '@openai/codex-sdk';
-
-// OpenCode SDK
-export * as OpenCode from '@opencode-ai/sdk';

@@ -53,11 +53,6 @@ vi.mock('@opencode-ai/sdk', () => ({
     createMockClient(config),
 }));
 
-// Mock getDaemonUrl
-vi.mock('../../config.js', () => ({
-  getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
-}));
-
 // Mock MCP scoping
 vi.mock('@agor/core/mcp', () => ({
   getMcpServersForSession: vi.fn().mockResolvedValue([]),
@@ -78,6 +73,7 @@ const mockMCPServerRepo = {
 
 describe('OpenCodeTool', () => {
   beforeEach(() => {
+    process.env.DAEMON_URL = 'http://localhost:3030';
     clientCreateCount = 0;
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;

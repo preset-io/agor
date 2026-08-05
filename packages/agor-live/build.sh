@@ -246,6 +246,23 @@ jq '
   }
 ' "$REPO_ROOT/packages/core/package.json" > "$DIST_STAGE/core/package.json"
 
+echo "  → Copying OpenCode agentic-tool package..."
+mkdir -p "$DIST_STAGE/agentic-tool-opencode"
+cp -r "$REPO_ROOT/packages/agentic-tool-opencode/dist/"* "$DIST_STAGE/agentic-tool-opencode/"
+
+echo "  → Creating package.json for bundled @agor/agentic-tool-opencode..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/agentic-tool-opencode",
+    version: "0.1.0",
+    type: "module",
+    main: "./shared/index.js",
+    types: "./shared/index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/agentic-tool-opencode/package.json" > "$DIST_STAGE/agentic-tool-opencode/package.json"
+
 echo "  → Copying CLI..."
 mkdir -p "$DIST_STAGE/cli"
 cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"

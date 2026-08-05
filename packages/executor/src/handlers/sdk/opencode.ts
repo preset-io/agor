@@ -9,6 +9,7 @@
  * - Different return type (TaskResult vs execution result)
  */
 
+import { OpenCodeTool } from '@agor/agentic-tool-opencode/runtime';
 import { generateId, shortId } from '@agor/core';
 import type {
   ExecutorPulseKind,
@@ -18,9 +19,10 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
-import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
+import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
 
@@ -88,7 +90,8 @@ export async function executeOpenCodeTask(params: {
       repos.messagesService,
       repos.sessionMCP,
       repos.mcpServers,
-      repos.mcpOAuthAuthHeaders
+      repos.mcpOAuthAuthHeaders,
+      { getDaemonUrl, enrichContentBlocks }
     );
 
     let opencodeSessionId: string;
