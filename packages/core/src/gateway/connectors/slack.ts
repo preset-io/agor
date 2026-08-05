@@ -23,7 +23,7 @@
  *   e.g. "C07ABC123-1707340800.123456"
  */
 
-import { type Logger, SocketModeClient } from '@slack/socket-mode';
+import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
 import { WebClient } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
@@ -36,7 +36,7 @@ import type {
   SlackTestResult,
 } from '../../types/gateway';
 import type { GatewayConnector, InboundFile, InboundMessage, OutboundPayload } from '../connector';
-import { acquireSlackSdkLogger } from './slack-sdk-logger';
+import { createSlackSdkLogger } from './slack-sdk-logger';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
@@ -794,7 +794,6 @@ export class SlackConnector implements GatewayConnector {
 
   private web: WebClient;
   private socketMode: SocketModeClient | null = null;
-  private releaseSlackSdkLogger: (() => void) | null = null;
   private config: SlackConfig;
   private botUserId: string | null = null;
 
@@ -1875,36 +1874,14 @@ export class SlackConnector implements GatewayConnector {
    * - Channel whitelist (if allowed_channel_ids is set)
    */
   async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
-    if (this.socketMode || this.releaseSlackSdkLogger) {
-      throw new Error('Slack Socket Mode listener is already active');
-    }
-
-    const appToken = this.config.app_token;
-    if (!appToken) {
+    if (!this.config.app_token) {
       console.error('[slack] ERROR: app_token is missing from config');
       throw new Error('Slack Socket Mode requires app_token in config');
     }
 
-    const sdkLogger = acquireSlackSdkLogger();
-    this.releaseSlackSdkLogger = sdkLogger.release;
-    try {
-      await this.startSocketMode(callback, sdkLogger.logger, appToken);
-    } catch (error) {
-      this.socketMode = null;
-      this.releaseSlackSdkLogger = null;
-      sdkLogger.release();
-      throw error;
-    }
-  }
-
-  private async startSocketMode(
-    callback: (msg: InboundMessage) => void,
-    logger: Logger,
-    appToken: string
-  ): Promise<void> {
     this.socketMode = new SocketModeClient({
-      appToken,
-      logger,
+      appToken: this.config.app_token,
+      logger: createSlackSdkLogger(),
     });
 
     // Fetch bot user ID for mention detection
@@ -2213,14 +2190,9 @@ export class SlackConnector implements GatewayConnector {
    * Stop Socket Mode listener
    */
   async stopListening(): Promise<void> {
-    const socketMode = this.socketMode;
-    const releaseLogger = this.releaseSlackSdkLogger;
-    try {
-      if (socketMode) await socketMode.disconnect();
-    } finally {
+    if (this.socketMode) {
+      await this.socketMode.disconnect();
       this.socketMode = null;
-      this.releaseSlackSdkLogger = null;
-      releaseLogger?.();
     }
   }
 
