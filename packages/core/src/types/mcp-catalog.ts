@@ -336,6 +336,20 @@ export interface MCPCatalogConnectData {
   catalog_key: string;
   branch_id: string;
   agentic_tool: AgenticToolName;
+  /**
+   * The `permission_disclosure` the user was shown and accepted.
+   *
+   * Connecting a server puts its tools, and their descriptions, inside every
+   * prompt of the session it is attached to, so the disclosure is the last
+   * thing between a user and that decision. A client-side checkbox cannot be
+   * the only place that rule lives: the endpoint would accept a connect from
+   * any caller that never rendered it. Sending back the text — rather than a
+   * bare `true` — means a client cannot satisfy the check without having had
+   * the disclosure in hand, and a stale one no longer matches the row.
+   *
+   * It does not prove a human read the words. It proves the protocol ran.
+   */
+  acknowledged_disclosure: string;
 }
 
 /** What a successful connect hands back to the caller. */

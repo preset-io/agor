@@ -66,12 +66,7 @@ function makeClient(): AgorClient {
     }
     if (path === 'branches') {
       return {
-        find: async () => ({
-          total: 1,
-          limit: 200,
-          skip: 0,
-          data: [{ branch_id: 'branch-1', name: 'mkt-slice' }],
-        }),
+        findAll: async () => [{ branch_id: 'branch-1', name: 'mkt-slice' }],
       };
     }
     if (path === 'mcp-catalog/connect') {
@@ -176,6 +171,19 @@ describe('connect', () => {
     await waitFor(() => expect(connect).toBeEnabled());
   });
 
+  it("does not carry one server's acknowledgement to the next one opened", async () => {
+    const deepwiki = await openDrawer();
+    fireEvent.click(deepwiki.getByRole('checkbox'));
+    await waitFor(() => expect(deepwiki.getByRole('button', { name: /Connect/ })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Linear' }));
+
+    const linear = within(await screen.findByRole('dialog'));
+    expect(linear.getByRole('checkbox')).not.toBeChecked();
+    expect(linear.getByRole('button', { name: /Connect/ })).toBeDisabled();
+  });
+
   it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
     const drawer = await openDrawer();
     fireEvent.click(drawer.getByRole('checkbox'));
@@ -188,6 +196,9 @@ describe('connect', () => {
       catalog_key: 'entry-deepwiki',
       branch_id: 'branch-1',
       agentic_tool: 'claude-code',
+      // The exact text the drawer rendered, so the daemon can refuse a connect
+      // that skipped the disclosure or is holding a stale one.
+      acknowledged_disclosure: DEEPWIKI.permission_disclosure,
     });
 
     await waitFor(() =>

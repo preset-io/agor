@@ -50,7 +50,15 @@ export interface CatalogDetailDrawerProps {
   defaultBranchId: string | null;
   connecting: boolean;
   connectError: string | null;
-  onConnect: (input: { branchId: string; agenticTool: AgenticToolName }) => void;
+  /**
+   * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
+   * what the connect request claims was shown cannot drift from what was.
+   */
+  onConnect: (input: {
+    branchId: string;
+    agenticTool: AgenticToolName;
+    acknowledgedDisclosure: string;
+  }) => void;
 }
 
 export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
@@ -66,18 +74,17 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
-  const [acknowledged, setAcknowledged] = useState(false);
   const [branchId, setBranchId] = useState<string | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
 
   const entryId = entry?.catalog_entry_id;
 
-  // A fresh entry is a fresh first-time connect: the acknowledgement never
-  // carries across servers.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resets on entry identity, not on a value the effect reads
-  useEffect(() => {
-    setAcknowledged(false);
-  }, [entryId]);
+  // The acknowledgement records *which* server was acknowledged, rather than a
+  // boolean an effect resets when the entry changes. An effect would leave one
+  // render in which the new server's disclosure sits above an already-enabled
+  // connect button, carrying consent from the server before it.
+  const [acknowledgedEntryId, setAcknowledgedEntryId] = useState<string | null>(null);
+  const acknowledged = entryId !== undefined && acknowledgedEntryId === entryId;
 
   const branchOptions = useMemo(
     () =>
@@ -99,6 +106,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
 
   const blockedReason = entry ? connectBlockedReason(entry) : undefined;
   const title = entry ? entryTitle(entry) : '';
+  const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
   const canConnect = Boolean(!blockedReason && acknowledged && branchId && !connecting);
 
   return (
@@ -177,11 +185,13 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
             message="What this can access"
             description={
               <Flex vertical gap={token.marginXS}>
-                <Text>{entry.permission_disclosure ?? FALLBACK_DISCLOSURE}</Text>
+                <Text>{disclosure}</Text>
                 {!blockedReason && (
                   <Checkbox
                     checked={acknowledged}
-                    onChange={(event) => setAcknowledged(event.target.checked)}
+                    onChange={(event) =>
+                      setAcknowledgedEntryId(event.target.checked ? (entryId ?? null) : null)
+                    }
                   >
                     I understand what this server can access
                   </Checkbox>
@@ -225,7 +235,10 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 icon={<ThunderboltOutlined />}
                 loading={connecting}
                 disabled={!canConnect}
-                onClick={() => branchId && onConnect({ branchId, agenticTool })}
+                onClick={() =>
+                  branchId &&
+                  onConnect({ branchId, agenticTool, acknowledgedDisclosure: disclosure })
+                }
               >
                 Connect &amp; try it
               </Button>
