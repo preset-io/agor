@@ -11,6 +11,7 @@ const repoRoot = resolve(__dirname, '..');
 const targetManifest = 'packages/agor-live/package.json';
 const sourceManifests = [
   'packages/agentic-tool-opencode/package.json',
+  'packages/agentic-tools/package.json',
   'packages/core/package.json',
   'packages/git/package.json',
   'apps/agor-cli/package.json',
@@ -22,6 +23,7 @@ const sourceManifests = [
 // They are not publishable npm dependencies and should not be synced into dependencies.
 const skipDeps = new Set([
   '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
   '@agor/core',
   '@agor/daemon',
   '@agor/git',

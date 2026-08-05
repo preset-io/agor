@@ -1,7 +1,5 @@
 import type { ExecutorPulseKind } from '@agor/core/types';
 
-export const OPENCODE_SDK_ACTIVITY_VERSION = '@opencode-ai/sdk@1.14.33';
-
 const STARTED = new Set(['permission.updated']);
 const WAITING = new Set(['permission.asked']);
 const PROGRESS = new Set(['message.updated', 'message.part.updated', 'session.status']);

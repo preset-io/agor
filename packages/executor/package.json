@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@agor/agentic-tool-opencode": "workspace:*",
+    "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
     "@cursor/sdk": "^1.0.23",

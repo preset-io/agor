@@ -16,6 +16,7 @@
  * variables are not credential fallbacks.
  */
 
+import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -32,7 +33,6 @@ import type {
   AuthenticatedParams,
   UserID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
@@ -325,8 +325,8 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
-      // opencode is server-based — no credentials concept, always ready.
-      if (tool === 'opencode') {
+      // Integrations without host-managed credentials are ready at this boundary.
+      if (getAgenticToolIntegration(tool as AgenticToolName).authentication === 'none') {
         return authed('native');
       }
 

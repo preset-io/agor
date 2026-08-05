@@ -14,8 +14,9 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES, DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
+import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';

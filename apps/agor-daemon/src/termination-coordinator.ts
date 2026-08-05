@@ -1,3 +1,4 @@
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import { shortId } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
@@ -144,12 +145,11 @@ async function runContainment(
     untrackExecutorProcess(current.session_id, current.task_id);
     return { status: 'terminal', task: current };
   }
-  const providerUnverified = tool === 'opencode';
-  if (containment.status === 'unverified' || providerUnverified) {
-    const reason =
-      containment.status === 'unverified'
-        ? containment.reason
-        : 'OpenCode server-side execution termination is not verified.';
+  const providerUnverifiedReason = getAgenticToolIntegration(tool).unverifiedTerminationReason;
+  const unverifiedReason =
+    containment.status === 'unverified' ? containment.reason : providerUnverifiedReason;
+  if (unverifiedReason !== undefined) {
+    const reason = unverifiedReason;
     const diagnosis: SdkFailure = current.sdk_failure
       ? { ...current.sdk_failure, termination: 'unverified' }
       : {

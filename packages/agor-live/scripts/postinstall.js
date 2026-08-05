@@ -18,7 +18,7 @@ try {
     mkdirSync(nodeModulesAgor, { recursive: true });
   }
 
-  for (const packageName of ['agentic-tool-opencode', 'core', 'git']) {
+  for (const packageName of ['agentic-tool-opencode', 'agentic-tools', 'core', 'git']) {
     const symlinkPath = join(nodeModulesAgor, packageName);
     // Use relative path from node_modules/@agor to dist/<package>
     const target = join('..', '..', 'dist', packageName);

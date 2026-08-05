@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -7,11 +8,7 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  getDefaultModelForTool,
-  getDefaultPermissionMode,
-} from '@agor-live/client';
+import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
 import {
   ApiOutlined,
   ExperimentOutlined,

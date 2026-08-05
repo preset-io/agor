@@ -5,6 +5,7 @@
  * Makes it easier to add new tools and ensures consistency.
  */
 
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type {
   ExecutorPulseKind,
   MessageSource,
@@ -12,7 +13,6 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -139,48 +139,48 @@ export async function initializeToolRegistry(): Promise<void> {
   // Register Claude Code
   ToolRegistry.register({
     tool: 'claude-code',
-    name: 'Claude Code',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
+    name: getAgenticToolIntegration('claude-code').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('claude-code').apiKeyName!,
     runner: claude.executeClaudeCodeTask,
   });
 
   // Register Codex
   ToolRegistry.register({
     tool: 'codex',
-    name: 'Codex',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
+    name: getAgenticToolIntegration('codex').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('codex').apiKeyName!,
     runner: codex.executeCodexTask,
   });
 
   // Register Gemini
   ToolRegistry.register({
     tool: 'gemini',
-    name: 'Gemini',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
+    name: getAgenticToolIntegration('gemini').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('gemini').apiKeyName!,
     runner: gemini.executeGeminiTask,
   });
 
   // Register OpenCode
   ToolRegistry.register({
     tool: 'opencode',
-    name: 'OpenCode',
-    apiKeyEnvVar: 'NONE', // OpenCode doesn't need API key
+    name: getAgenticToolIntegration('opencode').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('opencode').apiKeyName ?? 'NONE',
     runner: opencode.executeOpenCodeTask,
   });
 
   // Register Copilot
   ToolRegistry.register({
     tool: 'copilot',
-    name: 'GitHub Copilot',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
+    name: getAgenticToolIntegration('copilot').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('copilot').apiKeyName!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
     runner: copilot.executeCopilotTask,
   });
 
   // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
   ToolRegistry.register({
     tool: 'cursor',
-    name: 'Cursor SDK',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
+    name: getAgenticToolIntegration('cursor').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('cursor').apiKeyName!,
     runner: cursor.executeCursorTask,
   });
 }

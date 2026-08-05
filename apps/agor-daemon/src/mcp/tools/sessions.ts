@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import {
   BranchRepository,
   type BranchWithZoneAndSessions,
@@ -18,7 +19,6 @@ import {
 } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,

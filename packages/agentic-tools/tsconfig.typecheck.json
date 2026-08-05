@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@agor/agentic-tool-opencode": ["../agentic-tool-opencode/src/shared/index.ts"],
+      "@agor/core/types": ["../core/src/types/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

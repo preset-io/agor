@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",
+    "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@ant-design/icons": "^6.3.2",
     "@ant-design/x": "^2.8.0",

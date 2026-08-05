@@ -1,8 +1,4 @@
-export {
-  mapOpenCodeActivity,
-  OPENCODE_SDK_ACTIVITY_VERSION,
-  reportOpenCodeActivity,
-} from './activity.js';
+export { mapOpenCodeActivity, reportOpenCodeActivity } from './activity.js';
 export type {
   OpenCodeCreateSessionConfig,
   OpenCodeMessagesService,

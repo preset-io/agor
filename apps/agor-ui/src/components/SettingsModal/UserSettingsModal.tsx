@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
@@ -11,13 +12,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  AGENTIC_TOOL_DISPLAY_NAMES,
-  hasMinimumRole,
-  ROLE_OPTIONS,
-  ROLES,
-} from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   BellOutlined,
   CheckCircleFilled,

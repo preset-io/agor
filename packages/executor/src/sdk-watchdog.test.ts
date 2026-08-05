@@ -1,7 +1,12 @@
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
-import type { SdkHealthFailureInput } from '@agor/core/types';
+import type { AgenticToolName, SdkHealthFailureInput } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isSdkHealthAbort, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
+import {
+  getSdkActivityVersion,
+  isSdkHealthAbort,
+  markSdkHealthAbort,
+  SdkWatchdog,
+} from './sdk-watchdog.js';
 
 const baseConfig: ResolvedSdkWatchdogConfig = {
   mode: 'observe',
@@ -12,12 +17,15 @@ const baseConfig: ResolvedSdkWatchdogConfig = {
 
 type Evidence = Omit<SdkHealthFailureInput, 'task_id'>;
 
-function harness(overrides: Partial<ResolvedSdkWatchdogConfig> = {}, tool = 'codex') {
+function harness(
+  overrides: Partial<ResolvedSdkWatchdogConfig> = {},
+  tool: AgenticToolName = 'codex'
+) {
   const decisions: Evidence[] = [];
   const watchdog = new SdkWatchdog({
     tool,
     config: { ...baseConfig, ...overrides },
-    sdkVersion: 'sdk@1.0.0',
+    sdkVersion: getSdkActivityVersion(tool),
     now: Date.now,
     onDecision: (evidence) => decisions.push(evidence),
   });
@@ -31,6 +39,13 @@ describe('SdkWatchdog', () => {
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it('includes the package-owned OpenCode SDK version in watchdog evidence', () => {
+    const { watchdog, decisions } = harness({}, 'opencode');
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(1_000);
+    expect(decisions[0]?.sdk_version).toBe('@opencode-ai/sdk@1.14.33');
+  });
 
   it.each(['observe', 'enforce'] as const)(
     'uses the same first-progress decision in %s mode',

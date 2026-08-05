@@ -322,6 +322,7 @@ describe('termination coordinator', () => {
 
     await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
       status: 'unverified',
+      reason: 'OpenCode server-side execution termination is not verified.',
     });
   });
 

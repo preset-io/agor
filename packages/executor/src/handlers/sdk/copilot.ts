@@ -5,6 +5,7 @@
  * Includes interactive permission handling via PermissionService (same as Claude Code).
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type {
   ExecutorPulseKind,
   MessageSource,
@@ -12,7 +13,6 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';

@@ -1,22 +1,23 @@
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
-import type { ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
+import type { AgenticToolName, ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
 import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
 export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
 
-type SdkVersionAdapter = SdkActivityAdapter | 'opencode';
-
-export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkVersionAdapter, string> = {
+export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> = {
   'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.197',
   codex: '@openai/codex-sdk@0.144.0',
   gemini: '@google/gemini-cli-core@0.31.0',
   copilot: '@github/copilot-sdk@0.2.2',
-  opencode: '@opencode-ai/sdk@1.14.33',
 };
 
-export function getSdkActivityVersion(adapter: string): string | undefined {
-  return SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkVersionAdapter];
+export function getSdkActivityVersion(tool: AgenticToolName): string | undefined {
+  return (
+    getAgenticToolIntegration(tool).sdkVersion ??
+    SDK_ACTIVITY_VERSION_MANIFEST[tool as SdkActivityAdapter]
+  );
 }
 
 const STARTED = new Set([

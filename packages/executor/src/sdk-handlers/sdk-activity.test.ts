@@ -52,7 +52,7 @@ describe('SDK activity version manifest', () => {
   it('matches every reviewed resolved dependency version', () => {
     const lockfile = readFileSync(new URL('../../../../pnpm-lock.yaml', import.meta.url), 'utf8');
     expect(Object.keys(SDK_ACTIVITY_VERSION_MANIFEST).sort()).toEqual(
-      ['claude-code', 'codex', 'gemini', 'copilot', 'opencode'].sort()
+      ['claude-code', 'codex', 'gemini', 'copilot'].sort()
     );
     for (const dependency of Object.values(SDK_ACTIVITY_VERSION_MANIFEST)) {
       expect(lockfile).toContain(`'${dependency}':`);

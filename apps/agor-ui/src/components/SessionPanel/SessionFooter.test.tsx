@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -5,7 +6,6 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES } from '@agor-live/client';
 import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
