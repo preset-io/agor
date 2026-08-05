@@ -86,6 +86,39 @@ describe('AppHeader Knowledge Base button', () => {
   });
 });
 
+describe('AppHeader Marketplace button', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+  });
+
+  it('renders a promoted top-level Marketplace entry, not a gear-menu item', () => {
+    renderHeader();
+
+    const button = screen.getByRole('link', { name: 'Marketplace' });
+    expect(button).toHaveAttribute('href', '/ui/marketplace');
+  });
+
+  it('navigates to /marketplace via SPA navigation on plain click', () => {
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Marketplace' }));
+
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/marketplace');
+  });
+
+  it('lets modifier clicks fall through to the browser', () => {
+    renderHeader();
+
+    const button = screen.getByRole('link', { name: 'Marketplace' });
+    button.removeAttribute('href');
+
+    const eventWasNotCancelled = fireEvent.click(button, { metaKey: true });
+
+    expect(eventWasNotCancelled).toBe(true);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
 describe('AppHeader settings dropdown', () => {
   beforeEach(() => {
     mockNavigate.mockClear();

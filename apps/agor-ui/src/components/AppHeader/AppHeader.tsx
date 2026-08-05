@@ -1,5 +1,5 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
-import { BulbOutlined } from '@ant-design/icons';
+import { BulbOutlined, ShopOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
@@ -94,6 +94,16 @@ const RecentBoardPills: React.FC<{
   );
 };
 
+/**
+ * True when a click on an `href`-bearing Button should be handled by the
+ * router. Modified clicks and middle clicks keep the browser's native
+ * open-in-new-tab behaviour, which the `href` exists to preserve.
+ */
+function isPlainLeftClick(event: React.MouseEvent): boolean {
+  if (event.defaultPrevented) return false;
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+}
+
 const AppHeaderInner: React.FC<AppHeaderProps> = ({
   user,
   presenceClient = null,
@@ -120,6 +130,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
+  const marketplaceHref = useHref('/marketplace');
   const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
@@ -279,6 +290,21 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
+        <Tooltip title="Marketplace">
+          <Button
+            type="text"
+            icon={<ShopOutlined style={{ fontSize: token.fontSizeLG }} />}
+            href={marketplaceHref}
+            aria-label="Marketplace"
+            onClick={(event) => {
+              if (isPlainLeftClick(event)) {
+                event.preventDefault();
+                navigate('/marketplace');
+              }
+            }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          />
+        </Tooltip>
         <Tooltip title="Knowledge Base">
           <Button
             type="text"
@@ -286,18 +312,10 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             href={knowledgeHref}
             aria-label="Knowledge Base"
             onClick={(event) => {
-              if (event.defaultPrevented) return;
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              ) {
-                return;
+              if (isPlainLeftClick(event)) {
+                event.preventDefault();
+                navigate('/knowledge');
               }
-              event.preventDefault();
-              navigate('/knowledge');
             }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           />

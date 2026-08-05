@@ -10,7 +10,10 @@
 // registry or from a file checked into this repository — so the table is
 // deliberately global. See `packages/core/src/db/tenant-deletion-manifest.ts`.
 
+import type { AgenticToolName } from './agentic-tool';
 import type { UUID } from './id';
+import type { MCPServer } from './mcp';
+import type { Session } from './session';
 
 /**
  * MCP catalog entry ID (branded UUID).
@@ -319,6 +322,30 @@ export interface MCPCatalogCurationUpsert {
   /** Used when the registry has not (yet) published the server. */
   remote_url?: string;
   transport?: MCPCatalogTransport;
+}
+
+/**
+ * Request body of `POST /mcp-catalog/connect`.
+ *
+ * A catalog key and where the session should live, and nothing else. URL,
+ * transport, and auth come from the catalog row server-side, so this cannot be
+ * used to register an arbitrary server.
+ */
+export interface MCPCatalogConnectData {
+  /** Catalog entry UUID or its reverse-DNS registry name. */
+  catalog_key: string;
+  branch_id: string;
+  agentic_tool: AgenticToolName;
+}
+
+/** What a successful connect hands back to the caller. */
+export interface MCPCatalogConnectResult {
+  mcp_server: MCPServer;
+  session: Session;
+  /** The entry's curated demonstration prompt, for the new session's composer. */
+  starter_prompt?: string;
+  /** True when an existing install was reused rather than a second row created. */
+  reused_existing_server: boolean;
 }
 
 /** Result of probing one entry, written back onto the row. */

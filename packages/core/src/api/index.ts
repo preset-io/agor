@@ -33,6 +33,9 @@ import type {
   KnowledgeSearchResult,
   KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
+  MCPCatalogConnectData,
+  MCPCatalogConnectResult,
+  MCPCatalogEntry,
   MCPServer,
   Message,
   OpenCodeModelCatalog,
@@ -209,6 +212,8 @@ export interface ServiceTypes {
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
+  'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/connect': MCPCatalogConnectResult;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
   'kb/versions': KnowledgeDocumentVersion;
@@ -340,6 +345,16 @@ export interface OpenCodeAuthService {
 
 export interface OpenCodeModelsService {
   find(params?: Params): Promise<OpenCodeModelCatalog>;
+}
+
+/**
+ * Marketplace connect command endpoint.
+ *
+ * Create-only: it installs one catalog entry and returns the session that can
+ * use it. There is nothing to read back, so it exposes no find/get.
+ */
+export interface MCPCatalogConnectService {
+  create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
 }
 
 /**
@@ -681,6 +696,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths
