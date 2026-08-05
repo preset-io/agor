@@ -1109,7 +1109,7 @@ active.
 
 User Stop first persists the Task's `stopping` state. That normal realtime Task
 patch travels over the executor's authenticated WebSocket, so the executor can
-abort its SDK and run provider cleanup regardless of which host or pod runs the
+abort its agentic-tool runtime and run cleanup regardless of which host or pod runs the
 daemon. Reconnecting executors read the durable Task state instead of relying on
 an ephemeral cancellation event. The executor reports quiescence only after its
 SDK and stop hooks return.
@@ -1127,15 +1127,16 @@ result because the daemon cannot inspect a process group on another host.
 Missing reports still flow through the heartbeat supervisor and remain visible
 and blocked rather than being treated as proof of termination. Templated or
 remote execution that cannot prove absence likewise remains blocked until a
-branch owner or administrator explicitly force-fails it. OpenCode server-side
-execution also remains unverified. A stale heartbeat does not authorize the
-daemon to signal a local executor that is still present; it rechecks until
-process absence is verified. After a verified failure, Agor may continue the
-next distinct Task already in the session queue, but it never retries or replays
-the failed prompt. Unverified containment keeps queued work blocked. After an
-abrupt daemon restart, Agor keeps its existing orphan cleanup behavior;
-diagnostics disclose that logical release does not prove remote process
-termination.
+branch owner or administrator explicitly force-fails it. Normal cooperative
+completion uses the execution-mode proof above. If forced runtime cleanup cannot
+verify that server-side work ended, Agor records `runtime_cleanup_unverified`;
+local wrapper absence alone still cannot release the Task. Heartbeat expiry may
+initiate scoped containment, but only verified local absence or fenced remote
+quiescence permits release. After a verified failure, Agor may continue the next
+distinct Task already in the session queue, but it never retries or replays the
+failed prompt. Unverified containment keeps queued work blocked. At startup,
+Agor claims `daemon_restart`, resumes containment, and keeps unverifiable work
+`STOPPING`.
 
 ### Step 5: Test Single Executor
 

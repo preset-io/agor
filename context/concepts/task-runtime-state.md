@@ -208,8 +208,18 @@ mapping-review point.
   unchanged. The fired deadline is latched to avoid a busy repeat; meaningful
   activity for that deadline invalidates the latch and rearms supervision.
 - In `enforce` mode, recognized first-progress, absolute-turn, idle, operation, or wait
-  deadline failures terminate supervision once, request SDK abort, and hand
-  containment to the daemon.
+  deadline failures report the executor-local pulse sequence captured at
+  detection. Before reporting, the executor coalescingly flushes telemetry
+  through that decision sequence and abandons locally superseded evidence when
+  the acknowledgement includes newer meaningful progress. Under the locked
+  termination claim, the daemon also rejects enforcement if newer meaningful
+  progress is already durable. Only one health acknowledgement remains in
+  flight, and the executor aborts only
+  after the daemon returns a `stopping` or terminal Task; activity observed while
+  that decision is pending remains in the watchdog and rearms its deadlines when
+  the report is superseded. The acknowledgement wait is bounded without issuing
+  parallel reports; timeout alone never authorizes abort, while a late daemon
+  response still passes through the normal Task lifecycle handler.
 
 First-progress supervision covers all mapped executor SDKs, including Cursor.
 Claude and Codex also have a one-hour post-progress idle timeout by default;
@@ -246,7 +256,9 @@ bounded cooperative cleanup have settled. Outstanding transcript-stream side
 effects are drained within the same bound so a terminal outcome cannot overtake
 them. The executor then reports one semantic `quiesced` settlement to the
 daemon. The daemon strictly validates that runtime payload at the trust seam,
-then commits terminal timing and result fields atomically.
+atomically retains it on a STOPPING termination request, and uses the existing
+termination coordinator to verify scoped local process absence (or fenced
+remote quiescence) before committing terminal timing and result fields.
 Runtime cancellation without a winning `user_stop` request maps to `failed`;
 `cancelled` is not a durable Task status.
 Process-level failure handlers never guess terminality; cleanup uncertainty
@@ -369,7 +381,16 @@ admission/UI projection:
 - callback Task creation and its source receipt are one transaction. Gateway
   terminal intent is stored on the source Task, and the final assistant
   response is reloaded from persisted Messages instead of an in-memory buffer.
-  Missing or pending consequence state remains repairable after restart;
+  Terminal reconciliation completes after durable intent and applicable queue
+  continuation; it never waits for connector delivery. Delivery remains
+  at-least-once and independently repairable. Provider failure remains pending,
+  while invalidated origin topology becomes a terminal skipped receipt and a
+  Task without an origin is explicitly not applicable;
+- `terminal_consequences_completed_at` is recorded only after Session
+  projection, callback materialization, durable gateway intent, and applicable
+  queue continuation succeed. The introducing migration baselines older
+  terminal Tasks across tenants with transaction-local policies removed before
+  commit. Missing consequence state remains repairable after restart;
 - after verified settlement, a separately queued durable Task may run after
   commit; it is not a retry or replay of the settled prompt;
 - reconciliation repairs a failed/not-ready Session when no non-queued Task
@@ -381,7 +402,8 @@ admission/UI projection:
 
 Standalone startup performs narrow tenant-ID discovery and re-enters each
 tenant for one ordered post-listen recovery path: resume containment, record
-restart notices, then run the bounded terminal-consequence repair sweep.
+restart notices, run the bounded terminal-consequence repair sweep, then run
+the gateway-owned pending-delivery repair sweep.
 Containment keeps only tenant identity while it waits on the runtime; claims,
 notices, and repair work use explicit short database scopes. Queue processing
 is suppressed during restart settlement and resumes through the final
@@ -443,6 +465,8 @@ Preserve these invariants:
 16. Fresh and already-observed terminal settlements run idempotent terminal
     consequences only after terminal state commits; only the fresh transition
     emits lifecycle analytics and events.
+17. Enforced SDK-health containment is fenced by executor-authored
+    detection-time sequence evidence, not by a later Task snapshot.
 
 ## Code map
 

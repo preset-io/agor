@@ -102,6 +102,9 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     }),
     patch: vi.fn(),
   };
+  const gatewayService = {
+    repairPendingTerminalDeliveries: vi.fn(),
+  };
   tasksService.reconcileSessionState.mockImplementation(async (id: string, params: unknown) => {
     await sessionsService.patch(id, { ready_for_prompt: true }, params);
     return fixtures.sessionsById?.[id] ?? makeSession({ session_id: id, ready_for_prompt: true });
@@ -109,6 +112,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
   const services = new Map<string, unknown>([
     ['tasks', tasksService],
     ['sessions', sessionsService],
+    ['gateway', gatewayService],
   ]);
   const app = {
     service: vi.fn((name: string) => services.get(name)),
@@ -135,7 +139,7 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     environmentHealthMonitorPolicy: 'standalone',
   } as unknown as StartupContext;
 
-  return { ctx, baseDb, tasksService, sessionsService };
+  return { ctx, baseDb, tasksService, sessionsService, gatewayService };
 }
 
 function makeTask(overrides: Partial<Task>): Task {
@@ -382,7 +386,7 @@ describe('startup tenant database scope', () => {
       status: SessionStatus.RUNNING,
       tasks: [task.task_id] as never,
     });
-    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+    const { ctx, tasksService, gatewayService } = makeStartupContextWithGuardedDb({
       orphanedTasks: [task],
       sessionsById: { [session.session_id]: session },
     });
@@ -417,6 +421,10 @@ describe('startup tenant database scope', () => {
     tasksService.repairTerminalConsequences.mockImplementation(async () => {
       order.push('repair');
     });
+    gatewayService.repairPendingTerminalDeliveries.mockImplementation(async () => {
+      expect(getCurrentTenantId()).toBe('startup-tenant');
+      order.push('gateway-repair');
+    });
 
     const recovery = resumeRuntimeRecovery(ctx, {
       wasGraceful: false,
@@ -432,7 +440,13 @@ describe('startup tenant database scope', () => {
     finishContainment();
     await recovery;
 
-    expect(order).toEqual(['containment-start', 'containment-end', 'notice', 'repair']);
+    expect(order).toEqual([
+      'containment-start',
+      'containment-end',
+      'notice',
+      'repair',
+      'gateway-repair',
+    ]);
     expect(appendNotice).toHaveBeenCalledOnce();
     expect(containment).toHaveBeenCalledOnce();
     expect(countMessages).toHaveBeenCalledOnce();

@@ -1,7 +1,6 @@
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { AgenticToolName, ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
-import { isSdkHealthFailureAbort, markSdkHealthFailureAbort } from './termination-state.js';
 
 export type SdkActivityAdapter = AgenticToolName;
 
@@ -122,15 +121,6 @@ export function activityToPulse(activity: RuntimeActivity): {
 
 type WatchdogEvidence = Omit<SdkHealthFailureInput, 'task_id'>;
 
-export function markSdkHealthAbort(controller: AbortController): void {
-  markSdkHealthFailureAbort(controller);
-  controller.abort();
-}
-
-export function isSdkHealthAbort(controller: AbortController): boolean {
-  return isSdkHealthFailureAbort(controller);
-}
-
 interface ActiveOperation {
   id: string;
   kind: string;
@@ -183,6 +173,8 @@ export class SdkWatchdog {
   };
   private timer?: ReturnType<typeof setTimeout>;
   private decided = false;
+  private activityRevision = 0;
+  private pendingEnforcedDecision?: { key: string; activityRevision: number };
   private readonly observeLatches = new Set<string>();
 
   constructor(
@@ -190,13 +182,15 @@ export class SdkWatchdog {
       tool: string;
       config: ResolvedSdkWatchdogConfig;
       sdkVersion?: string;
-      onDecision(evidence: WatchdogEvidence): void | Promise<void>;
+      pulseSequenceAtDetection?: () => number | undefined;
+      onDecision(evidence: WatchdogEvidence): boolean | undefined | Promise<boolean | undefined>;
       now?: () => number;
     }
   ) {}
 
   record(activity: RuntimeActivity): RuntimeActivity {
     if (this.decided || this.options.config.mode === 'disabled') return activity;
+    if (activity.type !== 'sdk_started') this.activityRevision += 1;
     const now = this.now();
 
     if (activity.type === 'waiting_started') {
@@ -427,6 +421,14 @@ export class SdkWatchdog {
       };
     });
 
+    // Keep recording activity, but do not start a second decision or spin an
+    // already-expired timer while daemon authorization is in flight. The
+    // decision continuation calls check() again against the updated state.
+    if (this.pendingEnforcedDecision) {
+      this.schedule(undefined);
+      return;
+    }
+
     const decision = interpretedDeadlines.find(
       (deadline) => now >= deadline.at && !this.observeLatches.has(deadline.key)
     );
@@ -460,10 +462,38 @@ export class SdkWatchdog {
       watchdog_action: action,
       unknown_event_count: this.state.unknownCount,
       sdk_version: this.options.sdkVersion,
+      pulse_sequence_at_detection: this.options.pulseSequenceAtDetection?.(),
     };
-    if (terminalDecision) {
-      if (action === 'enforced') this.stop();
-      else if (observeKey) this.observeLatches.add(observeKey);
+    if (terminalDecision && action !== 'enforced' && observeKey) {
+      this.observeLatches.add(observeKey);
+    }
+    if (terminalDecision && action === 'enforced') {
+      const key = observeKey ?? reason;
+      if (this.pendingEnforcedDecision) return;
+      const pending = { key, activityRevision: this.activityRevision };
+      this.pendingEnforcedDecision = pending;
+      queueMicrotask(async () => {
+        let authorized = false;
+        try {
+          authorized = (await this.options.onDecision(evidence)) === true;
+        } catch {
+          authorized = false;
+        }
+        if (this.pendingEnforcedDecision !== pending) return;
+        this.pendingEnforcedDecision = undefined;
+        if (authorized) {
+          this.stop();
+          return;
+        }
+        // A report can be superseded by activity observed while it was in
+        // flight. Recompute from that state. Without new activity, latch the
+        // expired deadline so a transport failure cannot create a hot loop.
+        if (this.activityRevision === pending.activityRevision) {
+          this.observeLatches.add(key);
+        }
+        this.check();
+      });
+      return;
     }
     queueMicrotask(() => void this.options.onDecision(evidence));
   }

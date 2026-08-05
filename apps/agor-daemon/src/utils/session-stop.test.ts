@@ -22,7 +22,7 @@ describe('markStoppedSessionPromptableNoDrain', () => {
     expect(sessionsService.patch).toHaveBeenCalledWith(
       'session-1',
       { status: 'idle', ready_for_prompt: true },
-      expect.objectContaining({ provider: 'rest', suppressTerminalQueueProcessing: true })
+      params
     );
     expect(sessionsService.triggerQueueProcessing).not.toHaveBeenCalled();
     expect(calls).toEqual(['patch']);
@@ -76,7 +76,7 @@ describe('stopSessionPreserveQueue', () => {
     expect(requestTermination).not.toHaveBeenCalled();
   });
 
-  it('stops only the active task and preserves queued tasks for the caller to drain after the lock', async () => {
+  it('stops only the active task and leaves queue continuation to terminal reconciliation', async () => {
     const sessionId = 'session-1';
     const runningTask = {
       task_id: 'task-running',
@@ -140,7 +140,7 @@ describe('stopSessionPreserveQueue', () => {
       expect.objectContaining({
         taskId: runningTask.task_id,
         cause: 'user_stop',
-        params: expect.objectContaining({ suppressTerminalQueueProcessing: true }),
+        params,
       })
     );
   });

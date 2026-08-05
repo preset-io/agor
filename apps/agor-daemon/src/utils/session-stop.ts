@@ -23,11 +23,11 @@ export interface StopSessionDeps {
 }
 
 /**
- * Mark a stopped session promptable without draining the queue while the Stop
- * route still holds the turn lock.
+ * Repair a stopped session with no active Task while the Stop route holds the
+ * turn lock.
  *
- * The route schedules queue processing after the lock is released. Doing it
- * here would deadlock/retry against the same in-flight lock.
+ * With no terminal Task, the route schedules queue processing after the lock
+ * is released. Doing it here would wait on the same in-flight lock.
  */
 export async function markStoppedSessionPromptableNoDrain(
   sessionsService: Pick<SessionsServiceImpl, 'patch'>,
@@ -40,10 +40,7 @@ export async function markStoppedSessionPromptableNoDrain(
       status: SessionStatus.IDLE,
       ready_for_prompt: true,
     },
-    {
-      ...(params ?? {}),
-      suppressTerminalQueueProcessing: true,
-    } as Params
+    params
   );
 }
 
@@ -51,13 +48,11 @@ export async function markStoppedSessionPromptableNoDrain(
  * Stop semantics, in one place:
  * - target only the active task for the session;
  * - preserve queued work so it can drain after Stop;
- * - suppress task-terminal side effects that would independently drain or
- *   dispatch callbacks for a user-stopped turn;
- * - leave the session idle/promptable before the caller kicks the queue
- *   drainer after releasing the session turn lock.
+ * - let terminal reconciliation own Session projection and queue continuation;
+ * - repair the no-active-Task edge case directly.
  *
- * Callers must hold the session turn lock while invoking this function, and
- * must trigger queue processing only after the lock is released.
+ * Callers must hold the session turn lock while invoking this function. They
+ * trigger queue processing after release only for the no-active-Task result.
  */
 export async function stopSessionPreserveQueue(
   deps: StopSessionDeps,
@@ -104,8 +99,7 @@ export async function stopSessionPreserveQueue(
     taskId: latestTask.task_id,
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
-    // This caller owns the queue hand-off until its session lock is released.
-    params: { ...params, suppressTerminalQueueProcessing: true },
+    params,
   });
   if (termination.status !== 'terminal') {
     return {

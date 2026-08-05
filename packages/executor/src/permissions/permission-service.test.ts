@@ -1,6 +1,8 @@
+import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SdkWatchdog } from '../sdk-watchdog.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutionPermissionService, PermissionService } from './permission-service.js';
 
@@ -83,6 +85,138 @@ describe('PermissionService interaction capability', () => {
       sessionId,
       taskId,
     });
+  });
+
+  it.each([
+    ['approved', true],
+    ['denied', false],
+  ] as const)('settles %s exactly once when abort races a decision', async (outcome, allow) => {
+    const onActivity = vi.fn();
+    const service = new PermissionService(
+      vi.fn().mockResolvedValue(undefined),
+      600_000,
+      'interactive',
+      onActivity
+    );
+    const abortController = new AbortController();
+    const resolution = service.waitForDecision(
+      'request-1',
+      taskId,
+      sessionId,
+      abortController.signal
+    );
+
+    service.resolvePermission({
+      requestId: 'request-1',
+      taskId,
+      allow,
+      remember: false,
+      scope: PermissionScope.ONCE,
+      decidedBy: 'test-user',
+    });
+    abortController.abort();
+
+    await expect(resolution).resolves.toMatchObject({ outcome });
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenLastCalledWith({
+      type: 'waiting_finished',
+      id: 'request-1',
+      outcome,
+    });
+  });
+
+  it('does not turn an ordinary denial/abort race into adapter incompatibility', async () => {
+    const decisions: unknown[] = [];
+    const watchdog = new SdkWatchdog({
+      tool: 'claude-code',
+      config: {
+        mode: 'enforce',
+        first_progress_timeout_ms: 60_000,
+        operation_absolute_timeout_ms: 60_000,
+        abort_grace_ms: 100,
+        claude_idle_timeout_ms: 60_000,
+        codex_idle_timeout_ms: 60_000,
+      } as ResolvedSdkWatchdogConfig,
+      onDecision: (evidence) => decisions.push(evidence),
+    });
+    const service = new PermissionService(
+      vi.fn().mockResolvedValue(undefined),
+      600_000,
+      'interactive',
+      (activity) => watchdog.record(activity)
+    );
+    const abortController = new AbortController();
+    const resolution = service.waitForDecision(
+      'request-1',
+      taskId,
+      sessionId,
+      abortController.signal
+    );
+
+    service.resolvePermission({
+      requestId: 'request-1',
+      taskId,
+      allow: false,
+      remember: false,
+      scope: PermissionScope.ONCE,
+      decidedBy: 'test-user',
+    });
+    abortController.abort();
+
+    await expect(resolution).resolves.toMatchObject({ outcome: 'denied' });
+    expect(decisions).toEqual([]);
+  });
+
+  it('settles timeout exactly once when abort and a late decision follow', async () => {
+    vi.useFakeTimers();
+    const emitEvent = vi.fn().mockResolvedValue(undefined);
+    const onActivity = vi.fn();
+    const service = new PermissionService(emitEvent, 1, 'interactive', onActivity);
+    const abortController = new AbortController();
+    const resolution = service.waitForDecision(
+      'request-1',
+      taskId,
+      sessionId,
+      abortController.signal
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    abortController.abort();
+    service.resolvePermission({
+      requestId: 'request-1',
+      taskId,
+      allow: true,
+      remember: false,
+      scope: PermissionScope.ONCE,
+      decidedBy: 'test-user',
+    });
+
+    await expect(resolution).resolves.toMatchObject({ outcome: 'timed_out' });
+    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles cancellation exactly once for every pending request in a session', async () => {
+    const onActivity = vi.fn();
+    const service = new PermissionService(
+      vi.fn().mockResolvedValue(undefined),
+      600_000,
+      'interactive',
+      onActivity
+    );
+    const abortController = new AbortController();
+    const resolution = service.waitForDecision(
+      'request-1',
+      taskId,
+      sessionId,
+      abortController.signal
+    );
+
+    service.cancelPendingRequests(sessionId);
+    abortController.abort();
+
+    await expect(resolution).resolves.toMatchObject({ outcome: 'cancelled', taskId });
+    expect(onActivity).toHaveBeenCalledTimes(2);
   });
 
   it.each([

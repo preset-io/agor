@@ -275,4 +275,32 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("= 'task_runtime_recovery'");
     expect(migration).not.toContain('WITH CHECK');
   });
+  it('limits terminal consequence recovery to incomplete work and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0083_terminal_consequence_recovery.sql'
+    );
+    const sqliteMigration = readRepoFile(
+      'packages/core/drizzle/sqlite/0085_terminal_consequence_recovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain('ON "tasks"');
+    expect(migration).toContain('ON "sessions"');
+    expect(migration).toContain("'stopping'");
+    expect(migration).toContain("= 'task_runtime_recovery'");
+    expect(migration).toContain("terminal_consequences_completed_at' IS NULL");
+    expect(migration).toContain("gateway_terminal_delivery' ->> 'status' = 'pending'");
+    const sessionPolicy = migration.split('session_runtime_recovery_discovery')[1] ?? '';
+    expect(sessionPolicy).not.toContain("'timed_out'");
+    expect(migration).not.toContain("INTERVAL '7 days'");
+    expect(migration).toContain("set_config('agor.migration_scope'");
+    expect(migration).toContain('terminal_consequence_baseline_select');
+    expect(migration).toContain('terminal_consequence_baseline_update');
+    expect(migration).toContain('DROP POLICY "terminal_consequence_baseline_update"');
+    const recoveryPolicies = migration.split('task_runtime_recovery_discovery')[1] ?? '';
+    expect(recoveryPolicies).not.toContain('WITH CHECK');
+    expect(migration).toContain('Baseline them once');
+    expect(sqliteMigration).toContain('terminal_consequences_completed_at');
+  });
+
 });

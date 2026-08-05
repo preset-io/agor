@@ -261,6 +261,19 @@ function makeGatewayHarness(args: {
       tasks.set(id, task);
       return task;
     }),
+    materializeGatewayTerminalDelivery: vi.fn(async (id: string, receipt: never) => {
+      const current = await taskRepo.findById(id);
+      if (current?.metadata?.gateway_terminal_delivery) return current;
+      return taskRepo.update(id, { metadata: { gateway_terminal_delivery: receipt } });
+    }),
+    settleGatewayTerminalDelivery: vi.fn(async (id: string, _expected: unknown, receipt: never) =>
+      taskRepo.update(id, { metadata: { gateway_terminal_delivery: receipt } })
+    ),
+    findPendingGatewayDeliveryPage: vi.fn(async (_cursor?: string, limit = 100) =>
+      [...tasks.values()]
+        .filter((task) => task.metadata?.gateway_terminal_delivery?.status === 'pending')
+        .slice(0, limit)
+    ),
   };
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
@@ -1685,12 +1698,20 @@ describe('GatewayService terminal reconciliation', () => {
     };
 
     await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    await runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal));
     await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    await runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal));
     await runWithTenantContext('tenant-channel', () =>
       service.finalizeTask({ ...terminal, task_id: 'task-2' })
     );
     await runWithTenantContext('tenant-channel', () =>
+      service.deliverTerminalTask({ ...terminal, task_id: 'task-2' })
+    );
+    await runWithTenantContext('tenant-channel', () =>
       service.finalizeTask({ ...terminal, task_id: 'task-2' })
+    );
+    await runWithTenantContext('tenant-channel', () =>
+      service.deliverTerminalTask({ ...terminal, task_id: 'task-2' })
     );
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -1715,10 +1736,10 @@ describe('GatewayService terminal reconciliation', () => {
       connector: { setThreadStatus },
     });
 
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'failed' as const };
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
     await expect(
-      runWithTenantContext('tenant-channel', () =>
-        service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'failed' })
-      )
+      runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal))
     ).rejects.toThrow('slack unavailable');
 
     await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
@@ -1757,7 +1778,7 @@ describe('GatewayService terminal reconciliation', () => {
     });
 
     await runWithTenantContext('tenant-channel', () =>
-      service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
+      service.deliverTerminalTask({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
     );
 
     expect(threadMapRepo.findBySession).not.toHaveBeenCalled();
@@ -1768,6 +1789,82 @@ describe('GatewayService terminal reconciliation', () => {
     await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
       metadata: { gateway_terminal_delivery: { status: 'delivered' } },
     });
+  });
+
+  it.each([
+    ['deleted mapping', 'origin_mapping_deleted'],
+    ['disabled channel', 'origin_channel_disabled'],
+    ['unsupported channel', 'origin_channel_unsupported'],
+  ] as const)('settles pending delivery as skipped for %s topology', async (topology, reason) => {
+    const { service, taskRepo, threadMapRepo, channelRepo } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+    });
+    const terminal = { session_id: 'sess-1', task_id: 'task-1', state: 'done' as const };
+    await runWithTenantContext('tenant-channel', () => service.finalizeTask(terminal));
+    if (topology === 'deleted mapping') threadMapRepo.findById.mockResolvedValueOnce(null);
+    else if (topology === 'disabled channel') {
+      channelRepo.findById.mockResolvedValueOnce({ ...slackChannel, enabled: false });
+    } else {
+      channelRepo.findById.mockResolvedValueOnce({
+        ...slackChannel,
+        channel_type: 'unsupported' as never,
+      });
+    }
+
+    await runWithTenantContext('tenant-channel', () => service.deliverTerminalTask(terminal));
+
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: { gateway_terminal_delivery: { status: 'skipped', reason } },
+    });
+  });
+
+  it('materializes an explicit not-applicable receipt when no origin mapping exists', async () => {
+    const { service, taskRepo } = makeGatewayHarness({ existingMapping: null });
+
+    await runWithTenantContext('tenant-channel', () =>
+      service.finalizeTask({ session_id: 'sess-1', task_id: 'task-1', state: 'done' })
+    );
+
+    await expect(taskRepo.findById('task-1')).resolves.toMatchObject({
+      metadata: {
+        gateway_terminal_delivery: {
+          status: 'not_applicable',
+          reason: 'no_origin_mapping',
+        },
+      },
+    });
+  });
+
+  it('continues terminal-delivery repair past a failing old page', async () => {
+    const { service, taskRepo } = makeGatewayHarness({});
+    const task = (taskId: string) =>
+      ({ task_id: taskId, session_id: `session-${taskId}`, status: TaskStatus.COMPLETED }) as Task;
+    const oldFailure = new Error('old delivery failed');
+    taskRepo.findPendingGatewayDeliveryPage.mockImplementation(
+      async (cursor?: string, pageSize = 100) => {
+        expect(pageSize).toBe(2);
+        if (!cursor) return [task('task-001'), task('task-002')];
+        if (cursor === 'task-002') return [task('task-003')];
+        return [];
+      }
+    );
+    const deliverTerminalTask = vi
+      .spyOn(service, 'deliverTerminalTask')
+      .mockImplementation(async (data) => {
+        if (data.task_id === 'task-001') throw oldFailure;
+      });
+
+    await expect(service.repairPendingTerminalDeliveries(2)).rejects.toBe(oldFailure);
+
+    expect(taskRepo.findPendingGatewayDeliveryPage.mock.calls).toEqual([
+      [undefined, 2],
+      ['task-002', 2],
+    ]);
+    expect(deliverTerminalTask.mock.calls.map(([data]) => data.task_id)).toEqual([
+      'task-001',
+      'task-002',
+      'task-003',
+    ]);
   });
 });
 

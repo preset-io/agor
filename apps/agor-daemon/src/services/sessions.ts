@@ -1037,7 +1037,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (this.queueProcessor) {
       await this.queueProcessor(id, params);
     } else {
-      console.warn('⚠️  [SessionsService] Queue processor not set, cannot trigger queue processing');
+      throw new Error('Queue processor not set, cannot trigger queue processing');
     }
   }
 

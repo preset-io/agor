@@ -146,10 +146,7 @@ import {
   type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
-import {
-  deferWithSessionQueueTenantScope,
-  runWithSessionQueueTenantScope,
-} from './utils/session-queue-tenant-scope.js';
+import { runWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
@@ -942,27 +939,29 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     taskRepo: TaskRepository,
     params: RouteParams,
     options: { ignoredTaskIds?: readonly string[] } = {}
-  ): Promise<Session> {
+  ): Promise<{ session: Session; terminalQueueContinuationScheduled: boolean }> {
     if (session.status !== SessionStatus.FAILED || session.ready_for_prompt === true) {
-      return session;
+      return { session, terminalQueueContinuationScheduled: false };
     }
 
     const sessionTasks = await taskRepo.findBySession(session.session_id);
-    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
+    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) {
+      return { session, terminalQueueContinuationScheduled: false };
+    }
     const ignoredTaskIds = new Set(options.ignoredTaskIds ?? []);
     const terminalTask = [...sessionTasks]
       .reverse()
       .find((task) => !ignoredTaskIds.has(task.task_id) && isTerminalTaskStatus(task.status));
-    if (!terminalTask) return session;
+    if (!terminalTask) return { session, terminalQueueContinuationScheduled: false };
 
     console.warn(
       `🧹 [PromptState] Reconciling terminal Task ${shortId(terminalTask.task_id)} for stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (app.service('tasks') as unknown as TasksServiceImpl).reconcileSessionState(
-      session.session_id,
-      { ...params, suppressTerminalQueueProcessing: true }
-    );
+    const reconciled = await (
+      app.service('tasks') as unknown as TasksServiceImpl
+    ).reconcileSessionState(session.session_id, params);
+    return { session: reconciled, terminalQueueContinuationScheduled: true };
   }
 
   /**
@@ -1265,7 +1264,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       {
         status: SessionStatus.RUNNING,
         ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
+        tasks: session.tasks.includes(task.task_id)
+          ? session.tasks
+          : [...session.tasks, task.task_id],
       },
       params
     );
@@ -1527,11 +1528,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               // turn doesn't accept a prompt.
               throw new Error('Cannot send prompt: session is currently stopping');
             }
-            lockedSession = await reconcileSessionPromptStateIfStuck(
+            const promptState = await reconcileSessionPromptStateIfStuck(
               lockedSession,
               taskRepo,
               params
             );
+            lockedSession = promptState.session;
 
             const prior = data.idempotencyTaskId
               ? await taskRepo.findById(data.idempotencyTaskId)
@@ -1625,9 +1627,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
   // the executor by POSTing a Task row first (`POST /tasks`) and then poking
   // it awake here. Wraps `spawnTaskExecutor` via `runExistingTask` (status
-  // revalidation) under `withSessionTurnLock` — the same shared session-level
-  // mutex that `/sessions/:id/prompt`'s idle branch and the queue drainer
-  // also acquire — so the on-the-wire effect is identical to "create a task
+  // revalidation) under `withSessionTurnLock` — the same process-local mutex
+  // as `/sessions/:id/prompt` and local queue preparation. The drainer additionally
+  // uses a Session-first database claim, so the on-the-wire effect remains "create a task
   // and run it now."
   //
   // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
@@ -1730,7 +1732,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           async () => {
             // Re-read session state inside the lock — it may have flipped to
             // RUNNING while we waited for our turn.
-            const session = await reconcileSessionPromptStateIfStuck(
+            const { session } = await reconcileSessionPromptStateIfStuck(
               await sessionsService.get(task.session_id, params),
               taskRepo,
               params,
@@ -2553,7 +2555,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
-        const triggerPreservedQueue = () => {
+        const triggerNoActiveTaskQueue = () => {
           deferInFreshTenantScope(params, async () => {
             try {
               await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
@@ -2596,7 +2598,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               stoppedTaskId: failedTask.task_id,
             };
           });
-          triggerPreservedQueue();
           return result;
         }
 
@@ -2614,8 +2615,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           )
         );
 
-        if (result.success) {
-          triggerPreservedQueue();
+        if (result.success && !result.stoppedTaskId) {
+          triggerNoActiveTaskQueue();
         }
 
         return result;
@@ -2678,107 +2679,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params,
         label: 'processNextQueuedTask',
       },
-      async (scopedParams) => processNextQueuedTaskInTenantScope(sessionId, scopedParams)
+      async (scopedParams) =>
+        withSessionTurnLock(sessionTurnLocks, sessionId, () =>
+          processNextQueuedTaskInternal(sessionId, scopedParams)
+        )
     );
-  }
-
-  async function processNextQueuedTaskInTenantScope(
-    sessionId: SessionID,
-    params: RouteParams
-  ): Promise<void> {
-    const existingLock = sessionTurnLocks.get(sessionId);
-    if (existingLock) {
-      console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
-
-      // Race the lock against a timeout. A half-open TCP connection can leave
-      // a DB query pending forever, which holds the lock indefinitely and
-      // deadlocks all subsequent prompts for this session. statement_timeout
-      // (60s) handles normal cases; this is the client-side backstop.
-      const LOCK_WAIT_TIMEOUT_MS = 65_000;
-      const outcome = await Promise.race([
-        existingLock.catch(() => undefined).then(() => 'released' as const),
-        new Promise<'timeout'>((resolve) =>
-          setTimeout(() => resolve('timeout'), LOCK_WAIT_TIMEOUT_MS)
-        ),
-      ]);
-
-      if (outcome === 'timeout') {
-        console.error(
-          `❌ [Queue] Session ${shortId(sessionId)}: turn lock held >${LOCK_WAIT_TIMEOUT_MS / 1000}s — ` +
-            `holder may be stuck on a broken DB connection. Skipping this drain trigger; ` +
-            `the next natural trigger (user prompt or task completion) will retry.`
-        );
-        return;
-      }
-
-      if (!queueRetryScheduled.has(sessionId)) {
-        queueRetryScheduled.add(sessionId);
-        deferWithSessionQueueTenantScope(
-          {
-            db,
-            config,
-            sessionId,
-            params,
-            label: 'processNextQueuedTask retry',
-          },
-          async (retryParams) => {
-            queueRetryScheduled.delete(sessionId);
-            try {
-              await processNextQueuedTask(sessionId, retryParams);
-            } catch (error) {
-              console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
-            }
-          },
-          (error) => {
-            queueRetryScheduled.delete(sessionId);
-            console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
-          }
-        );
-      } else {
-        console.log(
-          `⏭️  [Queue] Retry already scheduled for session ${shortId(sessionId)}, not queueing another`
-        );
-      }
-      return;
-    }
-
-    let resolveLock!: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      resolveLock = resolve;
-    });
-    sessionTurnLocks.set(sessionId, lockPromise);
-
-    // Race the drain against a holder timeout. A half-open TCP connection can
-    // keep spawnTaskExecutor waiting indefinitely on a DB query that never
-    // completes on the Node.js side (statement_timeout only fires if Postgres
-    // actually received the query). Releasing the lock after 30s lets waiting
-    // prompts make progress; the background drain will eventually fail and DB
-    // state will be reconciled by reconcileSessionPromptStateIfStuck.
-    const HOLDER_TIMEOUT_MS = 30_000;
-    try {
-      await Promise.race([
-        processNextQueuedTaskInternal(sessionId, params),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `processNextQueuedTaskInternal timed out for ${shortId(sessionId)} after ${HOLDER_TIMEOUT_MS / 1000}s`
-                )
-              ),
-            HOLDER_TIMEOUT_MS
-          )
-        ),
-      ]);
-    } catch (err) {
-      console.error(
-        `❌ [Queue] processNextQueuedTask holder error for ${shortId(sessionId)}:`,
-        err instanceof Error ? err.message : err
-      );
-    } finally {
-      sessionTurnLocks.delete(sessionId);
-      resolveLock();
-    }
   }
 
   async function processNextQueuedTaskInternal(
@@ -2813,11 +2718,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
     );
-    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
+    const promptState = await reconcileSessionPromptStateIfStuck(
+      queuedSession,
+      taskRepo,
+      taskParams
+    );
+    if (promptState.terminalQueueContinuationScheduled) {
+      taskQueueDebug(
+        `⏳ Terminal reconciliation owns queue continuation for session ${shortId(sessionId)}`
+      );
+      return;
+    }
 
-    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+    if (!sessionCanStartTask(promptState.session.status, promptState.session.ready_for_prompt)) {
       console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
+        `⏸️  [Queue] Session ${shortId(sessionId)} is ${promptState.session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
           `(will be processed when session becomes IDLE via patch hook)`
       );
       return;
@@ -2867,11 +2782,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   // Inject queue processor into sessions service.
   sessionsService.setQueueProcessor(async (sessionId: SessionID, params?: RouteParams) => {
-    try {
-      await processNextQueuedTask(sessionId, params || {});
-    } catch (error) {
-      console.error(`❌ [Sessions] Failed to process queued task:`, error);
-    }
+    await processNextQueuedTask(sessionId, params || {});
   });
 
   // ============================================================================

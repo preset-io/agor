@@ -62,7 +62,10 @@ describe('SdkWatchdog', () => {
       tool: 'codex',
       config: { ...config, ...overrides } as ResolvedSdkWatchdogConfig,
       now: () => Date.now(),
-      onDecision: (evidence) => decisions.push(evidence),
+      onDecision: (evidence) => {
+        decisions.push(evidence);
+        return evidence.watchdog_action === 'enforced';
+      },
     });
     return { watchdog, decisions };
   }

@@ -2,7 +2,6 @@ import type { ExecutorFailureCause } from '@agor/core/types';
 
 const DaemonAbortCause = {
   COORDINATOR_TERMINATION: 'coordinator_termination',
-  SDK_HEALTH_FAILURE: 'sdk_health_failure',
 } as const;
 type DaemonOwnedAbortCause = (typeof DaemonAbortCause)[keyof typeof DaemonAbortCause];
 
@@ -42,14 +41,6 @@ export function markCoordinatorTerminationAbort(controller: AbortController): vo
 
 export function isCoordinatorTerminationAbort(controller: AbortController): boolean {
   return hasDaemonOwnedAbortCause(controller, DaemonAbortCause.COORDINATOR_TERMINATION);
-}
-
-export function markSdkHealthFailureAbort(controller: AbortController): void {
-  markDaemonOwnedAbort(controller, DaemonAbortCause.SDK_HEALTH_FAILURE);
-}
-
-export function isSdkHealthFailureAbort(controller: AbortController): boolean {
-  return hasDaemonOwnedAbortCause(controller, DaemonAbortCause.SDK_HEALTH_FAILURE);
 }
 
 /** Whether a daemon workflow, rather than the executor fail-safe, owns terminality. */

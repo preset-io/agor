@@ -71,6 +71,10 @@ persisted in `Task.metadata.initial_message_id`; a later drainer therefore
 writes exactly the same transcript row. A losing admission that still observes
 `queued` writes no transcript row.
 
+Terminal reconciliation durably materializes callback receipts and the originating
+gateway intent before queue continuation. External gateway delivery is owned and
+repaired independently, so connector availability never blocks the next queued Task.
+
 Widget submit/dismiss uses a separate short Message-row claim before registry
 or connector work. Only `pending -> resolving` may perform that work; the
 opaque claim token alone may publish `submitted|dismissed`. An interrupted

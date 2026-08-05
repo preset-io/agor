@@ -90,7 +90,8 @@ export class PermissionService {
     string,
     {
       sessionId: SessionID;
-      resolve: (resolution: PermissionResolution) => void;
+      taskId: TaskID;
+      settle: (resolution: PermissionResolution) => boolean;
       timeout: NodeJS.Timeout;
     }
   >();
@@ -162,51 +163,66 @@ export class PermissionService {
     });
 
     return new Promise((resolve) => {
-      // Handle cancellation
-      signal.addEventListener('abort', () => {
+      let settled = false;
+      let timeout: NodeJS.Timeout;
+      const onAbort = () => {
         const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
+        if (
+          pending?.settle({
+            requestId,
+            taskId,
+            outcome: 'cancelled',
+            reason: 'Cancelled',
+            remember: false,
+            scope: PermissionScope.ONCE,
+            decidedBy: 'system',
+          })
+        ) {
+          console.log(`🛡️  [executor] Permission request cancelled: ${requestId}`);
+        }
+      };
+      const settle = (resolution: PermissionResolution): boolean => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(timeout);
+        signal.removeEventListener('abort', onAbort);
+        if (this.pendingRequests.get(requestId)?.settle === settle) {
           this.pendingRequests.delete(requestId);
         }
-        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'cancelled' });
-        console.log(`🛡️  [executor] Permission request cancelled: ${requestId}`);
-        resolve({
-          requestId,
-          taskId,
-          outcome: 'cancelled',
-          reason: 'Cancelled',
-          remember: false,
-          scope: PermissionScope.ONCE,
-          decidedBy: 'system',
+        this.onActivity?.({
+          type: 'waiting_finished',
+          id: requestId,
+          outcome: resolution.outcome,
         });
-      });
+        resolve(resolution);
+        return true;
+      };
 
-      // Timeout (configurable, default 10 minutes)
-      const timeout = setTimeout(async () => {
-        this.pendingRequests.delete(requestId);
-        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'timed_out' });
+      timeout = setTimeout(async () => {
+        if (
+          !settle({
+            requestId,
+            taskId,
+            outcome: 'timed_out',
+            reason: 'Timed out',
+            remember: false,
+            scope: PermissionScope.ONCE,
+            decidedBy: 'system',
+          })
+        ) {
+          return;
+        }
         console.warn(`⏰ [executor] Permission request timed out: ${requestId}`);
-
-        // Broadcast timeout to UI via daemon
         try {
           await this.emitEvent(PermissionEvent.TIMEOUT, { requestId, sessionId, taskId });
         } catch (err) {
           console.error(`⚠️  [executor] Failed to emit permission:timeout event:`, err);
         }
-
-        resolve({
-          requestId,
-          taskId,
-          outcome: 'timed_out',
-          reason: 'Timed out',
-          remember: false,
-          scope: PermissionScope.ONCE,
-          decidedBy: 'system',
-        });
       }, this.timeoutMs);
 
-      this.pendingRequests.set(requestId, { sessionId, resolve, timeout });
+      this.pendingRequests.set(requestId, { sessionId, taskId, settle, timeout });
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
       console.log(
         `🛡️  [executor] Waiting for permission decision: ${requestId} (timeout: ${Math.round(this.timeoutMs / 1000)}s)`
       );
@@ -220,21 +236,17 @@ export class PermissionService {
   resolvePermission(decision: PermissionDecision) {
     const pending = this.pendingRequests.get(decision.requestId);
     if (pending) {
-      clearTimeout(pending.timeout);
       const { allow, ...resolution } = decision;
-      pending.resolve({
-        ...resolution,
-        outcome: allow ? 'approved' : 'denied',
-      });
-      this.pendingRequests.delete(decision.requestId);
-      this.onActivity?.({
-        type: 'waiting_finished',
-        id: decision.requestId,
-        outcome: allow ? 'approved' : 'denied',
-      });
-      console.log(
-        `🛡️  [executor] Permission resolved: ${decision.requestId} → ${decision.allow ? 'ALLOW' : 'DENY'}`
-      );
+      if (
+        pending.settle({
+          ...resolution,
+          outcome: allow ? 'approved' : 'denied',
+        })
+      ) {
+        console.log(
+          `🛡️  [executor] Permission resolved: ${decision.requestId} → ${decision.allow ? 'ALLOW' : 'DENY'}`
+        );
+      }
     } else {
       console.warn(`⚠️  [executor] No pending request found for ${decision.requestId}`);
     }
@@ -248,18 +260,18 @@ export class PermissionService {
 
     for (const [requestId, pending] of this.pendingRequests.entries()) {
       if (pending.sessionId === sessionId) {
-        clearTimeout(pending.timeout);
-        pending.resolve({
-          requestId,
-          taskId: '' as TaskID,
-          outcome: 'cancelled',
-          reason: 'Cancelled due to previous permission denial',
-          remember: false,
-          scope: PermissionScope.ONCE,
-          decidedBy: 'system',
-        });
-        this.pendingRequests.delete(requestId);
-        this.onActivity?.({ type: 'waiting_finished', id: requestId, outcome: 'cancelled' });
+        if (
+          !pending.settle({
+            requestId,
+            taskId: pending.taskId,
+            outcome: 'cancelled',
+            reason: 'Cancelled due to previous permission denial',
+            remember: false,
+            scope: PermissionScope.ONCE,
+            decidedBy: 'system',
+          })
+        )
+          continue;
         cancelledCount++;
       }
     }

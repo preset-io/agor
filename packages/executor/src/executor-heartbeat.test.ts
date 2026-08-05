@@ -161,6 +161,35 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
+  it('coalescingly acknowledges newer progress that arrives during a decision flush', async () => {
+    let releaseInitial!: () => void;
+    const reportRuntimeTelemetry = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseInitial = resolve;
+          })
+      )
+      .mockResolvedValue({});
+    const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+    const handle = startExecutorHeartbeat({ client, taskId: 'task-1', intervalMs: 60_000 });
+    handle.recordPulse('sdk_started', 'codex');
+
+    const flush = handle.flushProgressThrough(1);
+    handle.recordPulse('progress', 'item.completed');
+    releaseInitial();
+
+    await expect(flush).resolves.toBe(2);
+    expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(2);
+    expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
+      task_id: 'task-1',
+      pulse: { sequence: 2, kind: 'progress', detail: 'item.completed' },
+      progress: { sequence: 2, kind: 'progress', detail: 'item.completed' },
+    });
+    handle.stop();
+  });
+
   it('keeps 100 concurrent pulse streams bounded to heartbeat cadence', async () => {
     vi.useFakeTimers();
     try {

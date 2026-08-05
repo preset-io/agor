@@ -139,7 +139,7 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
   });
 
-  it('preserves an explicit caller-owned queue hand-off', async () => {
+  it('preserves ordered startup queue deferral', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble();
     state.claim(stopping('user_stop'));
@@ -148,8 +148,8 @@ describe('termination coordinator', () => {
     await requestExecutorTermination({
       app: state.app,
       taskId,
-      cause: 'user_stop',
-      errorMessage: 'Stopped by user',
+      cause: 'daemon_restart',
+      errorMessage: 'Recovering after restart',
       params: { suppressTerminalQueueProcessing: true },
     });
 
@@ -432,34 +432,132 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
-  it('does not infer provider quiescence from verified local process-group absence', async () => {
+  it('releases normal OpenCode settlement after cooperative quiescence and local absence', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble('opencode');
-    state.claim(stopping('user_stop'));
-    state.settle(
+    state.claim(
       task(TaskStatus.STOPPING, {
-        termination_request: stopping('user_stop').termination_request,
-        sdk_failure: { termination: 'unverified' },
-      }),
-      'unverified'
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+        executor_mode: 'local',
+        termination_request: {
+          cause: 'runtime_settlement',
+          requested_at: '2026-01-01T00:00:01.000Z',
+          executor_quiesced_at: '2026-01-01T00:00:02.000Z',
+          executor_settlement: { status: TaskStatus.COMPLETED },
+        },
+      })
     );
+    state.settle(task(TaskStatus.COMPLETED));
 
-    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'runtime_settlement',
+        errorMessage: 'Runtime settled',
+      })
+    ).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.COMPLETED },
+    });
+  });
+
+  it('keeps a user Stop stopping after runtime cleanup fails despite local wrapper absence', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble('opencode');
+    state.claim(
+      task(TaskStatus.STOPPING, {
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+        executor_mode: 'local',
+        termination_request: {
+          cause: 'user_stop',
+          requested_at: '2026-01-01T00:00:01.000Z',
+          runtime_cleanup_unverified: true,
+        },
+      })
+    );
+    state.settle(task(TaskStatus.STOPPING), 'unverified');
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'runtime_cleanup_failed',
+        errorMessage: 'Provider abort was not confirmed',
+      })
+    ).resolves.toMatchObject({
       status: 'unverified',
-      reason: 'OpenCode server-side execution termination is not verified.',
-      task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
+      task: { status: TaskStatus.STOPPING },
     });
     expect(state.settleTermination).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId,
-        outcome: 'unverified',
-        errorMessage: expect.stringContaining(
-          'OpenCode server-side execution termination is not verified.'
-        ),
-      }),
-      expect.objectContaining({ suppressTerminalQueueProcessing: true })
+      expect.objectContaining({ taskId, outcome: 'unverified' }),
+      expect.anything()
     );
-    expect(untrackExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('settles local cleanup failure after absence but holds templated work without quiescence', async () => {
+    containExecutorProcess
+      .mockResolvedValueOnce({ status: 'verified_absent' })
+      .mockResolvedValueOnce({ status: 'unverified', reason: 'remote runtime is not inspectable' });
+
+    const local = appDouble('codex');
+    local.claim(
+      task(TaskStatus.STOPPING, {
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+        executor_mode: 'local',
+        termination_request: {
+          cause: 'runtime_cleanup_failed',
+          requested_at: '2026-01-01T00:00:01.000Z',
+        },
+      })
+    );
+    local.settle(task(TaskStatus.FAILED));
+    await expect(
+      requestExecutorTermination({
+        app: local.app,
+        taskId,
+        cause: 'runtime_cleanup_failed',
+        errorMessage: 'Cleanup failed',
+      })
+    ).resolves.toMatchObject({ status: 'terminal' });
+
+    const remote = appDouble('codex');
+    remote.claim(
+      task(TaskStatus.STOPPING, {
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+        executor_mode: 'templated',
+        termination_request: {
+          cause: 'runtime_cleanup_failed',
+          requested_at: '2026-01-01T00:00:01.000Z',
+        },
+      })
+    );
+    remote.settle(task(TaskStatus.STOPPING), 'unverified');
+    await expect(
+      requestExecutorTermination({
+        app: remote.app,
+        taskId,
+        cause: 'runtime_cleanup_failed',
+        errorMessage: 'Cleanup failed',
+      })
+    ).resolves.toMatchObject({ status: 'unverified' });
+  });
+
+
+  it('accepts launch-fence absence before an OpenCode runtime connects', async () => {
+    const state = appDouble('opencode');
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(task(TaskStatus.FAILED));
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Executor failed before connection',
+        absenceVerified: true,
+      })
+    ).resolves.toMatchObject({ status: 'terminal' });
   });
 
   it('generically contains historical Claude CLI work during recovery', async () => {
@@ -498,5 +596,8 @@ describe('termination coordinator', () => {
       confirmation: '018f00000000700080000000',
     });
     expect(state.settleTermination).toHaveBeenCalledTimes(2);
+    expect(state.settleTermination).toHaveBeenLastCalledWith(expect.anything(), {
+      provider: undefined,
+    });
   });
 });

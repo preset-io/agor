@@ -1,5 +1,5 @@
 /** Executor-side settlement reporting. The daemon owns durable terminality. */
-import type { ExecutorFailureCause, ExecutorOutcomePatch } from '@agor/core/types';
+import type { ExecutorFailureCause, ExecutorOutcomePatch, Task } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 export type AgenticToolTaskPatch = ExecutorOutcomePatch;
@@ -18,7 +18,11 @@ export interface AgenticToolOutcome {
 
 /** Cleanup uncertainty must reach daemon containment, never a terminal outcome. */
 export class RuntimeCleanupError extends Error {
-  constructor(label: string, cause: unknown) {
+  constructor(
+    label: string,
+    cause: unknown,
+    readonly runtimeCleanupUnverified = false
+  ) {
     super(`${label} runtime cleanup failed`, { cause });
     this.name = 'RuntimeCleanupError';
   }
@@ -54,8 +58,8 @@ export async function finalizeTask(
   client: AgorClient,
   taskId: string,
   outcome: AgenticToolOutcome
-): Promise<void> {
-  await client.service('tasks').reportExecutorSettlement(
+): Promise<Task> {
+  return client.service('tasks').reportExecutorSettlement(
     outcome.result === 'success'
       ? { task_id: taskId, kind: 'quiesced', result: 'success', task_patch: outcome.taskPatch }
       : {
@@ -78,6 +82,9 @@ export async function requestContainment(
     task_id: taskId,
     kind: 'containment_required',
     error_message: `Agentic-tool runtime cleanup could not be verified: ${message}`,
+    ...(error instanceof RuntimeCleanupError && error.runtimeCleanupUnverified
+      ? { runtime_cleanup_unverified: true }
+      : {}),
   });
 }
 

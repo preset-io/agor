@@ -20,6 +20,7 @@ import type {
   MessageSource,
   PermissionMode,
   PermissionScope,
+  SdkHealthFailureInput,
   SessionID,
   Task,
   TaskID,
@@ -33,7 +34,6 @@ import {
   activityToPulse,
   applyAdapterConformanceMode,
   getSdkActivityConformance,
-  markSdkHealthAbort,
   type RuntimeActivity,
   SdkWatchdog,
 } from './sdk-watchdog.js';
@@ -50,6 +50,7 @@ patchConsole();
 
 const DEBUG_EXECUTOR =
   process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
+const SDK_HEALTH_ACK_WAIT_MS = 2_000;
 
 function executorDebug(...args: unknown[]): void {
   if (DEBUG_EXECUTOR) {
@@ -80,8 +81,14 @@ export class AgorExecutor {
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
   private latestPulseSequence?: number;
+  private latestProgressSequence?: number;
+  private sdkWorkStarted = false;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
+  private sdkHealthReportInFlight?: {
+    action: SdkHealthFailureInput['watchdog_action'];
+    report: Promise<Task | undefined>;
+  };
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -94,11 +101,12 @@ export class AgorExecutor {
    */
   private async finalizeTask(outcome: AgenticToolOutcome): Promise<void> {
     if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
-    await persistTaskOutcome(this.client, this.config.taskId, outcome);
+    const task = await persistTaskOutcome(this.client, this.config.taskId, outcome);
+    this.handleTaskLifecycleUpdate(task);
   }
 
   private async requestContainment(error: unknown, bestEffort = false): Promise<void> {
-    if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
+    if (!this.client) return;
     if (bestEffort) {
       await tryRequestContainment(this.client, this.config.taskId, error);
       return;
@@ -239,7 +247,13 @@ export class AgorExecutor {
   }
 
   private async reportTerminationComplete(): Promise<void> {
-    if (!this.client || !this.terminationRequest) return;
+    if (
+      !this.client ||
+      !this.terminationRequest ||
+      this.terminationRequest.cause === 'runtime_settlement'
+    ) {
+      return;
+    }
     if (!this.terminationReport) {
       const report = this.client
         .service('tasks')
@@ -260,10 +274,12 @@ export class AgorExecutor {
 
   /** Handle Stop that atomically beat connectExecutor() without starting SDK work. */
   private async recoverTerminationBeforeStart(): Promise<boolean> {
-    if (!this.client) return false;
+    if (!this.client || this.sdkWorkStarted) return false;
     try {
       await this.refreshTerminationState();
-      if (!this.terminationRequest) return false;
+      if (!this.terminationRequest || this.terminationRequest.cause === 'runtime_settlement') {
+        return false;
+      }
       await this.reportTerminationComplete();
       return true;
     } catch {
@@ -281,6 +297,7 @@ export class AgorExecutor {
     if (this.terminationRequest || this.abortController.signal.aborted) return;
 
     this.isRunning = true;
+    this.sdkWorkStarted = true;
 
     const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
     this.heartbeat = startExecutorHeartbeat({
@@ -302,6 +319,7 @@ export class AgorExecutor {
         mode: applyAdapterConformanceMode(watchdogConfig.mode, conformance.mode),
       },
       sdkVersion: conformance.version,
+      pulseSequenceAtDetection: () => this.latestPulseSequence,
       onDecision: (evidence) => this.handleWatchdogDecision(evidence),
     });
     // Start at the executor boundary so imports, subscriptions, prompt
@@ -349,57 +367,63 @@ export class AgorExecutor {
     const observedActivity = this.watchdog?.record(activity) ?? activity;
     const pulse = activityToPulse(observedActivity);
     this.latestPulseSequence = this.heartbeat?.recordPulse(pulse.kind, pulse.detail);
+    if (pulse.kind === 'progress') this.latestProgressSequence = this.latestPulseSequence;
   }
 
   private async handleWatchdogDecision(
-    evidence: Omit<import('@agor/core/types').SdkHealthFailureInput, 'task_id'>
-  ): Promise<void> {
-    if (!this.client) return;
-    let acknowledged = false;
-    const report = this.client
-      .service('tasks')
-      .reportSdkHealthFailure({
-        ...evidence,
-        task_id: this.config.taskId,
-        ...(this.latestPulseSequence === undefined
-          ? {}
-          : { pulse_sequence_at_detection: this.latestPulseSequence }),
-      })
-      .then((task) => {
-        acknowledged = true;
-        this.handleTaskLifecycleUpdate(task);
-      })
-      .catch((error) => console.error('[executor] Failed to report SDK health:', error));
-    if (evidence.watchdog_action !== 'enforced') {
-      await report;
-      return;
+    evidence: Omit<SdkHealthFailureInput, 'task_id'>
+  ): Promise<boolean> {
+    const client = this.client;
+    if (!client) return false;
+    if (
+      !this.sdkHealthReportInFlight ||
+      this.sdkHealthReportInFlight.action !== evidence.watchdog_action
+    ) {
+      const previous = this.sdkHealthReportInFlight?.report;
+      const report = (previous ?? Promise.resolve())
+        .then(async () => {
+          if (
+            evidence.watchdog_action === 'enforced' &&
+            evidence.pulse_sequence_at_detection !== undefined
+          ) {
+            const acknowledgedProgress = await this.heartbeat?.flushProgressThrough(
+              evidence.pulse_sequence_at_detection
+            );
+            const newestProgress = Math.max(
+              acknowledgedProgress ?? -1,
+              this.latestProgressSequence ?? -1
+            );
+            if (newestProgress > evidence.pulse_sequence_at_detection) return undefined;
+          }
+          return client.service('tasks').reportSdkHealthFailure({
+            ...evidence,
+            task_id: this.config.taskId,
+          });
+        })
+        .then((task) => {
+          if (task) this.handleTaskLifecycleUpdate(task);
+          return task;
+        })
+        .catch((error) => {
+          console.error('[executor] Failed to report SDK health:', error);
+          return undefined;
+        });
+      const inFlight = { action: evidence.watchdog_action, report };
+      this.sdkHealthReportInFlight = inFlight;
+      void report.finally(() => {
+        if (this.sdkHealthReportInFlight === inFlight) this.sdkHealthReportInFlight = undefined;
+      });
     }
 
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      report,
-      new Promise<void>((resolve) => {
-        deadline = setTimeout(resolve, 2_000);
-        deadline.unref?.();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const task = await Promise.race([
+      this.sdkHealthReportInFlight.report,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), SDK_HEALTH_ACK_WAIT_MS);
+        timeout.unref?.();
       }),
-    ]);
-    if (deadline) clearTimeout(deadline);
-    markSdkHealthAbort(this.abortController);
-    if (!acknowledged) {
-      this.heartbeat?.stop();
-      this.heartbeat = null;
-      const abortGraceMs =
-        this.config.resolvedConfig?.execution?.sdk_watchdog?.abort_grace_ms ??
-        resolveSdkWatchdogConfig().abort_grace_ms;
-      const exitDeadline = setTimeout(() => {
-        if (acknowledged) return;
-        console.error(
-          '[executor] SDK health report remained unacknowledged; exiting for containment'
-        );
-        process.exit(70);
-      }, abortGraceMs);
-      exitDeadline.unref?.();
-    }
+    ]).finally(() => clearTimeout(timeout));
+    return !!task && (isTerminalTaskStatus(task.status) || task.status === TaskStatus.STOPPING);
   }
 
   /**
@@ -411,7 +435,7 @@ export class AgorExecutor {
 
       if (this.isRunning) {
         this.abortController.abort();
-        // Let the normal execution/finalization path await provider cleanup.
+        // Let the normal execution/finalization path await runtime cleanup.
         // If it cannot return, exiting without a terminal write leaves the
         // daemon's liveness/containment owners to settle the Task safely.
         const graceMs =

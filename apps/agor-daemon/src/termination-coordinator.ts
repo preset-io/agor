@@ -1,4 +1,3 @@
-import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import { generateId, shortId, type TerminationClaimResult } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
@@ -9,7 +8,7 @@ import type {
   TaskID,
   TerminationCause,
 } from '@agor/core/types';
-import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import {
   containExecutorProcess,
@@ -36,6 +35,7 @@ export interface TerminationInput {
   cooperativeGraceMs?: number;
   absenceVerified?: boolean;
   sdkFailure?: SdkFailure;
+  runtimeCleanupUnverified?: boolean;
   expectedStatus?: Task['status'];
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
@@ -115,6 +115,7 @@ async function claimRequest(input: TerminationInput) {
         cause: input.cause,
         errorMessage: input.errorMessage,
         sdkFailure: input.sdkFailure,
+        runtimeCleanupUnverified: input.runtimeCleanupUnverified,
         expectedStatus: input.expectedStatus,
         expectedHeartbeatAt: input.expectedHeartbeatAt,
         heartbeatStaleBefore: input.heartbeatStaleBefore,
@@ -220,13 +221,12 @@ async function runContainment(
     return { status: 'terminal', task: current };
   }
   if (!coordinationToken) return { status: 'condition_changed', task: current };
-  const descriptorUnverifiedReason = isAgenticToolName(tool)
-    ? getAgenticToolIntegration(tool).unverifiedTerminationReason
-    : undefined;
-  const unverifiedReason =
-    containment.status === 'unverified' ? containment.reason : descriptorUnverifiedReason;
-  if (unverifiedReason !== undefined) {
-    const reason = unverifiedReason;
+  const cleanupUnverified = current.termination_request?.runtime_cleanup_unverified === true;
+  if (containment.status === 'unverified' || cleanupUnverified) {
+    const reason =
+      containment.status === 'unverified'
+        ? containment.reason
+        : 'Runtime cleanup could not be verified.';
     const diagnosis: SdkFailure = current.sdk_failure
       ? { ...current.sdk_failure, termination: 'unverified' }
       : {
@@ -406,7 +406,7 @@ export async function forceFailUnverifiedTask(input: {
       outcome: 'forced_unverified',
       errorMessage: 'Force-failed by an authorized user; executor termination remains unverified.',
     },
-    { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
+    internalParams(input.params)
   );
   if (settlement.outcome !== 'transitioned' && settlement.outcome !== 'terminal') {
     throw new Conflict('Task termination state changed before force-fail could be applied.');

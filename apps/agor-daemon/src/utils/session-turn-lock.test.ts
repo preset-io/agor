@@ -4,7 +4,7 @@
  * processor. Pins the mutual-exclusion contract relied on by all three.
  */
 import type { SessionID } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type SessionTurnLocks, withSessionTurnLock } from './session-turn-lock';
 
 const SID = (s: string) => s as SessionID;
@@ -140,5 +140,31 @@ describe('withSessionTurnLock', () => {
 
     expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end', 'third']);
     expect(locks.size).toBe(0);
+  });
+
+  it('bounds acquisition without releasing an unfinished holder', async () => {
+    vi.useFakeTimers();
+    const locks: SessionTurnLocks = new Map();
+    let releaseHolder!: () => void;
+    const holder = withSessionTurnLock(locks, SID('s1'), async () => {
+      await new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+    });
+    await Promise.resolve();
+    const holderLock = locks.get(SID('s1'));
+
+    const waiter = withSessionTurnLock(locks, SID('s1'), async () => undefined, {
+      waiterTimeoutMs: 5,
+    });
+    const rejection = expect(waiter).rejects.toThrow('acquisition timed out after 5ms');
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
+
+    expect(locks.get(SID('s1'))).toBe(holderLock);
+    releaseHolder();
+    await holder;
+    expect(locks.size).toBe(0);
+    vi.useRealTimers();
   });
 });

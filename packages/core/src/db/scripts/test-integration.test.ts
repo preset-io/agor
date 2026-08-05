@@ -389,7 +389,7 @@ describe('Task Repository Integration', () => {
     expect(session2Tasks).toHaveLength(1);
   });
 
-  it('should update task status and completion time', async () => {
+  it('should hand executor completion to termination settlement', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
     const { branch } = await setupRepoAndBranch(db);
@@ -429,8 +429,17 @@ describe('Task Repository Integration', () => {
       now: new Date(completedAt),
     });
 
-    expect(result.task.status).toBe(TaskStatus.COMPLETED);
-    expect(result.task.completed_at).toBe(completedAt);
+    expect(result).toMatchObject({
+      outcome: 'stopping',
+      task: {
+        status: TaskStatus.STOPPING,
+        termination_request: {
+          cause: 'runtime_settlement',
+          executor_quiesced_at: completedAt,
+        },
+      },
+    });
+    expect(result.task.completed_at).toBeUndefined();
   });
 });
 

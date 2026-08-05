@@ -71,6 +71,7 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
+  GatewayTerminalDeliveryReceipt,
   MCPServerID,
   Message,
   MessageSource,
@@ -88,6 +89,7 @@ import {
   hasMinimumRole,
   ROLES,
   SessionStatus,
+  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
@@ -2990,32 +2992,79 @@ export class GatewayService {
       : 'Task completed.';
   }
 
-  /** Materialize one durable terminal gateway consequence (at-least-once externally). */
+  /** Materialize one deterministic terminal gateway intent without external I/O. */
   async finalizeTask(data: GatewayProgressData): Promise<void> {
     if (!data.task_id) return;
     const task = await this.taskRepo.findById(data.task_id);
     if (!task) return;
     const existing = task.metadata?.gateway_terminal_delivery;
-    if (existing?.status === 'delivered') return;
-    const mapping = existing
-      ? await this.threadMapRepo.findById(existing.mapping_id)
-      : await this.threadMapRepo.findBySession(data.session_id);
-    if (!mapping || (existing && mapping.channel_id !== existing.channel_id)) return;
-    const receipt =
-      existing ??
-      ({
-        mapping_id: mapping.id,
-        channel_id: mapping.channel_id,
-        status: 'pending',
-        intended_at: new Date().toISOString(),
-      } as const);
-    if (!existing) {
-      await this.taskRepo.update(task.task_id, {
-        metadata: { gateway_terminal_delivery: receipt },
-      });
+    if (existing) return;
+    const mapping = await this.threadMapRepo.findBySession(data.session_id);
+    const intendedAt = new Date().toISOString();
+    const receipt: GatewayTerminalDeliveryReceipt = mapping
+      ? {
+          mapping_id: mapping.id,
+          channel_id: mapping.channel_id,
+          status: 'pending',
+          intended_at: intendedAt,
+        }
+      : {
+          status: 'not_applicable',
+          intended_at: intendedAt,
+          completed_at: intendedAt,
+          reason: 'no_origin_mapping',
+        };
+    await this.taskRepo.materializeGatewayTerminalDelivery(task.task_id, receipt);
+  }
+
+  private async skipTerminalDelivery(
+    task: Task,
+    receipt: Extract<GatewayTerminalDeliveryReceipt, { status: 'pending' }>,
+    reason: Extract<GatewayTerminalDeliveryReceipt, { status: 'skipped' }>['reason']
+  ): Promise<void> {
+    const completedAt = new Date().toISOString();
+    await this.taskRepo.settleGatewayTerminalDelivery(
+      task.task_id,
+      { mapping_id: receipt.mapping_id, channel_id: receipt.channel_id },
+      {
+        mapping_id: receipt.mapping_id,
+        channel_id: receipt.channel_id,
+        status: 'skipped',
+        intended_at: receipt.intended_at,
+        completed_at: completedAt,
+        reason,
+      }
+    );
+  }
+
+  /** Attempt one pending delivery. Provider failure remains pending for repair. */
+  async deliverTerminalTask(data: GatewayProgressData): Promise<void> {
+    if (!data.task_id) return;
+    const task = await this.taskRepo.findById(data.task_id);
+    const receipt = task?.metadata?.gateway_terminal_delivery;
+    if (!task || receipt?.status !== 'pending') return;
+    const mapping = await this.threadMapRepo.findById(receipt.mapping_id);
+    if (!mapping) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_deleted');
+      return;
+    }
+    if (mapping.channel_id !== receipt.channel_id) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_mapping_changed');
+      return;
     }
     const channel = await this.channelRepo.findById(mapping.channel_id);
-    if (!channel?.enabled || !hasConnector(channel.channel_type as ChannelType)) return;
+    if (!channel) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_channel_deleted');
+      return;
+    }
+    if (!channel.enabled) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_channel_disabled');
+      return;
+    }
+    if (!hasConnector(channel.channel_type as ChannelType)) {
+      await this.skipTerminalDelivery(task, receipt, 'origin_channel_unsupported');
+      return;
+    }
 
     if (channel.channel_type === 'slack') {
       await this.updateProgress(data, mapping.id);
@@ -3038,15 +3087,52 @@ export class GatewayService {
       });
     }
 
-    await this.taskRepo.update(task.task_id, {
-      metadata: {
-        gateway_terminal_delivery: {
-          ...receipt,
-          status: 'delivered',
-          delivered_at: new Date().toISOString(),
-        },
-      },
-    });
+    await this.taskRepo.settleGatewayTerminalDelivery(
+      task.task_id,
+      { mapping_id: receipt.mapping_id, channel_id: receipt.channel_id },
+      { ...receipt, status: 'delivered', delivered_at: new Date().toISOString() }
+    );
+  }
+
+  deliverTerminalTaskAfterCommit(data: GatewayProgressData, params?: unknown): void {
+    deferWithTenantContext(
+      params,
+      () => this.deliverTerminalTask(data),
+      (error) =>
+        console.warn(
+          `[gateway] Terminal delivery remains pending for Task ${shortId(data.task_id ?? '')}:`,
+          error
+        )
+    );
+  }
+
+  /** Bounded tenant-scoped repair pass; the startup orchestrator supplies tenant identity. */
+  async repairPendingTerminalDeliveries(pageSize = 100): Promise<void> {
+    let cursor: string | undefined;
+    let firstFailure: unknown;
+    while (true) {
+      const page = await this.taskRepo.findPendingGatewayDeliveryPage(cursor, pageSize);
+      for (const task of page) {
+        try {
+          await this.deliverTerminalTask({
+            session_id: task.session_id,
+            task_id: task.task_id,
+            state:
+              task.status === TaskStatus.FAILED || task.status === TaskStatus.TIMED_OUT
+                ? 'failed'
+                : 'done',
+            ...(task.error_message ? { error_message: task.error_message } : {}),
+          });
+        } catch (error) {
+          firstFailure ??= error;
+        }
+      }
+      if (page.length < pageSize) {
+        if (firstFailure) throw firstFailure;
+        return;
+      }
+      cursor = page.at(-1)?.task_id;
+    }
   }
 
   private scheduleListenerScan(delayMs: number): void {

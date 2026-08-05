@@ -264,3 +264,68 @@ describe('SDK session storage retirement migrations', () => {
     expect(migration).toContain('payloads are intentionally discarded');
   });
 });
+
+describe('terminal consequence recovery migration', () => {
+  it('baselines only pre-contract terminal Tasks in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-terminal-consequence-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      await client.execute(`
+        CREATE TABLE tasks (
+          task_id text PRIMARY KEY NOT NULL,
+          status text NOT NULL,
+          data text NOT NULL
+        )
+      `);
+      await client.batch([
+        {
+          sql: 'INSERT INTO tasks (task_id, status, data) VALUES (?, ?, ?)',
+          args: ['legacy-terminal', 'completed', '{"preserved":true}'],
+        },
+        {
+          sql: 'INSERT INTO tasks (task_id, status, data) VALUES (?, ?, ?)',
+          args: [
+            'already-complete',
+            'failed',
+            '{"metadata":{"terminal_consequences_completed_at":"2026-01-01T00:00:00.000Z"}}',
+          ],
+        },
+        {
+          sql: 'INSERT INTO tasks (task_id, status, data) VALUES (?, ?, ?)',
+          args: ['active', 'running', '{}'],
+        },
+      ]);
+
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0085_terminal_consequence_recovery.sql', import.meta.url),
+        'utf8'
+      );
+      await client.execute(migration);
+
+      const tasks = await client.execute(`
+        SELECT task_id,
+               json_extract(data, '$.preserved') AS preserved,
+               json_extract(data, '$.metadata.terminal_consequences_completed_at') AS completed
+        FROM tasks
+        ORDER BY task_id
+      `);
+      expect(tasks.rows).toEqual([
+        { task_id: 'active', preserved: null, completed: null },
+        {
+          task_id: 'already-complete',
+          preserved: null,
+          completed: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          task_id: 'legacy-terminal',
+          preserved: 1,
+          completed: expect.any(String),
+        },
+      ]);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -97,6 +97,7 @@ export type SdkHealthFailureInput = Pick<
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
 export type TerminationCause =
+  | 'runtime_settlement'
   | 'user_stop'
   | 'startup_timeout'
   | 'daemon_restart'
@@ -133,6 +134,14 @@ export interface TerminationRequest {
   executor_quiesced_at?: string;
   /** Current expiring containment coordinator, if one has been elected. */
   coordination?: TerminationCoordinationClaim;
+  /** Runtime cleanup could not prove that work terminated. */
+  runtime_cleanup_unverified?: boolean;
+  /** Executor result retained until the daemon proves runtime release. */
+  executor_settlement?: {
+    status: typeof TaskStatus.COMPLETED | typeof TaskStatus.FAILED | typeof TaskStatus.TIMED_OUT;
+    task_patch?: ExecutorOutcomePatch;
+    sdk_failure?: SdkFailure;
+  };
 }
 
 export interface ExecutorTerminationCompleteInput {
@@ -167,6 +176,40 @@ export interface LocalExecutorRuntime {
   as_user?: string;
 }
 
+export type GatewayTerminalDeliveryReceipt =
+  | {
+      mapping_id: ThreadSessionMapID;
+      channel_id: GatewayChannelID;
+      status: 'pending';
+      intended_at: string;
+    }
+  | {
+      mapping_id: ThreadSessionMapID;
+      channel_id: GatewayChannelID;
+      status: 'delivered';
+      intended_at: string;
+      delivered_at: string;
+    }
+  | {
+      mapping_id: ThreadSessionMapID;
+      channel_id: GatewayChannelID;
+      status: 'skipped';
+      intended_at: string;
+      completed_at: string;
+      reason:
+        | 'origin_mapping_deleted'
+        | 'origin_mapping_changed'
+        | 'origin_channel_deleted'
+        | 'origin_channel_disabled'
+        | 'origin_channel_unsupported';
+    }
+  | {
+      status: 'not_applicable';
+      intended_at: string;
+      completed_at: string;
+      reason: 'no_origin_mapping';
+    };
+
 export interface TaskMetadata {
   is_agor_callback?: boolean;
   source?: PersistedMessageSource;
@@ -187,13 +230,9 @@ export interface TaskMetadata {
     dispatched_at: string;
   }>;
   /** Restart-safe gateway consequence receipt, scoped to this source Task. */
-  gateway_terminal_delivery?: {
-    mapping_id: ThreadSessionMapID;
-    channel_id: GatewayChannelID;
-    status: 'pending' | 'delivered';
-    intended_at: string;
-    delivered_at?: string;
-  };
+  gateway_terminal_delivery?: GatewayTerminalDeliveryReceipt;
+  /** Set only after every applicable terminal consequence has succeeded. */
+  terminal_consequences_completed_at?: string;
   /** Local process identity used only to resume containment after daemon restart. */
   executor_runtime?: LocalExecutorRuntime;
   /** Durable idempotency marker for the system message emitted by a BTW fork. */
@@ -562,6 +601,7 @@ export const ExecutorSettlementInputSchema = z.union([
     task_id: z.string().min(1),
     kind: z.literal('containment_required'),
     error_message: z.string().min(1),
+    runtime_cleanup_unverified: z.boolean().optional(),
   }),
 ]);
 

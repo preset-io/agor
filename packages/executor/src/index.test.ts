@@ -1,14 +1,21 @@
+import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const runtime = vi.hoisted(() => ({
+  createClient: vi.fn(),
   execute: vi.fn().mockResolvedValue(undefined),
   initialize: vi.fn().mockResolvedValue(undefined),
   recordPulse: vi.fn(),
+  flushProgressThrough: vi.fn(),
   stopHeartbeat: vi.fn(),
+}));
+vi.mock('./services/feathers-client.js', () => ({
+  createFeathersClient: runtime.createClient,
 }));
 vi.mock('./executor-heartbeat.js', () => ({
   startExecutorHeartbeat: () => ({
     recordPulse: runtime.recordPulse,
+    flushProgressThrough: runtime.flushProgressThrough,
     stop: runtime.stopHeartbeat,
   }),
 }));
@@ -19,11 +26,14 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
 
 import { AgorExecutor } from './index.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { SdkWatchdog } from './sdk-watchdog.js';
+import { RuntimeCleanupError } from './terminal-task.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
   elapsed_ms: 1_000,
   watchdog_action: 'enforced' as const,
+  pulse_sequence_at_detection: 1,
 };
 
 function harness(reportSdkHealthFailure: () => Promise<unknown>) {
@@ -48,12 +58,21 @@ function harness(reportSdkHealthFailure: () => Promise<unknown>) {
     },
   }) as unknown as {
     client: { service: () => { reportSdkHealthFailure: typeof reportSdkHealthFailure } };
-    heartbeat: { stop: ReturnType<typeof vi.fn> } | null;
+    heartbeat: {
+      stop: ReturnType<typeof vi.fn>;
+      flushProgressThrough: ReturnType<typeof vi.fn>;
+    } | null;
     abortController: AbortController;
-    handleWatchdogDecision(input: typeof evidence): Promise<void>;
+    latestPulseSequence?: number;
+    latestProgressSequence?: number;
+    handleWatchdogDecision(input: typeof evidence): Promise<boolean>;
   };
   executor.client = { service: () => ({ reportSdkHealthFailure }) };
-  executor.heartbeat = { stop: vi.fn() };
+  executor.heartbeat = {
+    stop: vi.fn(),
+    flushProgressThrough: runtime.flushProgressThrough.mockResolvedValue(undefined),
+  };
+  executor.latestPulseSequence = 1;
   return executor;
 }
 
@@ -98,11 +117,16 @@ describe('AgorExecutor watchdog handoff', () => {
     );
   });
 
-  it('persists one normalized outcome after adapter cleanup and before stopping liveness', async () => {
+  it('preserves the STOPPING settlement response after adapter cleanup', async () => {
     const tasks = {
-      reportExecutorSettlement: vi
-        .fn()
-        .mockResolvedValue({ task_id: 'task-1', status: 'completed' }),
+      reportExecutorSettlement: vi.fn().mockResolvedValue({
+        task_id: 'task-1',
+        status: 'stopping',
+        termination_request: {
+          cause: 'runtime_settlement',
+          requested_at: '2026-07-23T12:00:00.000Z',
+        },
+      }),
     };
     let settleAdapter!: (value: { result: 'success'; taskPatch: { model: string } }) => void;
     runtime.execute.mockReturnValueOnce(
@@ -134,6 +158,7 @@ describe('AgorExecutor watchdog handoff', () => {
     await execution;
 
     expect(runtime.stopHeartbeat).toHaveBeenCalledOnce();
+    expect(executor.abortController.signal.aborted).toBe(true);
     expect(tasks.reportExecutorSettlement).toHaveBeenCalledWith({
       task_id: 'task-1',
       kind: 'quiesced',
@@ -148,8 +173,147 @@ describe('AgorExecutor watchdog handoff', () => {
     );
   });
 
-  it('stops liveness and exits for containment when the daemon does not acknowledge', async () => {
-    vi.useFakeTimers();
+  it('exits after normal quiesced settlement without reporting termination twice', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const reportTerminationComplete = vi
+      .fn()
+      .mockRejectedValue(new Error('normal settlement must not wait for coordinator containment'));
+    const stoppingTask = {
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'runtime_settlement',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    };
+    const tasks = {
+      connectExecutor: vi.fn().mockResolvedValue({
+        task_id: 'task-1',
+        status: TaskStatus.RUNNING,
+      }),
+      reportExecutorSettlement: vi.fn().mockResolvedValue(stoppingTask),
+      reportTerminationComplete,
+      on: vi.fn(),
+    };
+    runtime.createClient.mockResolvedValueOnce({
+      service: (path: string) => (path === 'tasks' ? tasks : { on: vi.fn() }),
+    });
+    runtime.execute.mockResolvedValueOnce({ result: 'success' });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      start(): Promise<void>;
+      setupShutdownHandlers(): void;
+    };
+    executor.setupShutdownHandlers = vi.fn();
+
+    await executor.start();
+
+    expect(tasks.reportExecutorSettlement).toHaveBeenCalledOnce();
+    expect(reportTerminationComplete).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('reports containment instead of quiescence when provider cleanup fails after SDK start', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stoppingTask = {
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    };
+    const reportTerminationComplete = vi.fn().mockResolvedValue(stoppingTask);
+    const reportExecutorSettlement = vi.fn().mockResolvedValue(stoppingTask);
+    const tasks = {
+      connectExecutor: vi.fn().mockResolvedValue({
+        task_id: 'task-1',
+        status: TaskStatus.RUNNING,
+      }),
+      get: vi.fn().mockResolvedValue(stoppingTask),
+      reportTerminationComplete,
+      reportExecutorSettlement,
+      on: vi.fn(),
+    };
+    runtime.createClient.mockResolvedValueOnce({
+      service: (path: string) => (path === 'tasks' ? tasks : { on: vi.fn() }),
+    });
+    runtime.execute.mockRejectedValueOnce(
+      new RuntimeCleanupError('OpenCode', new Error('provider abort failed'), true)
+    );
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+    }) as unknown as { start(): Promise<void>; setupShutdownHandlers(): void };
+    executor.setupShutdownHandlers = vi.fn();
+
+    await executor.start();
+
+    expect(reportTerminationComplete).not.toHaveBeenCalled();
+    expect(reportExecutorSettlement).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      kind: 'containment_required',
+      error_message: expect.stringContaining('OpenCode runtime cleanup failed'),
+      runtime_cleanup_unverified: true,
+    });
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('reports quiescence only when termination wins before SDK work starts', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stoppingTask = {
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    };
+    const reportTerminationComplete = vi.fn().mockResolvedValue(stoppingTask);
+    const tasks = {
+      connectExecutor: vi.fn().mockRejectedValue(new Error('cannot connect from stopping')),
+      get: vi.fn().mockResolvedValue(stoppingTask),
+      reportTerminationComplete,
+      on: vi.fn(),
+    };
+    runtime.createClient.mockResolvedValueOnce({
+      service: (path: string) => (path === 'tasks' ? tasks : { on: vi.fn() }),
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as { start(): Promise<void>; setupShutdownHandlers(): void };
+    executor.setupShutdownHandlers = vi.fn();
+
+    await executor.start();
+
+    expect(runtime.execute).not.toHaveBeenCalled();
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: stoppingTask.termination_request.requested_at,
+    });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('keeps runtime ownership when the daemon does not authorize containment', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const executor = harness(() => Promise.reject(new Error('offline')));
@@ -157,11 +321,228 @@ describe('AgorExecutor watchdog handoff', () => {
 
     await executor.handleWatchdogDecision(evidence);
 
+    expect(heartbeat?.stop).not.toHaveBeenCalled();
+    expect(executor.heartbeat).toBe(heartbeat);
+    expect(executor.abortController.signal.aborted).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it('invalidates enforced evidence when its progress flush acknowledges newer work', async () => {
+    const reportSdkHealthFailure = vi.fn().mockResolvedValue({
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+    });
+    const executor = harness(reportSdkHealthFailure);
+    runtime.flushProgressThrough.mockResolvedValueOnce(2);
+
+    await expect(executor.handleWatchdogDecision(evidence)).resolves.toBe(false);
+
+    expect(runtime.flushProgressThrough).toHaveBeenCalledWith(1);
+    expect(reportSdkHealthFailure).not.toHaveBeenCalled();
+    expect(executor.abortController.signal.aborted).toBe(false);
+  });
+
+  it('bounds a hung health acknowledgement without accumulating parallel reports', async () => {
+    vi.useFakeTimers();
+    const reportSdkHealthFailure = vi.fn(() => new Promise<never>(() => undefined));
+    const executor = harness(reportSdkHealthFailure);
+
+    const firstDecision = executor.handleWatchdogDecision(evidence);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(firstDecision).resolves.toBe(false);
+
+    const secondDecision = executor.handleWatchdogDecision(evidence);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(secondDecision).resolves.toBe(false);
+
+    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
+    expect(executor.abortController.signal.aborted).toBe(false);
+  });
+
+  it('applies late daemon authorization after the acknowledgement wait expires', async () => {
+    vi.useFakeTimers();
+    let resolveReport!: (task: unknown) => void;
+    const reportSdkHealthFailure = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveReport = resolve;
+        })
+    );
+    const executor = harness(reportSdkHealthFailure);
+    const heartbeat = executor.heartbeat;
+
+    const decision = executor.handleWatchdogDecision(evidence);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(decision).resolves.toBe(false);
+    expect(executor.abortController.signal.aborted).toBe(false);
+
+    resolveReport({
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'sdk_health_failure',
+        requested_at: '2026-01-01T00:00:02.000Z',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
     expect(heartbeat?.stop).toHaveBeenCalledOnce();
     expect(executor.heartbeat).toBeNull();
     expect(executor.abortController.signal.aborted).toBe(true);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(exit).toHaveBeenCalledWith(70);
+  });
+
+  it('sends enforced evidence after an in-flight diagnostic report settles', async () => {
+    vi.useFakeTimers();
+    const resolvers: Array<(task: unknown) => void> = [];
+    const reportSdkHealthFailure = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    const executor = harness(reportSdkHealthFailure);
+
+    const diagnostic = executor.handleWatchdogDecision({
+      ...evidence,
+      reason: 'unknown_activity',
+      watchdog_action: 'would_fire',
+    });
+    await Promise.resolve();
+    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
+
+    const enforced = executor.handleWatchdogDecision({
+      ...evidence,
+      reason: 'adapter_incompatible',
+    });
+    await Promise.resolve();
+    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(diagnostic).resolves.toBe(false);
+    await expect(enforced).resolves.toBe(false);
+    expect(executor.abortController.signal.aborted).toBe(false);
+
+    resolvers[0]?.({ task_id: 'task-1', status: TaskStatus.RUNNING });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reportSdkHealthFailure).toHaveBeenCalledTimes(2);
+    expect(reportSdkHealthFailure.mock.calls[1]?.[0]).toMatchObject({
+      reason: 'adapter_incompatible',
+      watchdog_action: 'enforced',
+    });
+
+    resolvers[1]?.({
+      task_id: 'task-1',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'sdk_health_failure',
+        requested_at: '2026-01-01T00:00:02.000Z',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(executor.abortController.signal.aborted).toBe(true);
+  });
+
+  it('drops enforced evidence when newer progress arrives behind a delayed diagnostic', async () => {
+    vi.useFakeTimers();
+    let resolveDiagnostic!: (task: unknown) => void;
+    const reportSdkHealthFailure = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveDiagnostic = resolve;
+        })
+    );
+    const executor = harness(reportSdkHealthFailure);
+    let acknowledgedProgress = 1;
+    runtime.flushProgressThrough.mockImplementation(async () => acknowledgedProgress);
+
+    const diagnostic = executor.handleWatchdogDecision({
+      ...evidence,
+      reason: 'unknown_activity',
+      watchdog_action: 'would_fire',
+    });
+    await Promise.resolve();
+    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
+
+    const enforced = executor.handleWatchdogDecision({
+      ...evidence,
+      reason: 'adapter_incompatible',
+    });
+    await Promise.resolve();
+    acknowledgedProgress = 2;
+    executor.latestProgressSequence = 2;
+    resolveDiagnostic({ task_id: 'task-1', status: TaskStatus.RUNNING });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(diagnostic).resolves.toBe(false);
+    await expect(enforced).resolves.toBe(false);
+    expect(runtime.flushProgressThrough).toHaveBeenCalledWith(1);
+    expect(reportSdkHealthFailure).toHaveBeenCalledOnce();
+    expect(executor.abortController.signal.aborted).toBe(false);
+  });
+
+  it('preserves progress observed during a delayed rejected report and rearms supervision', async () => {
+    let resolveFirst!: (task: unknown) => void;
+    const reportSdkHealthFailure = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValue({ task_id: 'task-1', status: TaskStatus.RUNNING });
+    const executor = harness(reportSdkHealthFailure) as ReturnType<typeof harness> & {
+      watchdog: SdkWatchdog;
+    };
+    let now = 0;
+    const watchdog = new SdkWatchdog({
+      tool: 'codex',
+      config: {
+        mode: 'enforce',
+        first_progress_timeout_ms: 10,
+        operation_absolute_timeout_ms: 1_000,
+        abort_grace_ms: 100,
+        claude_idle_timeout_ms: null,
+        codex_idle_timeout_ms: 10,
+      },
+      now: () => now,
+      pulseSequenceAtDetection: () => executor.latestPulseSequence,
+      onDecision: (decision) => executor.handleWatchdogDecision(decision as typeof evidence),
+    });
+    executor.watchdog = watchdog;
+
+    watchdog.record({ type: 'sdk_started' });
+    now = 11;
+    watchdog.record({ type: 'sdk_started' });
+    await vi.waitFor(() => expect(reportSdkHealthFailure).toHaveBeenCalledTimes(1));
+    expect(reportSdkHealthFailure.mock.calls[0]?.[0]).toMatchObject({
+      reason: 'no_first_progress',
+      pulse_sequence_at_detection: 1,
+    });
+
+    now = 12;
+    watchdog.record({ type: 'progress', detail: 'newer-progress' });
+    executor.latestPulseSequence = 3;
+    resolveFirst({
+      task_id: 'task-1',
+      status: TaskStatus.RUNNING,
+      latest_executor_progress: { sequence: 3, kind: 'progress' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(executor.abortController.signal.aborted).toBe(false);
+    expect(executor.heartbeat?.stop).not.toHaveBeenCalled();
+
+    now = 23;
+    watchdog.record({ type: 'sdk_started' });
+    await vi.waitFor(() => expect(reportSdkHealthFailure).toHaveBeenCalledTimes(2));
+    expect(reportSdkHealthFailure.mock.calls[1]?.[0]).toMatchObject({
+      reason: 'progress_stalled',
+      pulse_sequence_at_detection: 3,
+    });
+    watchdog.stop();
   });
 
   it('aborts immediately on the durable stopping patch and reports quiescence', async () => {

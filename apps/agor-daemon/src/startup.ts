@@ -305,7 +305,6 @@ async function recoverTenantRuntime(
     SessionStatus.STOPPING,
     SessionStatus.AWAITING_PERMISSION,
     SessionStatus.AWAITING_INPUT,
-    SessionStatus.TIMED_OUT,
   ]) {
     orphanedSessions.push(
       ...(await collectAllPages<Session>((skip) =>
@@ -448,6 +447,7 @@ export async function resumeRuntimeRecovery(
   cleanup: OrphanCleanupResult
 ): Promise<void> {
   const tasks = ctx.app.service('tasks') as unknown as TasksServiceImpl;
+  const gateway = ctx.app.service('gateway') as unknown as GatewayService;
   for (const recovery of cleanup.recoveries) {
     const params = startupTenantParams(ctx.config, recovery.tenantId);
     await runWithTenantContext(recovery.tenantId, async () => {
@@ -485,6 +485,14 @@ export async function resumeRuntimeRecovery(
       } catch (error) {
         console.warn(
           `[startup] Failed to repair terminal consequences for ${recovery.tenantId}:`,
+          error
+        );
+      }
+      try {
+        await gateway.repairPendingTerminalDeliveries(100);
+      } catch (error) {
+        console.warn(
+          `[startup] Failed to repair pending gateway deliveries for ${recovery.tenantId}:`,
           error
         );
       }

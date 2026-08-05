@@ -2,6 +2,8 @@ import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
+const tenantParams = { tenant: { tenant_id: 'tenant-a', source: 'explicit' } } as const;
+
 function completionHarness(input: {
   currentTask: Record<string, unknown>;
   resultTask: Record<string, unknown>;
@@ -39,11 +41,21 @@ function completionHarness(input: {
   service.repository = { update: vi.fn().mockResolvedValue(input.resultTask) };
   service.id = 'task_id';
   service.emit = vi.fn();
-  (service as unknown as { taskRepo: { settleTermination: ReturnType<typeof vi.fn> } }).taskRepo = {
+  (
+    service as unknown as {
+      taskRepo: {
+        settleTermination: ReturnType<typeof vi.fn>;
+        findById: ReturnType<typeof vi.fn>;
+        markTerminalConsequencesComplete: ReturnType<typeof vi.fn>;
+      };
+    }
+  ).taskRepo = {
     settleTermination: vi.fn().mockResolvedValue({
       outcome: input.settlementOutcome ?? 'transitioned',
       task: input.resultTask,
     }),
+    findById: vi.fn().mockResolvedValue(input.resultTask),
+    markTerminalConsequencesComplete: vi.fn().mockResolvedValue(input.resultTask),
   };
   service.app = {
     service: (name: string) => {
@@ -309,19 +321,19 @@ describe('TasksService executor heartbeat helpers', () => {
       sessionTasks: [taskId],
     });
 
-    const result = await service.settleTermination({ taskId, outcome: 'verified_absent' });
+    const result = await service.settleTermination(
+      { taskId, outcome: 'verified_absent', coordinationToken: 'completion-test' },
+      tenantParams as never
+    );
 
     expect(result.task).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      sessionId,
-      expect.objectContaining({
-        status: 'idle',
-        ready_for_prompt: true,
-        runtime_projection: expect.objectContaining({ terminal_task_id: taskId }),
-      }),
-      { provider: undefined }
+    expect(sessionsPatch).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(triggerQueueProcessing).toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({ provider: undefined, tenant: tenantParams.tenant })
+      )
     );
-    expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, { provider: undefined });
   });
 
   it('ignores late executor attempts to revive a stopped task as awaiting permission', async () => {

@@ -15,10 +15,18 @@ export interface ExecutorHeartbeatOptions {
 
 export interface ExecutorHeartbeatHandle {
   recordPulse(kind: ExecutorPulseKind, detail?: string): number;
+  /** Flush coalesced telemetry and return the newest acknowledged progress sequence. */
+  flushProgressThrough(decisionSequence: number): Promise<number | undefined>;
   stop(): void;
 }
 
 const DEFAULT_INTERVAL_MS = 10_000;
+
+interface TelemetryWriteResult {
+  succeeded: boolean;
+  pulseSequence?: number;
+  progressSequence?: number;
+}
 
 export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): ExecutorHeartbeatHandle {
   const enabled = options.enabled ?? true;
@@ -30,39 +38,53 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       : DEFAULT_INTERVAL_MS;
   const warn = options.warn ?? console.warn;
   let stopped = false;
-  let inFlight = false;
+  let inFlight: Promise<TelemetryWriteResult> | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
   let pulseTimer: ReturnType<typeof setTimeout> | undefined;
   let sequence = 0;
   let latestPulse: { sequence: number; kind: ExecutorPulseKind; detail?: string } | undefined;
   let latestProgress: { sequence: number; kind: 'progress'; detail?: string } | undefined;
 
-  const emit = async () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
-    try {
-      const task = await options.client.service('tasks').reportRuntimeTelemetry({
+  const emit = (): Promise<TelemetryWriteResult> => {
+    if (stopped) return Promise.resolve({ succeeded: false });
+    if (inFlight) return inFlight;
+    const pulse = latestPulse;
+    const progress = latestProgress;
+    const report: Promise<TelemetryWriteResult> = options.client
+      .service('tasks')
+      .reportRuntimeTelemetry({
         task_id: options.taskId,
-        ...(latestPulse ? { pulse: latestPulse } : {}),
-        ...(latestProgress ? { progress: latestProgress } : {}),
-      });
-      options.onTask?.(task as Task);
-    } catch (error) {
-      warn(
-        '[executor-heartbeat] Failed to write heartbeat:',
-        error instanceof Error ? error.message : String(error)
-      );
-      try {
-        await options.onReportError?.(error);
-      } catch (reconcileError) {
+        ...(pulse ? { pulse } : {}),
+        ...(progress ? { progress } : {}),
+      })
+      .then((task) => {
+        options.onTask?.(task as Task);
+        return {
+          succeeded: true,
+          ...(pulse ? { pulseSequence: pulse.sequence } : {}),
+          ...(progress ? { progressSequence: progress.sequence } : {}),
+        };
+      })
+      .catch(async (error) => {
         warn(
-          '[executor-heartbeat] Failed to reconcile Task ownership:',
-          reconcileError instanceof Error ? reconcileError.message : String(reconcileError)
+          '[executor-heartbeat] Failed to write heartbeat:',
+          error instanceof Error ? error.message : String(error)
         );
-      }
-    } finally {
-      inFlight = false;
-    }
+        try {
+          await options.onReportError?.(error);
+        } catch (reconcileError) {
+          warn(
+            '[executor-heartbeat] Failed to reconcile Task ownership:',
+            reconcileError instanceof Error ? reconcileError.message : String(reconcileError)
+          );
+        }
+        return { succeeded: false };
+      });
+    inFlight = report;
+    void report.finally(() => {
+      if (inFlight === report) inFlight = null;
+    });
+    return report;
   };
 
   const schedulePulseFlush = () => {
@@ -93,6 +115,27 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       }
       schedulePulseFlush();
       return sequence;
+    },
+    async flushProgressThrough(decisionSequence) {
+      const first = await emit();
+      if (!first.succeeded) return undefined;
+
+      let acknowledgedProgress = first.progressSequence;
+      if (
+        !stopped &&
+        (latestProgress?.sequence ?? -1) > Math.max(decisionSequence, acknowledgedProgress ?? -1)
+      ) {
+        const coalesced = await emit();
+        if (coalesced.succeeded) {
+          acknowledgedProgress = Math.max(
+            acknowledgedProgress ?? -1,
+            coalesced.progressSequence ?? -1
+          );
+        }
+      }
+      return acknowledgedProgress !== undefined && acknowledgedProgress >= 0
+        ? acknowledgedProgress
+        : undefined;
     },
     stop() {
       stopped = true;

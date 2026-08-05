@@ -29,7 +29,7 @@ describe('executor settlement reporting', () => {
         failureCause: 'runtime_failure',
         taskPatch: { error_message: 'boom', model: 'test-model' },
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: TaskStatus.FAILED });
 
     expect(reportExecutorSettlement).toHaveBeenCalledWith({
       task_id: 't1',

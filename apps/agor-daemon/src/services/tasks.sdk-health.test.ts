@@ -105,6 +105,8 @@ describe('TasksService SDK health reports', () => {
     });
     expect(claimExecutorTermination).not.toHaveBeenCalled();
     expect(taskEmit).toHaveBeenCalledOnce();
+    expect(updateProgress).not.toHaveBeenCalled();
+    await deferred.work?.();
     expect(updateProgress).toHaveBeenCalledOnce();
   });
 
@@ -178,6 +180,7 @@ describe('TasksService SDK health reports', () => {
           task_id: task.task_id,
           reason: 'no_first_progress',
           watchdog_action: 'enforced',
+          pulse_sequence_at_detection: 4,
         },
         { tenant: { tenant_id: 'tenant-a' } } as never
       )
@@ -188,7 +191,11 @@ describe('TasksService SDK health reports', () => {
         taskId: task.task_id,
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
-        sdkFailure: expect.objectContaining({ termination: 'requested' }),
+        expectedStatus: TaskStatus.RUNNING,
+        sdkFailure: expect.objectContaining({
+          pulse_sequence_at_detection: 4,
+          termination: 'requested',
+        }),
       })
     );
     expect(deferred.schedule).toHaveBeenCalledWith(
@@ -207,6 +214,49 @@ describe('TasksService SDK health reports', () => {
         params: expect.objectContaining({ provider: undefined }),
       })
     );
+  });
+
+  it('returns newer persisted progress without authorizing containment', async () => {
+    const current = {
+      ...task,
+      sdk_watchdog_mode: 'enforce' as const,
+      latest_executor_progress: {
+        sequence: 5,
+        kind: 'progress' as const,
+        detail: 'operation:new',
+        observed_at: '2026-01-01T00:00:05.000Z',
+      },
+    };
+    const service = serviceFor(current);
+    claimExecutorTermination.mockResolvedValue({ outcome: 'condition_changed', task: current });
+
+    await expect(
+      service.reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'progress_stalled',
+        watchdog_action: 'enforced',
+        pulse_sequence_at_detection: 4,
+      })
+    ).resolves.toBe(current);
+
+    expect(claimExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sdkFailure: expect.objectContaining({ pulse_sequence_at_detection: 4 }),
+      })
+    );
+    expect(requestExecutorTermination).not.toHaveBeenCalled();
+    expect(deferred.schedule).toHaveBeenCalledOnce();
+  });
+
+  it('rejects enforced reports without detection-time sequence evidence', async () => {
+    await expect(
+      serviceFor({ ...task, sdk_watchdog_mode: 'enforce' }).reportSdkHealthFailure({
+        task_id: task.task_id,
+        reason: 'no_first_progress',
+        watchdog_action: 'enforced',
+      })
+    ).rejects.toThrow('require pulse_sequence_at_detection');
+    expect(claimExecutorTermination).not.toHaveBeenCalled();
   });
 
   it('rejects terminal, disconnected, disabled, and authority-escalating reports', async () => {
@@ -229,6 +279,7 @@ describe('TasksService SDK health reports', () => {
         task_id: task.task_id,
         reason: 'no_first_progress',
         watchdog_action: 'enforced',
+        pulse_sequence_at_detection: 4,
       })
     ).rejects.toThrow('must be would_fire');
   });
@@ -255,6 +306,7 @@ describe('TasksService SDK health reports', () => {
         task_id: task.task_id,
         reason: 'no_first_progress',
         watchdog_action: 'enforced',
+        pulse_sequence_at_detection: 4,
       })
     ).resolves.toBe(current);
   });
