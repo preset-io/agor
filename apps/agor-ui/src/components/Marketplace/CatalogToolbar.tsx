@@ -37,6 +37,7 @@ export interface CatalogToolbarProps {
   category?: MCPCatalogCategory;
   capability?: string;
   reviewedOnly: boolean;
+  connectableOnly: boolean;
   sort: MCPCatalogSort;
   /** Debounced search term, for controlled resets (e.g. "clear filters"). */
   search: string;
@@ -44,6 +45,7 @@ export interface CatalogToolbarProps {
   onCategoryChange: (value?: MCPCatalogCategory) => void;
   onCapabilityChange: (value?: string) => void;
   onReviewedOnlyChange: (value: boolean) => void;
+  onConnectableOnlyChange: (value: boolean) => void;
   onSortChange: (value: MCPCatalogSort) => void;
   /** `null` while the unfiltered catalog size is still unknown. */
   matchSummary: { matched: number; total: number } | null;
@@ -53,12 +55,14 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   category,
   capability,
   reviewedOnly,
+  connectableOnly,
   sort,
   search,
   onSearchChange,
   onCategoryChange,
   onCapabilityChange,
   onReviewedOnlyChange,
+  onConnectableOnlyChange,
   onSortChange,
   matchSummary,
 }) => {
@@ -81,7 +85,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
 
   return (
     <Card size="small" styles={{ body: { padding: token.padding } }}>
-      <Space direction="vertical" size={token.paddingSM} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={token.paddingSM} style={{ width: '100%' }}>
         <Input
           size="large"
           allowClear
@@ -120,6 +124,17 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
                 checked={reviewedOnly}
                 onChange={onReviewedOnlyChange}
                 aria-label="Show only servers reviewed by Preset"
+              />
+            </Space>
+          </Col>
+          <Col flex="none">
+            <Space size={token.marginXS}>
+              <Text type="secondary">Connectable now</Text>
+              <Switch
+                size="small"
+                checked={connectableOnly}
+                onChange={onConnectableOnlyChange}
+                aria-label="Show only servers that need no account"
               />
             </Space>
           </Col>

@@ -9,10 +9,15 @@
  */
 
 import type { MCPCatalogEntry } from '@agor/core/types';
-import { SafetyCertificateOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  LockOutlined,
+  QuestionCircleOutlined,
+  SafetyCertificateOutlined,
+} from '@ant-design/icons';
 import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
-import { capabilityLabel, entryTitle } from './catalogPresentation';
+import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
 
 const { Text, Paragraph } = Typography;
 
@@ -28,6 +33,10 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
   const title = entryTitle(entry);
   const capabilities = entry.capabilities ?? [];
   const overflow = capabilities.length - VISIBLE_CAPABILITIES;
+  // Whether pressing Connect will get anywhere, on the card rather than after
+  // the disclosure — most curated entries want an account this phase cannot ask
+  // for, so discovering it at the button is discovering it too late.
+  const connect = connectStatus(entry);
 
   return (
     <Card
@@ -87,6 +96,21 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
           ))}
           {overflow > 0 && <Text type="secondary">+{overflow}</Text>}
         </Space>
+
+        <Tooltip title={connect.detail}>
+          <Space size={token.marginXXS} align="center">
+            {connect.readiness === 'ready' ? (
+              <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+            ) : connect.readiness === 'unchecked' ? (
+              <QuestionCircleOutlined style={{ color: token.colorTextTertiary }} />
+            ) : (
+              <LockOutlined style={{ color: token.colorTextTertiary }} />
+            )}
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              {connect.label}
+            </Text>
+          </Space>
+        </Tooltip>
       </Flex>
     </Card>
   );

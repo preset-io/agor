@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capabilityLabel,
   connectBlockedReason,
+  connectStatus,
   DEFAULT_SORT,
   entryTitle,
 } from './catalogPresentation';
@@ -89,6 +90,32 @@ describe('connectBlockedReason', () => {
     expect(connectBlockedReason(entry({ probed_auth_type: 'unreachable' }))).toMatch(
       /could not be reached/i
     );
+  });
+});
+
+describe('connectStatus', () => {
+  it('says an unprobed entry may still ask for an account, rather than promising either way', () => {
+    const status = connectStatus(entry({ probed_auth_type: 'unknown' }));
+    expect(status.readiness).toBe('unchecked');
+    expect(status.detail).toMatch(/may ask for an account/i);
+    // Still connectable — the endpoint probes on demand, and this is the only
+    // way to find out on an install that has never run a registry sync.
+    expect(connectBlockedReason(entry({ probed_auth_type: 'unknown' }))).toBeUndefined();
+  });
+
+  it('says outright when no account is needed', () => {
+    expect(connectStatus(entry()).readiness).toBe('ready');
+  });
+
+  it('carries a card-sized label for every blocked reason', () => {
+    expect(connectStatus(entry({ curated: false }))).toMatchObject({
+      readiness: 'blocked',
+      label: 'Not reviewed',
+    });
+    expect(connectStatus(entry({ probed_auth_type: 'oauth' }))).toMatchObject({
+      readiness: 'blocked',
+      label: 'Needs an account',
+    });
   });
 });
 

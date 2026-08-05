@@ -132,32 +132,82 @@ export function entryTitle(entry: MCPCatalogEntry): string {
 const GENERIC_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api', 'www']);
 
 /**
- * Why an entry cannot be connected yet, or `undefined` when it can.
+ * What a user would find out by pressing Connect, said before they press it.
  *
- * Mirrors the server-side rules in `mcp-catalog-connect`: uncurated entries are
- * browse-only, and only the no-auth branch exists. `unknown` is deliberately
- * treated as connectable — the seeded catalog has never been probed on an
- * install with registry sync off, and connect probes on demand.
+ * Only the no-auth branch is wired, and most curated entries need an account —
+ * so without this the default experience is accepting a disclosure and then
+ * being refused. `unknown` is its own case rather than being folded into
+ * either side: the endpoint probes on demand and may well succeed, but a
+ * catalog that has never been probed cannot promise it will.
  */
-export function connectBlockedReason(entry: MCPCatalogEntry): string | undefined {
-  if (!entry.curated) {
-    return 'Only servers reviewed by Preset can be connected from the marketplace.';
-  }
+export type ConnectReadiness = 'ready' | 'unchecked' | 'blocked';
+
+export interface ConnectStatus {
+  readiness: ConnectReadiness;
+  /** Short enough for a card tag. */
+  label: string;
+  /** A sentence, for the drawer. */
+  detail: string;
+}
+
+const CONNECT_STATUSES = {
+  notReviewed: {
+    readiness: 'blocked',
+    label: 'Not reviewed',
+    detail: 'Only servers reviewed by Preset can be connected from the marketplace.',
+  },
+  local: {
+    readiness: 'blocked',
+    label: 'Runs locally',
+    detail:
+      'This server runs locally rather than over the network. An admin configures it directly.',
+  },
+  needsAccount: {
+    readiness: 'blocked',
+    label: 'Needs an account',
+    detail: 'This server needs an account. Signing in from the marketplace is not available yet.',
+  },
+  unreachable: {
+    readiness: 'blocked',
+    label: 'Unreachable',
+    detail: 'This server could not be reached the last time Agor checked.',
+  },
+  undisclosed: {
+    readiness: 'blocked',
+    label: 'No access statement',
+    detail: 'This server has not stated what it can access, so it cannot be connected yet.',
+  },
+  unchecked: {
+    readiness: 'unchecked',
+    label: 'Not checked yet',
+    detail:
+      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
+  },
+  ready: {
+    readiness: 'ready',
+    label: 'No account needed',
+    detail: 'This server needs no account, so connecting it takes one step.',
+  },
+} as const satisfies Record<string, ConnectStatus>;
+
+export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
+  if (!entry.curated) return CONNECT_STATUSES.notReviewed;
   if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
-    return 'This server runs locally rather than over the network. An admin configures it directly.';
+    return CONNECT_STATUSES.local;
   }
   if (entry.probed_auth_type === 'oauth' || entry.probed_auth_type === 'credentials') {
-    return 'This server needs an account. Signing in from the marketplace is not available yet.';
+    return CONNECT_STATUSES.needsAccount;
   }
-  if (entry.probed_auth_type === 'unreachable') {
-    return 'This server could not be reached the last time Agor checked.';
-  }
-  // Connecting is gated on accepting what the server can reach, so an entry
-  // that states nothing has no acceptance to give. Curation requires one, so
-  // this is unreachable today — but it is what keeps a curation gap from
-  // rendering a connect button that can only fail.
-  if (!entry.permission_disclosure?.trim()) {
-    return 'This server has not stated what it can access, so it cannot be connected yet.';
-  }
-  return undefined;
+  if (entry.probed_auth_type === 'unreachable') return CONNECT_STATUSES.unreachable;
+  // Curation requires a disclosure, so this is unreachable today — but it is
+  // what keeps a curation gap from offering a connect that could only fail.
+  if (!entry.permission_disclosure?.trim()) return CONNECT_STATUSES.undisclosed;
+  if (entry.probed_auth_type !== 'none') return CONNECT_STATUSES.unchecked;
+  return CONNECT_STATUSES.ready;
+}
+
+/** Why connecting is refused outright, or `undefined` when it may proceed. */
+export function connectBlockedReason(entry: MCPCatalogEntry): string | undefined {
+  const status = connectStatus(entry);
+  return status.readiness === 'blocked' ? status.detail : undefined;
 }

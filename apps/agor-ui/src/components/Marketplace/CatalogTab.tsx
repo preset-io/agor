@@ -9,8 +9,8 @@
 import type { AgenticToolName, MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
-import { Alert, Col, Empty, Flex, Pagination, Row, Skeleton, Typography, theme } from 'antd';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { savePromptDraft } from '../../utils/promptDrafts';
 import { CatalogCard } from './CatalogCard';
@@ -29,13 +29,12 @@ import {
   useConnectTargets,
 } from './useConnectTargets';
 
-const { Text } = Typography;
-
 const GRID_SPANS = { xs: 24, sm: 12, lg: 8, xxl: 6 } as const;
 
 const INITIAL_FILTERS: CatalogFilterState = {
   search: '',
   reviewedOnly: false,
+  connectableOnly: false,
   sort: DEFAULT_SORT,
 };
 
@@ -44,6 +43,28 @@ const INITIAL_FILTERS: CatalogFilterState = {
  * leaves the page identical (e.g. re-selecting the same sort) doesn't rebuild
  * every card.
  */
+/**
+ * True once `active` has held for `delayMs`.
+ *
+ * A normal load is connected inside a second, so announcing every one of those
+ * would be noise. A disconnection that outlasts the delay is the case worth
+ * naming — otherwise the skeleton spins forever and says nothing.
+ */
+function useSettledFlag(active: boolean, delayMs: number): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setSettled(false);
+      return;
+    }
+    const timer = setTimeout(() => setSettled(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [active, delayMs]);
+  return settled;
+}
+
+const DISCONNECT_NOTICE_DELAY_MS = 2000;
+
 const CatalogGrid = memo<{
   entries: MCPCatalogEntry[];
   onOpen: (entry: MCPCatalogEntry) => void;
@@ -58,10 +79,12 @@ const CatalogGrid = memo<{
 ));
 
 export interface CatalogTabProps {
-  client: AgorClient;
+  client: AgorClient | null;
+  /** The socket has connected and authenticated, so reads will be answered. */
+  connected: boolean;
 }
 
-export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
+export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
 
@@ -70,9 +93,11 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
-  const { entries, matchCount, catalogSize, loading, error } = useCatalogSearch(
+  const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
     client,
+    connected,
     filters,
     page
   );
@@ -80,7 +105,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
     branches,
     loading: branchesLoading,
     error: branchesError,
-  } = useConnectTargets(client, selected !== null);
+  } = useConnectTargets(client, connected && selected !== null);
 
   // Any narrowing invalidates the current offset — page 4 of an unfiltered
   // catalog is usually past the end of a filtered one.
@@ -102,6 +127,10 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
     (reviewedOnly: boolean) => applyFilter({ reviewedOnly }),
     [applyFilter]
   );
+  const onConnectableOnlyChange = useCallback(
+    (connectableOnly: boolean) => applyFilter({ connectableOnly }),
+    [applyFilter]
+  );
   const onSortChange = useCallback(
     (sort: CatalogFilterState['sort']) => applyFilter({ sort }),
     [applyFilter]
@@ -121,10 +150,10 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
   // filtering is happening.
   const matchSummary = useMemo(
     () =>
-      isFilterActive(filters) && catalogSize !== null
+      status === 'ready' && isFilterActive(filters) && catalogSize !== null
         ? { matched: matchCount, total: catalogSize }
         : null,
-    [filters, catalogSize, matchCount]
+    [status, filters, catalogSize, matchCount]
   );
 
   const handleConnect = useCallback(
@@ -137,7 +166,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
     }) => {
-      if (!selected) return;
+      if (!selected || !client) return;
       setConnecting(true);
       setConnectError(null);
       try {
@@ -169,35 +198,59 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
         category={filters.category}
         capability={filters.capability}
         reviewedOnly={filters.reviewedOnly}
+        connectableOnly={filters.connectableOnly}
         sort={filters.sort}
         onSearchChange={onSearchChange}
         onCategoryChange={onCategoryChange}
         onCapabilityChange={onCapabilityChange}
         onReviewedOnlyChange={onReviewedOnlyChange}
+        onConnectableOnlyChange={onConnectableOnlyChange}
         onSortChange={onSortChange}
         matchSummary={matchSummary}
       />
 
-      {error ? (
-        <Alert type="error" showIcon message="Could not load the catalog" description={error} />
-      ) : loading && entries.length === 0 ? (
-        <Row gutter={[16, 16]}>
-          {Array.from({ length: 6 }, (_, index) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
-            <Col key={index} {...GRID_SPANS}>
-              <Skeleton active paragraph={{ rows: 2 }} />
-            </Col>
-          ))}
-        </Row>
+      {showDisconnected && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Not connected to the Agor daemon"
+          description="The catalog will load as soon as the connection is back."
+        />
+      )}
+
+      {/* `empty` is only reachable from a read that returned. A failed read
+          renders as a failure, never as a catalog with nothing in it. */}
+      {status === 'error' ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Could not load the catalog"
+          description={error}
+          action={
+            <Button size="small" onClick={retry}>
+              Retry
+            </Button>
+          }
+        />
+      ) : status === 'loading' ? (
+        showDisconnected ? null : (
+          <Row gutter={[16, 16]}>
+            {Array.from({ length: 6 }, (_, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
+              <Col key={index} {...GRID_SPANS}>
+                <Skeleton active paragraph={{ rows: 2 }} />
+              </Col>
+            ))}
+          </Row>
+        )
       ) : entries.length === 0 ? (
         <Empty description="No servers match" />
       ) : (
         <CatalogGrid entries={entries} onOpen={openEntry} />
       )}
 
-      {matchCount > CATALOG_PAGE_SIZE && (
+      {status === 'ready' && matchCount > CATALOG_PAGE_SIZE && (
         <Flex justify="flex-end" align="center" gap={token.margin}>
-          {loading && <Text type="secondary">Loading…</Text>}
           <Pagination
             current={page}
             pageSize={CATALOG_PAGE_SIZE}

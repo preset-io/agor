@@ -1,7 +1,7 @@
 import type { SessionID } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CatalogTab } from './CatalogTab';
@@ -47,6 +47,7 @@ let catalogQueries: Array<Record<string, unknown>>;
 let catalogRows: (typeof DEEPWIKI)[];
 let connectCalls: Array<Record<string, unknown>>;
 let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
+let catalogFindError: Error | null;
 
 function makeClient(): AgorClient {
   const service = (path: string) => {
@@ -54,6 +55,7 @@ function makeClient(): AgorClient {
       return {
         find: async ({ query }: { query: Record<string, unknown> }) => {
           catalogQueries.push(query);
+          if (catalogFindError) throw catalogFindError;
           // The unfiltered size probe asks for a single row.
           const filtered =
             typeof query.search === 'string'
@@ -83,10 +85,10 @@ function makeClient(): AgorClient {
   return { service } as unknown as AgorClient;
 }
 
-function renderTab() {
+function renderTab({ connected = true }: { connected?: boolean } = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} />
+      <CatalogTab client={makeClient()} connected={connected} />
     </MemoryRouter>
   );
 }
@@ -94,6 +96,7 @@ function renderTab() {
 beforeEach(() => {
   catalogQueries = [];
   catalogRows = [DEEPWIKI, LINEAR];
+  catalogFindError = null;
   connectCalls = [];
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
@@ -112,6 +115,77 @@ describe('catalog browsing', () => {
     expect(screen.getByRole('button', { name: 'Open Linear' })).toBeInTheDocument();
   });
 
+  it('reads nothing until the socket can answer, and never calls that an empty catalog', async () => {
+    // The cold path: `/marketplace` as the entry URL. `client` exists from the
+    // moment the socket is being built, so a surface that fetches on its
+    // presence asks an unauthenticated socket and is refused.
+    const { container } = renderTab({ connected: false });
+    // Let any effect that was going to fire, fire.
+    await act(() => Promise.resolve());
+
+    expect(catalogQueries).toHaveLength(0);
+    expect(container.querySelectorAll('.ant-skeleton').length).toBeGreaterThan(0);
+    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load the catalog')).not.toBeInTheDocument();
+  });
+
+  it('says the daemon is unreachable rather than spinning silently', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderTab({ connected: false });
+      await act(() => Promise.resolve());
+      expect(screen.queryByText('Not connected to the Agor daemon')).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2500);
+      });
+
+      expect(screen.getByText('Not connected to the Agor daemon')).toBeVisible();
+      expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('loads once the socket connects, without a remount', async () => {
+    const client = makeClient();
+    const { rerender } = render(
+      <MemoryRouter>
+        <CatalogTab client={client} connected={false} />
+      </MemoryRouter>
+    );
+    expect(catalogQueries).toHaveLength(0);
+
+    rerender(
+      <MemoryRouter>
+        <CatalogTab client={client} connected={true} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+  });
+
+  it('renders a failed read as a failure, not as an empty catalog', async () => {
+    catalogFindError = new Error('NotAuthenticated: Authentication required');
+    renderTab();
+
+    expect(await screen.findByText('Could not load the catalog')).toBeVisible();
+    expect(screen.getByText(/Authentication required/)).toBeVisible();
+    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
+  });
+
+  it('recovers from a failed read when retried', async () => {
+    catalogFindError = new Error('boom');
+    renderTab();
+    await screen.findByText('Could not load the catalog');
+
+    catalogFindError = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
+    expect(screen.queryByText('Could not load the catalog')).not.toBeInTheDocument();
+  });
+
   it('pushes filters and page bounds to the server rather than filtering in the browser', async () => {
     renderTab();
     await screen.findByRole('button', { name: 'Open DeepWiki' });
@@ -128,6 +202,17 @@ describe('catalog browsing', () => {
     fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
     expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
     expect(catalogQueries.some((query) => query.curated === true)).toBe(true);
+  });
+
+  it('filters to servers that need no account', async () => {
+    renderTab();
+    await screen.findByRole('button', { name: 'Open DeepWiki' });
+
+    fireEvent.click(screen.getByRole('switch', { name: /need no account/i }));
+
+    await waitFor(() =>
+      expect(catalogQueries.some((query) => query.probed_auth_type === 'none')).toBe(true)
+    );
   });
 
   it('debounces search into one server-side query', async () => {

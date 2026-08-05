@@ -19,14 +19,14 @@ export interface ConnectTargets {
   error: string | null;
 }
 
-export function useConnectTargets(client: AgorClient, enabled: boolean): ConnectTargets {
+export function useConnectTargets(client: AgorClient | null, enabled: boolean): ConnectTargets {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!enabled || loaded) return;
+    if (!client || !enabled || loaded) return;
     let cancelled = false;
     setLoading(true);
 

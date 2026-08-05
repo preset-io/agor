@@ -1799,6 +1799,7 @@ function AppContent() {
   const marketplacePageElement = (
     <MarketplacePage
       client={client}
+      connected={connected}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
