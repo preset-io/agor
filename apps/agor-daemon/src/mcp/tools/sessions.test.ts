@@ -429,12 +429,11 @@ describe('agor_sessions_create', () => {
 
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config).toBeDefined();
-    // Explicit override wins over user default ('claude-sonnet-5').
-    expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias');
-    expect(created.model_config.effort).toBe('max');
-    expect(typeof created.model_config.updated_at).toBe('string');
+    expect(created.model_config).toEqual({
+      model: 'claude-opus-4-6',
+      mode: 'alias',
+      effort: 'max',
+    });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.session).not.toHaveProperty('mcp_token');
@@ -480,7 +479,7 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.effort).toBe('xhigh');
   });
 
-  it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
+  it('attributes sessions to the acting MCP user and leaves their defaults for the sessions service', async () => {
     const sessionCreates: unknown[] = [];
     const baseServiceParams = {
       authenticated: true,
@@ -544,13 +543,11 @@ describe('agor_sessions_create', () => {
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.created_by).toBe('user-b');
     expect(created.unix_username).toBe('bob');
-    expect(created.permission_config.mode).toBe('acceptEdits');
-    expect(created.model_config.model).toBe('claude-sonnet-5');
-    expect(created.model_config.effort).toBe('high');
-    expect(created.model_config.model).not.toBe('claude-parent');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
-  it('falls back to user default modelConfig when none is explicitly provided', async () => {
+  it('does not snapshot user defaults before the sessions service materializes them', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
@@ -582,8 +579,8 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
-    expect(created.model_config.effort).toBe('medium');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
   it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
@@ -1310,7 +1307,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias'); // default applied by resolveModelConfig
+    expect(created.model_config).toEqual({ model: 'claude-opus-4-6' });
   });
 });
 

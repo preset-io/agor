@@ -271,7 +271,10 @@ describe('SessionsService direct OpenCode model selection', () => {
     } as unknown as Application;
     const service = new SessionsService(db, app);
     const branchId = await createBranch(db);
-    const user = { user_id: 'test-user' as UUID };
+    const user = await new UsersRepository(db).create({
+      email: `catalog-fallback-${generateId()}@example.com`,
+      name: 'Catalog fallback owner',
+    });
 
     const created = await service.create(
       {
@@ -290,9 +293,79 @@ describe('SessionsService direct OpenCode model selection', () => {
     });
   });
 
+  dbTest('materializes selected user and workspace presets on direct create', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const owner = await new UsersRepository(db).create({
+      email: `direct-default-${generateId()}@example.com`,
+      name: 'Direct default owner',
+    });
+    const presets = new AgenticToolPresetRepository(db);
+    const userPreset = await presets.create(
+      {
+        tool: 'opencode',
+        name: 'User selected',
+        configuration: {
+          permissionMode: 'auto',
+          modelConfig: { mode: 'exact', provider: 'anthropic', model: 'claude-user' },
+        },
+      },
+      owner.user_id
+    );
+    await new UsersRepository(db).update(owner.user_id, {
+      default_agentic_selection: {
+        opencode: { source: 'preset', preset_id: userPreset.preset_id },
+      },
+    });
+
+    await expect(
+      service.create({
+        branch_id: branchId,
+        agentic_tool: 'opencode',
+        status: SessionStatus.IDLE,
+        created_by: owner.user_id,
+      })
+    ).resolves.toMatchObject({
+      agentic_tool_preset_id: userPreset.preset_id,
+      permission_config: { mode: 'autoEdit' },
+      model_config: { provider: 'anthropic', model: 'claude-user' },
+    });
+
+    const workspacePreset = await presets.create(
+      {
+        tool: 'opencode',
+        name: 'Workspace selected',
+        is_default: true,
+        configuration: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-workspace' },
+        },
+      },
+      owner.user_id
+    );
+    await new UsersRepository(db).update(owner.user_id, {
+      default_agentic_selection: { opencode: { source: 'workspace_default' } },
+    });
+
+    await expect(
+      service.create({
+        branch_id: branchId,
+        agentic_tool: 'opencode',
+        status: SessionStatus.IDLE,
+        created_by: owner.user_id,
+      })
+    ).resolves.toMatchObject({
+      agentic_tool_preset_id: workspacePreset.preset_id,
+      model_config: { provider: 'openai', model: 'gpt-workspace' },
+    });
+  });
+
   dbTest('never resolves a fallback under a different execution owner', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
     const branchId = await createBranch(db);
+    const owner = await new UsersRepository(db).create({
+      email: `different-owner-${generateId()}@example.com`,
+      name: 'Different owner',
+    });
 
     await expect(
       service.create(
@@ -300,7 +373,7 @@ describe('SessionsService direct OpenCode model selection', () => {
           branch_id: branchId,
           agentic_tool: 'opencode',
           status: SessionStatus.IDLE,
-          created_by: 'other-user' as UUID,
+          created_by: owner.user_id,
         },
         { user: { user_id: 'caller' as UUID } } as never
       )
@@ -474,11 +547,32 @@ describe('SessionsService direct OpenCode model selection', () => {
     });
 
     await new UsersRepository(db).update(owner.user_id, {
+      default_agentic_selection: {
+        opencode: { source: 'preset', preset_id: preset.preset_id },
+      },
+    });
+    const claudeParentId = await createSession(db, branchId, {
+      created_by: owner.user_id,
+      agentic_tool: 'claude-code',
+    });
+    await expect(
+      service.spawn(claudeParentId, {
+        prompt: 'Taskless cross-tool default',
+        agent: 'opencode',
+      })
+    ).resolves.toMatchObject({
+      agentic_tool_preset_id: preset.preset_id,
+      model_config: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
+      genealogy: { spawn_point_task_id: undefined },
+    });
+
+    await new UsersRepository(db).update(owner.user_id, {
       default_agentic_config: {
         opencode: {
           modelConfig: { mode: 'exact', provider: 'anthropic', model: 'default-child' },
         },
       },
+      default_agentic_selection: { opencode: { source: 'inline' } },
     });
     const ownedParentId = await createSession(db, branchId, {
       created_by: owner.user_id,

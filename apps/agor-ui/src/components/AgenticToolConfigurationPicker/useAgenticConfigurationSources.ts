@@ -70,6 +70,7 @@ interface Options {
   client: AgorClient | null;
   currentUser?: User | null;
   allowInlineSelection?: boolean;
+  preserveInlineSelection?: boolean;
 }
 
 interface AgenticConfigurationSourceOption {
@@ -113,10 +114,14 @@ export function useAgenticConfigurationSources({
   client,
   currentUser,
   allowInlineSelection = true,
+  preserveInlineSelection = false,
 }: Options) {
   const canonicalTool = canonicalTenantAgenticTool(tool);
   const settings = useAgorStore((state) => state.agenticToolSettingsByName?.get(canonicalTool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false && allowInlineSelection;
+  const inlineAllowedByPolicy = settings?.inline_configuration_allowed !== false;
+  const inlineAllowed = inlineAllowedByPolicy && allowInlineSelection;
+  const inlineSelectionAllowed =
+    inlineAllowed || (inlineAllowedByPolicy && preserveInlineSelection);
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -200,11 +205,14 @@ export function useAgenticConfigurationSources({
     !agenticToolRequiresModelSelection(tool) ||
     isAgenticToolModelSelectionComplete(tool, userDefaultConfiguration?.modelConfig);
   const isSourceAllowedByPolicy = useCallback(
-    (source: string | undefined) =>
-      inlineAllowed ||
-      (source !== INLINE_AGENTIC_CONFIGURATION &&
-        (source !== USER_DEFAULT_AGENTIC_CONFIGURATION || !userDefaultUsesInline)),
-    [inlineAllowed, userDefaultUsesInline]
+    (source: string | undefined) => {
+      if (source === INLINE_AGENTIC_CONFIGURATION) return inlineSelectionAllowed;
+      if (source === USER_DEFAULT_AGENTIC_CONFIGURATION && userDefaultUsesInline) {
+        return inlineAllowed;
+      }
+      return true;
+    },
+    [inlineAllowed, inlineSelectionAllowed, userDefaultUsesInline]
   );
   const hasUserDefault =
     hasConfiguredUserDefault &&
@@ -324,9 +332,28 @@ export function useAgenticConfigurationSources({
               summary: '',
             },
           ]
-        : []),
+        : preserveInlineSelection && inlineSelectionAllowed
+          ? [
+              {
+                value: INLINE_AGENTIC_CONFIGURATION,
+                title: 'Stored configuration',
+                summary: 'read-only',
+                disabled: true,
+              },
+            ]
+          : []),
     ],
-    [canonicalTool, hasUserDefault, inlineAllowed, myDefaultSummary, presets, tool, workspacePreset]
+    [
+      canonicalTool,
+      hasUserDefault,
+      inlineAllowed,
+      inlineSelectionAllowed,
+      myDefaultSummary,
+      preserveInlineSelection,
+      presets,
+      tool,
+      workspacePreset,
+    ]
   );
 
   const getSourceError = useCallback(
@@ -351,6 +378,7 @@ export function useAgenticConfigurationSources({
 
   return {
     inlineAllowed,
+    inlineSelectionAllowed,
     presets,
     loading,
     loaded,

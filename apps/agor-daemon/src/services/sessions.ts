@@ -57,7 +57,12 @@ import type {
   TaskID,
   UUID,
 } from '@agor/core/types';
-import { isAgenticToolDefaultConfigurationReference, ROLES, SessionStatus } from '@agor/core/types';
+import {
+  isAgenticToolDefaultConfigurationReference,
+  ROLES,
+  SessionStatus,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
@@ -354,7 +359,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } else {
       const source = configurationReference
         ? ({ reference: configurationReference } as const)
-        : sessionConfigurationSource(data);
+        : data.model_config != null || data.permission_config != null
+          ? sessionConfigurationSource(data)
+          : ({ reference: USER_DEFAULT_AGENTIC_CONFIGURATION } as const);
       let materialized: MaterializedAgenticToolConfiguration;
       try {
         materialized = await materializeAgenticToolConfiguration(this.db, {
@@ -801,15 +808,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         tool: targetTool,
         source: presetId
           ? { reference: presetId }
-          : {
-              configuration: {
-                modelConfig: data.modelConfig,
-                permissionMode: data.permissionMode,
-                codexSandboxMode: data.codexSandboxMode,
-                codexApprovalPolicy: data.codexApprovalPolicy,
-                codexNetworkAccess: data.codexNetworkAccess,
-              },
-            },
+          : hasAtomicOverride || targetTool === parent.agentic_tool
+            ? {
+                configuration: {
+                  modelConfig: data.modelConfig,
+                  permissionMode: data.permissionMode,
+                  codexSandboxMode: data.codexSandboxMode,
+                  codexApprovalPolicy: data.codexApprovalPolicy,
+                  codexNetworkAccess: data.codexNetworkAccess,
+                },
+              }
+            : { reference: USER_DEFAULT_AGENTIC_CONFIGURATION },
         executionOwnerId: created_by as import('@agor/core/types').UserID,
         ...(user ? { executionOwner: user } : {}),
         parent,

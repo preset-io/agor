@@ -4,7 +4,7 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Form } from 'antd';
+import { Button, Form, Input } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgenticToolConfigurationPicker,
@@ -188,9 +188,18 @@ describe('AgenticToolConfigurationPicker', () => {
     expect(screen.queryByText(/^My default/)).not.toBeInTheDocument();
   });
 
-  it('renders OpenCode inline selection fail-closed without a subject-scoped catalog', async () => {
+  it('preserves stored OpenCode inline config without allowing cross-owner edits', async () => {
+    const onFinish = vi.fn();
     render(
-      <Form initialValues={{ agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION }}>
+      <Form
+        initialValues={{
+          agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION,
+          modelConfig: { mode: 'exact', provider: 'anthropic', model: 'claude-test' },
+          permissionMode: 'auto',
+          name: 'Before',
+        }}
+        onFinish={onFinish}
+      >
         <AgenticToolConfigurationPicker
           tool="opencode"
           client={makeClient()}
@@ -198,14 +207,29 @@ describe('AgenticToolConfigurationPicker', () => {
           mcpServerById={new Map()}
           currentUser={userWithoutDefault}
         />
+        <Form.Item name="name">
+          <Input aria-label="Unrelated field" />
+        </Form.Item>
+        <Button htmlType="submit">Save</Button>
       </Form>
     );
 
     expect(
       await screen.findByText('OpenCode model selection is unavailable for this execution owner')
     ).toBeInTheDocument();
+    expect(screen.getByText(/Stored configuration: anthropic\/claude-test/)).toBeInTheDocument();
     expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
     expect(screen.queryByText('Customize for this session…')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Unrelated field'), { target: { value: 'After' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
+    expect(onFinish.mock.calls[0][0]).toMatchObject({
+      agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION,
+      modelConfig: { mode: 'exact', provider: 'anthropic', model: 'claude-test' },
+      permissionMode: 'auto',
+      name: 'After',
+    });
   });
 
   it('prefers and summarizes a complete OpenCode workspace pair', async () => {

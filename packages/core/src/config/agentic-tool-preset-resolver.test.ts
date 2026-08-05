@@ -213,6 +213,7 @@ describe('agentic tool preset resolution', () => {
             },
           },
           modelConfiguration: exactPairPolicy,
+          modelFallback: { mode: 'exact', provider: 'fallback', model: 'fallback-model' },
         })
       ).rejects.toThrow(/provider and model/i);
     }

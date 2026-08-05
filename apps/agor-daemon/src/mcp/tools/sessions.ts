@@ -999,31 +999,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Resolve permission_config / model_config / inherited mcp_server_ids
-      // from the explicit MCP args (highest priority) > user defaults > system
-      // fallback. Single source of truth for this dance lives in
-      // `@agor/core/sessions` so MCP tools, the gateway, and the
-      // `before:create` hook can't drift apart.
-      //
-      // For the explicit MCP args we resolve short IDs first; branch/user
-      // defaults are already full UUIDs, so the helper passes them through.
+      // Session creation materializes permission/model defaults centrally so
+      // selected presets retain their provenance. MCP attachment remains here
+      // because explicit attach failures are part of this tool's response.
       const explicitMcpServerIds =
         args.mcpServerIds !== undefined
           ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
           : undefined;
-      const resolvedDefaults = resolveSessionDefaults({
+      const modelConfig = coerceModelConfig(args.modelConfig);
+      const mcpServerIds = resolveSessionDefaults({
         agenticTool,
         user,
         branch,
-        overrides: {
-          modelConfig: coerceModelConfig(args.modelConfig),
-          mcpServerIds: explicitMcpServerIds,
-        },
-      });
-      const permissionConfig = resolvedDefaults.permission_config;
-      const modelConfig = resolvedDefaults.model_config;
-      const mcpServerIds = resolvedDefaults.mcp_server_ids;
-      const permissionMode = permissionConfig.mode;
+        overrides: { mcpServerIds: explicitMcpServerIds },
+      }).mcp_server_ids;
       // Track whether the caller explicitly requested these servers. When they
       // did, we surface attach failures in the response instead of silently
       // dropping them (the "mcpServerId doesn't stick" bug). For inherited
@@ -1132,7 +1121,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         description: args.description,
         created_by: ctx.userId,
         unix_username: user.unix_username,
-        permission_config: permissionConfig,
         ...(modelConfig && { model_config: modelConfig }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
@@ -1229,12 +1217,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Execute initial prompt if provided
       let initialTask = null;
       if (args.initialPrompt) {
-        initialTask = await ctx.app
-          .service('/sessions/:id/prompt')
-          .create(
-            { prompt: args.initialPrompt, permissionMode, stream: true },
-            { ...ctx.baseServiceParams, route: { id: session.session_id } }
-          );
+        initialTask = await ctx.app.service('/sessions/:id/prompt').create(
+          {
+            prompt: args.initialPrompt,
+            permissionMode: session.permission_config?.mode,
+            stream: true,
+          },
+          { ...ctx.baseServiceParams, route: { id: session.session_id } }
+        );
       }
 
       const callbackNote = callbackConfig.callback_session_id

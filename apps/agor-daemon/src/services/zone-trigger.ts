@@ -2,8 +2,8 @@
  * Shared zone-trigger orchestration.
  *
  * `fireAlwaysNewZoneTrigger()` runs the always_new flow end-to-end:
- *   render template → validate non-empty → resolve session defaults →
- *   create session → attach MCP servers → send prompt.
+ *   render template → validate non-empty → create through the central session
+ *   materializer → attach inherited MCP servers → send prompt.
  *
  * Both `POST /branches/:id/fire-zone-trigger` (UI path) and
  * `agor_branches_set_zone(triggerTemplate: true)` always_new branch (MCP
@@ -92,11 +92,11 @@ export async function fireAlwaysNewZoneTrigger(
     );
   }
 
-  const {
-    permission_config: permissionConfig,
-    model_config: modelConfig,
-    mcp_server_ids: inheritedMcpIds,
-  } = resolveSessionDefaults({ agenticTool, user, branch });
+  const { mcp_server_ids: inheritedMcpIds } = resolveSessionDefaults({
+    agenticTool,
+    user,
+    branch,
+  });
 
   // In strict/delegated, refuse to create a zone-triggered session for a user
   // without a unix_username — it would fail at prompt time (or silently share
@@ -115,8 +115,6 @@ export async function fireAlwaysNewZoneTrigger(
       description: `Session from zone "${zone.label ?? ''}"`,
       created_by: userId,
       unix_username: user.unix_username,
-      permission_config: permissionConfig,
-      ...(modelConfig && { model_config: modelConfig }),
       genealogy: { children: [] },
       tasks: [],
     },

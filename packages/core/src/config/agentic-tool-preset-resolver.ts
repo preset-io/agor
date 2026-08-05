@@ -184,7 +184,7 @@ export async function materializeAgenticToolConfiguration(
     },
     now: args.now,
     modelConfiguration: args.modelConfiguration,
-    modelFallback: args.modelFallback,
+    modelFallback: preset ? undefined : args.modelFallback,
   });
 
   if (

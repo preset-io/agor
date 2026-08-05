@@ -7,6 +7,7 @@ import { AgenticToolConfigForm, buildConfigFromFormValues } from '../AgenticTool
 import { SessionMcpServersField } from '../MCPServerSelect';
 import {
   INLINE_AGENTIC_CONFIGURATION,
+  summarizeAgenticConfiguration,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   useAgenticConfigurationSources,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -16,6 +17,8 @@ export { INLINE_AGENTIC_CONFIGURATION } from './useAgenticConfigurationSources';
 
 /** Form field the save-as-default checkbox binds to. Parents read it on submit. */
 export const SAVE_AS_DEFAULT_FIELD = 'saveAsDefault';
+
+const PreservedFormValue: React.FC<{ value?: unknown }> = () => null;
 
 interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client'> {
   tool: AgenticToolName;
@@ -82,8 +85,11 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   const catalogUnavailable = tool === 'opencode' && resolvedModelCatalogClient === null;
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
+  const modelConfig = Form.useWatch('modelConfig', form);
+  const permissionMode = Form.useWatch('permissionMode', form);
   const {
     inlineAllowed,
+    inlineSelectionAllowed,
     presets,
     loading,
     loaded,
@@ -98,6 +104,11 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     client,
     currentUser,
     allowInlineSelection: !catalogUnavailable,
+    preserveInlineSelection: catalogUnavailable && selected === INLINE_AGENTIC_CONFIGURATION,
+  });
+  const storedInlineSummary = summarizeAgenticConfiguration(tool, {
+    modelConfig,
+    permissionMode,
   });
 
   useEffect(() => {
@@ -171,10 +182,26 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
           type="warning"
           showIcon
           title="OpenCode model selection is unavailable for this execution owner"
+          description={
+            selected === INLINE_AGENTIC_CONFIGURATION && inlineSelectionAllowed
+              ? `Stored configuration: ${storedInlineSummary || 'exact provider/model pair'}. It is read-only and will be preserved.`
+              : undefined
+          }
         />
       )}
 
-      {!inlineAllowed && presets.length === 0 && loaded && (
+      {selected === INLINE_AGENTIC_CONFIGURATION && !inlineAllowed && inlineSelectionAllowed && (
+        <>
+          <Form.Item name="modelConfig" noStyle>
+            <PreservedFormValue />
+          </Form.Item>
+          <Form.Item name="permissionMode" noStyle>
+            <PreservedFormValue />
+          </Form.Item>
+        </>
+      )}
+
+      {!inlineAllowed && !inlineSelectionAllowed && presets.length === 0 && loaded && (
         <Alert type="error" showIcon title="No administrator-managed preset is available" />
       )}
 
