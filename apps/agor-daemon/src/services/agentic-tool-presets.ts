@@ -1,3 +1,4 @@
+import { normalizeAgenticToolModelConfiguration } from '@agor/agentic-tools/config';
 import {
   AgenticToolPresetRepository,
   GatewayChannelRepository,
@@ -8,6 +9,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { InvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolPreset,
   CreateAgenticToolPreset,
@@ -50,6 +52,32 @@ function validateConfiguration(
     throw new BadRequest(`Unknown preset configuration fields: ${unknown.join(', ')}`);
 }
 
+function normalizeConfiguration(
+  tool: TenantAgenticToolName,
+  configuration: AgenticToolPreset['configuration']
+): AgenticToolPreset['configuration'] {
+  try {
+    const modelConfig = normalizeAgenticToolModelConfiguration(tool, configuration.modelConfig);
+    return {
+      ...configuration,
+      ...(modelConfig
+        ? {
+            modelConfig: {
+              mode: modelConfig.mode,
+              model: modelConfig.model,
+              ...(modelConfig.provider ? { provider: modelConfig.provider } : {}),
+              ...(modelConfig.effort ? { effort: modelConfig.effort } : {}),
+              ...(modelConfig.advisorModel ? { advisorModel: modelConfig.advisorModel } : {}),
+            },
+          }
+        : {}),
+    };
+  } catch (error) {
+    if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+    throw error;
+  }
+}
+
 function isForeignKeyRestriction(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; current && depth < 4; depth++) {
@@ -89,7 +117,10 @@ export class AgenticToolPresetsService {
     const tool = parseTool(data.tool);
     if (!tool) throw new BadRequest('tool is required');
     validateConfiguration(data.configuration);
-    return this.repository.create({ ...data, tool }, actor(params));
+    return this.repository.create(
+      { ...data, tool, configuration: normalizeConfiguration(tool, data.configuration) },
+      actor(params)
+    );
   }
 
   async patch(
@@ -97,7 +128,14 @@ export class AgenticToolPresetsService {
     data: PatchAgenticToolPreset,
     params?: Params
   ): Promise<AgenticToolPreset> {
-    if (data.configuration !== undefined) validateConfiguration(data.configuration);
+    if (data.configuration !== undefined) {
+      validateConfiguration(data.configuration);
+      const current = await this.get(id);
+      data = {
+        ...data,
+        configuration: normalizeConfiguration(current.tool, data.configuration),
+      };
+    }
     if (data.name !== undefined && !data.name.trim()) throw new BadRequest('name is required');
     if (data.is_default === false) {
       const current = await this.get(id);

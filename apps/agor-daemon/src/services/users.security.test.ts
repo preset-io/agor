@@ -7,6 +7,7 @@
  * shaped bytes cannot persist in the database.
  */
 
+import { AgenticToolPresetRepository } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -131,4 +132,109 @@ describe('UsersService — avatar source metadata', () => {
       expect(updated.avatar_synced_at).toBeUndefined();
     }
   );
+});
+
+describe('UsersService — OpenCode defaults', () => {
+  dbTest('rejects an incomplete inline default before persistence', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    await expect(
+      service.patch(id, {
+        default_agentic_config: {
+          opencode: { modelConfig: { mode: 'exact', model: 'gpt-test' } },
+        },
+        default_agentic_selection: { opencode: { source: 'inline' } },
+      })
+    ).rejects.toThrow(/provider and model/i);
+
+    expect((await service.get(id)).default_agentic_config?.opencode).toBeUndefined();
+  });
+
+  dbTest('rejects unresolved workspace and preset defaults', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    await expect(
+      service.patch(id, {
+        default_agentic_selection: { opencode: { source: 'workspace_default' } },
+      })
+    ).rejects.toThrow(/provider and model/i);
+
+    const preset = await new AgenticToolPresetRepository(db).create(
+      { tool: 'opencode', name: 'Permissions only', configuration: { permissionMode: 'yolo' } },
+      id
+    );
+    await expect(
+      service.patch(id, {
+        default_agentic_selection: {
+          opencode: { source: 'preset', preset_id: preset.preset_id },
+        },
+      })
+    ).rejects.toThrow(/provider and model/i);
+
+    expect((await service.get(id)).default_agentic_selection?.opencode).toBeUndefined();
+  });
+
+  dbTest('persists a complete exact inline pair', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    const updated = await service.patch(id, {
+      default_agentic_config: {
+        opencode: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-test' },
+        },
+      },
+      default_agentic_selection: { opencode: { source: 'inline' } },
+    });
+
+    expect(updated.default_agentic_config?.opencode?.modelConfig).toMatchObject({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+  });
+
+  dbTest('validates removals against the complete replacement state', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+    await service.patch(id, {
+      default_agentic_config: {
+        opencode: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-test' },
+        },
+      },
+      default_agentic_selection: { opencode: { source: 'inline' } },
+    });
+
+    await expect(service.patch(id, { default_agentic_config: {} })).rejects.toThrow(
+      /provider and model/i
+    );
+    expect((await service.get(id)).default_agentic_config?.opencode?.modelConfig).toMatchObject({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+  });
+
+  dbTest('normalizes a provider/model alias to an exact durable pair', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+
+    const updated = await service.patch(id, {
+      default_agentic_config: {
+        opencode: {
+          modelConfig: { mode: 'alias', provider: 'openai', model: 'gpt-test' },
+        },
+      },
+      default_agentic_selection: { opencode: { source: 'inline' } },
+    });
+
+    expect(updated.default_agentic_config?.opencode?.modelConfig).toMatchObject({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+  });
 });

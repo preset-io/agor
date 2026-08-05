@@ -5,14 +5,14 @@
  * Uses DrizzleService adapter with SessionRepository.
  */
 
-import { getAgenticToolModelSelectionError } from '@agor/agentic-tools';
+import { getAgenticToolModelConfiguration } from '@agor/agentic-tools';
 import {
-  assertInlineAgenticConfigurationAllowed,
+  isResolvedAgenticToolModelConfiguration,
+  materializeAgenticToolConfiguration,
+} from '@agor/agentic-tools/config';
+import {
   isTenantAgenticToolEnabled,
   PAGINATION,
-  presetConfigurationToSessionPatch,
-  resolveAgenticConfigurationReference,
-  resolveAgenticToolPreset,
   resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
@@ -38,10 +38,9 @@ import {
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
-  isResolvedModelConfig,
+  InvalidModelConfigError,
   lintModelToolMatch,
 } from '@agor/core/models';
-import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   AuthenticatedParams,
@@ -71,17 +70,9 @@ import {
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 
-/**
- * Session runtime configuration that should be inherited across forks, spawns, and btw.
- *
- * Bundled into a single type so that adding a new inheritable field only requires
- * updating this type and getInheritableConfig() — all creation paths (fork, spawn, btw)
- * automatically pick it up.
- */
-interface InheritableSessionConfig {
-  permission_config?: Session['permission_config'];
-  model_config?: Session['model_config'];
-}
+type MaterializedAgenticToolConfiguration = Awaited<
+  ReturnType<typeof materializeAgenticToolConfiguration>
+>;
 
 type SessionArchiveReason = NonNullable<Session['archived_reason']>;
 type SessionArchiveTarget = {
@@ -93,14 +84,17 @@ type SessionArchiveTarget = {
 const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
 const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
-/**
- * Extract the inheritable runtime configuration from a parent session.
- * Used by fork() and spawn() to ensure consistent config inheritance.
- */
-function getInheritableConfig(parent: Session): InheritableSessionConfig {
+function sessionConfigurationSource(
+  data: Pick<Session, 'model_config' | 'permission_config'>
+): import('@agor/core/types').AgenticToolConfigurationSource {
   return {
-    permission_config: parent.permission_config,
-    model_config: parent.model_config,
+    configuration: {
+      modelConfig: data.model_config ?? undefined,
+      permissionMode: data.permission_config?.mode,
+      codexSandboxMode: data.permission_config?.codex?.sandboxMode,
+      codexApprovalPolicy: data.permission_config?.codex?.approvalPolicy,
+      codexNetworkAccess: data.permission_config?.codex?.networkAccess,
+    },
   };
 }
 
@@ -229,12 +223,25 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (modelError) throw new BadRequest(modelError);
   }
 
-  private assertCompleteAgenticToolModelSelection(
+  private async resolveDirectCreateModelFallback(
     agenticTool: AgenticToolName,
-    modelConfig: { provider?: string; model?: string } | null | undefined
-  ): void {
-    const modelError = getAgenticToolModelSelectionError(agenticTool, modelConfig);
-    if (modelError) throw new BadRequest(modelError);
+    data: CreateSessionInput,
+    params?: SessionParams
+  ) {
+    const policy = getAgenticToolModelConfiguration(agenticTool);
+    if (
+      !policy?.modelCatalogService ||
+      !policy.resolveCatalogFallback ||
+      !params?.user ||
+      data.created_by !== params.user.user_id
+    ) {
+      return undefined;
+    }
+    const app = this.app as unknown as {
+      service(path: string): { find(params?: SessionParams): Promise<unknown> };
+    };
+    const catalog = await app.service(policy.modelCatalogService).find(params);
+    return policy.resolveCatalogFallback(catalog);
   }
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
@@ -314,36 +321,55 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     }
     const {
       agentic_tool_preset_id: configurationReference,
-      model_config: modelConfig,
+      model_config: originalModelConfig,
       ...sessionData
     } = data;
-    let createData: Partial<Session>;
-    if (configurationReference) {
-      const resolved = await resolveAgenticConfigurationReference(
-        this.db,
-        agenticTool,
-        configurationReference,
-        params?.user?.user_id as import('@agor/core/types').UserID | undefined
-      );
-      const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
-      createData = {
-        ...sessionData,
-        agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
-        ...presetConfigurationToSessionPatch(agenticTool, configuration),
-      };
-    } else {
-      await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
-      if (!params?._agenticConfigResolved) {
-        this.assertCompleteAgenticToolModelSelection(agenticTool, modelConfig);
+    let createData: Partial<Session> = {
+      ...sessionData,
+      agentic_tool_preset_id: configurationReference,
+      model_config: originalModelConfig,
+    };
+    if (!params?._agenticConfigResolved) {
+      const source = configurationReference
+        ? ({ reference: configurationReference } as const)
+        : sessionConfigurationSource(createData);
+      let materialized: MaterializedAgenticToolConfiguration;
+      try {
+        materialized = await materializeAgenticToolConfiguration(this.db, {
+          tool: agenticTool,
+          source,
+          executionOwnerId: data.created_by as import('@agor/core/types').UserID | undefined,
+        });
+      } catch (error) {
+        if (!(error instanceof InvalidModelConfigError) || configurationReference) throw error;
+        const modelFallback = await this.resolveDirectCreateModelFallback(
+          agenticTool,
+          data as CreateSessionInput,
+          params
+        );
+        materialized = await materializeAgenticToolConfiguration(this.db, {
+          tool: agenticTool,
+          source,
+          executionOwnerId: data.created_by as import('@agor/core/types').UserID | undefined,
+          modelFallback,
+        });
       }
-      if (modelConfig != null && !isResolvedModelConfig(modelConfig)) {
-        throw new BadRequest('model_config must be resolved before session creation');
-      }
       createData = {
-        ...sessionData,
-        agentic_tool_preset_id: configurationReference,
-        model_config: modelConfig,
+        ...createData,
+        agentic_tool_preset_id: materialized.agentic_tool_preset_id,
+        permission_config: materialized.permission_config,
+        model_config: materialized.model_config,
       };
+    }
+    const modelPolicy = getAgenticToolModelConfiguration(agenticTool);
+    if (
+      modelPolicy?.isResolved &&
+      !isResolvedAgenticToolModelConfiguration(agenticTool, createData.model_config)
+    ) {
+      throw new BadRequest(modelPolicy.missingSelectionError ?? 'model_config is not resolved');
+    }
+    if (createData.model_config != null && !createData.model_config.updated_at) {
+      throw new BadRequest('model_config must be resolved before session creation');
     }
     this.assertSupportedModelConfig(agenticTool, createData.model_config);
     const created = await super.create(createData, params);
@@ -363,19 +389,31 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     return runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
       if (!session.agentic_tool_preset_id) {
-        await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
+        const policy = getAgenticToolModelConfiguration(agenticTool);
+        if (
+          policy?.isResolved &&
+          !isResolvedAgenticToolModelConfiguration(agenticTool, session.model_config)
+        ) {
+          throw new BadRequest(policy.missingSelectionError ?? 'model_config is not resolved');
+        }
         return session;
       }
-      const preset = await resolveAgenticToolPreset(
-        tenantDb,
-        agenticTool,
-        session.agentic_tool_preset_id
-      );
-      const materialized = presetConfigurationToSessionPatch(agenticTool, preset.configuration);
-      this.assertSupportedModelConfig(agenticTool, materialized.model_config);
-      return this.sessionRepo.update(session.session_id, materialized, {
-        replaceAgenticConfig: true,
+      const materialized = await materializeAgenticToolConfiguration(tenantDb, {
+        tool: agenticTool,
+        source: { reference: session.agentic_tool_preset_id },
+        executionOwnerId: session.created_by as import('@agor/core/types').UserID,
       });
+      this.assertSupportedModelConfig(agenticTool, materialized.model_config);
+      return this.sessionRepo.update(
+        session.session_id,
+        {
+          permission_config: materialized.permission_config,
+          model_config: materialized.model_config,
+        },
+        {
+          replaceAgenticConfig: true,
+        }
+      );
     });
   }
 
@@ -610,13 +648,19 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
     // only when the branch opts in via dangerously_allow_session_sharing.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
-    const inheritableConfig = getInheritableConfig(parent);
-    this.assertSupportedModelConfig(parentTool, inheritableConfig.model_config);
+    const inherited = await materializeAgenticToolConfiguration(this.db, {
+      tool: parentTool,
+      source: parent.agentic_tool_preset_id
+        ? { reference: parent.agentic_tool_preset_id }
+        : sessionConfigurationSource(parent),
+      executionOwnerId: created_by as import('@agor/core/types').UserID,
+    });
+    this.assertSupportedModelConfig(parentTool, inherited.model_config);
 
     const forkedSession = await this.create(
       {
         agentic_tool: parentTool,
-        agentic_tool_preset_id: parent.agentic_tool_preset_id,
+        agentic_tool_preset_id: inherited.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
@@ -632,7 +676,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
-        ...inheritableConfig,
+        permission_config: inherited.permission_config,
+        model_config: inherited.model_config,
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
@@ -680,30 +725,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     return session;
   }
 
-  /**
-   * Spawn a child session, optionally delegating to a different agentic tool.
-   *
-   * Config resolution is centralized in {@link resolveChildSessionConfig}
-   * (`@agor/core/sessions`):
-   *
-   *   model_config:      request → parent (same tool only) → user default → undefined
-   *   permission_config: request → parent (same tool only) → user default → mapped system default
-   *
-   * The "same tool only" gate prevents cross-tool inheritance bugs: a Codex
-   * child spawned from a Claude parent must not inherit `claude-opus-4-7`,
-   * because Codex cannot run Claude models. When no per-tool default exists,
-   * the helper returns `model_config: undefined` and the SDK picks its own
-   * default rather than running with a poisoned value.
-   *
-   * Identity resolution runs *before* defaults lookup so per-tool defaults
-   * come from the resolved child owner (the caller in normal cross-user
-   * spawns), not the parent owner. Otherwise a collaborator spawning a
-   * subsession would get the parent owner's preferences stamped on their
-   * own session.
-   *
-   * MCP server inheritance is handled inline below — MCPs are tool-agnostic
-   * and follow "explicit list > copy from parent" regardless of tool match.
-   */
+  /** Spawn a child after atomically materializing its selected source for the child owner. */
   async spawn(
     id: string,
     data: Partial<import('@agor/core/types').SpawnConfig>,
@@ -720,12 +742,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       data.modelConfig !== undefined ||
       data.codexSandboxMode !== undefined ||
       data.codexApprovalPolicy !== undefined ||
-      data.codexNetworkAccess !== undefined ||
-      data.mcpServerIds !== undefined;
+      data.codexNetworkAccess !== undefined;
     const inheritedPresetId =
       targetTool === parent.agentic_tool ? parent.agentic_tool_preset_id : undefined;
     const presetId = data.presetId ?? inheritedPresetId ?? undefined;
-    if (inheritedPresetId && !data.presetId && hasAtomicOverride) {
+    if (presetId && hasAtomicOverride) {
       throw new BadRequest(
         'Preset-backed child sessions cannot override individual configuration fields'
       );
@@ -736,9 +757,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // `resolveChildIdentity` returns `parent.created_by` anyway.)
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
 
-    // Load the child owner's per-tool defaults. Failing this lookup is
-    // non-fatal — the resolver falls through to the mapped system default
-    // when `user` is null.
+    // Preload the child owner when the app service is available; the shared
+    // materializer can also resolve the owner directly from its scoped DB.
     let user: import('@agor/core/types').User | null = null;
     if (created_by && this.app) {
       try {
@@ -753,18 +773,29 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
 
-    const resolved = resolveChildSessionConfig({
-      parent,
-      effectiveTool: targetTool,
-      user,
-      overrides: {
-        permissionMode: data.permissionMode,
-        modelConfig: data.modelConfig,
-        codexSandboxMode: data.codexSandboxMode,
-        codexApprovalPolicy: data.codexApprovalPolicy,
-        codexNetworkAccess: data.codexNetworkAccess,
-      },
-    });
+    let resolved: MaterializedAgenticToolConfiguration;
+    try {
+      resolved = await materializeAgenticToolConfiguration(this.db, {
+        tool: targetTool,
+        source: presetId
+          ? { reference: presetId }
+          : {
+              configuration: {
+                modelConfig: data.modelConfig,
+                permissionMode: data.permissionMode,
+                codexSandboxMode: data.codexSandboxMode,
+                codexApprovalPolicy: data.codexApprovalPolicy,
+                codexNetworkAccess: data.codexNetworkAccess,
+              },
+            },
+        executionOwnerId: created_by as import('@agor/core/types').UserID,
+        ...(user ? { executionOwner: user } : {}),
+        parent,
+      });
+    } catch (error) {
+      if (error instanceof InvalidModelConfigError) throw new BadRequest(error.message);
+      throw error;
+    }
     const permissionConfig = resolved.permission_config;
     const modelConfig = resolved.model_config;
 
@@ -805,7 +836,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
-        agentic_tool_preset_id: presetId,
+        agentic_tool_preset_id: resolved.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
@@ -1286,7 +1317,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const mutatesAtomicConfig =
         data.model_config !== undefined ||
         data.permission_config !== undefined ||
-        data.agentic_tool !== undefined;
+        data.agentic_tool !== undefined ||
+        data.agentic_tool_preset_id === null;
       if (
         current.agentic_tool_preset_id &&
         mutatesAtomicConfig &&
@@ -1298,24 +1330,39 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       if (data.agentic_tool_preset_id) {
         const tool = requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool);
-        const resolved = await resolveAgenticConfigurationReference(
-          this.db,
+        const materialized = await materializeAgenticToolConfiguration(this.db, {
           tool,
-          data.agentic_tool_preset_id,
-          params?.user?.user_id as import('@agor/core/types').UserID | undefined
-        );
-        const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+          source: { reference: data.agentic_tool_preset_id },
+          executionOwnerId: current.created_by as import('@agor/core/types').UserID,
+        });
         data = {
           ...data,
-          agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
-          ...presetConfigurationToSessionPatch(tool, configuration),
+          agentic_tool_preset_id: materialized.agentic_tool_preset_id,
+          permission_config: materialized.permission_config,
+          model_config: materialized.model_config,
         };
         replaceAgenticConfig = true;
-      } else if (data.agentic_tool_preset_id === null && current.agentic_tool_preset_id) {
-        await assertInlineAgenticConfigurationAllowed(
-          this.db,
-          requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool)
-        );
+      } else if (mutatesAtomicConfig) {
+        const tool = requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool);
+        const materialized = await materializeAgenticToolConfiguration(this.db, {
+          tool,
+          source: sessionConfigurationSource({
+            model_config:
+              data.model_config === undefined ? current.model_config : data.model_config,
+            permission_config:
+              data.permission_config === undefined
+                ? current.permission_config
+                : data.permission_config,
+          }),
+          executionOwnerId: current.created_by as import('@agor/core/types').UserID,
+        });
+        data = {
+          ...data,
+          agentic_tool_preset_id: null,
+          permission_config: materialized.permission_config,
+          model_config: materialized.model_config,
+        };
+        replaceAgenticConfig = true;
       }
       // Validate only a newly selected/effective model. Existing persisted
       // sessions remain patchable when the curated registry changes.
@@ -1327,12 +1374,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         const effectiveTool = requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool);
         const effectiveModelConfig =
           data.model_config === undefined ? current.model_config : data.model_config;
-        const effectivePresetId =
-          data.agentic_tool_preset_id === undefined
-            ? current.agentic_tool_preset_id
-            : data.agentic_tool_preset_id;
-        if (!effectivePresetId) {
-          this.assertCompleteAgenticToolModelSelection(effectiveTool, effectiveModelConfig);
+        const modelPolicy = getAgenticToolModelConfiguration(effectiveTool);
+        if (
+          modelPolicy?.isResolved &&
+          !isResolvedAgenticToolModelConfiguration(effectiveTool, effectiveModelConfig)
+        ) {
+          throw new BadRequest(modelPolicy.missingSelectionError ?? 'model_config is not resolved');
         }
         this.assertSupportedModelConfig(effectiveTool, effectiveModelConfig);
       }

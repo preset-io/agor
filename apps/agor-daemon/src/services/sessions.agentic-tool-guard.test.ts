@@ -9,16 +9,18 @@
  * These tests pin the server-side guard down against a real database.
  */
 import {
+  AgenticToolPresetRepository,
   BranchRepository,
   generateId,
   RepoRepository,
   SessionRepository,
   TaskRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, Task, UUID } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { SessionStatus, TaskStatus, USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
 
@@ -27,6 +29,11 @@ import { SessionsService } from './sessions';
 const STUB_APP = {} as unknown as Application;
 
 async function createBranch(db: any): Promise<UUID> {
+  await new UsersRepository(db).create({
+    user_id: 'test-user' as UUID,
+    email: `session-guard-${generateId()}@example.com`,
+    name: 'Test User',
+  });
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
   const repo = await repoRepo.create({
@@ -249,6 +256,57 @@ describe('SessionsService direct OpenCode model selection', () => {
     });
   });
 
+  dbTest('persists the authenticated subject fallback as an exact pair', async ({ db }) => {
+    const app = {
+      service: (path: string) => {
+        if (path === 'opencode-models') {
+          return {
+            find: async () => ({
+              suggestedSelection: { providerId: 'openai', modelId: 'gpt-test' },
+            }),
+          };
+        }
+        throw new Error(`Unexpected service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new SessionsService(db, app);
+    const branchId = await createBranch(db);
+    const user = { user_id: 'test-user' as UUID };
+
+    const created = await service.create(
+      {
+        branch_id: branchId,
+        agentic_tool: 'opencode',
+        status: SessionStatus.IDLE,
+        created_by: user.user_id,
+      },
+      { user } as never
+    );
+
+    expect(created.model_config).toMatchObject({
+      mode: 'exact',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+  });
+
+  dbTest('never resolves a fallback under a different execution owner', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+
+    await expect(
+      service.create(
+        {
+          branch_id: branchId,
+          agentic_tool: 'opencode',
+          status: SessionStatus.IDLE,
+          created_by: 'other-user' as UUID,
+        },
+        { user: { user_id: 'caller' as UUID } } as never
+      )
+    ).rejects.toThrow(/provider and model/i);
+  });
+
   dbTest(
     'rejects caller-controlled indirect-create provenance before persistence',
     async ({ db }) => {
@@ -297,44 +355,42 @@ describe('SessionsService direct OpenCode model selection', () => {
     }
   );
 
-  dbTest('allows resolved internal creates plus fork and task-ID-less spawn', async ({ db }) => {
-    const app = {
-      service: (path: string) => {
-        if (path === 'users') return { get: async () => null };
-        throw new Error(`Unexpected service: ${path}`);
-      },
-    } as unknown as Application;
-    const service = new SessionsService(db, app);
-    const branchId = await createBranch(db);
-    const incompleteModel = modelConfig();
-    const base = {
-      branch_id: branchId,
-      agentic_tool: 'opencode' as const,
-      status: SessionStatus.IDLE,
-      created_by: 'test-user' as UUID,
-      model_config: incompleteModel,
-    };
+  dbTest(
+    'allows trusted resolved creates but fails closed for incomplete children',
+    async ({ db }) => {
+      const app = {
+        service: (path: string) => {
+          if (path === 'users') return { get: async () => null };
+          throw new Error(`Unexpected service: ${path}`);
+        },
+      } as unknown as Application;
+      const service = new SessionsService(db, app);
+      const branchId = await createBranch(db);
+      const incompleteModel = modelConfig();
+      const base = {
+        branch_id: branchId,
+        agentic_tool: 'opencode' as const,
+        status: SessionStatus.IDLE,
+        created_by: 'test-user' as UUID,
+        model_config: incompleteModel,
+      };
 
-    await expect(service.create(base, { _agenticConfigResolved: true })).resolves.toMatchObject({
-      model_config: incompleteModel,
-    });
+      await expect(service.create(base, { _agenticConfigResolved: true })).rejects.toThrow(
+        /provider and model/i
+      );
 
-    const parentId = await createSession(db, branchId, {
-      agentic_tool: 'opencode',
-      model_config: incompleteModel,
-    });
-    await expect(service.fork(parentId, { prompt: 'Fork internally' })).resolves.toMatchObject({
-      model_config: incompleteModel,
-      genealogy: { forked_from_session_id: parentId },
-    });
-    const spawned = await service.spawn(parentId, { prompt: 'Spawn without a task ID' });
-    expect(spawned).toMatchObject({
-      model_config: { mode: 'exact', model: 'gpt-test' },
-      genealogy: { parent_session_id: parentId },
-    });
-    expect(spawned.model_config?.provider).toBeUndefined();
-    expect(spawned.genealogy?.spawn_point_task_id).toBeUndefined();
-  });
+      const parentId = await createSession(db, branchId, {
+        agentic_tool: 'opencode',
+        model_config: incompleteModel,
+      });
+      await expect(service.fork(parentId, { prompt: 'Fork internally' })).rejects.toThrow(
+        /provider and model/i
+      );
+      await expect(service.spawn(parentId, { prompt: 'Spawn without a task ID' })).rejects.toThrow(
+        /provider and model/i
+      );
+    }
+  );
 
   dbTest('rejects incomplete direct patches and accepts a complete exact pair', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
@@ -355,6 +411,78 @@ describe('SessionsService direct OpenCode model selection', () => {
       service.patch(sessionId, { model_config: modelConfig('anthropic', 'claude-test') })
     ).resolves.toMatchObject({
       model_config: { provider: 'anthropic', model: 'claude-test' },
+    });
+  });
+
+  dbTest('materializes presets with explicit MCPs before taskless child trust', async ({ db }) => {
+    const app = {
+      service: (path: string) => {
+        if (path === 'users') {
+          return { get: (id: string) => new UsersRepository(db).findById(id) };
+        }
+        throw new Error(`Unexpected service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new SessionsService(db, app);
+    const setMCPServers = vi.spyOn(service, 'setMCPServers').mockResolvedValue();
+    const branchId = await createBranch(db);
+    const owner = await new UsersRepository(db).create({
+      email: `child-owner-${generateId()}@example.com`,
+      name: 'Child owner',
+    });
+    const preset = await new AgenticToolPresetRepository(db).create(
+      {
+        tool: 'opencode',
+        name: 'Child exact pair',
+        configuration: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
+        },
+      },
+      owner.user_id
+    );
+    const parentId = await createSession(db, branchId, {
+      agentic_tool: 'opencode',
+      agentic_tool_preset_id: preset.preset_id,
+      model_config: modelConfig(),
+    });
+
+    const explicitMcpServerIds = ['mcp-explicit'];
+    const child = await service.spawn(parentId, {
+      prompt: 'Taskless child',
+      presetId: preset.preset_id,
+      mcpServerIds: explicitMcpServerIds,
+    });
+    expect(child).toMatchObject({
+      agentic_tool_preset_id: preset.preset_id,
+      model_config: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
+      genealogy: { spawn_point_task_id: undefined },
+    });
+    expect(setMCPServers).toHaveBeenCalledWith(child.session_id, explicitMcpServerIds, 'spawn');
+    await expect(service.fork(parentId, { prompt: 'Preset fork' })).resolves.toMatchObject({
+      agentic_tool_preset_id: preset.preset_id,
+      model_config: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
+    });
+
+    await new UsersRepository(db).update(owner.user_id, {
+      default_agentic_config: {
+        opencode: {
+          modelConfig: { mode: 'exact', provider: 'anthropic', model: 'default-child' },
+        },
+      },
+    });
+    const ownedParentId = await createSession(db, branchId, {
+      created_by: owner.user_id,
+      agentic_tool: 'opencode',
+      model_config: modelConfig('openai', 'stale-parent'),
+    });
+    await expect(
+      service.spawn(ownedParentId, {
+        prompt: 'Taskless reserved default',
+        presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      })
+    ).resolves.toMatchObject({
+      model_config: { mode: 'exact', provider: 'anthropic', model: 'default-child' },
+      genealogy: { spawn_point_task_id: undefined },
     });
   });
 });

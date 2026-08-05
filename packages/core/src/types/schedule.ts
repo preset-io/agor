@@ -6,8 +6,12 @@ import type {
   PersistedAgenticToolName,
 } from './agentic-tool';
 import { isAgenticToolName } from './agentic-tool';
+import type {
+  AgenticToolDefaultConfigurationReference,
+  AgenticToolPresetID,
+} from './agentic-tool-preset';
 import type { BranchID, SessionID, UUID } from './id';
-import type { PermissionMode } from './session';
+import type { PermissionMode, Session } from './session';
 import type { DefaultModelConfig } from './user';
 
 /**
@@ -50,14 +54,30 @@ export function isTimezoneMode(value: unknown): value is TimezoneMode {
  * etc. — they're treated as a unit in the modal and stored as one
  * jsonb blob.
  */
-export interface ScheduleAgenticToolConfig {
+interface ScheduleAgenticToolConfigBase {
   /** Agent to spawn for this schedule's runs. */
   agentic_tool: AgenticToolName;
-  /** Live preset reference. Inline runtime fields cannot coexist with this source. */
-  preset_id?: import('./agentic-tool-preset').AgenticToolPresetID;
-  /** User/workspace default reference, deliberately resolved for every run. */
-  configuration_reference?: import('./agentic-tool-preset').AgenticToolDefaultConfigurationReference;
+  /** Additional context files to load into the spawned session. */
+  context_files?: string[];
+}
 
+type ReferencedScheduleAgenticToolConfig = (
+  | { preset_id: AgenticToolPresetID; configuration_reference?: never }
+  | {
+      configuration_reference: AgenticToolDefaultConfigurationReference;
+      preset_id?: never;
+    }
+) & {
+  permission_mode?: never;
+  model_config?: never;
+  codex_sandbox_mode?: never;
+  codex_approval_policy?: never;
+  codex_network_access?: never;
+};
+
+type InlineScheduleAgenticToolConfig = {
+  preset_id?: never;
+  configuration_reference?: never;
   /** Permission mode for spawned sessions (e.g., 'auto', 'ask', 'default'). */
   permission_mode?: PermissionMode;
 
@@ -72,9 +92,6 @@ export interface ScheduleAgenticToolConfig {
    */
   model_config?: DefaultModelConfig;
 
-  /** Additional context files to load into the spawned session. */
-  context_files?: string[];
-
   /** Codex-specific: sandbox mode (where Codex can write). */
   codex_sandbox_mode?: CodexSandboxMode;
 
@@ -83,7 +100,10 @@ export interface ScheduleAgenticToolConfig {
 
   /** Codex-specific: network access (outbound HTTP/HTTPS). */
   codex_network_access?: boolean;
-}
+};
+
+export type ScheduleAgenticToolConfig = ScheduleAgenticToolConfigBase &
+  (ReferencedScheduleAgenticToolConfig | InlineScheduleAgenticToolConfig);
 
 /**
  * Storage-facing schedule configuration.
@@ -92,8 +112,17 @@ export interface ScheduleAgenticToolConfig {
  * create/update and runtime boundaries narrow it through
  * {@link ScheduleAgenticToolConfig} instead of reinterpreting it.
  */
-export type PersistedScheduleAgenticToolConfig = Omit<ScheduleAgenticToolConfig, 'agentic_tool'> & {
+export type PersistedScheduleAgenticToolConfig = {
   agentic_tool: PersistedAgenticToolName;
+  preset_id?: AgenticToolPresetID;
+  configuration_reference?: AgenticToolDefaultConfigurationReference;
+  context_files?: string[];
+  permission_mode?: PermissionMode;
+  /** Normalized materialized snapshot; references are still resolved live at execution. */
+  model_config?: DefaultModelConfig | NonNullable<Session['model_config']>;
+  codex_sandbox_mode?: CodexSandboxMode;
+  codex_approval_policy?: CodexApprovalPolicy;
+  codex_network_access?: boolean;
 };
 
 /** Narrow a storage-facing configuration before using it at a current runtime/write boundary. */

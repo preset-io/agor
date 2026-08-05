@@ -1,8 +1,11 @@
 import {
   AgenticToolPresetRepository,
   BranchRepository,
+  createTenantScopedDatabaseProxy,
   generateId,
   RepoRepository,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionRepository,
   UsersRepository,
@@ -181,6 +184,25 @@ describe('renderSchedulePrompt', () => {
 });
 
 describe('materializeScheduleAgenticToolConfig', () => {
+  dbTest(
+    'rejects deferred materialization through a retained foreign tenant scope',
+    async ({ db }) => {
+      const guardedDb = createTenantScopedDatabaseProxy(db);
+      await runWithTenantDatabaseScope(guardedDb, 'tenant-a', async (tenantADb) => {
+        await expect(
+          runWithTenantContext('tenant-b', () =>
+            runWithTenantDatabaseScope(tenantADb, undefined, (tenantBDb) =>
+              materializeScheduleAgenticToolConfig(
+                tenantBDb,
+                makeSchedule({ agentic_tool_config: { agentic_tool: 'codex' } })
+              )
+            )
+          )
+        ).rejects.toThrow(/tenant.*scope|scope.*tenant/i);
+      });
+    }
+  );
+
   dbTest('follows the schedule creator user default on every run', async ({ db }) => {
     const users = new UsersRepository(db);
     const creator = await users.create({
@@ -241,7 +263,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
     });
 
     await expect(materializeScheduleAgenticToolConfig(db, schedule)).resolves.toMatchObject({
-      preset_id: preset.preset_id,
+      configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
 
@@ -252,7 +274,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
     );
 
     await expect(materializeScheduleAgenticToolConfig(db, schedule)).resolves.toMatchObject({
-      preset_id: preset.preset_id,
+      configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
       model_config: { mode: 'exact', model: 'gpt-5.5' },
     });
   });
@@ -294,7 +316,11 @@ describe('materializeScheduleAgenticToolConfig', () => {
 
     await expect(
       materializeScheduleAgenticToolConfig(db, makeSchedule({ agentic_tool_config: config }))
-    ).resolves.toEqual(config);
+    ).resolves.toMatchObject({
+      agentic_tool: 'codex',
+      permission_mode: 'ask',
+      model_config: { mode: 'exact', model: 'gpt-5.4', updated_at: expect.any(String) },
+    });
   });
 
   dbTest('materializes before the shared spawn path creates a session', async ({ db }) => {
@@ -371,7 +397,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
   });
 
   dbTest(
-    'rejects a corrupted mixed source before creating or prompting a session',
+    're-materializes a deferred reference instead of trusting its stored snapshot',
     async ({ db }) => {
       const { creator, schedule } = await seedRunnableSchedule(
         db,
@@ -387,14 +413,13 @@ describe('materializeScheduleAgenticToolConfig', () => {
       );
       const { app, createSession, prompt } = createSchedulerApp(db);
 
-      await expect(
-        new SchedulerService(db, app).executeScheduleNow({
-          scheduleId: schedule.schedule_id,
-          triggeredBy: creator.user_id,
-        })
-      ).rejects.toThrow(/cannot contain.*inline/i);
-      expect(createSession).not.toHaveBeenCalled();
-      expect(prompt).not.toHaveBeenCalled();
+      await new SchedulerService(db, app).executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: creator.user_id,
+      });
+      expect(createSession).toHaveBeenCalledOnce();
+      expect(createSession.mock.calls[0][0].model_config?.model).not.toBe('gpt-5.4');
+      expect(prompt).toHaveBeenCalledOnce();
     }
   );
 

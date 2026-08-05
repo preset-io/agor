@@ -11,9 +11,10 @@ import type {
   CodexSandboxMode,
   PersistedAgenticToolName,
 } from './agentic-tool';
+import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
 import type { ScheduleID } from './schedule';
-import type { PermissionMode } from './session';
+import type { PermissionMode, Session } from './session';
 import type { DefaultModelConfig } from './user';
 
 // ============================================================================
@@ -251,15 +252,8 @@ export interface GatewayEnvVar {
   forceOverride: boolean;
 }
 
-export interface GatewayAgenticConfig {
+interface GatewayAgenticConfigBase {
   agent: AgenticToolName;
-  /** Live preset reference. Remaining runtime fields are ignored when present. */
-  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
-  modelConfig?: DefaultModelConfig;
-  permissionMode?: PermissionMode;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
   /**
    * Gateway-level environment variables (e.g., service account tokens).
    *
@@ -272,9 +266,37 @@ export interface GatewayAgenticConfig {
   envVars?: GatewayEnvVar[];
 }
 
+type ReferencedGatewayAgenticConfig = {
+  /** Live preset/default reference. */
+  presetId: AgenticToolConfigurationReference;
+  modelConfig?: never;
+  permissionMode?: never;
+  codexSandboxMode?: never;
+  codexApprovalPolicy?: never;
+  codexNetworkAccess?: never;
+};
+
+type InlineGatewayAgenticConfig = {
+  presetId?: never;
+  modelConfig?: DefaultModelConfig;
+  permissionMode?: PermissionMode;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
+};
+
+export type GatewayAgenticConfig = GatewayAgenticConfigBase &
+  (ReferencedGatewayAgenticConfig | InlineGatewayAgenticConfig);
+
 /** Storage-facing gateway configuration, including readable removed identifiers. */
-export type PersistedGatewayAgenticConfig = Omit<GatewayAgenticConfig, 'agent'> & {
+export type PersistedGatewayAgenticConfig = GatewayAgenticConfigBase & {
   agent: PersistedAgenticToolName;
+  presetId?: AgenticToolConfigurationReference;
+  modelConfig?: DefaultModelConfig | NonNullable<Session['model_config']>;
+  permissionMode?: PermissionMode;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
 };
 
 // ============================================================================

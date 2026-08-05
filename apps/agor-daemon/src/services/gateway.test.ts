@@ -1,3 +1,4 @@
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { getBaseUrl } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
@@ -15,6 +16,19 @@ import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+
+vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/agentic-tools/config')>();
+  return {
+    ...actual,
+    materializeAgenticToolConfiguration: vi.fn(async () => ({
+      agentic_tool_preset_id: null,
+      permission_config: { mode: 'default' },
+      model_config: null,
+      mcp_server_ids: [],
+    })),
+  };
+});
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/gateway')>();
@@ -184,6 +198,7 @@ function makeGatewayHarness(args: {
 }
 
 afterEach(() => {
+  vi.mocked(materializeAgenticToolConfiguration).mockClear();
   vi.mocked(getBaseUrl).mockReset();
   vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');
   vi.mocked(getConnector).mockReset();
@@ -265,6 +280,12 @@ describe('GatewayService multi-tenant process state', () => {
 
     await runWithTenantContext('tenant-a', () => service.refreshChannelState());
     await runWithTenantContext('tenant-b', () => service.refreshChannelState());
+
+    const crossTenant = await runWithTenantContext('tenant-b', () =>
+      service.routeMessage({ session_id: 'sess-1', message: 'wrong tenant' })
+    );
+    expect(crossTenant).toEqual({ routed: false });
+    expect(sendMessage).not.toHaveBeenCalled();
 
     const result = await runWithTenantContext('tenant-a', () =>
       service.routeMessage({ session_id: 'sess-1', message: 'hello tenant A' })
@@ -1315,6 +1336,18 @@ describe('GatewayService inbound create without ambient tenant DB scope', () => 
   // 'Missing tenant database scope for gateway agent resolution' on this path,
   // breaking all inbound Slack messages.
   it('processes a Slack listener message with tenant identity only', async () => {
+    const materializationScopes: unknown[] = [];
+    vi.mocked(materializeAgenticToolConfiguration).mockImplementationOnce(async (tenantDb) => {
+      const scope = getCurrentTenantDatabaseScope();
+      materializationScopes.push(scope);
+      expect(tenantDb).toBe(scope?.db);
+      return {
+        agentic_tool_preset_id: null,
+        permission_config: { mode: 'default' },
+        model_config: null,
+        mcp_server_ids: [],
+      };
+    });
     const fetchThreadHistory = vi.fn(async () => ({ has_more: false, messages: [] }));
     const { createUnscoped, promptCreate } = makeGatewayHarness({
       existingMapping: makeMapping(),
@@ -1337,7 +1370,42 @@ describe('GatewayService inbound create without ambient tenant DB scope', () => 
     );
 
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    expect(materializationScopes).toEqual([
+      expect.objectContaining({ kind: 'tenant', tenantId: 'tenant-channel' }),
+    ]);
     expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
     expect(promptCreate).toHaveBeenCalled();
+  });
+
+  it('rejects materialization through a retained foreign tenant scope', async () => {
+    const db = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
+    const { createUnscoped } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: {
+        fetchThreadHistory: vi.fn(async () => ({ has_more: false, messages: [] })),
+        sendMessage: vi.fn(async () => undefined),
+      },
+    });
+
+    await expect(
+      runWithTenantDatabaseScope(db, 'tenant-a', () =>
+        runWithTenantContext('tenant-b', () =>
+          createUnscoped({
+            channel_key: 'slack-key',
+            thread_id: 'C123-100.000000',
+            text: 'please answer',
+            metadata: {
+              channel: 'C123',
+              channel_type: 'channel',
+              slack_has_mention: true,
+              slack_message_ts: '103.000000',
+              slack_thread_ts: '100.000000',
+            },
+          })
+        )
+      )
+    ).rejects.toThrow('Cannot enter tenant scope tenant-b from active tenant scope tenant-a');
+    expect(materializeAgenticToolConfiguration).not.toHaveBeenCalled();
   });
 });

@@ -6,12 +6,8 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import {
-  assertInlineAgenticConfigurationAllowed,
-  getBaseUrl,
-  resolveAgenticToolPreset,
-  resolveExecutionSecurityMode,
-} from '@agor/core/config';
+import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { getBaseUrl, resolveExecutionSecurityMode } from '@agor/core/config';
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
@@ -53,7 +49,6 @@ import {
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   BranchPermissionLevel,
@@ -71,9 +66,15 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  ROLES,
+  SessionStatus,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
@@ -2019,42 +2020,37 @@ export class GatewayService {
     // Open a short tenant unit of work from that identity — same pattern as
     // bindRepositoryToTenantUnitOfWork — instead of assuming an ambient scope
     // or falling back to the unscoped base connection.
-    const preset = await runWithTenantDatabaseScope(
+    const materializedAgenticConfig = await runWithTenantDatabaseScope(
       this.db,
       getCurrentTenantId(),
-      async (tenantDb) => {
-        const resolved = agenticConfig?.presetId
-          ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
-          : null;
-        if (!resolved) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
-        return resolved;
-      }
+      (tenantDb) =>
+        materializeAgenticToolConfiguration(tenantDb, {
+          tool: agenticTool,
+          source: agenticConfig
+            ? agenticConfig.presetId
+              ? { reference: agenticConfig.presetId }
+              : { configuration: gatewayAgenticConfigToInlineConfiguration(agenticConfig) }
+            : { reference: USER_DEFAULT_AGENTIC_CONFIGURATION },
+          executionOwnerId: user.user_id,
+          executionOwner: user,
+          mcpServerIds: channel.mcp_server_ids,
+        })
     );
-    const runtimeConfig = preset?.configuration ?? agenticConfig;
     const {
       permission_config: gatewayPermissionConfig,
       model_config: gatewayModelConfig,
       mcp_server_ids: defaultMcpServerIds,
-    } = resolveSessionDefaults({
-      agenticTool,
-      user,
-      overrides: {
-        permissionMode: runtimeConfig?.permissionMode,
-        modelConfig: runtimeConfig?.modelConfig,
-        codexSandboxMode: runtimeConfig?.codexSandboxMode,
-        codexApprovalPolicy: runtimeConfig?.codexApprovalPolicy,
-        codexNetworkAccess: runtimeConfig?.codexNetworkAccess,
-      },
-    });
+    } = materializedAgenticConfig;
+    const resolvedPresetId = materializedAgenticConfig.agentic_tool_preset_id ?? undefined;
     const gatewayMcpServerIds = channel.mcp_server_ids ?? defaultMcpServerIds;
     const permissionMode = gatewayPermissionConfig.mode;
 
     if (existingMapping) {
       // Existing thread → existing session
       sessionId = existingMapping.session_id;
-      if (agenticConfig?.presetId) {
+      if (resolvedPresetId) {
         await this.app.service('sessions').patch(sessionId, {
-          agentic_tool_preset_id: agenticConfig.presetId,
+          agentic_tool_preset_id: resolvedPresetId,
         });
       } else if (agenticConfig) {
         await this.app.service('sessions').patch(sessionId, {
@@ -2212,7 +2208,7 @@ export class GatewayService {
           unix_username: user.unix_username ?? null,
           status: SessionStatus.IDLE,
           agentic_tool: agenticTool,
-          agentic_tool_preset_id: agenticConfig?.presetId,
+          agentic_tool_preset_id: resolvedPresetId,
           permission_config: gatewayPermissionConfig,
           model_config: gatewayModelConfig,
           tasks: [],
@@ -2228,9 +2224,7 @@ export class GatewayService {
       sessionId = session.session_id;
       created = true;
 
-      // Attach MCP servers from channel agentic config (reuses sessions service logic)
-      // gatewayMcpServerIds came out of resolveSessionDefaults, so user-default
-      // inheritance is already applied (channel config > user defaults > []).
+      // Attach the channel selection, falling back to the stable owner's defaults.
       if (gatewayMcpServerIds.length > 0) {
         await sessionsService.setMCPServers(
           session.session_id as SessionID,
