@@ -21,31 +21,16 @@
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import { probeRemoteAuthType } from '@agor/core/mcp-catalog';
 import type {
-  AgenticToolName,
   AuthenticatedParams,
   CreateMCPServerInput,
+  MCPCatalogConnectData,
+  MCPCatalogConnectResult,
   MCPCatalogEntry,
   MCPServer,
   MCPTransport,
   Session,
   UserID,
 } from '@agor/core/types';
-
-export interface MCPCatalogConnectData {
-  /** Catalog entry UUID or its reverse-DNS registry name. */
-  catalog_key: string;
-  branch_id: string;
-  agentic_tool: AgenticToolName;
-}
-
-export interface MCPCatalogConnectResult {
-  mcp_server: MCPServer;
-  session: Session;
-  /** The entry's curated demonstration prompt, for the new session's composer. */
-  starter_prompt?: string;
-  /** True when an existing install was reused rather than a second row created. */
-  reused_existing_server: boolean;
-}
 
 /** Catalog transports, as `mcp_servers` names them. */
 function toServerTransport(entry: MCPCatalogEntry): MCPTransport {

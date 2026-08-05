@@ -13,6 +13,7 @@ export type {
   BoardsService,
   BranchesService,
   ClientInput,
+  FindResult,
   GatewayChannelsService,
   MessagesBulkService,
   MessagesService,
