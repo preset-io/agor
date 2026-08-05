@@ -46,7 +46,8 @@ vi.mock('../../sdk-handlers/claude/message-builder.js', () => ({
   createUserMessage: mocks.createUserMessage,
 }));
 
-vi.mock('./base-executor.js', () => ({
+vi.mock('./base-executor.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./base-executor.js')>()),
   createStreamingCallbacks: () => ({}),
 }));
 
@@ -69,6 +70,10 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
       emit: vi.fn(),
     },
     tasks: { patch: vi.fn(async () => ({})) },
+    messages: {
+      find: vi.fn(async () => ({ total: 0 })),
+      create: vi.fn(async () => ({})),
+    },
   };
   return {
     services,
@@ -76,13 +81,16 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
   };
 }
 
-function execute(value: ReturnType<typeof client>['value']) {
+function execute(
+  value: ReturnType<typeof client>['value'],
+  abortController = new AbortController()
+) {
   return executeOpenCodeTask({
     client: value as never,
     sessionId: sessionId as never,
     taskId: taskId as never,
     prompt: 'Continue',
-    abortController: new AbortController(),
+    abortController,
     agenticToolContext: { dataHome: '/opaque/opencode-home' },
   });
 }
@@ -155,7 +163,32 @@ describe('OpenCode executor adapter', () => {
     expect(order).toEqual(['session', 'turn-clean', 'task']);
   });
 
-  it('rejects a missing exact pair before branch or message side effects', async () => {
+  it('surfaces a provider failure in the task and transcript', async () => {
+    const state = client();
+    mocks.runTurn.mockRejectedValue(new Error('OpenCode provider authentication failed'));
+
+    await expect(execute(state.value)).rejects.toThrow('OpenCode provider authentication failed');
+
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({
+        status: 'failed',
+        error_message: 'OpenCode provider authentication failed',
+      })
+    );
+    expect(state.services.messages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        task_id: taskId,
+        type: 'system',
+        role: 'system',
+        content: 'OpenCode provider authentication failed',
+        metadata: { is_task_failure: true },
+      })
+    );
+  });
+
+  it('rejects a missing exact pair before provider side effects', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'openai', model: '' } });
 
     await expect(execute(state.value)).rejects.toThrow(/provider and model/i);
@@ -178,6 +211,19 @@ describe('OpenCode executor adapter', () => {
     await expect(execute(state.value)).resolves.toBeUndefined();
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    expect(state.services.messages.create).not.toHaveBeenCalled();
     expect(mocks.permissionUnregister).toHaveBeenCalledWith(sessionId);
+  });
+
+  it('does not make an aborted turn terminal', async () => {
+    const state = client();
+    const abortController = new AbortController();
+    abortController.abort();
+    mocks.runTurn.mockRejectedValue(new Error('cancelled'));
+
+    await expect(execute(state.value, abortController)).rejects.toThrow('cancelled');
+
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    expect(state.services.messages.create).not.toHaveBeenCalled();
   });
 });
