@@ -41,6 +41,7 @@ describe('hasNativeMillionContext', () => {
     'keeps %s on the opt-in context path',
     (modelId) => {
       expect(hasNativeMillionContext(modelId)).toBe(false);
+      expect(hasNativeMillionContext(`${modelId}[1m]`)).toBe(false);
     }
   );
 });

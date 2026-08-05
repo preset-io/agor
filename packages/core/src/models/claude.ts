@@ -23,11 +23,11 @@ export function supportsClaudeExtendedContext(modelId: string): boolean {
 }
 
 export function hasNativeMillionContext(modelId: string): boolean {
-  const normalizedId = modelId.toLowerCase();
-  const selected = AVAILABLE_CLAUDE_MODEL_ALIASES.find((model) => model.id === normalizedId);
+  const baseId = modelId.toLowerCase().replace(/\[1m\]$/, '');
+  const selected = AVAILABLE_CLAUDE_MODEL_ALIASES.find((model) => model.id === baseId);
   return (
     selected?.contextWindow === CLAUDE_EXTENDED_CONTEXT_WINDOW &&
-    !AVAILABLE_CLAUDE_MODEL_ALIASES.some((model) => model.id === `${normalizedId}[1m]`)
+    !AVAILABLE_CLAUDE_MODEL_ALIASES.some((model) => model.id === `${baseId}[1m]`)
   );
 }
 
