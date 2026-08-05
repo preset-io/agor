@@ -48,32 +48,12 @@ import { Claude } from '@agor/core/sdk';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import {
-  formatListForLog,
-  type QuerySetupDeps,
-  setupQuery,
-  summarizeMcpConfigCounts,
-} from './query-builder.js';
+import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('MCP logging helpers', () => {
   it('formats long server lists without dumping every entry', () => {
     expect(formatListForLog(['a', 'b', 'c'], 5)).toBe('a, b, c');
     expect(formatListForLog(['a', 'b', 'c', 'd'], 2)).toBe('a, b +2 more');
-  });
-
-  it('ignores malformed server entries when summarizing MCP config', () => {
-    expect(
-      summarizeMcpConfigCounts({
-        remote: { type: 'http', env: { SECRET: 'not-logged' } },
-        stdio: { command: 'server', env: {} },
-        nullServer: null,
-        undefinedServer: undefined,
-        stringServer: 'invalid',
-        numberServer: 42,
-        booleanServer: true,
-        arrayServer: [{ type: 'sse', env: { ALSO_SECRET: 'not-logged' } }],
-      })
-    ).toBe('mcp_total=2 mcp_remote=1 mcp_stdio=1 mcp_with_env=1');
   });
 });
 
@@ -118,37 +98,35 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
-  it('logs prompt metadata without content and passes the original prompt unchanged', async () => {
+  it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
     const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
     const deps = createMockDeps();
+    const now = new Date().toISOString();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
       session_id: 'test-session' as SessionID,
       branch_id: 'test-branch' as BranchID,
       mcp_token: 'test-token',
+      sdk_session_id: 'sdk-session-secret',
+      created_at: now,
+      last_updated: now,
+      permission_config: { mode: 'default' },
+      model_config: {
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: now,
+        effort: 'high',
+        advisorModel: 'opus',
+      },
     } as any);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
       await setupQuery('test-session' as SessionID, prompt, deps);
 
-      const queryStartCalls = logSpy.mock.calls.filter(
-        (call) => typeof call[0] === 'string' && call[0].startsWith('claude_query_start ')
-      );
-      expect(queryStartCalls).toHaveLength(1);
-      expect(queryStartCalls[0]).toHaveLength(1);
-      const queryStart = queryStartCalls[0][0] as string;
-      expect(queryStart).toContain(`prompt_length=${prompt.length}`);
-      expect(queryStart).toContain(
-        'option_names=additionalDirectories,cwd,debug,disallowedTools,includePartialMessages,mcpServers,model,pathToClaudeCodeExecutable,settingSources,stderr,systemPrompt'
-      );
-      expect(queryStart).toContain('mcp_total=1 mcp_remote=1 mcp_stdio=0 mcp_with_env=0');
-      expect(queryStart).not.toMatch(/[\r\n\u2028\u2029]/u);
-
-      const consoleOutput = logSpy.mock.calls.flat().map(String).join('\n');
-      expect(consoleOutput).not.toContain('SECRET_QUERY_SENTINEL');
-      expect(consoleOutput).not.toContain(prompt);
+      expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
       const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      expect(callArgs.options.resume).toBe('sdk-session-secret');
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);

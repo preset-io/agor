@@ -38,16 +38,6 @@ function claudeMessageDebug(...args: unknown[]): void {
   }
 }
 
-function appendNumericLogField(parts: string[], key: string, value: unknown): void {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    parts.push(`${key}=${value}`);
-  }
-}
-
-function singleLineLogValue(value: string): string {
-  return value.replace(/[\s=]+/gu, '_');
-}
-
 /**
  * Content block interface for SDK messages
  */
@@ -264,12 +254,6 @@ export class SDKMessageProcessor {
       claudeMessageDebug(`📨 SDK message ${this.state.messageCount}: type=${msg.type}`);
     }
 
-    // Add detailed logging for debugging SDK behavior
-    if (process.env.DEBUG_SDK_MESSAGES === 'true') {
-      console.log(`🔍 [DEBUG] Full SDK message ${this.state.messageCount}:`);
-      console.log(JSON.stringify(msg, null, 2));
-    }
-
     // Capture session ID from first message that has it
     if (!this.state.capturedAgentSessionId && 'session_id' in msg && msg.session_id) {
       const events = this.captureSessionId(msg.session_id);
@@ -361,7 +345,9 @@ export class SDKMessageProcessor {
   private handleUser(msg: SDKUserMessage | SDKUserMessageReplay): ProcessedEvent[] {
     // Check if this is a replay message (already processed)
     if ('isReplay' in msg && msg.isReplay) {
-      console.debug(`🔄 User message replay (uuid: ${msg.uuid ? shortId(msg.uuid) : 'unknown'})`);
+      claudeMessageDebug(
+        `🔄 User message replay (uuid: ${msg.uuid ? shortId(msg.uuid) : 'unknown'})`
+      );
       return []; // Skip replays - already in our database
     }
 
@@ -576,48 +562,6 @@ export class SDKMessageProcessor {
    * Handle result messages (end of conversation)
    */
   private handleResult(msg: SDKResultMessage): ProcessedEvent[] {
-    const resultParts = [`claude_result subtype=${singleLineLogValue(msg.subtype || 'unknown')}`];
-    appendNumericLogField(resultParts, 'duration_ms', msg.duration_ms);
-    appendNumericLogField(resultParts, 'cost_usd', msg.total_cost_usd);
-    console.log(resultParts.join(' '));
-
-    if ('usage' in msg && msg.usage && typeof msg.usage === 'object') {
-      const usage = msg.usage as Record<string, unknown>;
-      const usageParts = ['claude_token_usage'];
-      appendNumericLogField(usageParts, 'input_tokens', usage.input_tokens);
-      appendNumericLogField(usageParts, 'output_tokens', usage.output_tokens);
-      appendNumericLogField(usageParts, 'cache_read_input_tokens', usage.cache_read_input_tokens);
-      appendNumericLogField(
-        usageParts,
-        'cache_creation_input_tokens',
-        usage.cache_creation_input_tokens
-      );
-      if (Array.isArray(usage.iterations)) {
-        usageParts.push(`iterations=${usage.iterations.length}`);
-      }
-      console.log(usageParts.join(' '));
-    }
-
-    if ('modelUsage' in msg && msg.modelUsage && typeof msg.modelUsage === 'object') {
-      for (const [model, rawUsage] of Object.entries(msg.modelUsage)) {
-        if (!rawUsage || typeof rawUsage !== 'object') continue;
-
-        const usage = rawUsage as Record<string, unknown>;
-        const modelParts = [`claude_model_usage model=${singleLineLogValue(model)}`];
-        appendNumericLogField(modelParts, 'input_tokens', usage.inputTokens);
-        appendNumericLogField(modelParts, 'output_tokens', usage.outputTokens);
-        appendNumericLogField(modelParts, 'cache_read_input_tokens', usage.cacheReadInputTokens);
-        appendNumericLogField(
-          modelParts,
-          'cache_creation_input_tokens',
-          usage.cacheCreationInputTokens
-        );
-        appendNumericLogField(modelParts, 'cost_usd', usage.costUSD);
-        appendNumericLogField(modelParts, 'context_window', usage.contextWindow);
-        console.log(modelParts.join(' '));
-      }
-    }
-
     const events: ProcessedEvent[] = [];
 
     // The SDK puts final output text in result.result for both normal prompts and local commands.
@@ -632,9 +576,6 @@ export class SDKMessageProcessor {
       msg.result.trim().length > 0
     ) {
       const hasAssistantMessages = this.state.assistantMessageCount > 0;
-      console.log(
-        `📋 SDK result text (${msg.result.length} chars, hasAssistantMessages=${hasAssistantMessages})`
-      );
       if (!hasAssistantMessages) {
         events.push({
           type: 'complete',
@@ -731,7 +672,7 @@ export class SDKMessageProcessor {
 
     if ('subtype' in msg && msg.subtype === 'init') {
       const initMsg = msg as SDKSystemMessage;
-      console.debug(`ℹ️  SDK system init:`, {
+      claudeMessageDebug(`ℹ️  SDK system init:`, {
         model: initMsg.model,
         permissionMode: initMsg.permissionMode,
         cwd: initMsg.cwd,
