@@ -164,7 +164,16 @@ describe('OpenCode executor adapter', () => {
   });
 
   it('surfaces a provider failure in the task and transcript', async () => {
+    const order: string[] = [];
     const state = client();
+    state.services.messages.create.mockImplementation(async () => {
+      order.push('message');
+      return {};
+    });
+    state.services.tasks.patch.mockImplementation(async () => {
+      order.push('task');
+      return {};
+    });
     mocks.runTurn.mockRejectedValue(new Error('OpenCode provider authentication failed'));
 
     await expect(execute(state.value)).rejects.toThrow('OpenCode provider authentication failed');
@@ -186,6 +195,7 @@ describe('OpenCode executor adapter', () => {
         metadata: { is_task_failure: true },
       })
     );
+    expect(order).toEqual(['message', 'task']);
   });
 
   it('rejects a missing exact pair before provider side effects', async () => {

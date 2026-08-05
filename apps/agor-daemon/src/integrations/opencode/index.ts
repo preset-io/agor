@@ -1,3 +1,4 @@
+import { executorRuntimeScopeGuard } from '../../auth/executor-runtime-scope.js';
 import type { RegisterServicesContext } from '../../register-services.js';
 import { createOpenCodeAuthService } from './auth-service.js';
 import { createOpenCodeModelsService } from './models-service.js';
@@ -7,10 +8,14 @@ export function registerOpenCodeServices(
   ctx: Pick<RegisterServicesContext, 'app' | 'db' | 'requireAuth'>
 ): void {
   ctx.app.use('/opencode-auth', createOpenCodeAuthService(ctx.db));
-  ctx.app.service('/opencode-auth').hooks({ before: { all: [ctx.requireAuth] } });
+  ctx.app
+    .service('/opencode-auth')
+    .hooks({ before: { all: [ctx.requireAuth, executorRuntimeScopeGuard()] } });
   ctx.app.service('/opencode-auth').publish(() => []);
 
   ctx.app.use('/opencode-models', createOpenCodeModelsService(ctx.db));
-  ctx.app.service('/opencode-models').hooks({ before: { all: [ctx.requireAuth] } });
+  ctx.app
+    .service('/opencode-models')
+    .hooks({ before: { all: [ctx.requireAuth, executorRuntimeScopeGuard()] } });
   ctx.app.service('/opencode-models').publish(() => []);
 }

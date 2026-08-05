@@ -4,6 +4,7 @@ import {
   resolveOpenCodeCredentialNamespace,
   resolveOpenCodeTaskCredentialNamespace,
 } from './credential-namespace';
+import { OPENCODE_DAEMON_CONTRIBUTION } from './index.js';
 
 describe('OpenCode credential namespace routing', () => {
   it('is stable for one tenant and subject without exposing either identifier in the path', () => {
@@ -67,6 +68,20 @@ describe('OpenCode credential namespace routing', () => {
 
     expect(owner).toEqual(expected);
     expect(owner).not.toEqual(promptActor);
+  });
+
+  it('uses the credential namespace as the primary writer coordination key', () => {
+    const input = {
+      tenantId: 'tenant-a',
+      session: { created_by: 'owner', unix_username: 'alice' },
+      homeDir: '/home/alice',
+    };
+    const namespace = resolveOpenCodeTaskCredentialNamespace(input);
+
+    expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(input)).toEqual({
+      namespaceKey: namespace.namespaceKey,
+      executorPayload: { agenticToolContext: { dataHome: namespace.dataHome } },
+    });
   });
 
   it('rejects hosted auth-resolved tenancy before native OpenCode work', () => {

@@ -55,6 +55,7 @@ function createMockProcess() {
     stderr: EventEmitter;
     written: string;
     pid: number;
+    kill: ReturnType<typeof vi.fn>;
   };
   proc.pid = 4242;
   proc.written = '';
@@ -66,6 +67,7 @@ function createMockProcess() {
   });
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
   return proc;
 }
 
@@ -375,6 +377,39 @@ describe('configured executor spawning', () => {
     expect(spawnOptions.cwd).not.toBe(tenantBranchPath);
     expect(spawnOptions.cwd).toMatch(/\/packages\/executor$/);
     expect(JSON.parse(proc.written)).toMatchObject({ params: { cwd: tenantBranchPath } });
+  });
+
+  it('waits for asynchronous spawn readiness before sending the executor payload', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor({ command: 'prompt' }, { onSpawn: () => ready });
+
+    expect(proc.written).toBe('');
+    markReady();
+    await vi.waitFor(() => expect(proc.written).not.toBe(''));
+    expect(JSON.parse(proc.written)).toMatchObject({ command: 'prompt' });
+  });
+
+  it('contains the executor when asynchronous spawn readiness fails', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onExit = vi.fn();
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor(
+      { command: 'prompt' },
+      { onSpawn: () => Promise.reject(new Error('identity not durable')), onExit }
+    );
+
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(127, { mode: 'local' }));
+    expect(proc.written).toBe('');
+    expect(proc.kill).toHaveBeenCalledOnce();
   });
 
   it('preserves the exit-0/no-result protocol failure diagnostic', async () => {

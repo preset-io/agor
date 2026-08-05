@@ -44,7 +44,7 @@ class MissingCredentialError extends Error {
   override readonly name = 'MissingCredentialError';
 }
 
-export async function appendTaskFailureMessage(
+async function appendTaskFailureMessage(
   client: AgorClient,
   sessionId: SessionID,
   taskId: TaskID,
@@ -81,6 +81,19 @@ export async function appendTaskFailureMessage(
   } catch (error) {
     console.error('[executor] Failed to create task failure message:', error);
   }
+}
+
+export async function settleTaskFailure(
+  client: AgorClient,
+  sessionId: SessionID,
+  taskId: TaskID,
+  failure: Error,
+  patch: Partial<Task>
+): Promise<void> {
+  // Terminal task hooks may drain the next queued turn, so reserve the current
+  // transcript index before publishing terminality. Message failure stays best-effort.
+  await appendTaskFailureMessage(client, sessionId, taskId, failure);
+  await client.service('tasks').patch(taskId, patch);
 }
 
 /**
@@ -679,10 +692,7 @@ export async function executeToolTask(params: {
       };
     }
 
-    // Update task status to failed with git SHA
-    await client.service('tasks').patch(taskId, patchData);
-
-    await appendTaskFailureMessage(client, sessionId, taskId, err);
+    await settleTaskFailure(client, sessionId, taskId, err, patchData);
 
     throw err;
   } finally {

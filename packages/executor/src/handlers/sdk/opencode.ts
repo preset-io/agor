@@ -33,7 +33,7 @@ import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js'
 import { createCanUseToolCallback } from '../../sdk-handlers/base/permission-hooks.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { appendTaskFailureMessage, createStreamingCallbacks } from './base-executor.js';
+import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -157,12 +157,11 @@ export async function executeOpenCodeTask(params: {
       return;
     }
     if (!params.abortController.signal.aborted) {
-      await client.service('tasks').patch(taskId, {
+      await settleTaskFailure(client, sessionId, taskId, failure, {
         status: 'failed',
         completed_at: new Date().toISOString(),
         error_message: failure.message,
       });
-      await appendTaskFailureMessage(client, sessionId, taskId, failure);
     }
     throw failure;
   } finally {

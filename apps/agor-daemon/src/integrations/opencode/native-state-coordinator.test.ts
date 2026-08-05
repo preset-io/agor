@@ -125,4 +125,38 @@ describe('OpenCode native-state coordinator', () => {
     ).rejects.toThrow(/cleanup could not be verified/i);
     expect(containment.release).not.toHaveBeenCalled();
   });
+
+  it('holds the namespace until a primary writer lifecycle settles', async () => {
+    const key = crypto.randomUUID();
+    let finishFirst!: () => void;
+    const firstFinished = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const firstStarted = vi.fn();
+    const secondStarted = vi.fn();
+
+    const first = inOpenCodeNativeStateMutationSlot(key, async (fence) => {
+      await fence.attach({
+        retainContainmentFence: vi.fn(async () => undefined),
+        verifyAbsence: async () => true,
+      });
+      firstStarted();
+      await firstFinished;
+    });
+    await vi.waitFor(() => expect(firstStarted).toHaveBeenCalledOnce());
+
+    const second = inOpenCodeNativeStateMutationSlot(key, async (fence) => {
+      await fence.attach({
+        retainContainmentFence: vi.fn(async () => undefined),
+        verifyAbsence: async () => true,
+      });
+      secondStarted();
+    });
+    expect(secondStarted).not.toHaveBeenCalled();
+
+    finishFirst();
+    await first;
+    await second;
+    expect(secondStarted).toHaveBeenCalledOnce();
+  });
 });

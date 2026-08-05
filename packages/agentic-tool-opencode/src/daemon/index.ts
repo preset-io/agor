@@ -24,21 +24,25 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     tenantId: string | undefined;
     config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
     modelConfig?: Pick<NonNullable<Session['model_config']>, 'provider' | 'model'>;
+    sessionOwnerId: string;
+    prompterUserId: string | undefined;
   }) {
     assertOpenCodeExecutionAllowed(input);
     if (!hasCompleteOpenCodeModelConfig(input.modelConfig)) {
       throw new BadRequest(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
   },
-  getExecutorPayload(input: {
+  getExecutorLaunch(input: {
     tenantId: string;
     session: Pick<Session, 'created_by' | 'unix_username'>;
     homeDir: string;
   }) {
+    const namespace = resolveOpenCodeTaskCredentialNamespace(input);
     return {
-      agenticToolContext: createOpenCodeExecutorContext(
-        resolveOpenCodeTaskCredentialNamespace(input).dataHome
-      ),
+      namespaceKey: namespace.namespaceKey,
+      executorPayload: {
+        agenticToolContext: createOpenCodeExecutorContext(namespace.dataHome),
+      },
     };
   },
 } as const;

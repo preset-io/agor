@@ -243,6 +243,12 @@ describe('executorRuntimeScopeGuard', () => {
     );
   });
 
+  it.each(['opencode-auth', 'opencode-models'])('rejects executor tokens on %s', async (path) => {
+    await expect(executorRuntimeScopeGuard()(ctx({ path, method: 'find' }))).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
   it('allows OAuth auth-header hydration create to reach its session-token validation', async () => {
     const context = ctx({
       path: 'mcp-servers/oauth-auth-headers',

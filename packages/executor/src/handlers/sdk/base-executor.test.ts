@@ -91,8 +91,9 @@ describe('resolveApiKeyForTask', () => {
 
 describe('executeToolTask credential preflight', () => {
   it('persists an explicit missing-credential failure before invoking the tool', async () => {
-    const taskPatch = vi.fn().mockResolvedValue(undefined);
-    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const order: string[] = [];
+    const taskPatch = vi.fn(async () => order.push('task'));
+    const messageCreate = vi.fn(async () => order.push('message'));
     const client = {
       service(name: string) {
         if (name === 'config/resolve-api-key') {
@@ -146,6 +147,7 @@ describe('executeToolTask credential preflight', () => {
         },
       })
     );
+    expect(order).toEqual(['message', 'task']);
   });
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {

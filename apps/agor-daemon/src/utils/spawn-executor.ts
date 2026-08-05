@@ -134,7 +134,7 @@ export interface SpawnExecutorOptions {
   templateVariables?: Omit<ExecutorTemplateVariables, 'tenant_id'>;
   onExit?: (code: number | null, context: ExecutorSpawnContext) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
-  onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void;
+  onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
@@ -361,6 +361,31 @@ export function spawnExecutor(
   }
 }
 
+function sendExecutorPayload(
+  executorProcess: ChildProcess,
+  payload: Record<string, unknown>,
+  spawnReady: void | Promise<void>,
+  logPrefix: string,
+  reportExit: (code: number | null) => void
+): void {
+  const writePayload = () => {
+    executorProcess.stdin?.write(JSON.stringify(payload));
+    executorProcess.stdin?.end();
+  };
+  if (!spawnReady) {
+    writePayload();
+    return;
+  }
+  void spawnReady.then(writePayload).catch((error) => {
+    console.error(`${logPrefix} Spawn readiness failed:`, error);
+    try {
+      executorProcess.kill();
+    } finally {
+      reportExit(127);
+    }
+  });
+}
+
 /**
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
@@ -412,7 +437,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
   attachEnvFileCleanup(executorProcess, { envFilePath, asUser });
 
-  options.onSpawn?.(executorProcess, { mode: 'local' });
+  const spawnReady = options.onSpawn?.(executorProcess, { mode: 'local' });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -432,8 +457,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
 function spawnExecutorWithTemplate(
@@ -465,7 +489,7 @@ function spawnExecutorWithTemplate(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  options.onSpawn?.(executorProcess, { mode: 'templated' });
+  const spawnReady = options.onSpawn?.(executorProcess, { mode: 'templated' });
 
   executorProcess.stdout?.on('data', (data) => {
     console.log(`${logPrefix} ${data.toString().trim()}`);
@@ -493,8 +517,7 @@ function spawnExecutorWithTemplate(
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
 const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';

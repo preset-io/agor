@@ -230,8 +230,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   private assertCompleteAgenticToolModelSelection(
-    agenticTool: Session['agentic_tool'],
-    modelConfig: Session['model_config'] | undefined
+    agenticTool: AgenticToolName,
+    modelConfig: { provider?: string; model?: string } | null | undefined
   ): void {
     const modelError = getAgenticToolModelSelectionError(agenticTool, modelConfig);
     if (modelError) throw new BadRequest(modelError);
@@ -345,10 +345,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         model_config: modelConfig,
       };
     }
-    this.assertSupportedModelConfig(
-      (createData.agentic_tool ?? agenticTool) as Session['agentic_tool'],
-      createData.model_config
-    );
+    this.assertSupportedModelConfig(agenticTool, createData.model_config);
     const created = await super.create(createData, params);
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
@@ -1327,7 +1324,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         data.agentic_tool !== undefined ||
         data.agentic_tool_preset_id !== undefined
       ) {
-        const effectiveTool = data.agentic_tool ?? current.agentic_tool;
+        const effectiveTool = requireActiveAgenticTool(data.agentic_tool ?? current.agentic_tool);
         const effectiveModelConfig =
           data.model_config === undefined ? current.model_config : data.model_config;
         const effectivePresetId =
