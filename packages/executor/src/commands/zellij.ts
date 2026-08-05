@@ -84,6 +84,24 @@ export function ensurePrivateZellijCacheDirectory(directory: string): void {
 }
 
 /**
+ * Select the Zellij socket base without regressing owner-local container reuse.
+ * macOS needs the short fallback because its default paths can exceed sun_path.
+ */
+export function getZellijSocketDir(
+  socketDir: string | undefined,
+  uid: number | undefined,
+  ownerLocalSocketDir: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (socketDir !== undefined) return socketDir;
+  if (platform !== 'darwin') return ownerLocalSocketDir;
+  if (uid === undefined) {
+    throw new Error('Cannot choose a per-user Zellij socket directory without a Unix uid');
+  }
+  return `/tmp/agor-zellij-${uid}`;
+}
+
+/**
  * Lifecycle invariants for an Agor-managed attach. Pass these explicitly so
  * existing persistent homes receive the current resurrection contract without
  * overwriting their user-owned Zellij configuration.
@@ -449,8 +467,13 @@ export async function handleZellijAttach(
     // cross-host protocol: topologies whose home is a network filesystem must
     // still advertise terminal capability=false unless one workspace runtime
     // owns both the socket and PTY.
-    const zellijSocketDir = `${zellijCacheDir}/sockets`;
-    ensurePrivateZellijCacheDirectory(zellijSocketDir);
+    const ownerLocalSocketDir = `${zellijCacheDir}/sockets`;
+    ensurePrivateZellijCacheDirectory(ownerLocalSocketDir);
+    const zellijSocketDir = getZellijSocketDir(
+      cleanEnv.ZELLIJ_SOCKET_DIR,
+      process.getuid?.(),
+      ownerLocalSocketDir
+    );
     process.env.ZELLIJ_SOCKET_DIR = zellijSocketDir;
 
     const zellijEnv = {

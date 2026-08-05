@@ -7,9 +7,43 @@ import {
   createReconnectGrace,
   ensurePrivateZellijCacheDirectory,
   forceZellijRepaint,
+  getZellijSocketDir,
   waitForZellijReady,
   zellijListingHasSession,
 } from './zellij.js';
+
+describe('getZellijSocketDir', () => {
+  it('preserves an explicit environment override', () => {
+    expect(getZellijSocketDir('/custom/zellij-sockets', 1000, '/home/user/.cache/sockets')).toBe(
+      '/custom/zellij-sockets'
+    );
+  });
+
+  it('keeps a real Agor session socket comfortably below the macOS limit', () => {
+    const socketDir = getZellijSocketDir(
+      undefined,
+      4_294_967_295,
+      '/home/user/.cache/sockets',
+      'darwin'
+    );
+    const sessionName = `agor-${'a'.repeat(24)}`;
+    const socketPath = join(socketDir, 'contract_version_1', sessionName);
+
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(80);
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(103);
+  });
+
+  it('separates macOS fallback directories by Unix user', () => {
+    expect(getZellijSocketDir(undefined, 1000, '/shared', 'darwin')).toBe('/tmp/agor-zellij-1000');
+    expect(getZellijSocketDir(undefined, 1001, '/shared', 'darwin')).toBe('/tmp/agor-zellij-1001');
+  });
+
+  it('keeps the owner-local socket directory on non-macOS runtimes', () => {
+    expect(getZellijSocketDir(undefined, 1000, '/home/user/.cache/zellij/sockets', 'linux')).toBe(
+      '/home/user/.cache/zellij/sockets'
+    );
+  });
+});
 
 describe('buildZellijLaunchArgs', () => {
   it('attaches directly when an active or exited session is known', () => {
