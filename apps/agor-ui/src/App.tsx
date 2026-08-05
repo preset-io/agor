@@ -1284,6 +1284,7 @@ function AppContent() {
     if (updated) {
       showSuccess('Board updated successfully!');
     }
+    return Boolean(updated);
   };
 
   const handleDeleteBoard = async (boardId: string) => {

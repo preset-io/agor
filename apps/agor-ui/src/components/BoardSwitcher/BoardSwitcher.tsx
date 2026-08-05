@@ -1,12 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  BoardGroupGrantWithGroup,
-  Branch,
-  GroupMembership,
-  User,
-} from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import type { AgorClient, Board, Branch, User } from '@agor-live/client';
 import { DownOutlined, EditOutlined, HomeOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import {
@@ -23,6 +15,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { BoardEditModal } from '../BoardEditModal';
 
 const { Text } = Typography;
@@ -73,50 +66,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [triggerActive, setTriggerActive] = useState(false);
-  const [canManage, setCanManage] = useState(false);
   const screens = Grid.useBreakpoint();
   const coarsePointer = useCoarsePointer();
 
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
-
-  useEffect(() => {
-    let cancelled = false;
-    setCanManage(false);
-    if (!currentBoard || !currentUser || !client || currentBoard.archived) return;
-    if (hasMinimumRole(currentUser.role, ROLES.ADMIN)) {
-      setCanManage(true);
-      return;
-    }
-    if (!hasMinimumRole(currentUser.role, ROLES.MEMBER)) return;
-
-    // Resolve the same owner/group-'all' inputs used by the daemon's
-    // BoardRepository.canMutate contract. If the RBAC routes are absent, the
-    // instance is in open-access mode and every member may update boards.
-    void Promise.all([
-      client.service('boards/:id/owners').find({ route: { id: currentBoard.board_id } }),
-      client.service('boards/:id/group-grants').find({ route: { id: currentBoard.board_id } }),
-      client.service('group-memberships').findAll({ query: { user_id: currentUser.user_id } }),
-    ])
-      .then(([owners, grants, memberships]) => {
-        if (cancelled) return;
-        const groupIds = new Set((memberships as GroupMembership[]).map((item) => item.group_id));
-        setCanManage(
-          (owners as User[]).some((owner) => owner.user_id === currentUser.user_id) ||
-            (grants as BoardGroupGrantWithGroup[]).some(
-              (grant) => grant.can === 'all' && groupIds.has(grant.group_id)
-            )
-        );
-      })
-      .catch((error: unknown) => {
-        // A 404 is the daemon's documented signal that board RBAC services are
-        // disabled. Fail closed for disconnects and other authorization errors.
-        const code = (error as { code?: number })?.code;
-        if (!cancelled) setCanManage(code === 404);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, currentBoard, currentUser]);
+  const canManage = useCanManageBoard(client, currentBoard, currentUser);
 
   const branchCountByBoard = useMemo(() => {
     const counts = new Map<string, number>();
@@ -316,7 +270,6 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              paddingRight: canManage ? 58 : 12,
             }}
           >
             <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
@@ -334,7 +287,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
           <span
             style={{
               position: 'absolute',
-              right: 24,
+              // Keep one base spacing unit between the overlay action and the
+              // dropdown caret without reserving any navbar layout width.
+              right: token.paddingLG + token.sizeUnit,
               top: '50%',
               transform: 'translateY(-50%)',
               opacity: !screens.md || coarsePointer || triggerActive ? 1 : 0,

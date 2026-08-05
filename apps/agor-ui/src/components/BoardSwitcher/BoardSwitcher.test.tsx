@@ -50,6 +50,11 @@ function renderSwitcher(client = clientFor(), user: User = owner) {
 }
 
 describe('BoardSwitcher current-board edit shortcut', () => {
+  it('allows the board creator even when legacy owner rows are missing', async () => {
+    renderSwitcher(clientFor({ reject: { code: 500 } }));
+    expect(await screen.findByRole('button', { name: /Edit current board:/ })).toBeVisible();
+  });
+
   it('passes only the current board to the canonical editor and does not navigate', async () => {
     const { onBoardChange } = renderSwitcher();
     const edit = await screen.findByRole('button', { name: /Edit current board:/ });
@@ -59,6 +64,15 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     expect(onBoardChange).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toHaveTextContent('board editor');
     expect(modalProps.current?.board).toBe(board);
+  });
+
+  it('overlays the edit action without reserving trigger width', async () => {
+    renderSwitcher();
+    const edit = await screen.findByRole('button', { name: /Edit current board:/ });
+    const trigger = edit.closest('div')?.querySelector('button.ant-dropdown-trigger');
+
+    expect(trigger).toHaveStyle({ padding: '8px 12px' });
+    expect(edit.closest('span[style*="position: absolute"]')).toHaveStyle({ right: '28px' });
   });
 
   it('keeps the action keyboard reachable and reveals it on focus-within', async () => {
