@@ -42,7 +42,10 @@ export interface AgenticToolUIIntegration {
   };
   modelLabel?: string;
   ModelSelector?: ComponentType<AgenticToolModelSelectorProps>;
-  ProviderSettings?: ComponentType<{ client: AgorClient }>;
+  ProviderSettings?: ComponentType<{
+    client: AgorClient;
+    copyText: (text: string) => Promise<boolean>;
+  }>;
   Readiness?: ComponentType<AgenticToolReadinessProps>;
   permissionModes?: readonly {
     mode: PermissionMode;

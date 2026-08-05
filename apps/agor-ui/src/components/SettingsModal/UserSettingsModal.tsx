@@ -55,6 +55,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
+import { copyToClipboard } from '../../utils/clipboard';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import { getSettingsSearchTokens, matchesSettingsSearchTokens } from '../../utils/settingsSearch';
 import {
@@ -473,8 +474,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     : null;
 
   // Reset (or force) the provider sub-tab whenever the active provider changes.
-  // Tools with no auth fields (e.g. OpenCode) only have Session Defaults, so
-  // they land there directly.
+  // Tools with neither host nor package-owned auth settings only have Session
+  // Defaults, so they land there directly.
   useEffect(() => {
     if (!activeTool) return;
     // A pending sub-tab from a search hit wins over the default, but only for
@@ -482,7 +483,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const pending = pendingProviderSubtabRef.current;
     pendingProviderSubtabRef.current = null;
     const requested = pending?.panelKey === providerKeyFor(activeTool) ? pending.subtab : undefined;
-    const hasAuth = (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0;
+    const hasAuth =
+      (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0 ||
+      !!getAgenticToolUIIntegration(activeTool)?.ProviderSettings;
     setProviderSubtab(requested ?? (hasAuth ? 'auth' : 'defaults'));
   }, [activeTool]);
 
@@ -1719,7 +1722,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         />
       );
       if (isSelf && client) {
-        providersPane = <ProviderSettings key={currentUser?.user_id} client={client} />;
+        providersPane = (
+          <ProviderSettings key={currentUser?.user_id} client={client} copyText={copyToClipboard} />
+        );
       } else if (isSelf) {
         providersPane = <Alert type="warning" showIcon title="Not connected to Agor." />;
       }

@@ -3,9 +3,23 @@ import type {
   OpenCodeProviderAuthPrompt,
   OpenCodeProviderSettings,
 } from '@agor/core/types';
-import { Alert, Button, Input, List, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { CheckOutlined, CopyOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Input,
+  List,
+  Popconfirm,
+  Select,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import { useState } from 'react';
 
 const ACTIVE_OAUTH_PHASES = new Set(['authorizing', 'awaiting_callback', 'completing']);
+const DEVICE_CODE_PATTERN = /[A-Z0-9]{4}-[A-Z0-9]{4,5}/;
 
 export function isActiveOAuthAttempt(attempt?: OpenCodeOAuthAttempt): boolean {
   return Boolean(attempt && ACTIVE_OAUTH_PHASES.has(attempt.phase));
@@ -64,6 +78,7 @@ type Provider = OpenCodeProviderSettings['providers'][number];
 
 export function OpenCodeProviderListItem({
   provider,
+  copyText,
   selected,
   selectedMethodIndex,
   promptValues,
@@ -82,6 +97,7 @@ export function OpenCodeProviderListItem({
   onOAuthCodeChange,
 }: {
   provider: Provider;
+  copyText: (text: string) => Promise<boolean>;
   selected: boolean;
   selectedMethodIndex?: number;
   promptValues: Record<string, string>;
@@ -99,6 +115,7 @@ export function OpenCodeProviderListItem({
   onApiKeyChange: (value: string) => void;
   onOAuthCodeChange: (value: string) => void;
 }) {
+  const [copiedAuthorizationCode, setCopiedAuthorizationCode] = useState<string>();
   const methodIndex =
     selected && selectedMethodIndex !== undefined
       ? selectedMethodIndex
@@ -110,6 +127,10 @@ export function OpenCodeProviderListItem({
   const promptsComplete = prompts.every((prompt) => values[prompt.key]?.trim());
   const oauthMethod = method?.type === 'oauth' ? method : undefined;
   const oauthActive = isActiveOAuthAttempt(oauthAttempt);
+  const authorizationCode =
+    oauthAttempt?.authorization?.method === 'auto'
+      ? oauthAttempt.authorization.instructions.match(DEVICE_CODE_PATTERN)?.[0]
+      : undefined;
 
   const actions = [
     provider.credentialPresence === 'present' ? (
@@ -188,7 +209,38 @@ export function OpenCodeProviderListItem({
                   title="Authorization in progress"
                   description={
                     <Space orientation="vertical">
-                      <Typography.Text>{oauthAttempt.authorization.instructions}</Typography.Text>
+                      <Space size="small">
+                        <Typography.Text>{oauthAttempt.authorization.instructions}</Typography.Text>
+                        {authorizationCode && (
+                          <Tooltip
+                            title={
+                              copiedAuthorizationCode === authorizationCode ? 'Copied' : 'Copy code'
+                            }
+                          >
+                            <Button
+                              type="text"
+                              size="small"
+                              aria-label={
+                                copiedAuthorizationCode === authorizationCode
+                                  ? 'Authorization code copied'
+                                  : 'Copy authorization code'
+                              }
+                              icon={
+                                copiedAuthorizationCode === authorizationCode ? (
+                                  <CheckOutlined />
+                                ) : (
+                                  <CopyOutlined />
+                                )
+                              }
+                              onClick={() =>
+                                void copyText(authorizationCode).then((copied) => {
+                                  if (copied) setCopiedAuthorizationCode(authorizationCode);
+                                })
+                              }
+                            />
+                          </Tooltip>
+                        )}
+                      </Space>
                       <Typography.Link
                         href={oauthAttempt.authorization.url}
                         target="_blank"

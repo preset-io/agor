@@ -70,4 +70,27 @@ describe('OpenCode known model catalog', () => {
       ]),
     });
   });
+
+  it('offers curated Anthropic models only with saved credential evidence', () => {
+    const disconnected = createOpenCodeKnownModelCatalog(new Set());
+    const configured = createOpenCodeKnownModelCatalog(new Set(['anthropic']));
+
+    expect(disconnected.providers.find(({ id }) => id === 'anthropic')).toMatchObject({
+      availableForSelection: false,
+    });
+    expect(configured.suggestedSelection).toEqual({
+      providerId: 'anthropic',
+      modelId: 'claude-sonnet-5',
+    });
+    expect(configured.providers.find(({ id }) => id === 'anthropic')).toMatchObject({
+      name: 'Anthropic',
+      availableForSelection: true,
+      suggestedModel: 'claude-sonnet-5',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-opus-5' }),
+        expect.objectContaining({ id: 'claude-sonnet-5' }),
+        expect.objectContaining({ id: 'claude-haiku-4-5' }),
+      ]),
+    });
+  });
 });

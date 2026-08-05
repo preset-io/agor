@@ -50,18 +50,22 @@ const initial: Settings = {
     },
   ],
 };
+const copySuccessfully = async () => true;
 
-function renderSettings(service: {
-  find: ReturnType<typeof vi.fn>;
-  get: ReturnType<typeof vi.fn>;
-  create: ReturnType<typeof vi.fn>;
-  patch: ReturnType<typeof vi.fn>;
-  remove: ReturnType<typeof vi.fn>;
-}) {
+function renderSettings(
+  service: {
+    find: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+    patch: ReturnType<typeof vi.fn>;
+    remove: ReturnType<typeof vi.fn>;
+  },
+  copyText = vi.fn(copySuccessfully)
+) {
   const client = { service: vi.fn(() => service) } as unknown as AgorClient;
   render(
     <AntApp>
-      <OpenCodeProviderSettings client={client} />
+      <OpenCodeProviderSettings client={client} copyText={copyText} />
     </AntApp>
   );
 }
@@ -232,7 +236,7 @@ describe('OpenCodeProviderSettings', () => {
     const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
     const { rerender } = render(
       <AntApp>
-        <OpenCodeProviderSettings client={clientA} />
+        <OpenCodeProviderSettings client={clientA} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -241,7 +245,7 @@ describe('OpenCodeProviderSettings', () => {
     });
     rerender(
       <AntApp>
-        <OpenCodeProviderSettings client={clientB} />
+        <OpenCodeProviderSettings client={clientB} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -294,7 +298,7 @@ describe('OpenCodeProviderSettings', () => {
     const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
     const { rerender } = render(
       <AntApp>
-        <OpenCodeProviderSettings client={clientA} />
+        <OpenCodeProviderSettings client={clientA} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -306,7 +310,7 @@ describe('OpenCodeProviderSettings', () => {
 
     rerender(
       <AntApp>
-        <OpenCodeProviderSettings client={clientB} />
+        <OpenCodeProviderSettings client={clientB} copyText={copySuccessfully} />
       </AntApp>
     );
     fireEvent.change(await screen.findByLabelText('Provider B API key'), {
@@ -352,7 +356,7 @@ describe('OpenCodeProviderSettings', () => {
     const client = { service: vi.fn(() => service) } as unknown as AgorClient;
     const { unmount } = render(
       <AntApp>
-        <OpenCodeProviderSettings client={client} />
+        <OpenCodeProviderSettings client={client} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -367,7 +371,7 @@ describe('OpenCodeProviderSettings', () => {
     await act(async () => connect.promise);
     render(
       <AntApp>
-        <OpenCodeProviderSettings client={client} />
+        <OpenCodeProviderSettings client={client} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -419,7 +423,7 @@ describe('OpenCodeProviderSettings', () => {
     const clientB = { service: vi.fn(() => serviceB) } as unknown as AgorClient;
     const { rerender } = render(
       <AntApp>
-        <OpenCodeProviderSettings client={clientA} />
+        <OpenCodeProviderSettings client={clientA} copyText={copySuccessfully} />
       </AntApp>
     );
 
@@ -428,7 +432,7 @@ describe('OpenCodeProviderSettings', () => {
 
     rerender(
       <AntApp>
-        <OpenCodeProviderSettings client={clientB} />
+        <OpenCodeProviderSettings client={clientB} copyText={copySuccessfully} />
       </AntApp>
     );
     fireEvent.click(await screen.findByRole('button', { name: 'Connect with Browser flow' }));
@@ -845,6 +849,36 @@ describe('OpenCodeProviderSettings', () => {
     expect(screen.queryByLabelText('OAuth Provider API key')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel authorization' }));
     await waitFor(() => expect(service.patch).toHaveBeenCalledWith('attempt-1', { cancel: true }));
+  });
+
+  it('copies an OpenAI-style device code from the native authorization instructions', async () => {
+    const oauthOnly = singleProviderSettings('openai', 'OpenAI', [
+      { index: 0, type: 'oauth', label: 'ChatGPT' },
+    ]);
+    const attempt = {
+      attemptId: 'attempt-copy',
+      providerId: 'openai',
+      phase: 'awaiting_callback' as const,
+      expiresAt: '2026-08-05T12:00:00.000Z',
+      authorization: {
+        url: 'https://auth.openai.com/device',
+        method: 'auto' as const,
+        instructions: 'Enter code ABCD-12345',
+      },
+    };
+    const service = createAuthService({
+      find: vi.fn().mockResolvedValue(oauthOnly),
+      get: vi.fn().mockResolvedValue(attempt),
+      create: vi.fn().mockResolvedValue(attempt),
+    });
+    const copyText = vi.fn(async () => true);
+    renderSettings(service, copyText);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect with ChatGPT' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy authorization code' }));
+
+    await screen.findByRole('button', { name: 'Authorization code copied' });
+    expect(copyText).toHaveBeenCalledWith('ABCD-12345');
   });
 
   it('submits a code callback once and clears the secret from UI state', async () => {

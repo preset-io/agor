@@ -910,6 +910,24 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     );
   });
 
+  it('opens package-owned OpenCode provider settings on Providers by default', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        initialTab="opencode"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'OpenCode' });
+    expect(screen.getByRole('tab', { name: 'Providers' })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('gives the dialog an accessible name even with the header hidden', () => {
     const user = makeUser();
     renderWithApp(

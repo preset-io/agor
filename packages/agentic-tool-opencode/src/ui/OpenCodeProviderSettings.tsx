@@ -71,7 +71,13 @@ function pollOAuthAttempt(input: {
   };
 }
 
-export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
+export function OpenCodeProviderSettings({
+  client,
+  copyText,
+}: {
+  client: AgorClient;
+  copyText: (text: string) => Promise<boolean>;
+}) {
   const {
     configuration: settings,
     loading,
@@ -434,6 +440,7 @@ export function OpenCodeProviderSettings({ client }: { client: AgorClient }) {
         renderItem={(provider) => (
           <OpenCodeProviderListItem
             provider={provider}
+            copyText={copyText}
             selected={provider.id === selectedProviderId}
             selectedMethodIndex={selectedMethodIndex}
             promptValues={promptValues}
