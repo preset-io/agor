@@ -379,7 +379,8 @@ describe('POST /mcp with personal API keys', () => {
   async function withMcpServer(
     services: Record<string, unknown>,
     fn: (baseUrl: string) => Promise<void>,
-    config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined }
+    config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined },
+    testOptions: Parameters<typeof setupMCPRoutes>[4] = {}
   ) {
     const webApp = express();
     webApp.use(express.json());
@@ -389,7 +390,13 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
-    setupMCPRoutes(webApp as never, testSqliteDb(), /* toolSearchEnabled */ false, config);
+    setupMCPRoutes(
+      webApp as never,
+      testSqliteDb(),
+      /* toolSearchEnabled */ false,
+      config,
+      testOptions
+    );
 
     const httpServer = webApp.listen(0);
     try {
@@ -520,18 +527,23 @@ describe('POST /mcp with personal API keys', () => {
       role: 'member',
     }));
 
-    await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const oldestSessionId = await initializeStatefulMcp(baseUrl);
-      await Promise.all(Array.from({ length: 99 }, () => initializeStatefulMcp(baseUrl)));
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await withMcpServer(
+      { users: { get: getUser } },
+      async (baseUrl) => {
+        const oldestSessionId = await initializeStatefulMcp(baseUrl);
+        await initializeStatefulMcp(baseUrl);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      await initializeStatefulMcp(baseUrl);
+        await initializeStatefulMcp(baseUrl);
 
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(
-        `⚠️  MCP streamable HTTP session limit reached; evicting ${oldestSessionId}`
-      );
-    });
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(
+          `⚠️  MCP streamable HTTP session limit reached; evicting ${oldestSessionId}`
+        );
+      },
+      undefined,
+      { statefulTransportMax: 2 }
+    );
   });
 
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
