@@ -36,6 +36,7 @@ import type {
   SlackTestResult,
 } from '../../types/gateway';
 import type { GatewayConnector, InboundFile, InboundMessage, OutboundPayload } from '../connector';
+import { createSlackSdkLogger } from './slack-sdk-logger';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
@@ -1880,6 +1881,7 @@ export class SlackConnector implements GatewayConnector {
 
     this.socketMode = new SocketModeClient({
       appToken: this.config.app_token,
+      logger: createSlackSdkLogger(),
     });
 
     // Fetch bot user ID for mention detection
