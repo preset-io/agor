@@ -241,6 +241,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             onBoardChange={onBoardChange || (() => {})}
             onHomeClick={onHomeClick}
             branchById={branchById}
+            sessionById={sessionById}
           />
         </div>
         {boards.length > 0 && (
