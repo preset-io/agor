@@ -94,7 +94,7 @@ export type {
  * - Claude Code: 'auto' — the SDK's model classifier approves/denies each
  *   permission prompt; anything it doesn't confidently auto-resolve still
  *   falls through to Agor's permission UI via the executor's canUseTool hook
- *   (see sdk-handlers/claude/permissions/permission-hooks.ts). MCP tool calls
+ *   (see sdk-handlers/base/permission-hooks.ts). MCP tool calls
  *   for the built-in `agor` server and any attached MCP servers are
  *   auto-approved by that same hook, so MCP-heavy sessions don't
  *   death-by-modal. Users can flip a running session to `acceptEdits` or

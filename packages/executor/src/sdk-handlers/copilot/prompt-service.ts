@@ -12,6 +12,7 @@
  */
 
 import { shortId } from '@agor/core/db';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -33,7 +34,6 @@ import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';

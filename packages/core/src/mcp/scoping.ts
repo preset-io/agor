@@ -2,7 +2,7 @@
  * MCP Server Scoping Utility
  *
  * Shared logic for determining which MCP servers should be attached to a session.
- * Used by all SDK handlers (Claude, Gemini, Codex) to ensure consistent behavior.
+ * Used by agentic-tool runtime adapters to ensure consistent behavior.
  *
  * Scoping Rules:
  * - ALL global-scoped MCPs are included in every session (available to all users)
@@ -17,17 +17,31 @@
  * truly global and available to all sessions regardless of who created them.
  */
 
+import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
 import {
   buildMCPTemplateContextFromEnv,
   resolveMcpServerTemplates,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
-} from '@agor/core/mcp';
-import type { MCPServer, SessionID } from '@agor/core/types';
-import type {
-  MCPOAuthAuthHeadersRepository,
-  MCPServerRepository,
-  SessionMCPServerRepository,
-} from '../../db/feathers-repositories.js';
+} from './template-resolver';
+
+export interface MCPScopingServerRepository {
+  findAll(filters?: MCPServerFilters, forUserId?: string): Promise<MCPServer[]>;
+}
+
+export interface MCPScopingSessionRepository {
+  listServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]>;
+  listEffectiveServers?(
+    sessionId: SessionID,
+    enabledOnly?: boolean,
+    forUserId?: string
+  ): Promise<MCPServer[]>;
+}
+
+export interface MCPAuthHeadersRepository {
+  getAuthHeaders(
+    mcpServerIds: MCPServerID[]
+  ): Promise<Record<string, { authorization?: string; error?: string }>>;
+}
 
 const DEBUG_MCP_SCOPING =
   process.env.AGOR_DEBUG_MCP_SCOPING === '1' || process.env.DEBUG?.includes('mcp-scoping');
@@ -54,15 +68,15 @@ export interface MCPServerWithSource {
  * Dependencies required for MCP server resolution
  */
 export interface MCPResolutionDeps {
-  sessionMCPRepo?: SessionMCPServerRepository;
-  mcpServerRepo?: MCPServerRepository;
+  sessionMCPRepo?: MCPScopingSessionRepository;
+  mcpServerRepo?: MCPScopingServerRepository;
   /**
    * Trusted executor-only route for hydrating OAuth Authorization headers.
    *
    * Normal session MCP server payloads redact OAuth access tokens, so executor
    * paths must not rely on `server.auth.oauth_access_token` being present.
    */
-  mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository;
+  mcpOAuthAuthHeadersRepo?: MCPAuthHeadersRepository;
   /**
    * User ID to use for fetching per-user OAuth tokens.
    * When provided, MCP servers with per-user OAuth will have tokens injected.

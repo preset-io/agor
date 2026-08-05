@@ -15,6 +15,7 @@
  */
 
 import { generateId, shortId } from '@agor/core';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
@@ -39,7 +40,6 @@ import type {
   TaskResult,
   ToolCapabilities,
 } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { ITool } from '../base/tool.interface.js';
 
 export function isOpenCodeSessionEvent(event: OpenCodeEvent, sessionId: string): boolean {

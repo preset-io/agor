@@ -19,6 +19,7 @@ const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
 type Options = Claude.Options;
 
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -34,10 +35,9 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { createCanUseToolCallback } from '../base/permission-hooks.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
-import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
 export function formatListForLog(items: string[], maxItems = 5): string {
   if (items.length <= maxItems) {

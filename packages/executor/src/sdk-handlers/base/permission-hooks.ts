@@ -19,9 +19,9 @@ import type {
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
-} from '../../../db/feathers-repositories.js';
-import type { PermissionService } from '../../../permissions/permission-service.js';
-import type { MessagesService, SessionsPatchClient, TasksService } from '../../base/index.js';
+} from '../../db/feathers-repositories.js';
+import type { PermissionService } from '../../permissions/permission-service.js';
+import type { MessagesService, SessionsPatchClient, TasksService } from './index.js';
 
 /**
  * Create canUseTool callback for permission handling

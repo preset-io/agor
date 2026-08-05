@@ -3,6 +3,14 @@
  */
 
 export {
+  getMcpServersForSession,
+  type MCPAuthHeadersRepository,
+  type MCPResolutionDeps,
+  type MCPScopingServerRepository,
+  type MCPScopingSessionRepository,
+  type MCPServerWithSource,
+} from './scoping';
+export {
   buildMCPTemplateContextFromEnv,
   containsTemplate,
   isUserEnvPlaceholder,

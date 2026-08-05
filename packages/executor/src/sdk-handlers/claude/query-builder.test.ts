@@ -25,21 +25,21 @@ vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
 }));
-vi.mock('../base/mcp-scoping.js', () => ({
+vi.mock('@agor/core/mcp', () => ({
   getMcpServersForSession: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
 }));
-vi.mock('./permissions/permission-hooks.js', () => ({
+vi.mock('../base/permission-hooks.js', () => ({
   createCanUseToolCallback: vi.fn(
     () => () => Promise.resolve({ behavior: 'allow', updatedInput: {} })
   ),
 }));
 
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { Claude } from '@agor/core/sdk';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 

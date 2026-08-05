@@ -40,7 +40,7 @@ Cursor's new TypeScript SDK is a credible fit for Agor's provider model, but it 
 - Global config credential whitelist: `packages/core/src/config/config-manager.ts:635`, `packages/core/src/config/types.ts:698`, `packages/core/src/config/types.ts:710`.
 - Executor payload/registry surfaces: `packages/executor/src/payload-types.ts:74`, `packages/executor/src/index.ts:23`, `packages/executor/src/handlers/sdk/tool-registry.ts:16`, `packages/executor/src/handlers/sdk/tool-registry.ts:120`.
 - Shared executor lifecycle/callbacks/token normalization: `packages/executor/src/handlers/sdk/base-executor.ts:31`, `packages/executor/src/handlers/sdk/base-executor.ts:109`, `packages/executor/src/handlers/sdk/base-executor.ts:274`, `packages/executor/src/handlers/sdk/base-executor.ts:302`, `packages/executor/src/handlers/sdk/base-executor.ts:428`, `packages/executor/src/sdk-handlers/normalizer-factory.ts:31`.
-- MCP scoping/template resolution: `packages/executor/src/sdk-handlers/base/mcp-scoping.ts:69`, `packages/executor/src/sdk-handlers/base/mcp-scoping.ts:144`.
+- MCP scoping/template resolution: `packages/core/src/mcp/scoping.ts`.
 - Provider precedents: Claude wrapper `packages/executor/src/handlers/sdk/claude.ts:20`, Codex wrapper `packages/executor/src/handlers/sdk/codex.ts:17`, OpenCode special-case session handling `packages/executor/src/handlers/sdk/opencode.ts:26`.
 
 ---
@@ -151,7 +151,7 @@ Agor already has a provider-neutral callback contract at `packages/executor/src/
 
 ### 4. MCP handling
 
-Reuse `getMcpServersForSession()` and template resolution (`packages/executor/src/sdk-handlers/base/mcp-scoping.ts:69`, `:144`). Convert Agor MCP rows to Cursor SDK configs:
+Reuse `getMcpServersForSession()` and template resolution (`packages/core/src/mcp/scoping.ts`). Convert Agor MCP rows to Cursor SDK configs:
 
 - Built-in Agor MCP: `type: "http"`, `url: daemonUrl + "/mcp"`, and an `Authorization: Bearer <session.mcp_token>` header.
 - `stdio`: `{ type: 'stdio', command, args, env, cwd }`.

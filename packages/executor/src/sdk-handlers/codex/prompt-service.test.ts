@@ -72,7 +72,7 @@ async function* streamMockEvents() {
 
 // Mock @agor/core/sdk to avoid spawning real Codex CLI processes
 vi.mock('./app-server-client.js', () => appServerMocks);
-vi.mock('../base/mcp-scoping.js', () => mcpScopingMocks);
+vi.mock('@agor/core/mcp', () => mcpScopingMocks);
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
 

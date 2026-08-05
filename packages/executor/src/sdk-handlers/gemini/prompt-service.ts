@@ -23,6 +23,7 @@ type ResumedSessionData = Gemini.ResumedSessionData;
 type Part = GenAI.Part;
 
 import { shortId } from '@agor/core/db';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -39,7 +40,6 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';

@@ -1,6 +1,6 @@
 import type { MCPServer, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { getMcpServersForSession } from './mcp-scoping';
+import { getMcpServersForSession } from './scoping';
 
 const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer =>
   ({
@@ -13,7 +13,7 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
     created_at: new Date(),
     updated_at: new Date(),
     auth: { type: 'token', token: `value-${id}` },
-  }) as MCPServer;
+  }) as unknown as MCPServer;
 
 describe('getMcpServersForSession', () => {
   it('uses session-scoped effective config retrieval when available', async () => {
