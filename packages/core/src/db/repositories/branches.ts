@@ -446,7 +446,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
     const rows = await select(this.db, columns)
       .from(branches)
-      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      // `error` is monitorable too: an unreachable environment can recover on
+      // its own (e.g. a Codespace whose app was still booting), and the health
+      // monitor implements `error → running`. Excluding it here would leave
+      // such environments red forever after a daemon restart.
+      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting'), eq(statusExpr, 'error')))
       .all();
 
     return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({

@@ -66,6 +66,22 @@ interface HealthMonitorTimer {
   phase: 'grace' | 'interval';
 }
 
+/**
+ * Statuses the monitor keeps polling.
+ *
+ * `error` is included deliberately. An environment is demoted to `error` when
+ * it becomes unreachable, but "unreachable" is frequently temporary — a Codespace
+ * whose app is still booting, or a lifecycle command that raced. If the monitor
+ * stopped polling on `error`, such an environment could never return to
+ * `running` on its own: it would sit red while serving HTTP 200, and a human
+ * would have to press Start on a perfectly healthy app. `BranchesService.checkHealth`
+ * already implements the `error → running` recovery path; this keeps the monitor
+ * consistent with it.
+ */
+function isMonitorableStatus(status: string | undefined): boolean {
+  return status === 'running' || status === 'starting' || status === 'error';
+}
+
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
   const tenantId = getHiddenTenantId(branch);
   if (!tenantId) return undefined;
@@ -144,9 +160,9 @@ export class HealthMonitor {
 
     const status = branch.environment_instance?.status;
 
-    if (status === 'running' || status === 'starting') {
-      // Start monitoring if not already monitored.
-      // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'.
+    if (isMonitorableStatus(status)) {
+      // Start monitoring if not already monitored. Health checks transition
+      // 'starting' → 'running' and recover 'error' → 'running'.
       const params = this.paramsForBranch(branch);
       if (!params && this.requireTenantParams) {
         console.error(
@@ -262,7 +278,7 @@ export class HealthMonitor {
 
         // Only check if still running or starting
         const status = branch.environment_instance?.status;
-        if (status !== 'running' && status !== 'starting') {
+        if (!isMonitorableStatus(status)) {
           // Silently stop monitoring (not an error - expected when env stops)
           // Start/stop logs are already handled in handleBranchUpdate()
           this.stopMonitoring(branchId);
@@ -339,10 +355,8 @@ export class HealthMonitor {
     const branches = (Array.isArray(result) ? result : result.data) as Branch[];
 
     // Start monitoring running or starting branches
-    const activeBranches = branches.filter(
-      (w) =>
-        w.environment_instance?.status === 'running' ||
-        w.environment_instance?.status === 'starting'
+    const activeBranches = branches.filter((w) =>
+      isMonitorableStatus(w.environment_instance?.status)
     );
 
     for (const branch of activeBranches) {
@@ -384,7 +398,7 @@ export class HealthMonitor {
         const loadAndStart = async () => {
           const branch = await branchesService.get(ref.branchId, params as never);
           const status = branch.environment_instance?.status;
-          if (status !== 'running' && status !== 'starting') return;
+          if (!isMonitorableStatus(status)) return;
           this.branchParams.set(branch.branch_id, tenantParamsFromBranch(branch) ?? params);
           this.startMonitoring(branch.branch_id, this.branchParams.get(branch.branch_id));
           activeCount += 1;

@@ -133,6 +133,22 @@ interface ManagedProcess {
 }
 
 /**
+ * Consecutive failed health probes before a `running` environment is demoted to
+ * `error`. At the monitor's 5s interval this is ~15s of continuous
+ * unreachability — long enough to ride out a blip, short enough that a
+ * shut-down Codespace stops being advertised as live.
+ */
+const ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD = 3;
+
+/**
+ * Consecutive successful health probes before an environment is promoted to
+ * `running`. At the monitor's 5s interval this is ~10s of sustained
+ * reachability, which is enough to reject the transient single 200 a resuming
+ * Codespace tunnel can emit while the app behind it is still booting.
+ */
+const ENVIRONMENT_READY_PROBE_THRESHOLD = 2;
+
+/**
  * Extended branches service with custom methods
  */
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
@@ -141,6 +157,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
+  /**
+   * Consecutive failed health probes per branch, used to demote a `running`
+   * environment that has actually gone away. In-memory on purpose: losing the
+   * count on daemon restart only costs us re-observing a few probes.
+   */
+  private healthFailureStreak = new Map<BranchID, number>();
+  /**
+   * Consecutive successful health probes per branch, used to require sustained
+   * reachability before promoting to `running`. Same in-memory rationale as
+   * {@link healthFailureStreak}.
+   */
+  private healthSuccessStreak = new Map<BranchID, number>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -2491,8 +2519,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // If health check succeeds and we're in 'starting' or 'error' state,
       // transition/recover to 'running'. The explicit 'error' recovery path matters
       // when a lifecycle command failed or raced but the configured app is now live.
+      //
+      // Requires CONSECUTIVE successes, mirroring the demotion below. A single
+      // success is not trustworthy while a remote environment is coming up: a
+      // resuming Codespace was observed answering one 200 through its tunnel and
+      // then immediately 502-ing, which flipped the environment to `running`
+      // while the app was in fact still booting.
+      const readyStreak = this.trackHealthProbeSuccess(id, isHealthy);
       const shouldTransitionToRunning =
-        isHealthy && (currentStatus === 'starting' || currentStatus === 'error');
+        isHealthy &&
+        (currentStatus === 'starting' || currentStatus === 'error') &&
+        readyStreak >= ENVIRONMENT_READY_PROBE_THRESHOLD;
 
       if (shouldTransitionToRunning) {
         console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
@@ -2512,10 +2549,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
       }
 
+      // An HTTP error (e.g. the 404 GitHub serves for a shut-down Codespace)
+      // does NOT throw, so unreachability has to be handled here too, not only
+      // in the catch below.
+      const shouldDemote = this.trackHealthProbeResult(id, isHealthy, currentStatus);
+      if (shouldDemote) {
+        console.warn(
+          `🔌 ${branch.name}: environment unreachable (HTTP ${response.status}) - marking 'error' so it can be started again`
+        );
+      }
+
       return await this.updateEnvironment(
         id,
         {
-          status: shouldTransitionToRunning ? 'running' : currentStatus,
+          status: shouldTransitionToRunning ? 'running' : shouldDemote ? 'error' : currentStatus,
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: newHealthStatus,
@@ -2552,18 +2599,81 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
 
+      const shouldDemote = this.trackHealthProbeResult(id, false, currentStatus);
+      if (shouldDemote) {
+        console.warn(
+          `🔌 ${branch.name}: environment unreachable (${message}) - marking 'error' so it can be started again`
+        );
+      }
+
       return await this.updateEnvironment(
         id,
         {
+          ...(shouldDemote ? { status: 'error' as const } : {}),
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: 'unhealthy',
-            message,
+            message: shouldDemote ? `Environment unreachable: ${message}` : message,
           },
         },
         params
       );
     }
+  }
+
+  /**
+   * Track consecutive failed health probes and decide whether a `running`
+   * environment should be demoted to `error`.
+   *
+   * A remote environment can vanish out from under Agor — a Codespace hits its
+   * idle timeout and shuts down, or retention deletes it. Without this, the
+   * environment stays `running` forever while only `last_health_check` goes
+   * unhealthy, so the UI keeps showing a green pill linking to a dead URL AND
+   * disables the Start button (`isRunning` gates it), leaving the user unable
+   * to recover from the board. Demoting to `error` re-enables Start.
+   *
+   * Demotion requires consecutive failures so that one blip — a redeploy, a
+   * slow request, a dropped packet — cannot flap a healthy environment.
+   *
+   * Note the health monitor stops polling once status leaves running/starting.
+   * That is intended here: a shut-down Codespace will not come back on its own,
+   * it needs an explicit start, which is exactly what we have re-enabled.
+   */
+  /**
+   * Track consecutive SUCCESSFUL probes and return the current streak length.
+   * Reset on any failure, so only sustained reachability accumulates.
+   */
+  private trackHealthProbeSuccess(id: BranchID, probeSucceeded: boolean): number {
+    if (!probeSucceeded) {
+      this.healthSuccessStreak.delete(id);
+      return 0;
+    }
+    const streak = (this.healthSuccessStreak.get(id) ?? 0) + 1;
+    this.healthSuccessStreak.set(id, streak);
+    return streak;
+  }
+
+  private trackHealthProbeResult(
+    id: BranchID,
+    probeSucceeded: boolean,
+    currentStatus: string | undefined
+  ): boolean {
+    if (probeSucceeded) {
+      this.healthFailureStreak.delete(id);
+      return false;
+    }
+
+    const streak = (this.healthFailureStreak.get(id) ?? 0) + 1;
+    this.healthFailureStreak.set(id, streak);
+
+    // Only a `running` environment can be demoted. `starting` keeps retrying
+    // (that is the readiness gate) and `error` is already where we would land.
+    if (currentStatus !== 'running' || streak < ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD) {
+      return false;
+    }
+
+    this.healthFailureStreak.delete(id);
+    return true;
   }
 
   /**

@@ -2108,7 +2108,9 @@ describe('BranchesService environment health recovery', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('recovers an errored environment to running when the health URL succeeds', async () => {
+  // Recovery now requires consecutive successes (ENVIRONMENT_READY_PROBE_THRESHOLD),
+  // so that one transient 200 cannot flap an environment back to running.
+  it('recovers an errored environment to running after sustained successful probes', async () => {
     const branch = {
       branch_id: 'wt-health-recover' as BranchID,
       repo_id: 'repo-1',
@@ -2146,6 +2148,7 @@ describe('BranchesService environment health recovery', () => {
     );
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
 
+    await service.checkHealth(branch.branch_id);
     const result = await service.checkHealth(branch.branch_id);
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -2206,6 +2209,35 @@ describe('BranchesService remote environment readiness gate', () => {
     return service;
   };
 
+  it('does NOT promote on a single success — a resuming tunnel can emit one stale 200', async () => {
+    const branch = remoteBranch();
+    const service = serviceFor(branch);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // Observed live: a resuming Codespace answered one 200 through its tunnel
+    // and then immediately 502'd. One success must not be enough.
+    expect(result.environment_instance?.status).toBe('starting');
+    expect(updateEnvironment).not.toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({ status: 'running' }),
+      undefined
+    );
+    expect(syncEnvironment).not.toHaveBeenCalled();
+  });
+
   it('probes the `health` fact and fires a catch-up sync on starting -> running', async () => {
     const branch = remoteBranch();
     const service = serviceFor(branch);
@@ -2222,6 +2254,8 @@ describe('BranchesService remote environment readiness gate', () => {
     const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
 
+    // Promotion requires sustained reachability, so probe twice.
+    await service.checkHealth(branch.branch_id);
     const result = await service.checkHealth(branch.branch_id);
 
     // The fact URL is what gets probed — not a frozen health_check_url.
@@ -2278,6 +2312,7 @@ describe('BranchesService remote environment readiness gate', () => {
 
     // The catch-up sync is fire-and-forget; a variant without `sync` must not
     // break the health check that triggered it.
+    await service.checkHealth(branch.branch_id);
     const result = await service.checkHealth(branch.branch_id);
 
     expect(result.environment_instance?.status).toBe('running');
