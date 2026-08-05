@@ -21,11 +21,10 @@ module.exports = {
     '/_app',
     '/_document',
     '/guide/assistants',
-    '/build-together',
-    '/company-wide-ai',
-    '/every-team',
-    '/open-source',
-    '/hand-off-the-work',
+    '/not-alone',
+    '/beyond-the-sandbox',
+    '/not-just-a-tool',
+    '/right-where-you-work',
   ],
 
   // Include static LLM-related files

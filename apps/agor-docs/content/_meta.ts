@@ -18,11 +18,10 @@ export default {
       layout: 'full', // Full page layout without sidebars/navbar
     },
   },
-  'build-together': heroVariantMeta,
-  'company-wide-ai': heroVariantMeta,
-  'every-team': heroVariantMeta,
-  'open-source': heroVariantMeta,
-  'hand-off-the-work': heroVariantMeta,
+  'not-alone': heroVariantMeta,
+  'beyond-the-sandbox': heroVariantMeta,
+  'not-just-a-tool': heroVariantMeta,
+  'right-where-you-work': heroVariantMeta,
   // Navbar links are separate from the content folders so Docs and Blog can
   // also remain in the shared root sidebar on every content surface.
   'docs-navbar': { title: 'Docs', type: 'page', href: '/guide' },

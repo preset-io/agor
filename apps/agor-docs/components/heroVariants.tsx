@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import styles from './LandingPage.module.css';
 
 /**
- * Homepage hero A/B test arms — five distinct messaging theses (not just
+ * Homepage hero A/B test arms — four distinct messaging theses (not just
  * copy tweaks), each mapped to a different buyer, tested at its own
  * canonical URL against the unchanged "/" kitchen-sink homepage. Register
  * (infra-forward vs. relatable/outcome language) intentionally varies by
@@ -13,7 +13,6 @@ export type HeroVariantKey =
   | 'technical-collaboration'
   | 'governance'
   | 'business-builders'
-  | 'open-source'
   | 'outcomes';
 
 export interface HeroVariant {
@@ -26,28 +25,23 @@ export interface HeroVariant {
 
 export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
   'technical-collaboration': {
-    headline: 'Raise your [AI Teammates].',
-    subheadline: '{Build} together. {Learn} together.',
+    headline: 'Raise a {team} of AI teammates.',
+    subheadline: '{Build} together, [learn] together, not alone in a terminal.',
     ctaLabel: 'See your team build together',
   },
   governance: {
-    headline: 'Manage company-wide [AI Teammates].',
-    subheadline: 'No {sandboxes}. No {silos}.',
+    headline: 'AI teammates built for [company-wide rollout], not just a {sandbox}.',
+    subheadline: '{Spend}, {access}, and oversight, handled from day one.',
     ctaLabel: 'See it govern your rollout',
   },
   'business-builders': {
-    headline: '[AI Teammates] for every team.',
-    subheadline: 'Multiply every {function} in your organization.',
+    headline: 'Give every team an AI teammate, not just another AI [tool].',
+    subheadline: 'Reachable in {Slack} or [email], no orchestration skill required.',
     ctaLabel: 'Design your first teammate with us',
   },
-  'open-source': {
-    headline: '[AI Teammates] for everyone.',
-    subheadline: '{Open source} and {enterprise-ready}.',
-    ctaLabel: 'Talk to us about scaling up',
-  },
   outcomes: {
-    headline: '[AI Teammates] that drive {outcomes}.',
-    subheadline: 'Hand off the {work}, get it back {finished}.',
+    headline: 'AI teammates that get it {done}.',
+    subheadline: 'Hand off the {work}, get it back [finished], right where you work.',
     ctaLabel: 'See what you could hand off',
   },
 };
