@@ -44,6 +44,7 @@ Step-by-step implementation guides referenced from code.
 ### `guidelines/` — house rules
 
 - [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
+- [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
 - [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
 
