@@ -9,7 +9,7 @@ import {
   type ModelConfigInput,
   type ResolvedModelConfig,
   resolveModelConfig,
-} from '@agor/core/models';
+} from '@agor/core/models/browser';
 import type { AgenticToolName } from '@agor/core/types';
 import { getAgenticToolModelConfiguration } from './index.js';
 

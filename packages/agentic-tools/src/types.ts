@@ -1,4 +1,4 @@
-import type { AgenticToolModelConfigurationPolicy } from '@agor/core/models';
+import type { AgenticToolModelConfigurationPolicy } from '@agor/core/models/browser';
 import type {
   AgenticToolCapabilities,
   AgenticToolName,

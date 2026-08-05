@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { execFileSync, execSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
-import path, { delimiter } from 'node:path';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -100,25 +100,20 @@ const requiredCompatibilityExports = [
   'AGENTIC_TOOL_KEY_CREATION_URL',
   'AGENTIC_TOOL_CAPABILITIES',
 ];
+symlinkSync(
+  path.join(packageDir, 'node_modules'),
+  path.join(packedRoot, 'node_modules'),
+  'junction'
+);
 try {
-  execFileSync(
-    process.execPath,
-    [
-      '-e',
-      `const client = require(${JSON.stringify(path.join(packedRoot, 'dist/index.cjs'))}); for (const name of ${JSON.stringify(requiredCompatibilityExports)}) { if (!(name in client)) throw new Error('Missing runtime export: ' + name); }`,
-    ],
-    {
-      env: {
-        ...process.env,
-        NODE_PATH: [path.join(packageDir, 'node_modules'), process.env.NODE_PATH]
-          .filter(Boolean)
-          .join(delimiter),
-      },
-    }
-  );
+  execFileSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    `const {createRequire}=await import('node:module'); const require=createRequire(import.meta.url); const clients=[require(${JSON.stringify(path.join(packedRoot, 'dist/index.cjs'))}), await import(${JSON.stringify(path.join(packedRoot, 'dist/index.js'))})]; for (const client of clients) for (const name of ${JSON.stringify(requiredCompatibilityExports)}) { if (!(name in client)) throw new Error('Missing runtime export: ' + name); }`,
+  ]);
 } catch (error) {
   fail(
-    `Packed client is missing agentic-tool compatibility exports: ${error instanceof Error ? error.message : String(error)}`
+    `Packed client entrypoint failed or is missing agentic-tool compatibility exports: ${error instanceof Error ? error.message : String(error)}`
   );
 }
 

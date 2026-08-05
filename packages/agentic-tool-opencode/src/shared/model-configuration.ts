@@ -4,7 +4,7 @@ import {
   type ModelConfigInput,
   type ResolvedModelConfig,
   resolveModelConfig,
-} from '@agor/core/models';
+} from '@agor/core/models/browser';
 import type { OpenCodeModelCatalog } from '@agor/core/types';
 
 export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =

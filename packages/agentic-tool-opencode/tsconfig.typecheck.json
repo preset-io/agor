@@ -5,6 +5,7 @@
     "rootDir": "..",
     "paths": {
       "@agor/core/client": ["../core/src/client/index.ts"],
+      "@agor/core/models/browser": ["../core/src/models/browser.ts"],
       "@agor/core/models": ["../core/src/models/index.ts"],
       "@agor/core/config": ["../core/src/config/index.ts"],
       "@agor/core/feathers": ["../core/src/feathers/index.ts"],
