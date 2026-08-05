@@ -1,3 +1,4 @@
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import {
   type AgenticToolName,
   type AgorClient,
@@ -5,6 +6,7 @@ import {
   CODEX_MODEL_METADATA,
   COPILOT_MODEL_METADATA,
   CURSOR_MODEL_METADATA,
+  createRestClient,
   DEFAULT_CODEX_MODEL,
   DEFAULT_COPILOT_MODEL,
   GEMINI_MODELS,
@@ -13,6 +15,7 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import { getDaemonUrl } from '../../config/daemon';
 import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
   curateModelOptions,
@@ -22,7 +25,8 @@ import {
   getModelSelectorFallbackModel,
   normalizeModelOption,
 } from './modelDefaults';
-import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
+
+const createDefaultRestClient = () => createRestClient(getDaemonUrl());
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
@@ -140,6 +144,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
   const isClaude = effectiveTool === 'claude-code';
+  const ToolModelSelector = getAgenticToolUIIntegration(effectiveTool)?.ModelSelector;
 
   // Dynamic model lists — fetched once when the picker opens for a given tool
   // and a client is available.
@@ -252,18 +257,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
   }, [effectiveTool, client]);
 
-  const rawModelList =
-    effectiveTool === 'codex'
+  const rawModelList = ToolModelSelector
+    ? []
+    : effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
         ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // OpenCode doesn't use this list
-          : effectiveTool === 'copilot'
-            ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
-            : effectiveTool === 'cursor'
-              ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
-              : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
+        : effectiveTool === 'copilot'
+          ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
+          : effectiveTool === 'cursor'
+            ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
+            : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
 
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a discovered alias selection.
@@ -272,10 +276,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
 
-  // OpenCode uses a different UI (2 dropdowns: provider + model)
-  if (effectiveTool === 'opencode') {
+  if (ToolModelSelector) {
     return (
-      <OpenCodeModelSelector
+      <ToolModelSelector
+        client={client}
+        createClient={createDefaultRestClient}
         value={
           value?.provider || value?.model
             ? {
@@ -284,12 +289,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               }
             : undefined
         }
-        onChange={(openCodeConfig: OpenCodeModelConfig) => {
+        onChange={(selection) => {
           if (onChange) {
             onChange({
-              mode: 'exact', // OpenCode always uses exact provider+model IDs
-              model: openCodeConfig.model,
-              provider: openCodeConfig.provider,
+              mode: 'exact',
+              model: selection.model,
+              provider: selection.provider,
             });
           }
         }}

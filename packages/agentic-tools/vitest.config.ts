@@ -7,7 +7,11 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: '@agor/agentic-tool-opencode',
+        find: '@agor/agentic-tool-opencode/ui',
+        replacement: source('../agentic-tool-opencode/src/ui/index.ts'),
+      },
+      {
+        find: /^@agor\/agentic-tool-opencode$/,
         replacement: source('../agentic-tool-opencode/src/shared/index.ts'),
       },
       { find: /^@agor\/core\/(.+)$/, replacement: `${source('../core/src')}/$1` },

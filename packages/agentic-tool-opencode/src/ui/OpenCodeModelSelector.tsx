@@ -1,8 +1,7 @@
-import { createRestClient } from '@agor-live/client';
+import type { AgorClient } from '@agor/core/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Alert, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useState } from 'react';
-import { getDaemonUrl } from '../../config/daemon';
 
 const { Text } = Typography;
 
@@ -14,6 +13,8 @@ export interface OpenCodeModelConfig {
 export interface OpenCodeModelSelectorProps {
   value?: OpenCodeModelConfig;
   onChange?: (config: OpenCodeModelConfig) => void;
+  client?: AgorClient | null;
+  createClient?: () => Promise<AgorClient>;
 }
 
 interface Provider {
@@ -36,6 +37,8 @@ interface ProvidersResponse {
 export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
   onChange,
+  client,
+  createClient,
 }) => {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,10 +52,12 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         setLoading(true);
         setError(null);
 
-        const daemonUrl = getDaemonUrl();
-        const client = await createRestClient(daemonUrl);
+        const resolvedClient = client ?? (await createClient?.());
+        if (!resolvedClient) {
+          throw new Error('OpenCode model discovery needs an Agor client.');
+        }
 
-        const response = (await client
+        const response = (await resolvedClient
           .service('opencode/models')
           .find()) as unknown as ProvidersResponse;
 
@@ -68,7 +73,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     };
 
     fetchProviders();
-  }, []); // Only fetch once on mount
+  }, [client, createClient]);
 
   // Set default value only if no value is provided and we haven't set a default yet
   // This runs after providers are loaded and when value changes

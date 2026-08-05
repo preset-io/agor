@@ -5,7 +5,9 @@
     "rootDir": "..",
     "paths": {
       "@agor/agentic-tool-opencode": ["../agentic-tool-opencode/src/shared/index.ts"],
-      "@agor/core/types": ["../core/src/types/index.ts"]
+      "@agor/core/types": ["../core/src/types/index.ts"],
+      "@agor/agentic-tool-opencode/ui": ["../agentic-tool-opencode/src/ui/index.ts"],
+      "@agor/core/client": ["../core/src/client/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

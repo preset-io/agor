@@ -6,6 +6,7 @@
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolName,
   AgorClient,
@@ -32,6 +33,7 @@ import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
+const openCodeOnboarding = getAgenticToolUIIntegration('opencode')?.onboardingOption;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -126,10 +128,10 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'custom',
     agent: 'opencode',
-    symbol: '⚙',
+    symbol: openCodeOnboarding?.symbol ?? '',
     provider: '',
-    title: 'Custom',
-    description: 'Use any model with an OpenAI-compatible API endpoint',
+    title: openCodeOnboarding?.title ?? '',
+    description: openCodeOnboarding?.description ?? '',
     placeholder: 'https://…',
     keyLink: null,
     keyLinkLabel: null,

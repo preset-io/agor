@@ -17,6 +17,12 @@
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js",
       "require": "./dist/runtime/index.cjs"
+    },
+    "./ui": {
+      "source": "./src/ui/index.ts",
+      "types": "./dist/ui/index.d.ts",
+      "import": "./dist/ui/index.js",
+      "require": "./dist/ui/index.cjs"
     }
   },
   "files": [
@@ -37,6 +43,26 @@
     "concurrently": "^9.2.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "@ant-design/icons": "^6.3.2",
+    "@types/react": "^19.2.17",
+    "antd": "^6.5.0",
+    "react": "^19.2.7"
+  },
+  "peerDependencies": {
+    "@ant-design/icons": "^6.3.2",
+    "antd": "^6.5.0",
+    "react": "^19.2.7"
+  },
+  "peerDependenciesMeta": {
+    "@ant-design/icons": {
+      "optional": true
+    },
+    "antd": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   }
 }

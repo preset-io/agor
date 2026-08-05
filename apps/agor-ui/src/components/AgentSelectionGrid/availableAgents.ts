@@ -5,7 +5,11 @@
  * Used across NewSessionModal, ScheduleTab, and other agent selection UIs.
  */
 
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type { AgenticToolOption } from './AgentSelectionGrid';
+
+const openCodeOption = getAgenticToolUIIntegration('opencode')?.agentSelectionOption;
 
 export const AVAILABLE_AGENTS: AgenticToolOption[] = [
   {
@@ -28,10 +32,10 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
   },
   {
     id: 'opencode',
-    name: 'OpenCode',
-    icon: '🌐',
-    description: 'Open-source terminal AI with 75+ LLM providers',
-    beta: true,
+    name: AGENTIC_TOOL_DISPLAY_NAMES.opencode,
+    icon: openCodeOption?.icon ?? '',
+    description: openCodeOption?.description ?? '',
+    beta: openCodeOption?.beta,
   },
   {
     id: 'cursor',

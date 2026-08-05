@@ -1,11 +1,17 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  entry: { index: 'src/index.ts', ui: 'src/ui.ts' },
   format: ['esm', 'cjs'],
   dts: false,
   splitting: false,
   sourcemap: true,
   clean: true,
-  external: ['@agor/agentic-tool-opencode', '@agor/core', /^@agor\/core\//],
+  external: [
+    '@agor/agentic-tool-opencode',
+    /^@agor\/agentic-tool-opencode\//,
+    '@agor/core',
+    /^@agor\/core\//,
+    'react',
+  ],
 });

@@ -5,6 +5,7 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node"],
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

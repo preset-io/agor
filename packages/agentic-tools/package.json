@@ -11,6 +11,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./ui": {
+      "source": "./src/ui.ts",
+      "types": "./dist/ui.d.ts",
+      "import": "./dist/ui.js",
+      "require": "./dist/ui.cjs"
     }
   },
   "files": [
@@ -31,6 +37,8 @@
     "concurrently": "^9.2.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "@types/react": "^19.2.17",
+    "react": "^19.2.7"
   }
 }

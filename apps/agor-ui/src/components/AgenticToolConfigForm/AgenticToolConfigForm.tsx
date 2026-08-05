@@ -15,6 +15,7 @@
  */
 
 import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
@@ -56,13 +57,13 @@ export interface AgenticToolConfigFormProps {
 const MODEL_LABELS: Record<string, string> = {
   codex: 'Codex Model',
   gemini: 'Gemini Model',
-  opencode: 'OpenCode LLM Provider',
   copilot: 'Copilot Model',
   cursor: 'Cursor Model',
 };
 
 /** The rendered label of a tool's model/provider selector (defaults to Claude). */
-export const modelLabelForTool = (tool: string): string => MODEL_LABELS[tool] ?? 'Claude Model';
+export const modelLabelForTool = (tool: AgenticToolName): string =>
+  getAgenticToolUIIntegration(tool)?.modelLabel ?? MODEL_LABELS[tool] ?? 'Claude Model';
 
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,

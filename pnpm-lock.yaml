@@ -153,7 +153,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   apps/agor-daemon:
     dependencies:
@@ -283,7 +283,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
       zod:
         specifier: ^4.3.6
         version: 4.4.3
@@ -522,7 +522,7 @@ importers:
         version: 0.5.1(supports-color@8.1.1)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/agentic-tool-opencode:
     dependencies:
@@ -533,12 +533,24 @@ importers:
         specifier: ^1.2.20
         version: 1.14.33
     devDependencies:
+      '@ant-design/icons':
+        specifier: ^6.3.2
+        version: 6.3.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/node':
         specifier: ^24.6.0
         version: 24.10.0
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      antd:
+        specifier: ^6.5.0
+        version: 6.5.0(luxon@3.7.2)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
@@ -547,7 +559,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/agentic-tools:
     dependencies:
@@ -561,9 +573,15 @@ importers:
       '@types/node':
         specifier: ^24.6.0
         version: 24.10.0
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(supports-color@8.1.1)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.9.0)
@@ -572,7 +590,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/agor-live:
     dependencies:
@@ -828,7 +846,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/core:
     dependencies:
@@ -979,7 +997,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/executor:
     dependencies:
@@ -1022,7 +1040,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   packages/git:
     dependencies:
@@ -1044,7 +1062,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
 packages:
 
@@ -13917,7 +13935,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -19859,7 +19877,7 @@ snapshots:
       tsx: 4.23.1
       yaml: 2.9.0
 
-  vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)):
+  vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(jsdom@27.1.0)(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.10
       '@vitest/mocker': 4.1.10(vite@8.2.0(@types/node@24.10.0)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
