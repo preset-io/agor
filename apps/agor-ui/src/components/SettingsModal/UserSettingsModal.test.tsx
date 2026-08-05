@@ -1030,6 +1030,58 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await screen.findByText(/No settings match/i);
     expect(screen.queryByRole('menuitem', { name: /OpenAI API Key/i })).not.toBeInTheDocument();
   });
+
+  it('renders package-owned OpenCode readiness in the sidebar and provider header', async () => {
+    const user = makeUser();
+    const modelFind = vi.fn().mockResolvedValue({
+      runtimeVersion: '1.14.33',
+      providers: [{ id: 'openai', availableForSelection: true, models: [] }],
+    });
+    const authFind = vi.fn().mockResolvedValue({
+      runtime: 'available',
+      runtimeVersion: '1.14.33',
+      isolation: { mode: 'simple', boundary: 'logical' },
+      providers: [],
+    });
+    const presetFind = vi.fn().mockResolvedValue([]);
+    const authentication = { accessToken: 'self' };
+    const client = {
+      service: vi.fn((path: string) => {
+        if (path === 'opencode-models') return { find: modelFind };
+        if (path === 'agentic-tool-presets') {
+          return { find: presetFind, on: vi.fn(), off: vi.fn() };
+        }
+        return {
+          find: authFind,
+          get: vi.fn(),
+          create: vi.fn(),
+          patch: vi.fn(),
+          remove: vi.fn(),
+        };
+      }),
+      get: vi.fn(() => authentication),
+      on: vi.fn(),
+    } as unknown as AgorClient;
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="opencode"
+      />
+    );
+
+    expect(
+      await screen.findByRole('menuitem', { name: /OpenCode Available/i })
+    ).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: 'OpenCode' });
+    expect(heading.parentElement).toHaveTextContent('Available');
+    expect(modelFind).toHaveBeenCalled();
+  });
 });
 
 // The tenant tool-settings store is module-global. Seed it as HYDRATED (empty =

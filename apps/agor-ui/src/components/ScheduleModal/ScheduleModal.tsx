@@ -33,6 +33,7 @@ import type {
   ScheduleAgenticToolConfig,
   ScheduleCreateData,
   SchedulePatchData,
+  User,
 } from '@agor-live/client';
 import {
   humanizeCron,
@@ -113,6 +114,10 @@ export interface ScheduleModalProps {
   mcpServerById: Map<string, MCPServer>;
   /** Feathers client. */
   client: AgorClient | null;
+  /** Stable owner whose defaults resolve at each run. */
+  executionOwner?: User | null;
+  /** Authenticated caller; model catalogs are caller-scoped. */
+  currentUser?: User | null;
   /** Fires after a successful create OR patch with the saved schedule. */
   onSaved?: (schedule: Schedule) => void;
 }
@@ -146,6 +151,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   schedule,
   mcpServerById,
   client,
+  executionOwner,
+  currentUser,
   onSaved,
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
@@ -285,31 +292,35 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
         ...timezoneConfig,
         agentic_tool_config:
-          all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+          all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION
             ? {
                 agentic_tool: agentTool,
-                ...(all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION ||
-                all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-                  ? {
-                      configuration_reference:
-                        all.agenticToolPresetId as ScheduleAgenticToolConfig['configuration_reference'],
-                    }
-                  : {
-                      preset_id: all.agenticToolPresetId as ScheduleAgenticToolConfig['preset_id'],
-                    }),
+                configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
               }
-            : buildScheduleConfigFromFormValues(
-                agentTool,
-                {
-                  modelConfig: all.modelConfig,
-                  effort: all.effort,
-                  permissionMode: all.permissionMode,
-                  codexSandboxMode: all.codexSandboxMode,
-                  codexApprovalPolicy: all.codexApprovalPolicy,
-                  codexNetworkAccess: all.codexNetworkAccess,
-                },
-                schedule?.agentic_tool_config
-              ),
+            : all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+              ? {
+                  agentic_tool: agentTool,
+                  configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+                }
+              : all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+                ? {
+                    agentic_tool: agentTool,
+                    preset_id: all.agenticToolPresetId as NonNullable<
+                      ScheduleAgenticToolConfig['preset_id']
+                    >,
+                  }
+                : buildScheduleConfigFromFormValues(
+                    agentTool,
+                    {
+                      modelConfig: all.modelConfig,
+                      effort: all.effort,
+                      permissionMode: all.permissionMode,
+                      codexSandboxMode: all.codexSandboxMode,
+                      codexApprovalPolicy: all.codexApprovalPolicy,
+                      codexNetworkAccess: all.codexNetworkAccess,
+                    },
+                    schedule?.agentic_tool_config
+                  ),
         mcp_server_ids: all.mcpServerIds ?? [],
         enabled: all.enabled ?? true,
         retention: all.retention ?? 5,
@@ -476,7 +487,14 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
             tool={agentTool}
             mcpServerById={mcpServerById}
             client={client}
+            modelCatalogClient={
+              executionOwner?.user_id && executionOwner.user_id === currentUser?.user_id
+                ? client
+                : null
+            }
+            branchId={branchId}
             defaultResolution="schedule-run"
+            currentUser={executionOwner}
           />
         )}
 

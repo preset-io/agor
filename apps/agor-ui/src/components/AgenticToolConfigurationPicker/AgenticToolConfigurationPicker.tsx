@@ -20,6 +20,8 @@ export const SAVE_AS_DEFAULT_FIELD = 'saveAsDefault';
 interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client'> {
   tool: AgenticToolName;
   client: AgorClient | null;
+  /** Subject-authorized model catalog. Explicit null disables inline model selection. */
+  modelCatalogClient?: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
   fieldName?: string;
   /**
@@ -67,6 +69,7 @@ export async function persistUserDefaultFromForm(
 export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   tool,
   client,
+  modelCatalogClient,
   mcpServerById,
   fieldName = 'agenticToolPresetId',
   defaultResolution = 'save',
@@ -75,6 +78,8 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   enableSaveAsDefault = false,
   ...formProps
 }) => {
+  const resolvedModelCatalogClient = modelCatalogClient === undefined ? client : modelCatalogClient;
+  const catalogUnavailable = tool === 'opencode' && resolvedModelCatalogClient === null;
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
   const {
@@ -88,7 +93,12 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     preferredSource,
     sourceOptions,
     getSourceError,
-  } = useAgenticConfigurationSources({ tool, client, currentUser });
+  } = useAgenticConfigurationSources({
+    tool,
+    client,
+    currentUser,
+    allowInlineSelection: !catalogUnavailable,
+  });
 
   useEffect(() => {
     if (!loaded || isValidSource(selected)) return;
@@ -156,6 +166,14 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
         />
       )}
 
+      {catalogUnavailable && (
+        <Alert
+          type="warning"
+          showIcon
+          title="OpenCode model selection is unavailable for this execution owner"
+        />
+      )}
+
       {!inlineAllowed && presets.length === 0 && loaded && (
         <Alert type="error" showIcon title="No administrator-managed preset is available" />
       )}
@@ -186,9 +204,13 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
           />
         )}
 
-      {selected === INLINE_AGENTIC_CONFIGURATION && (
+      {selected === INLINE_AGENTIC_CONFIGURATION && inlineAllowed && (
         <>
-          <AgenticToolConfigForm agenticTool={tool} client={client} {...formProps} />
+          <AgenticToolConfigForm
+            agenticTool={tool}
+            client={resolvedModelCatalogClient}
+            {...formProps}
+          />
           {enableSaveAsDefault && currentUser && client && (
             <Form.Item
               name={SAVE_AS_DEFAULT_FIELD}

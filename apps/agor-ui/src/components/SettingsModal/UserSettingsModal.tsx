@@ -1,4 +1,5 @@
 import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
@@ -94,14 +95,7 @@ const MAIN_FORM_KEYS = ['profile', 'security', 'preferences', 'access'] as const
 
 const PROVIDER_KEY_PREFIX = 'provider:';
 
-type ProviderStatus = 'connected' | 'not_connected' | 'workspace_managed';
 type ProviderSubtab = 'auth' | 'defaults';
-
-const PROVIDER_STATUS_LABEL: Record<ProviderStatus, string> = {
-  connected: 'Connected',
-  not_connected: 'Not connected',
-  workspace_managed: 'Managed by workspace',
-};
 
 // Visually-hidden text so a provider's status is never conveyed by the dot
 // color alone: assistive tech reads the label while sighted users see the dot.
@@ -116,6 +110,41 @@ const SR_ONLY_STYLE: React.CSSProperties = {
   whiteSpace: 'nowrap',
   border: 0,
 };
+
+function AgenticToolReadinessSlot({
+  tool,
+  client,
+  canLoadReadiness,
+  fallback,
+  children,
+}: {
+  tool: AgenticToolName;
+  client: AgorClient | null;
+  canLoadReadiness: boolean;
+  fallback: AgenticToolReadiness;
+  children: (status: AgenticToolReadiness) => React.ReactNode;
+}) {
+  const Readiness = getAgenticToolUIIntegration(tool)?.Readiness;
+  return Readiness ? (
+    <Readiness client={client} canLoadReadiness={canLoadReadiness}>
+      {children}
+    </Readiness>
+  ) : (
+    children(fallback)
+  );
+}
+
+function agenticToolReadinessTag(status: AgenticToolReadiness): React.ReactNode {
+  if (status.tone === 'positive') {
+    return (
+      <Tag color="success" icon={<CheckCircleFilled />}>
+        {status.label}
+      </Tag>
+    );
+  }
+  if (status.tone === 'info') return <Tag color="processing">{status.label}</Tag>;
+  return <Tag icon={<MinusCircleOutlined />}>{status.label}</Tag>;
+}
 
 type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
   defaultSelectionSource?: 'workspace_default' | 'preset' | 'inline';
@@ -835,6 +864,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
+      await agenticFormByTool[tool].validateFields();
       await saveAgenticConfigs(getAgenticConfigToolsToSave(tool));
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
@@ -907,12 +937,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       // workspace-managed policy — otherwise a tenant_required tool with no
       // workspace credential would show a "managed" dot while its own panel
       // says the effective source is Unavailable.
-      const status: ProviderStatus =
+      const status: AgenticToolReadiness =
         effectiveSource === 'Unavailable'
-          ? 'not_connected'
+          ? { tone: 'neutral', label: 'Not connected' }
           : managedByWorkspace
-            ? 'workspace_managed'
-            : 'connected';
+            ? { tone: 'info', label: 'Managed by workspace' }
+            : { tone: 'positive', label: 'Connected' };
       return {
         allToolFields,
         fieldStatus,
@@ -928,11 +958,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [agenticAuthMethods, agenticToolStatus, tenantToolSettings]
   );
 
-  const statusDotColor = useMemo<Record<ProviderStatus, string>>(
+  const statusDotColor = useMemo<Record<AgenticToolReadiness['tone'], string>>(
     () => ({
-      connected: token.colorSuccess,
-      not_connected: token.colorTextQuaternary,
-      workspace_managed: token.colorPrimary,
+      positive: token.colorSuccess,
+      neutral: token.colorTextQuaternary,
+      info: token.colorPrimary,
     }),
     [token.colorSuccess, token.colorTextQuaternary, token.colorPrimary]
   );
@@ -961,7 +991,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         key: string;
         title: string;
         icon?: React.ReactNode;
-        status?: ProviderStatus;
+        provider?: {
+          tool: AgenticToolName;
+          fallbackStatus: AgenticToolReadiness;
+        };
       }>;
     }> = [
       {
@@ -988,7 +1021,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: visibleAgenticToolTabs.map((tool) => ({
           key: providerKeyFor(tool),
           title: AGENTIC_TOOL_DISPLAY_NAMES[tool],
-          status: resolveProvider(tool).status,
+          provider: { tool, fallbackStatus: resolveProvider(tool).status },
         })),
       },
       {
@@ -1017,18 +1050,27 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: group.children.map((child) => ({
           key: child.key,
           icon: child.icon,
-          label: child.status ? (
-            <Space size={8}>
-              <Badge color={statusDotColor[child.status]} />
-              <span>{child.title}</span>
-              <span style={SR_ONLY_STYLE}>{PROVIDER_STATUS_LABEL[child.status]}</span>
-            </Space>
+          label: child.provider ? (
+            <AgenticToolReadinessSlot
+              tool={child.provider.tool}
+              client={client}
+              canLoadReadiness={isSelf}
+              fallback={child.provider.fallbackStatus}
+            >
+              {(status) => (
+                <Space size={8}>
+                  <Badge color={statusDotColor[status.tone]} />
+                  <span>{child.title}</span>
+                  <span style={SR_ONLY_STYLE}>{status.label}</span>
+                </Space>
+              )}
+            </AgenticToolReadinessSlot>
           ) : (
             child.title
           ),
         })),
       })),
-    [navGroups, statusDotColor]
+    [client, isSelf, navGroups, statusDotColor]
   );
 
   const activeInNav = navGroups.some((group) =>
@@ -1598,6 +1640,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderProviderPanel = (tool: AgenticToolName) => {
     const currentForm = agenticFormByTool[tool];
     const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool];
+    const ProviderSettings = getAgenticToolUIIntegration(tool)?.ProviderSettings;
     const {
       allToolFields,
       fieldStatus,
@@ -1614,16 +1657,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       toolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
     );
 
-    const statusTag =
-      status === 'connected' ? (
-        <Tag color="success" icon={<CheckCircleFilled />}>
-          Connected
-        </Tag>
-      ) : status === 'workspace_managed' ? (
-        <Tag color="processing">Managed by workspace</Tag>
-      ) : (
-        <Tag icon={<MinusCircleOutlined />}>Not connected</Tag>
-      );
+    const statusTag = (
+      <AgenticToolReadinessSlot
+        tool={tool}
+        client={client}
+        canLoadReadiness={isSelf}
+        fallback={status}
+      >
+        {agenticToolReadinessTag}
+      </AgenticToolReadinessSlot>
+    );
 
     const header = (
       <PanelHeader
@@ -1650,7 +1693,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             if (changed && 'mcpServerIds' in changed) setMcpEditSourceTool(tool);
           }}
         >
-          <UserAgenticDefaultEditor tool={tool} client={client} isAdmin={isAdmin} />
+          <UserAgenticDefaultEditor
+            tool={tool}
+            client={client}
+            modelCatalogClient={
+              user?.user_id && user.user_id === currentUser?.user_id ? client : null
+            }
+            isAdmin={isAdmin}
+          />
           <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={false} />
         </Form>
         <Divider style={{ margin: '20px 0' }} />
@@ -1659,6 +1709,40 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Button>
       </>
     );
+
+    if (ProviderSettings) {
+      let providersPane = (
+        <Alert
+          type="info"
+          showIcon
+          title={`${displayName} connections can only be managed by that user.`}
+        />
+      );
+      if (isSelf && client) {
+        providersPane = <ProviderSettings key={currentUser?.user_id} client={client} />;
+      } else if (isSelf) {
+        providersPane = <Alert type="warning" showIcon title="Not connected to Agor." />;
+      }
+
+      return (
+        <>
+          {header}
+          <Tabs
+            activeKey={providerSubtab}
+            onChange={(key) => setProviderSubtab(key as ProviderSubtab)}
+            items={[
+              { key: 'auth', label: 'Providers', children: providersPane },
+              {
+                key: 'defaults',
+                label: 'Session defaults',
+                children: defaultsPane,
+                forceRender: true,
+              },
+            ]}
+          />
+        </>
+      );
+    }
 
     // Tools with no auth/config fields (e.g. OpenCode) skip the tab strip entirely.
     if (allToolFields.length === 0) {

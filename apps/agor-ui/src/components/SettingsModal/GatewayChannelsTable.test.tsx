@@ -77,8 +77,15 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   );
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
-    AgenticToolConfigurationPicker: () => (
-      <div data-testid="agent-config">
+    AgenticToolConfigurationPicker: ({
+      modelCatalogClient,
+    }: {
+      modelCatalogClient?: AgorClient | null;
+    }) => (
+      <div
+        data-testid="agent-config"
+        data-model-catalog={modelCatalogClient === null ? 'closed' : 'open'}
+      >
         <Form.Item name="effort" noStyle>
           <EffortField />
         </Form.Item>
@@ -103,11 +110,12 @@ function makeBranch(): Branch {
   } as unknown as Branch;
 }
 
-function makeUser(): User {
+function makeUser(overrides: Partial<User> = {}): User {
   return {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    ...overrides,
   } as unknown as User;
 }
 
@@ -401,15 +409,21 @@ function renderEditTable(
   } = {}
 ) {
   const branch = makeBranch();
-  const user = makeUser();
+  const channelOwner = makeUser();
+  const currentUser = opts.currentUser ?? channelOwner;
   renderWithProviders(
     <GatewayChannelsTable
       client={client}
       gatewayChannelById={new Map([[channel.id, channel]])}
       branchById={new Map([[branch.branch_id, branch]])}
-      userById={new Map([[user.user_id, user]])}
+      userById={
+        new Map([
+          [channelOwner.user_id, channelOwner],
+          [currentUser.user_id, currentUser],
+        ])
+      }
       mcpServerById={new Map<string, MCPServer>()}
-      currentUser={opts.currentUser ?? user}
+      currentUser={currentUser}
       onUpdate={opts.onUpdate}
     />
   );
@@ -422,6 +436,41 @@ function expandPanel(title: string) {
 }
 
 describe('GatewayChannelsTable Slack edit mode', () => {
+  it('renders the OpenCode model catalog for a stable self-owned gateway', () => {
+    const { client } = makeClient();
+    renderEditTable(client, {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'opencode' },
+    } as GatewayChannel);
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'open');
+  });
+
+  it('renders the gateway model catalog fail-closed for a cross-user owner', () => {
+    const { client } = makeClient();
+    renderEditTable(
+      client,
+      {
+        ...makeSlackChannel(),
+        agentic_config: { agent: 'opencode' },
+      } as GatewayChannel,
+      { currentUser: makeUser({ user_id: 'user-2' }) }
+    );
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'closed');
+  });
+
+  it('renders the gateway model catalog fail-closed for an aligned owner', () => {
+    const { client } = makeClient();
+    renderEditTable(client, {
+      ...makeSlackChannel(),
+      config: { bot_token: '••••••••', align_slack_users: true },
+      agentic_config: { agent: 'opencode' },
+    } as GatewayChannel);
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'closed');
+  });
+
   it('still renders the Collapse form (not the wizard) when editing', () => {
     renderEditTable(null, makeSlackChannel());
 

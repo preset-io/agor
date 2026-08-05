@@ -222,6 +222,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                               mcpServerById={mcpServerById}
                               showHelpText={false}
                               client={client ?? null}
+                              currentUser={currentUser}
                             />
                           ),
                         },

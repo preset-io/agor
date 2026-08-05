@@ -355,6 +355,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                   mcpServerById={mcpServerById}
                   currentUser={currentUser}
                   client={client}
+                  branchId={session?.branch_id}
                 />
 
                 {selectedAgent === 'codex' && isInlineConfig && (
