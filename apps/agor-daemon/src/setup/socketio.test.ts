@@ -341,6 +341,35 @@ describe('Socket.IO lifecycle logging', () => {
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
   });
 
+  it('keeps post-connect authenticated sockets out of unauthenticated disconnect metrics', () => {
+    vi.useFakeTimers();
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-auth');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
+    socket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(
+      '🔌 Socket.io disconnected: post-connect-auth (reason: ping timeout, remaining: 0)'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
+  });
+
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
     const { io } = buildHarness();
     const socket = makeSocket('handshake-sock');
