@@ -186,6 +186,8 @@ services:
       - /app/node_modules
       # Shadow package-level node_modules too (they contain symlinks into root)
       - /app/packages/core/node_modules
+      - /app/packages/agentic-tool-opencode/node_modules
+      - /app/packages/agentic-tools/node_modules
       - /app/packages/executor/node_modules
       - /app/packages/client/node_modules
       - /app/packages/git/node_modules

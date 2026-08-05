@@ -48,7 +48,7 @@ echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
-DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
+DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/agentic-tool-opencode/dist /app/packages/agentic-tools/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
   # Clean and recreate dist directories with correct ownership.
   # Use the explicit workspace list instead of /app/packages/*/dist globs:
@@ -62,6 +62,8 @@ if sudo -n true 2>/dev/null; then
     /app/packages/executor/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/client/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/core/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tool-opencode/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tools/node_modules/.tmp/tsconfig.tsbuildinfo \
     2>/dev/null || true
   sudo -n mkdir -p $DIST_DIRS
 
@@ -75,7 +77,7 @@ if sudo -n true 2>/dev/null; then
   # incremental cache survives from an earlier container, `tsc` can incorrectly
   # decide there is nothing to emit, leaving dist empty and making the startup
   # wait loop time out. Remove stale build info alongside dist.
-  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
+  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
   sudo -n rm -rf $BUILD_INFO_DIRS 2>/dev/null || true
   sudo -n mkdir -p $BUILD_INFO_DIRS
   sudo -n chown -R agor:agor $BUILD_INFO_DIRS
@@ -84,8 +86,8 @@ if sudo -n true 2>/dev/null; then
 else
   # Fallback: try without sudo (might work depending on host permissions)
   rm -rf $DIST_DIRS 2>/dev/null || true
-  rm -rf /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
-  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  rm -rf /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
   mkdir -p $DIST_DIRS 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
@@ -127,6 +129,38 @@ while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages
 done
 echo "✅ @agor/core initial build complete (including type definitions)"
 
+echo "🔨 Building @agor/agentic-tool-opencode (initial build)..."
+pnpm --filter @agor/agentic-tool-opencode build
+
+echo "⏳ Waiting for @agor/agentic-tool-opencode type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/agentic-tool-opencode/dist/shared/index.d.ts" ] || [ ! -f "/app/packages/agentic-tool-opencode/dist/runtime/index.d.ts" ] || [ ! -f "/app/packages/agentic-tool-opencode/dist/ui/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for agentic-tool-opencode type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/agentic-tool-opencode initial build complete (including type definitions)"
+
+echo "🔨 Building @agor/agentic-tools (initial build)..."
+pnpm --filter @agor/agentic-tools build
+
+echo "⏳ Waiting for @agor/agentic-tools type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/agentic-tools/dist/index.d.ts" ] || [ ! -f "/app/packages/agentic-tools/dist/ui.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for agentic-tools type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/agentic-tools initial build complete (including type definitions)"
+
 echo "🔨 Building @agor/executor (initial build)..."
 pnpm --filter @agor/executor build
 
@@ -151,13 +185,18 @@ echo "✅ @agor/executor initial build complete (including type definitions)"
 if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
   echo "📦 Exposing compiled executor runtime for Unix impersonation..."
   sudo chmod o+x /app /app/packages \
-    /app/packages/core /app/packages/git /app/packages/executor
+    /app/packages/core /app/packages/git /app/packages/agentic-tool-opencode \
+    /app/packages/agentic-tools /app/packages/executor
   sudo chmod a+r /app/packages/core/package.json \
-    /app/packages/git/package.json /app/packages/executor/package.json
+    /app/packages/git/package.json /app/packages/agentic-tool-opencode/package.json \
+    /app/packages/agentic-tools/package.json /app/packages/executor/package.json
   sudo chmod -R a+rX /app/packages/core/dist /app/packages/git/dist \
+    /app/packages/agentic-tool-opencode/dist /app/packages/agentic-tools/dist \
     /app/packages/executor/bin /app/packages/executor/dist
   # Preserve runtime readability for files added later by the watch compilers.
-  find /app/packages/core/dist /app/packages/git/dist /app/packages/executor/dist \
+  find /app/packages/core/dist /app/packages/git/dist \
+    /app/packages/agentic-tool-opencode/dist /app/packages/agentic-tools/dist \
+    /app/packages/executor/dist \
     -type d -exec sudo setfacl -m d:o::rx {} +
   export AGOR_EXECUTOR_PATH=/app/packages/executor/bin/agor-executor
   echo "✅ Compiled executor runtime ready: $AGOR_EXECUTOR_PATH"
@@ -187,13 +226,19 @@ GIT_PID=$!
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
+pnpm --filter @agor/agentic-tool-opencode dev &
+AGENTIC_TOOL_OPENCODE_PID=$!
+
+pnpm --filter @agor/agentic-tools dev &
+AGENTIC_TOOLS_PID=$!
+
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
 pnpm --filter @agor-live/client dev &
 CLIENT_PID=$!
 
-echo "✅ Watch modes started (git, core, executor, and client will rebuild on file changes)"
+echo "✅ Watch modes started (git, core, agentic tools, executor, and client will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
@@ -357,5 +402,7 @@ VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" p
 kill $DAEMON_PID 2>/dev/null || true
 kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
+kill $AGENTIC_TOOLS_PID 2>/dev/null || true
+kill $AGENTIC_TOOL_OPENCODE_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
 kill $GIT_PID 2>/dev/null || true
