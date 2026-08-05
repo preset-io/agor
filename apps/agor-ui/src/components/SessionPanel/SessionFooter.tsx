@@ -47,6 +47,7 @@ import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 export interface SessionFooterProps {
   // Session data for chips
   session: Session & { agentic_tool: AgenticToolName };
+  currentUserId?: string;
   footerTimerTask: Task | null;
   tokenBreakdown: {
     total: number;
@@ -105,6 +106,7 @@ export interface SessionFooterProps {
 // wrappers, memoized slot/config objects) so the bailout actually holds.
 const SessionFooterInner: React.FC<SessionFooterProps> = ({
   session,
+  currentUserId,
   footerTimerTask,
   tokenBreakdown,
   latestContextWindow,
@@ -147,6 +149,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
+  const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
+  const getMorePopupContainer = React.useCallback(
+    (triggerNode: HTMLElement) =>
+      moreContentRef.current ?? triggerNode.parentElement ?? triggerNode,
+    []
+  );
   const [prefs, setPref] = useFooterPreferences();
   const pinnedItems = prefs.pinnedItems;
   const togglePin = (id: string) => {
@@ -229,7 +237,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const moreContent = (
     <fieldset
+      ref={moreContentRef}
       aria-label="More options"
+      onMouseDown={(event) => event.stopPropagation()}
       style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
     >
       {/* === Section: Settings === */}
@@ -279,7 +289,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             onChange={onModelConfigChange}
             agentic_tool={session.agentic_tool}
             client={client}
+            branchId={session.branch_id}
+            catalogEnabled={session.created_by === currentUserId}
             compact
+            getPopupContainer={getMorePopupContainer}
           />
         </div>
       </div>
@@ -1353,6 +1366,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         onChange={onModelConfigChange}
                         agentic_tool={session.agentic_tool}
                         client={client}
+                        branchId={session.branch_id}
+                        catalogEnabled={session.created_by === currentUserId}
                       />
                     )}
                   </div>

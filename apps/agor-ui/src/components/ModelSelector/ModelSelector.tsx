@@ -6,7 +6,6 @@ import {
   CODEX_MODEL_METADATA,
   COPILOT_MODEL_METADATA,
   CURSOR_MODEL_METADATA,
-  createRestClient,
   DEFAULT_CODEX_MODEL,
   DEFAULT_COPILOT_MODEL,
   GEMINI_MODELS,
@@ -15,7 +14,6 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
-import { getDaemonUrl } from '../../config/daemon';
 import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
   curateModelOptions,
@@ -25,8 +23,6 @@ import {
   getModelSelectorFallbackModel,
   normalizeModelOption,
 } from './modelDefaults';
-
-const createDefaultRestClient = () => createRestClient(getDaemonUrl());
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
@@ -49,8 +45,11 @@ export interface ModelSelectorProps {
    * client, the picker only shows static models.
    */
   client?: AgorClient | null;
+  branchId?: string;
+  catalogEnabled?: boolean;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
   /**
    * Render the Claude Code advisor model select inline. Surfaces that relocate
    * the advisor into an "Advanced" area (e.g. NewSessionModal) pass `false`.
@@ -136,7 +135,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agent,
   agentic_tool,
   client,
+  branchId,
+  catalogEnabled = true,
   compact = false,
+  getPopupContainer,
   showAdvisor = true,
 }) => {
   const { token } = theme.useToken();
@@ -280,7 +282,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return (
       <ToolModelSelector
         client={client}
-        createClient={createDefaultRestClient}
+        branchId={branchId}
+        catalogEnabled={catalogEnabled}
+        compact={compact}
+        getPopupContainer={getPopupContainer}
         value={
           value?.provider || value?.model
             ? {
@@ -290,13 +295,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             : undefined
         }
         onChange={(selection) => {
-          if (onChange) {
-            onChange({
-              mode: 'exact',
-              model: selection.model,
-              provider: selection.provider,
-            });
-          }
+          if (!selection) return;
+          onChange?.({
+            mode: 'exact',
+            model: selection.model,
+            provider: selection.provider,
+          });
         }}
       />
     );

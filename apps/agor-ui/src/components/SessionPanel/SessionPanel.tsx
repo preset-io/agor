@@ -1343,6 +1343,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const sessionFooter = activeSession ? (
     <SessionFooter
       session={activeSession}
+      currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}
