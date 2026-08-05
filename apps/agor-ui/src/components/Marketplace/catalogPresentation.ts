@@ -152,5 +152,12 @@ export function connectBlockedReason(entry: MCPCatalogEntry): string | undefined
   if (entry.probed_auth_type === 'unreachable') {
     return 'This server could not be reached the last time Agor checked.';
   }
+  // Connecting is gated on accepting what the server can reach, so an entry
+  // that states nothing has no acceptance to give. Curation requires one, so
+  // this is unreachable today — but it is what keeps a curation gap from
+  // rendering a connect button that can only fail.
+  if (!entry.permission_disclosure?.trim()) {
+    return 'This server has not stated what it can access, so it cannot be connected yet.';
+  }
   return undefined;
 }

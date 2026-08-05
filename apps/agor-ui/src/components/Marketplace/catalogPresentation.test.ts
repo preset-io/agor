@@ -20,6 +20,7 @@ function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
     remote_url: 'https://mcp.example.com/mcp',
     transport: 'streamable-http',
     probed_auth_type: 'none',
+    permission_disclosure: 'Reads public repository content only.',
     ...overrides,
   };
 }
@@ -77,6 +78,12 @@ describe('connectBlockedReason', () => {
       );
     }
   );
+
+  it('refuses an entry that discloses nothing, so no button can promise a connect', () => {
+    expect(connectBlockedReason(entry({ permission_disclosure: undefined }))).toMatch(
+      /has not stated what it can access/i
+    );
+  });
 
   it('refuses an unreachable endpoint', () => {
     expect(connectBlockedReason(entry({ probed_auth_type: 'unreachable' }))).toMatch(
