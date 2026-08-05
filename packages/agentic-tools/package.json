@@ -17,6 +17,12 @@
       "types": "./dist/ui.d.ts",
       "import": "./dist/ui.js",
       "require": "./dist/ui.cjs"
+    },
+    "./config": {
+      "source": "./src/config.ts",
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "require": "./dist/config.cjs"
     }
   },
   "files": [

@@ -25,7 +25,11 @@
  * resolvers share the same permission/model walk.
  */
 
-import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
+import {
+  type AgenticToolModelConfigurationPolicy,
+  type ModelConfigInput,
+  resolveModelConfigWithFallback,
+} from '../models/resolve-config.js';
 import type { AgenticToolName, Session, User } from '../types/index.js';
 import {
   resolvePermissionConfig,
@@ -47,9 +51,15 @@ export interface ResolveSessionDefaultsArgs {
   user?: Pick<User, 'default_agentic_config' | 'default_mcp_server_ids'> | null;
   /** Optional branch for MCP server inheritance (branch-level overrides user defaults). */
   branch?: { mcp_server_ids?: string[] | null } | null;
+  /** Child-only fallback, gated on an exact parent/child tool match. */
+  parent?: Pick<Session, 'agentic_tool' | 'permission_config' | 'model_config'> | null;
   overrides?: SessionDefaultsOverrides;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
+  /** Tool-owned model semantics supplied by the integration registry. */
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
+  /** Dynamic integration default, considered only after configured sources. */
+  modelFallback?: ModelConfigInput;
 }
 
 export interface ResolvedSessionDefaults {
@@ -68,20 +78,35 @@ export interface ResolvedSessionDefaults {
 }
 
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
-  const { agenticTool, user, branch, overrides, now } = args;
+  const { agenticTool, user, branch, parent, overrides, now, modelConfiguration, modelFallback } =
+    args;
   const userToolDefaults = user?.default_agentic_config?.[agenticTool];
+  const sameToolParent = parent?.agentic_tool === agenticTool ? parent : undefined;
+  const parentLayer = sameToolParent
+    ? {
+        permissionMode: sameToolParent.permission_config?.mode,
+        codexSandboxMode: sameToolParent.permission_config?.codex?.sandboxMode,
+        codexApprovalPolicy: sameToolParent.permission_config?.codex?.approvalPolicy,
+        codexNetworkAccess: sameToolParent.permission_config?.codex?.networkAccess,
+      }
+    : undefined;
 
   const permission_config = resolvePermissionConfig({
     effectiveTool: agenticTool,
     overrides,
     userToolDefaults,
-    // No parent layer for fresh-session defaults.
+    parentLayer,
   });
 
   const model_config = resolveModelConfigWithFallback(
     agenticTool,
-    [overrides?.modelConfig, userToolDefaults?.modelConfig],
-    { now }
+    [
+      overrides?.modelConfig,
+      sameToolParent?.model_config,
+      userToolDefaults?.modelConfig,
+      modelFallback,
+    ],
+    { now, policy: modelConfiguration }
   );
 
   // mcp_server_ids: explicit override wins (incl. empty array = "no MCPs"),

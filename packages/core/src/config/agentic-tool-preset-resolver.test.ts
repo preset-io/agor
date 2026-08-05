@@ -4,7 +4,16 @@ import {
   TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '../db/repositories';
+import {
+  createTenantScopedDatabaseProxy,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+} from '../db/tenant-scope';
 import { dbTest } from '../db/test-helpers';
+import {
+  type AgenticToolModelConfigurationPolicy,
+  resolveModelConfig,
+} from '../models/resolve-config';
 import {
   isAgenticToolDefaultConfigurationReference,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -14,10 +23,21 @@ import {
 import {
   AgenticConfigurationResolutionError,
   assertInlineAgenticConfigurationAllowed,
-  presetConfigurationToSessionPatch,
+  materializeAgenticToolConfiguration,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
 } from './agentic-tool-preset-resolver';
+
+const exactPairPolicy = {
+  missingSelectionError: 'Select an OpenCode provider and model.',
+  resolveSources: (sources, options) => {
+    const selected = sources.find((source) => source?.provider || source?.model);
+    if (!selected?.provider || !selected.model) return undefined;
+    return resolveModelConfig({ ...selected, mode: 'exact' }, options);
+  },
+  isResolved: (input) =>
+    input?.mode === 'exact' && Boolean(input.provider && input.model && input.updated_at),
+} satisfies AgenticToolModelConfigurationPolicy;
 
 beforeAll(() => {
   process.env.AGOR_MASTER_SECRET ||= 'agentic-tool-preset-resolver-test-secret';
@@ -112,6 +132,45 @@ describe('agentic tool preset resolution', () => {
     });
   });
 
+  dbTest('materializes the exact pair selected by the execution owner', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `materialized-default-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Configured User',
+      default_agentic_config: {
+        opencode: {
+          modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-test' },
+        },
+      },
+    });
+
+    await expect(
+      materializeAgenticToolConfiguration(db, {
+        tool: 'opencode',
+        source: { reference: USER_DEFAULT_AGENTIC_CONFIGURATION },
+        executionOwnerId: user.user_id as UserID,
+        modelConfiguration: exactPairPolicy,
+      })
+    ).resolves.toMatchObject({
+      model_config: { mode: 'exact', provider: 'openai', model: 'gpt-test' },
+    });
+  });
+
+  dbTest('rejects a preloaded execution owner with a mismatched subject', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `materialized-owner-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Configured User',
+    });
+
+    await expect(
+      materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: { configuration: {} },
+        executionOwnerId: '00000000-0000-7000-8000-000000000099' as UserID,
+        executionOwner: user,
+      })
+    ).rejects.toThrow(/execution owner does not match/i);
+  });
+
   dbTest('missing workspace default fails closed when presets are required', async ({ db }) => {
     await new TenantAgenticToolSettingsRepository(db).patch('codex', {
       inline_configuration_allowed: false,
@@ -121,23 +180,89 @@ describe('agentic tool preset resolution', () => {
     ).rejects.toThrow(/requires an administrator-managed preset/);
   });
 
-  it('materializes a complete replacement when preset fields are removed', () => {
-    const configured = presetConfigurationToSessionPatch('codex', {
-      modelConfig: { mode: 'exact', model: 'gpt-5.4' },
-      codexSandboxMode: 'danger-full-access',
-      codexApprovalPolicy: 'never',
-    });
-    expect(configured).toMatchObject({
-      model_config: { model: 'gpt-5.4' },
-      permission_config: {
-        codex: { sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
-      },
-    });
+  dbTest(
+    'does not let an incomplete referenced preset borrow owner or parent defaults',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `atomic-preset-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Configured User',
+        default_agentic_config: {
+          opencode: {
+            modelConfig: { mode: 'exact', provider: 'owner', model: 'owner-model' },
+          },
+        },
+      });
+      const preset = await new AgenticToolPresetRepository(db).create(
+        { tool: 'opencode', name: 'Incomplete', configuration: {} },
+        user.user_id as UserID
+      );
 
-    const cleared = presetConfigurationToSessionPatch('cursor', {});
-    expect(cleared).toEqual({
-      model_config: null,
-      permission_config: expect.any(Object),
-    });
-  });
+      await expect(
+        materializeAgenticToolConfiguration(db, {
+          tool: 'opencode',
+          source: { reference: preset.preset_id },
+          executionOwnerId: user.user_id as UserID,
+          parent: {
+            agentic_tool: 'opencode',
+            permission_config: { mode: 'default' },
+            model_config: {
+              mode: 'exact',
+              provider: 'parent',
+              model: 'parent-model',
+              updated_at: new Date().toISOString(),
+            },
+          },
+          modelConfiguration: exactPairPolicy,
+        })
+      ).rejects.toThrow(/provider and model/i);
+    }
+  );
+
+  dbTest(
+    'does not let a missing workspace default borrow the execution owner default',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `atomic-workspace-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Configured User',
+        default_agentic_config: {
+          opencode: {
+            modelConfig: { mode: 'exact', provider: 'owner', model: 'owner-model' },
+          },
+        },
+      });
+
+      await expect(
+        materializeAgenticToolConfiguration(db, {
+          tool: 'opencode',
+          source: { reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION },
+          executionOwnerId: user.user_id as UserID,
+          modelConfiguration: exactPairPolicy,
+        })
+      ).rejects.toThrow(/provider and model/i);
+    }
+  );
+
+  dbTest(
+    'rejects preset materialization through a retained foreign tenant scope',
+    async ({ db }) => {
+      const preset = await new AgenticToolPresetRepository(db).create(
+        { tool: 'codex', name: 'Tenant A preset', configuration: {} },
+        '00000000-0000-7000-8000-000000000001' as UserID
+      );
+
+      const guardedDb = createTenantScopedDatabaseProxy(db);
+      await runWithTenantDatabaseScope(guardedDb, 'tenant-a', async (tenantADb) => {
+        await expect(
+          runWithTenantContext('tenant-b', () =>
+            runWithTenantDatabaseScope(tenantADb, undefined, (tenantBDb) =>
+              materializeAgenticToolConfiguration(tenantBDb, {
+                tool: 'codex',
+                source: { reference: preset.preset_id },
+              })
+            )
+          )
+        ).rejects.toThrow(/tenant.*scope|scope.*tenant/i);
+      });
+    }
+  );
 });

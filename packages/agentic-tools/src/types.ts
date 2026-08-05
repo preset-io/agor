@@ -1,3 +1,4 @@
+import type { AgenticToolModelConfigurationPolicy } from '@agor/core/models';
 import type {
   AgenticToolCapabilities,
   AgenticToolName,
@@ -14,11 +15,8 @@ export interface AgenticToolIntegration {
   keyCreationUrl?: string;
   sdkVersion?: string;
   unverifiedTerminationReason?: string;
-  /** Integration-owned validation for tools that require an exact model selection. */
-  modelSelection?: {
-    isComplete(input: { provider?: string; model?: string } | null | undefined): boolean;
-    missingError: string;
-  };
+  /** Integration-owned model resolution and persisted-shape policy. */
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
 }
 
 export type AgenticToolIntegrationRegistry = Readonly<

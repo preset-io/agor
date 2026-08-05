@@ -6,6 +6,9 @@
     "paths": {
       "@agor/agentic-tool-opencode": ["../agentic-tool-opencode/src/shared/index.ts"],
       "@agor/core/types": ["../core/src/types/index.ts"],
+      "@agor/core/models": ["../core/src/models/index.ts"],
+      "@agor/core/config": ["../core/src/config/index.ts"],
+      "@agor/core/db": ["../core/src/db/index.ts"],
       "@agor/agentic-tool-opencode/ui": ["../agentic-tool-opencode/src/ui/index.ts"],
       "@agor/core/client": ["../core/src/client/index.ts"]
     }

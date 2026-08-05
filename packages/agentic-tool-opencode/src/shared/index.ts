@@ -5,14 +5,15 @@ export {
 } from './executor-context.js';
 export { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from './known-models.js';
 
-export const OPENCODE_MODEL_CONFIG_PAIR_ERROR =
-  'Select an exact OpenCode provider and model in Agor before running this session';
+export {
+  hasCompleteOpenCodeModelConfig,
+  OPENCODE_MODEL_CONFIG_PAIR_ERROR,
+  OPENCODE_MODEL_CONFIGURATION,
+  resolveOpenCodeCatalogFallback,
+  resolveOpenCodeModelConfig,
+} from './model-configuration.js';
 
-export function hasCompleteOpenCodeModelConfig(
-  input: { provider?: string; model?: string } | null | undefined
-): boolean {
-  return Boolean(input?.provider?.trim() && input.model?.trim());
-}
+import { OPENCODE_MODEL_CONFIGURATION } from './model-configuration.js';
 
 export const OPENCODE_INTEGRATION = Object.freeze({
   name: 'opencode',
@@ -25,8 +26,5 @@ export const OPENCODE_INTEGRATION = Object.freeze({
   authentication: 'runtime-managed',
   sdkVersion: '@opencode-ai/sdk@1.14.33',
   unverifiedTerminationReason: 'OpenCode server-side execution termination is not verified.',
-  modelSelection: {
-    isComplete: hasCompleteOpenCodeModelConfig,
-    missingError: OPENCODE_MODEL_CONFIG_PAIR_ERROR,
-  },
+  modelConfiguration: OPENCODE_MODEL_CONFIGURATION,
 } as const);

@@ -95,6 +95,8 @@ export interface DefaultModelConfig {
   mode?: 'alias' | 'exact';
   /** Model identifier (alias or exact ID) */
   model?: string;
+  /** OpenCode provider identifier paired with an exact model */
+  provider?: string;
   /** Effort level for reasoning depth */
   effort?: EffortLevel;
   /** Claude Code advisor model (e.g., 'opus', 'sonnet', 'fable'); unset means no session override */

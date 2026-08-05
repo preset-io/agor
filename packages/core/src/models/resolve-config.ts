@@ -45,11 +45,36 @@ export type ModelConfigInput = {
  */
 export type ResolvedModelConfig = NonNullable<Session['model_config']>;
 
+export class InvalidModelConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidModelConfigError';
+  }
+}
+
+/** Tool-owned model semantics injected by the integration registry. */
+export interface AgenticToolModelConfigurationPolicy {
+  missingSelectionError?: string;
+  /** Descriptor-owned catalog service used for a direct-create fallback. */
+  modelCatalogService?: string;
+  /** Convert a package catalog response into the integration's fallback input. */
+  resolveCatalogFallback?: (catalog: unknown) => ModelConfigInput | undefined;
+  isSelectionComplete?: (input: ModelConfigInput | null | undefined) => boolean;
+  resolveSources?: (
+    sources: Array<ModelConfigInput | undefined | null>,
+    options?: { now?: Date }
+  ) => ResolvedModelConfig | undefined;
+  isResolved?: (input: Partial<ResolvedModelConfig> | null | undefined) => boolean;
+}
+
 /** Whether a model config already has the complete persisted shape. */
 export function isResolvedModelConfig(
-  input: Partial<ResolvedModelConfig> | null | undefined
+  input: Partial<ResolvedModelConfig> | null | undefined,
+  policy?: AgenticToolModelConfigurationPolicy
 ): input is ResolvedModelConfig {
-  return Boolean(input?.mode && input.model && input.updated_at);
+  const hasPersistedShape = Boolean(input?.mode && input.model && input.updated_at);
+  if (!hasPersistedShape) return false;
+  return policy?.isResolved ? policy.isResolved(input) : true;
 }
 
 /**
@@ -165,8 +190,16 @@ function mergeModelLessFallbackOverrides(
 export function resolveModelConfigWithFallback(
   tool: AgenticToolName,
   sources: Array<ModelConfigInput | undefined | null>,
-  opts?: { now?: Date }
+  opts?: { now?: Date; policy?: AgenticToolModelConfigurationPolicy }
 ): ResolvedModelConfig | undefined {
+  if (opts?.policy?.resolveSources) {
+    const resolved = opts.policy.resolveSources(sources, { now: opts.now });
+    if (!resolved && opts.policy.missingSelectionError) {
+      throw new InvalidModelConfigError(opts.policy.missingSelectionError);
+    }
+    return resolved;
+  }
+
   let pendingModelLessOverrides: ModelConfigInput | undefined;
 
   for (const source of sources) {
