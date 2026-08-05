@@ -62,6 +62,15 @@ export interface ResolveSessionDefaultsArgs {
   modelFallback?: ModelConfigInput;
 }
 
+export interface ResolveSessionMcpServerIdsArgs {
+  /** Explicit per-call selection. An empty array means "no MCPs". */
+  explicit?: string[];
+  /** Optional branch inheritance, considered before user defaults. */
+  branch?: { mcp_server_ids?: string[] | null } | null;
+  /** User whose MCP defaults provide the final configured fallback. */
+  user?: Pick<User, 'default_mcp_server_ids'> | null;
+}
+
 export interface ResolvedSessionDefaults {
   /** Always populated — falls back to mapped `getDefaultPermissionMode(tool)`. */
   permission_config: NonNullable<Session['permission_config']>;
@@ -75,6 +84,19 @@ export interface ResolvedSessionDefaults {
   model_config?: NonNullable<Session['model_config']>;
   /** Resolved MCP server list. Empty array means "no MCPs". */
   mcp_server_ids: string[];
+}
+
+/** Resolve MCP inheritance independently from agent/model configuration ownership. */
+export function resolveSessionMcpServerIds({
+  explicit,
+  branch,
+  user,
+}: ResolveSessionMcpServerIdsArgs): string[] {
+  if (explicit !== undefined) return explicit;
+  if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
+    return branch.mcp_server_ids;
+  }
+  return user?.default_mcp_server_ids ?? [];
 }
 
 export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): ResolvedSessionDefaults {
@@ -109,16 +131,11 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
     { now, policy: modelConfiguration }
   );
 
-  // mcp_server_ids: explicit override wins (incl. empty array = "no MCPs"),
-  // then branch config, then user defaults, then [].
-  let mcp_server_ids: string[];
-  if (overrides?.mcpServerIds !== undefined) {
-    mcp_server_ids = overrides.mcpServerIds;
-  } else if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
-    mcp_server_ids = branch.mcp_server_ids;
-  } else {
-    mcp_server_ids = user?.default_mcp_server_ids ?? [];
-  }
+  const mcp_server_ids = resolveSessionMcpServerIds({
+    explicit: overrides?.mcpServerIds,
+    branch,
+    user,
+  });
 
   return { permission_config, model_config, mcp_server_ids };
 }

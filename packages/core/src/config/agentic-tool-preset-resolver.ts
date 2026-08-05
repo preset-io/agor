@@ -38,8 +38,6 @@ export interface MaterializeAgenticToolConfigurationArgs {
   executionOwnerId?: UserID;
   executionOwner?: User | null;
   parent?: Pick<Session, 'agentic_tool' | 'permission_config' | 'model_config'> | null;
-  branch?: { mcp_server_ids?: string[] | null } | null;
-  mcpServerIds?: string[];
   now?: Date;
   modelConfiguration?: AgenticToolModelConfigurationPolicy;
   modelFallback?: ModelConfigInput;
@@ -49,7 +47,6 @@ export interface MaterializedAgenticToolConfiguration {
   agentic_tool_preset_id: AgenticToolPresetID | null;
   permission_config: NonNullable<Session['permission_config']>;
   model_config: Session['model_config'];
-  mcp_server_ids: string[];
 }
 
 /** Expected user-facing failure while selecting or resolving an agentic configuration source. */
@@ -172,7 +169,6 @@ export async function materializeAgenticToolConfiguration(
     // A selected reference is one atomic configuration. Once resolved, its
     // missing fields cannot borrow a parent or the execution owner's defaults.
     user: hasReference ? null : owner,
-    branch: hasReference ? null : args.branch,
     parent: hasReference ? null : args.parent,
     overrides: {
       modelConfig: configuration.modelConfig,
@@ -180,7 +176,6 @@ export async function materializeAgenticToolConfiguration(
       codexSandboxMode: configuration.codexSandboxMode,
       codexApprovalPolicy: configuration.codexApprovalPolicy,
       codexNetworkAccess: configuration.codexNetworkAccess,
-      mcpServerIds: args.mcpServerIds,
     },
     now: args.now,
     modelConfiguration: args.modelConfiguration,
@@ -200,7 +195,6 @@ export async function materializeAgenticToolConfiguration(
     agentic_tool_preset_id: preset?.preset_id ?? null,
     permission_config: resolved.permission_config,
     model_config: resolved.model_config ?? null,
-    mcp_server_ids: resolved.mcp_server_ids,
   };
 }
 

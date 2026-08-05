@@ -155,6 +155,56 @@ describe('agentic tool preset resolution', () => {
     });
   });
 
+  dbTest(
+    'keeps referenced agent configuration atomic without taking ownership of MCP selection',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `materialized-atomic-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Configured User',
+        default_agentic_config: {
+          codex: {
+            permissionMode: 'ask',
+            modelConfig: { model: 'owner-model' },
+          },
+        },
+        default_mcp_server_ids: ['owner-mcp'],
+      });
+      const preset = await new AgenticToolPresetRepository(db).create(
+        {
+          tool: 'codex',
+          name: 'Atomic Codex',
+          configuration: {
+            permissionMode: 'auto',
+            modelConfig: { model: 'preset-model' },
+          },
+        },
+        user.user_id as UserID
+      );
+
+      const materialized = await materializeAgenticToolConfiguration(db, {
+        tool: 'codex',
+        source: { reference: preset.preset_id },
+        executionOwner: user,
+        parent: {
+          agentic_tool: 'codex',
+          permission_config: { mode: 'allow-all' },
+          model_config: {
+            mode: 'alias',
+            model: 'parent-model',
+            updated_at: new Date().toISOString(),
+          },
+        },
+      });
+
+      expect(materialized).toMatchObject({
+        agentic_tool_preset_id: preset.preset_id,
+        permission_config: { mode: 'auto' },
+        model_config: { model: 'preset-model' },
+      });
+      expect(materialized).not.toHaveProperty('mcp_server_ids');
+    }
+  );
+
   dbTest('rejects a preloaded execution owner with a mismatched subject', async ({ db }) => {
     const user = await new UsersRepository(db).create({
       email: `materialized-owner-${Date.now()}-${Math.random()}@example.com`,

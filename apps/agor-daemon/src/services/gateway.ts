@@ -49,6 +49,7 @@ import {
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
+import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   BranchPermissionLevel,
@@ -2033,16 +2034,15 @@ export class GatewayService {
             : { reference: USER_DEFAULT_AGENTIC_CONFIGURATION },
           executionOwnerId: user.user_id,
           executionOwner: user,
-          mcpServerIds: channel.mcp_server_ids,
         })
     );
-    const {
-      permission_config: gatewayPermissionConfig,
-      model_config: gatewayModelConfig,
-      mcp_server_ids: defaultMcpServerIds,
-    } = materializedAgenticConfig;
+    const { permission_config: gatewayPermissionConfig, model_config: gatewayModelConfig } =
+      materializedAgenticConfig;
     const resolvedPresetId = materializedAgenticConfig.agentic_tool_preset_id ?? undefined;
-    const gatewayMcpServerIds = channel.mcp_server_ids ?? defaultMcpServerIds;
+    const gatewayMcpServerIds = resolveSessionMcpServerIds({
+      explicit: channel.mcp_server_ids,
+      user,
+    });
     const permissionMode = gatewayPermissionConfig.mode;
 
     if (existingMapping) {

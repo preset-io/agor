@@ -25,7 +25,6 @@ vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
       agentic_tool_preset_id: null,
       permission_config: { mode: 'default' },
       model_config: null,
-      mcp_server_ids: [],
     })),
   };
 });
@@ -108,8 +107,10 @@ function makeGatewayHarness(args: {
   existingMapping?: ThreadSessionMap | null;
   connector?: Record<string, unknown>;
   db?: TenantScopeAwareDatabase;
+  user?: User;
 }) {
   const channel = args.channel ?? slackChannel;
+  const executionUser = args.user ?? user;
   let mapping = args.existingMapping ?? null;
   const promptCreate = vi.fn(async () => ({
     task_id: 'task-1',
@@ -121,11 +122,12 @@ function makeGatewayHarness(args: {
     branch_id: channel.target_branch_id,
     status: SessionStatus.IDLE,
   }));
+  const setMCPServers = vi.fn(async () => undefined);
   const app = {
     service: (name: string) => {
-      if (name === 'users') return { get: vi.fn(async () => user) };
+      if (name === 'users') return { get: vi.fn(async () => executionUser) };
       if (name === 'sessions') {
-        return { create: sessionsCreate, setMCPServers: vi.fn(async () => undefined) };
+        return { create: sessionsCreate, setMCPServers };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
       throw new Error(`Unexpected service: ${name}`);
@@ -192,6 +194,7 @@ function makeGatewayHarness(args: {
     createUnscoped: create,
     promptCreate,
     sessionsCreate,
+    setMCPServers,
     channelRepo,
     threadMapRepo,
   };
@@ -715,6 +718,75 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
     expect(threadMapRepo.updateLastMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService MCP resolution', () => {
+  const userDefaultMcpId = '00000000-0000-7000-8000-000000000101';
+  const channelMcpId = '00000000-0000-7000-8000-000000000102';
+
+  it.each([
+    {
+      name: 'Claude inherits the execution user default when the channel omits MCPs',
+      agenticConfig: null,
+      channelMcpIds: undefined,
+      expectedMcpIds: [userDefaultMcpId],
+    },
+    {
+      name: 'Codex preset selection does not suppress the execution user default',
+      agenticConfig: { agent: 'codex', presetId: 'preset-codex' },
+      channelMcpIds: undefined,
+      expectedMcpIds: [userDefaultMcpId],
+    },
+    {
+      name: 'an explicit empty channel selection disables inherited MCPs',
+      agenticConfig: null,
+      channelMcpIds: [],
+      expectedMcpIds: [],
+    },
+    {
+      name: 'explicit channel MCPs override the execution user default',
+      agenticConfig: { agent: 'codex' },
+      channelMcpIds: [channelMcpId],
+      expectedMcpIds: [channelMcpId],
+    },
+  ])('$name', async ({ agenticConfig, channelMcpIds, expectedMcpIds }) => {
+    const channel = {
+      ...slackChannel,
+      agentic_config: agenticConfig,
+      mcp_server_ids: channelMcpIds,
+    } as unknown as GatewayChannel;
+    const executionUser = {
+      ...user,
+      default_mcp_server_ids: [userDefaultMcpId],
+    } as unknown as User;
+    const { service, setMCPServers } = makeGatewayHarness({
+      channel,
+      user: executionUser,
+      existingMapping: null,
+      connector: {
+        fetchThreadHistory: vi.fn(async () => ({ has_more: false, messages: [] })),
+        sendMessage: vi.fn(async () => '100.000001'),
+      },
+    });
+
+    await service.create({
+      channel_key: channel.channel_key,
+      thread_id: 'C123-100.000000',
+      text: 'start',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+      },
+    });
+
+    if (expectedMcpIds.length === 0) {
+      expect(setMCPServers).not.toHaveBeenCalled();
+    } else {
+      expect(setMCPServers).toHaveBeenCalledWith('sess-new', expectedMcpIds, 'gateway');
+    }
   });
 });
 
@@ -1345,7 +1417,6 @@ describe('GatewayService inbound create without ambient tenant DB scope', () => 
         agentic_tool_preset_id: null,
         permission_config: { mode: 'default' },
         model_config: null,
-        mcp_server_ids: [],
       };
     });
     const fetchThreadHistory = vi.fn(async () => ({ has_more: false, messages: [] }));
