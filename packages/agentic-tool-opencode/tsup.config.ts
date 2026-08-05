@@ -10,7 +10,7 @@ export default defineConfig({
   dts: false,
   splitting: false,
   sourcemap: true,
-  clean: true,
+  clean: process.env.TSUP_CLEAN !== 'false',
   external: [
     '@agor/core',
     /^@agor\/core\//,
