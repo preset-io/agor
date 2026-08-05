@@ -620,12 +620,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
       if (task.computed_context_window !== undefined && task.normalized_sdk_response) {
-        const { contextWindowLimit } = task.normalized_sdk_response;
+        const { contextWindowLimit, contextUsageSnapshot } = task.normalized_sdk_response;
 
         if (task.computed_context_window > 0) {
           return {
             used: task.computed_context_window,
-            limit: contextWindowLimit || 0,
+            limit: contextUsageSnapshot?.maxTokens ?? contextWindowLimit ?? 0,
             // Forward the full normalized response so ContextWindowPill can
             // honor `contextUsageSnapshot.percentage` instead of recomputing
             // from raw used/limit (which is wrong for Codex's baseline-adjusted

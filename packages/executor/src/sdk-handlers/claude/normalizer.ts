@@ -9,23 +9,24 @@
  * - Extract primary model and costs
  */
 
+import { getClaudeContextWindowLimit } from '@agor/core/models';
 import type { SDKResultMessage } from '@agor/core/sdk';
 import type { INormalizer, NormalizedSdkData } from '../base/normalizer.interface.js';
 
 export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
-  normalize(msg: SDKResultMessage): NormalizedSdkData {
+  normalize(msg: SDKResultMessage, options?: { modelHint?: string }): NormalizedSdkData {
     // Extract basic metadata
     const durationMs = msg.duration_ms;
     const costUsd = msg.total_cost_usd;
 
     // If modelUsage exists, aggregate across all models
     if (msg.modelUsage && typeof msg.modelUsage === 'object') {
-      return this.normalizeMultiModel(msg.modelUsage, durationMs, costUsd);
+      return this.normalizeMultiModel(msg.modelUsage, durationMs, costUsd, options?.modelHint);
     }
 
     // Fallback to top-level usage (older SDK versions or single-model)
     if (msg.usage) {
-      return this.normalizeSingleModel(msg.usage, durationMs, costUsd);
+      return this.normalizeSingleModel(msg.usage, durationMs, costUsd, options?.modelHint);
     }
 
     // No usage data available - return zeros
@@ -50,7 +51,8 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
   private normalizeMultiModel(
     modelUsage: Record<string, import('../../types/sdk-response').ClaudeModelUsage>,
     durationMs?: number,
-    costUsd?: number
+    costUsd?: number,
+    modelHint?: string
   ): NormalizedSdkData {
     let totalInput = 0;
     let totalOutput = 0;
@@ -87,7 +89,7 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens: totalCacheRead,
         cacheCreationTokens: totalCacheCreation,
       },
-      contextWindowLimit: maxLimit,
+      contextWindowLimit: maxLimit || getClaudeContextWindowLimit(modelHint) || 0,
       primaryModel,
       durationMs,
       costUsd,
@@ -100,7 +102,8 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
   private normalizeSingleModel(
     usage: import('../../types/sdk-response').ClaudeTopLevelUsage,
     durationMs?: number,
-    costUsd?: number
+    costUsd?: number,
+    modelHint?: string
   ): NormalizedSdkData {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
@@ -115,9 +118,10 @@ export class ClaudeCodeNormalizer implements INormalizer<SDKResultMessage> {
         cacheReadTokens,
         cacheCreationTokens,
       },
-      // Fallback for older SDK versions without per-model contextWindow.
-      // Modern SDK reports actual context window (200K or 1M) in modelUsage.
-      contextWindowLimit: 200000,
+      // Older result shapes omit capacity. Fall back to the persisted Claude
+      // Code selection; unknown/custom models stay unknown instead of being
+      // mislabeled as 200k.
+      contextWindowLimit: getClaudeContextWindowLimit(modelHint) || 0,
       durationMs,
       costUsd,
     };

@@ -49,7 +49,8 @@ export function normalizeRawSdkResponse(
     switch (agenticTool) {
       case 'claude-code':
         return claudeNormalizer.normalize(
-          rawSdkResponse as Parameters<typeof claudeNormalizer.normalize>[0]
+          rawSdkResponse as Parameters<typeof claudeNormalizer.normalize>[0],
+          options
         );
 
       case 'codex':
