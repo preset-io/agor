@@ -62,5 +62,9 @@ describe('Claude context-window accounting fallback', () => {
   it('does not guess for unknown exact models or unsupported suffixes', () => {
     expect(getClaudeContextWindowLimit('custom-claude-model')).toBeUndefined();
     expect(getClaudeContextWindowLimit('claude-sonnet-4-5[1m]')).toBeUndefined();
+    expect(getClaudeContextWindowLimit('claude-opus-5-private')).toBeUndefined();
+    expect(getClaudeContextWindowLimit('claude-opus-4-8-preview[1m]')).toBeUndefined();
+    expect(supportsClaudeExtendedContext('claude-opus-5-private')).toBe(false);
+    expect(hasNativeMillionContext('claude-sonnet-5-private')).toBe(false);
   });
 });

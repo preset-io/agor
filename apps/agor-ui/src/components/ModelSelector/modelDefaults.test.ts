@@ -121,4 +121,10 @@ describe('getModelDisplayName', () => {
   it('falls back to the raw id for unknown models', () => {
     expect(getModelDisplayName('claude-code', 'some-unknown-model')).toBe('some-unknown-model');
   });
+
+  it('preserves unsupported legacy context suffixes instead of hiding the selection', () => {
+    expect(getModelDisplayName('claude-code', 'claude-sonnet-4-5[1m]')).toBe(
+      'claude-sonnet-4-5[1m]'
+    );
+  });
 });

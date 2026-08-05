@@ -17,24 +17,18 @@ export interface ClaudeModel {
 export const CLAUDE_STANDARD_CONTEXT_WINDOW = 200_000;
 export const CLAUDE_EXTENDED_CONTEXT_WINDOW = 1_000_000;
 
-/** Models for which Claude Code exposes both its standard and `[1m]` choices. */
-const EXTENDED_CONTEXT_MODEL_PREFIXES = [
-  'claude-opus-5',
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-opus-4-6',
-  'claude-sonnet-4-6',
-] as const;
-
-/** Models whose only supported context choice is the native 1M window. */
-const NATIVE_MILLION_ONLY_PREFIXES = ['claude-fable-5', 'claude-sonnet-5'] as const;
-
 export function supportsClaudeExtendedContext(modelId: string): boolean {
-  return EXTENDED_CONTEXT_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  const normalizedId = modelId.toLowerCase().replace(/\[1m\]$/, '');
+  return AVAILABLE_CLAUDE_MODEL_ALIASES.some((model) => model.id === `${normalizedId}[1m]`);
 }
 
 export function hasNativeMillionContext(modelId: string): boolean {
-  return NATIVE_MILLION_ONLY_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  const normalizedId = modelId.toLowerCase();
+  const selected = AVAILABLE_CLAUDE_MODEL_ALIASES.find((model) => model.id === normalizedId);
+  return (
+    selected?.contextWindow === CLAUDE_EXTENDED_CONTEXT_WINDOW &&
+    !AVAILABLE_CLAUDE_MODEL_ALIASES.some((model) => model.id === `${normalizedId}[1m]`)
+  );
 }
 
 /**
@@ -43,15 +37,8 @@ export function hasNativeMillionContext(modelId: string): boolean {
  */
 export function getClaudeContextWindowLimit(modelId?: string): number | undefined {
   if (!modelId) return undefined;
-  const base = modelId.replace(/\[1m\]$/i, '');
-  if (modelId.toLowerCase().endsWith('[1m]')) {
-    return supportsClaudeExtendedContext(base) || hasNativeMillionContext(base)
-      ? CLAUDE_EXTENDED_CONTEXT_WINDOW
-      : undefined;
-  }
-  if (hasNativeMillionContext(base)) return CLAUDE_EXTENDED_CONTEXT_WINDOW;
-  if (supportsClaudeExtendedContext(base)) return CLAUDE_STANDARD_CONTEXT_WINDOW;
-  const known = AVAILABLE_CLAUDE_MODEL_ALIASES.find((entry) => entry.id === base);
+  const normalizedId = modelId.toLowerCase();
+  const known = AVAILABLE_CLAUDE_MODEL_ALIASES.find((entry) => entry.id === normalizedId);
   return known?.contextWindow;
 }
 
