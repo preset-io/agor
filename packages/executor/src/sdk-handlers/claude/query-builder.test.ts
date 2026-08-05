@@ -24,7 +24,6 @@ vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
 }));
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
-  resolveUserEnvironment: vi.fn().mockReturnValue({ env: {} }),
 }));
 vi.mock('../base/mcp-scoping.js', () => ({
   getMcpServersForSession: vi.fn().mockResolvedValue([]),
@@ -126,6 +125,7 @@ describe('setupQuery - Local Settings Support', () => {
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
       const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      expect(callArgs.options).not.toHaveProperty('debug');
       expect(callArgs.options.resume).toBe('sdk-session-secret');
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();

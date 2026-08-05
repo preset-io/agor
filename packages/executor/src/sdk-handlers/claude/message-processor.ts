@@ -576,7 +576,6 @@ export class SDKMessageProcessor {
   private handleSystem(msg: SDKSystemMessage | SDKCompactBoundaryMessage): ProcessedEvent[] {
     if ('subtype' in msg && msg.subtype === 'compact_boundary') {
       console.log(`📦 SDK compact_boundary (compaction finished)`);
-      console.log(`📊 Full compact_boundary message:`, JSON.stringify(msg, null, 2));
 
       // Extract metadata from compact_boundary message
       const metadata = 'compact_metadata' in msg ? msg.compact_metadata : undefined;
@@ -643,9 +642,6 @@ export class SDKMessageProcessor {
       if (initMsg.slash_commands || initMsg.skills) {
         this.state.slashCommands = initMsg.slash_commands || [];
         this.state.skills = initMsg.skills || [];
-        console.log(
-          `📋 Available commands: ${this.state.slashCommands.length} slash commands, ${this.state.skills.length} skills`
-        );
 
         // Emit event so claude-tool can persist to session for UI autocomplete
         events.push({
@@ -699,12 +695,7 @@ export class SDKMessageProcessor {
     const overageStatus = info.overageStatus as string | undefined;
     const isUsingOverage = info.isUsingOverage as boolean | undefined;
 
-    // Always log rate limit events
-    if (status === 'allowed') {
-      console.log(
-        `⏳ Rate limit event: allowed (type: ${rateLimitType || 'unknown'}, overage: ${overageStatus || 'unknown'})`
-      );
-    } else {
+    if (status !== 'allowed') {
       console.warn(
         `🚫 Rate limit event: ${status} (type: ${rateLimitType || 'unknown'}, resets: ${resetsAt ? new Date(resetsAt * 1000).toISOString() : 'unknown'})`
       );

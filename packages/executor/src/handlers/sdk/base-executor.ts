@@ -557,9 +557,6 @@ export async function executeToolTask(params: {
       });
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
-        console.log(
-          `[${toolName}] Normalized SDK response: ${normalized.tokenUsage.totalTokens} tokens, $${normalized.costUsd?.toFixed(4) ?? 'N/A'}`
-        );
       }
     }
 
@@ -567,7 +564,6 @@ export async function executeToolTask(params: {
     const resolvedTaskModel = result.model || patchData.normalized_sdk_response?.primaryModel;
     if (resolvedTaskModel) {
       patchData.model = resolvedTaskModel;
-      console.log(`[${toolName}] Task model set to: ${resolvedTaskModel}`);
     }
 
     // Prefer the authoritative context-window snapshot when the tool surfaced
@@ -580,9 +576,6 @@ export async function executeToolTask(params: {
     // be near zero.
     if (result.rawContextUsage && result.rawContextUsage.maxTokens > 0) {
       patchData.computed_context_window = result.rawContextUsage.totalTokens;
-      console.log(
-        `[${toolName}] Authoritative context snapshot: ${result.rawContextUsage.totalTokens}/${result.rawContextUsage.maxTokens} tokens (${result.rawContextUsage.percentage}%)`
-      );
 
       // Override contextWindowLimit in the normalized response with the
       // authoritative maxTokens so the UI computes percentage against the
@@ -608,7 +601,6 @@ export async function executeToolTask(params: {
           );
           if (contextWindow > 0) {
             patchData.computed_context_window = contextWindow;
-            console.log(`[${toolName}] Computed context window: ${contextWindow} tokens`);
           }
         } catch (error) {
           console.error(`[${toolName}] Failed to compute context window:`, error);

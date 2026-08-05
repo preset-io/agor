@@ -19,7 +19,7 @@ const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
 type Options = Claude.Options;
 
-import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
+import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -244,15 +244,9 @@ export async function setupQuery(
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
     includePartialMessages: true,
-    // Enable debug logging to see what's happening
-    debug: true,
     // Capture stderr to get actual error messages (not just "exit code 1")
     stderr: (data: string) => {
       stderrBuffer += data;
-      // Log in real-time for debugging
-      if (data.trim()) {
-        console.error(`[Claude stderr] ${data.trim()}`);
-      }
     },
   };
 
@@ -340,18 +334,6 @@ export async function setupQuery(
   // If deps.apiKey is provided, use it directly (no need to check process.env)
   if (deps.apiKey) {
     queryOptions.apiKey = deps.apiKey;
-  }
-
-  // Resolve user environment variables. In executor mode, environment is
-  // inherited from the executor process.
-  const userEnv = resolveUserEnvironment();
-  if (contextUserId) {
-    try {
-      Object.keys(userEnv.env);
-    } catch (err) {
-      console.error(`⚠️  Failed to resolve user environment:`, err);
-      // Continue without user env vars - non-fatal error
-    }
   }
 
   // Handle resume, fork, and spawn cases
@@ -622,8 +604,8 @@ export async function setupQuery(
   try {
     result = query({
       prompt: asUserMessageIterable(prompt),
-      // queryOptions uses Record<string,unknown> to accommodate undocumented fields (debug, apiKey)
-      // that are valid at runtime but not in the public Options type
+      // queryOptions uses Record<string,unknown> to accommodate apiKey, which is valid at
+      // runtime but not in the public Options type.
       options: queryOptions as unknown as Options,
     });
   } catch (syncError) {

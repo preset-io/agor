@@ -74,6 +74,60 @@ describe('SDKMessageProcessor result logging', () => {
 });
 
 describe('SDKMessageProcessor system event suppression', () => {
+  it('keeps command discovery silent while preserving the init event', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'init',
+          model: 'claude-sonnet-4-6',
+          slash_commands: ['/compact'],
+          skills: ['example-skill'],
+        })
+      );
+
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        {
+          type: 'slash_commands_discovered',
+          slashCommands: ['/compact'],
+          skills: ['example-skill'],
+          agentSessionId: undefined,
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('logs only the bounded compaction lifecycle event while preserving metadata', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: 123_456 },
+        })
+      );
+
+      expect(logSpy.mock.calls).toEqual([['📦 SDK compact_boundary (compaction finished)']]);
+      expect(events).toEqual([
+        {
+          type: 'system_complete',
+          systemType: 'compaction',
+          agentSessionId: undefined,
+          metadata: { trigger: 'auto', pre_tokens: 123_456 },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('suppresses status=requesting (PR #1116)', async () => {
     const processor = createProcessor();
     const events = await processor.process(
@@ -167,10 +221,17 @@ describe('SDKMessageProcessor system event suppression', () => {
 describe('SDKMessageProcessor rate_limit_event handling', () => {
   it('suppresses allowed status with no overage concern', async () => {
     const processor = createProcessor();
-    const events = await processor.process(
-      rateLimitMsg({ status: 'allowed', rateLimitType: 'five_hour' })
-    );
-    expect(events.filter((e) => e.type === 'rate_limit')).toHaveLength(0);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        rateLimitMsg({ status: 'allowed', rateLimitType: 'five_hour' })
+      );
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(events.filter((e) => e.type === 'rate_limit')).toHaveLength(0);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('suppresses allowed status even when overageStatus is rejected', async () => {
