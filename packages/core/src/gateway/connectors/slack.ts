@@ -1875,6 +1875,10 @@ export class SlackConnector implements GatewayConnector {
    * - Channel whitelist (if allowed_channel_ids is set)
    */
   async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
+    if (this.socketMode || this.releaseSlackSdkLogger) {
+      throw new Error('Slack Socket Mode listener is already active');
+    }
+
     const appToken = this.config.app_token;
     if (!appToken) {
       console.error('[slack] ERROR: app_token is missing from config');

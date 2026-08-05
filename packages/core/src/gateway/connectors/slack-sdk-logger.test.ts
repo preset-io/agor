@@ -23,6 +23,33 @@ describe('Slack SDK logger', () => {
     return handle.logger;
   }
 
+  it('retires every logger method on idempotent release', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const handle = acquireSlackSdkLogger();
+    releases.push(handle.release);
+    handle.logger.setLevel(LogLevel.DEBUG);
+
+    handle.release();
+    handle.release();
+    handle.logger.setName('retired-name');
+    handle.logger.setLevel(LogLevel.ERROR);
+    handle.logger.debug('retired-debug');
+    handle.logger.info('retired-info');
+    handle.logger.warn('retired-warning');
+    handle.logger.warn(HEARTBEAT_WARNING);
+    handle.logger.error('retired-error');
+
+    expect(handle.logger.getLevel()).toBe(LogLevel.DEBUG);
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('emits one safe summary for a synchronized heartbeat-timeout burst', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const firstClient = acquireLogger();

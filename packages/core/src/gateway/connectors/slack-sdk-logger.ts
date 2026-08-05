@@ -83,6 +83,7 @@ const sharedHeartbeatWarnings = new SlackHeartbeatWarningAggregator();
 
 class SlackSdkLogger implements Logger {
   private level = LogLevel.INFO;
+  private retired = false;
 
   constructor(private readonly heartbeatWarnings: SlackHeartbeatWarningAggregator) {}
 
@@ -95,6 +96,7 @@ class SlackSdkLogger implements Logger {
   }
 
   warn(...messages: unknown[]): void {
+    if (this.retired) return;
     if (!this.shouldLog(LogLevel.WARN)) return;
     if (typeof messages[0] === 'string' && CLIENT_PONG_TIMEOUT_RE.test(messages[0])) {
       this.heartbeatWarnings.record(this);
@@ -108,6 +110,7 @@ class SlackSdkLogger implements Logger {
   }
 
   setLevel(level: LogLevel): void {
+    if (this.retired) return;
     this.level = level;
   }
 
@@ -117,11 +120,16 @@ class SlackSdkLogger implements Logger {
 
   setName(_name: string): void {}
 
+  retire(): void {
+    this.retired = true;
+  }
+
   private shouldLog(level: LogLevel): boolean {
     return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[this.level];
   }
 
   private write(level: LogLevel): void {
+    if (this.retired) return;
     if (!this.shouldLog(level)) return;
     const category = SAFE_CATEGORY_BY_LEVEL[level];
     const output = `[slack.socket_mode] ${category} category=${category}`;
@@ -142,6 +150,7 @@ export function acquireSlackSdkLogger(): { logger: Logger; release: () => void }
     release: () => {
       if (!active) return;
       active = false;
+      logger.retire();
       sharedHeartbeatWarnings.release();
     },
   };
