@@ -51,7 +51,24 @@ export type ScheduleParams = QueryParams<{
 }> &
   AuthenticatedParams & { schedule?: Schedule };
 
-export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData, ScheduleParams> {
+type PersistedScheduleCreateData = Omit<ScheduleCreateData, 'agentic_tool_config'> & {
+  agentic_tool_config?: PersistedScheduleAgenticToolConfig;
+  created_by?: Schedule['created_by'];
+  next_run_at?: Schedule['next_run_at'];
+};
+
+type PersistedSchedulePatchData = Omit<SchedulePatchData, 'agentic_tool_config'> & {
+  agentic_tool_config?: PersistedScheduleAgenticToolConfig;
+  next_run_at?: Schedule['next_run_at'];
+};
+
+type PersistedScheduleWriteData = PersistedScheduleCreateData | PersistedSchedulePatchData;
+
+export class SchedulesService extends DrizzleService<
+  Schedule,
+  PersistedScheduleWriteData,
+  ScheduleParams
+> {
   private db: TenantScopeAwareDatabase;
 
   constructor(db: TenantScopeAwareDatabase) {
@@ -115,7 +132,7 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
       : undefined;
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
-    const trustedData = {
+    const trustedData: PersistedScheduleCreateData = {
       ...data,
       ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
       ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
@@ -146,7 +163,7 @@ export class SchedulesService extends DrizzleService<Schedule, SchedulePatchData
         current.created_by as UserID
       );
     }
-    const trustedData = {
+    const trustedData: PersistedSchedulePatchData = {
       ...data,
       ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
       ...(prepared && typeof rawData.next_run_at === 'number'

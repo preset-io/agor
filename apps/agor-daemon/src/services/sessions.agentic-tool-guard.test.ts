@@ -378,6 +378,16 @@ describe('SessionsService direct OpenCode model selection', () => {
       await expect(service.create(base, { _agenticConfigResolved: true })).rejects.toThrow(
         /provider and model/i
       );
+      await expect(
+        service.create(
+          {
+            ...base,
+            agentic_tool_preset_id: USER_DEFAULT_AGENTIC_CONFIGURATION,
+            model_config: modelConfig('openai'),
+          },
+          { _agenticConfigResolved: true }
+        )
+      ).rejects.toThrow(/preset.*resolved/i);
 
       const parentId = await createSession(db, branchId, {
         agentic_tool: 'opencode',

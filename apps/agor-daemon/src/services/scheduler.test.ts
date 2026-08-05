@@ -357,6 +357,73 @@ describe('materializeScheduleAgenticToolConfig', () => {
     expect(prompt).toHaveBeenCalledOnce();
   });
 
+  dbTest(
+    'passes preset provenance and canonical config when My default selects a preset',
+    async ({ db }) => {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-preset-default-${Date.now()}-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        {
+          agentic_tool: 'codex',
+          configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
+        }
+      );
+      const preset = await new AgenticToolPresetRepository(db).create(
+        {
+          tool: 'codex',
+          name: 'Selected user default',
+          configuration: {
+            permissionMode: 'bypassPermissions',
+            codexSandboxMode: 'danger-full-access',
+            codexApprovalPolicy: 'never',
+            codexNetworkAccess: true,
+            modelConfig: { mode: 'exact', model: 'gpt-5.4' },
+          },
+        },
+        creator.user_id as UserID
+      );
+      await new UsersRepository(db).update(creator.user_id, {
+        default_agentic_selection: {
+          codex: { source: 'preset', preset_id: preset.preset_id },
+        },
+      });
+      const { app, createSession, prompt } = createSchedulerApp(db);
+
+      await new SchedulerService(db, app).executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: creator.user_id,
+      });
+
+      expect(createSession).toHaveBeenCalledOnce();
+      const created = createSession.mock.calls[0][0];
+      expect({
+        agentic_tool_preset_id: created.agentic_tool_preset_id,
+        permission_config: created.permission_config,
+        model_config: created.model_config,
+      }).toEqual({
+        agentic_tool_preset_id: preset.preset_id,
+        permission_config: {
+          mode: 'allow-all',
+          codex: {
+            sandboxMode: 'danger-full-access',
+            approvalPolicy: 'never',
+            networkAccess: true,
+          },
+        },
+        model_config: {
+          mode: 'exact',
+          model: 'gpt-5.4',
+          updated_at: expect.any(String),
+        },
+      });
+      expect(createSession.mock.calls[0][1]).toEqual({ _agenticConfigResolved: true });
+      expect(prompt).toHaveBeenCalledOnce();
+    }
+  );
+
   dbTest('uses system fallbacks after a user default selects workspace default', async ({ db }) => {
     const { creator, schedule } = await seedRunnableSchedule(
       db,

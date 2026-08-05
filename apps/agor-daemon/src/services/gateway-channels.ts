@@ -35,9 +35,22 @@ import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { getUploadLimits } from '../utils/upload.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
+type PersistedGatewayChannelCreateData = Omit<GatewayChannelCreateData, 'agentic_config'> & {
+  agentic_config?: PersistedGatewayAgenticConfig | null;
+  created_by?: GatewayChannel['created_by'];
+};
+
+type PersistedGatewayChannelPatchData = Omit<GatewayChannelPatchData, 'agentic_config'> & {
+  agentic_config?: PersistedGatewayAgenticConfig | null;
+};
+
+type PersistedGatewayChannelWriteData =
+  | PersistedGatewayChannelCreateData
+  | PersistedGatewayChannelPatchData;
+
 export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
-  GatewayChannelPatchData
+  PersistedGatewayChannelWriteData
 > {
   private db: TenantScopeAwareDatabase;
 
@@ -86,11 +99,9 @@ export class GatewayChannelsService extends DrizzleService<
       );
     }
 
-    const source = (
-      config?.presetId
-        ? { reference: config.presetId }
-        : { configuration: gatewayAgenticConfigToInlineConfiguration(config) }
-    ) as AgenticToolConfigurationSource;
+    const source: AgenticToolConfigurationSource = config?.presetId
+      ? { reference: config.presetId }
+      : { configuration: gatewayAgenticConfigToInlineConfiguration(config) };
     try {
       const materialized = await materializeAgenticToolConfiguration(this.db, {
         tool,
@@ -129,14 +140,12 @@ export class GatewayChannelsService extends DrizzleService<
     const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
-    return super.create(
-      {
-        ...data,
-        agentic_config: materializedAgenticConfig,
-        ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
-      },
-      params
-    );
+    const persistedData: PersistedGatewayChannelCreateData = {
+      ...data,
+      agentic_config: materializedAgenticConfig,
+      ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+    };
+    return super.create(persistedData, params);
   }
 
   async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
@@ -144,6 +153,7 @@ export class GatewayChannelsService extends DrizzleService<
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
+    let persistedData: PersistedGatewayChannelPatchData = data;
     if (
       data.agentic_config !== undefined ||
       data.agor_user_id !== undefined ||
@@ -161,9 +171,9 @@ export class GatewayChannelsService extends DrizzleService<
         },
         data.agentic_config === undefined
       );
-      data = { ...data, agentic_config: materializedAgenticConfig };
+      persistedData = { ...data, agentic_config: materializedAgenticConfig };
     }
-    return super.patch(id, data, params);
+    return super.patch(id, persistedData, params);
   }
 
   async uploadFileStreamFromExecutor(

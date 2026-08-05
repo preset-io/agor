@@ -172,13 +172,24 @@ export async function materializeScheduleAgenticToolConfig(
   db: TenantScopeAwareDatabase,
   schedule: Pick<Schedule, 'agentic_tool_config' | 'created_by'>
 ): Promise<PersistedScheduleAgenticToolConfig> {
+  return (await resolveScheduleAgenticToolConfig(db, schedule)).config;
+}
+
+async function resolveScheduleAgenticToolConfig(
+  db: TenantScopeAwareDatabase,
+  schedule: Pick<Schedule, 'agentic_tool_config' | 'created_by'>
+) {
   const cfg = normalizePersistedScheduleAgenticToolConfig(schedule.agentic_tool_config);
   const materialized = await materializeAgenticToolConfiguration(db, {
     tool: cfg.agentic_tool,
     source: scheduleAgenticToolConfigToSource(cfg),
     executionOwnerId: schedule.created_by as import('@agor/core/types').UserID,
   });
-  return materializedAgenticToolConfigurationToScheduleConfig(cfg, materialized);
+  return {
+    activeTool: cfg.agentic_tool,
+    config: materializedAgenticToolConfigurationToScheduleConfig(cfg, materialized),
+    sessionConfig: materialized,
+  };
 }
 
 /**
@@ -681,15 +692,16 @@ export class SchedulerService {
       // 5. Resolve unix_username (schedule's creator is the execution identity).
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
-      const cfg = await this.withTenantDatabase(() =>
-        materializeScheduleAgenticToolConfig(this.db, schedule)
+      const resolvedConfig = await this.withTenantDatabase(() =>
+        resolveScheduleAgenticToolConfig(this.db, schedule)
       );
+      const cfg = resolvedConfig.config;
 
       // 6. Create session with schedule metadata + FK back to schedule.
       const session: Partial<Session> = {
         branch_id: branch.branch_id,
-        agentic_tool: cfg.agentic_tool,
-        agentic_tool_preset_id: cfg.preset_id,
+        agentic_tool: resolvedConfig.activeTool,
+        agentic_tool_preset_id: resolvedConfig.sessionConfig.agentic_tool_preset_id ?? undefined,
         status: SessionStatus.IDLE,
         created_by: schedule.created_by,
         unix_username: unixUsername,
@@ -703,30 +715,11 @@ export class SchedulerService {
           ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
           : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
         contextFiles: cfg.context_files ?? [],
-        permission_config: {
-          mode: cfg.permission_mode ?? 'default',
-          ...(cfg.codex_sandbox_mode !== undefined ||
-          cfg.codex_approval_policy !== undefined ||
-          cfg.codex_network_access !== undefined
-            ? {
-                codex: {
-                  ...(cfg.codex_sandbox_mode !== undefined
-                    ? { sandboxMode: cfg.codex_sandbox_mode }
-                    : {}),
-                  ...(cfg.codex_approval_policy !== undefined
-                    ? { approvalPolicy: cfg.codex_approval_policy }
-                    : {}),
-                  ...(cfg.codex_network_access !== undefined
-                    ? { networkAccess: cfg.codex_network_access }
-                    : {}),
-                },
-              }
-            : {}),
-        },
+        permission_config: resolvedConfig.sessionConfig.permission_config,
         // DefaultModelConfig → Session.model_config. If the schedule
         // only sets ancillary fields (e.g. Claude effort), resolve them
         // against the same model defaults used by fresh sessions.
-        model_config: cfg.model_config,
+        model_config: resolvedConfig.sessionConfig.model_config,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,

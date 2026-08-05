@@ -39,6 +39,7 @@ import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
   InvalidModelConfigError,
+  isResolvedModelConfig,
   lintModelToolMatch,
 } from '@agor/core/models';
 import type {
@@ -56,7 +57,7 @@ import type {
   TaskID,
   UUID,
 } from '@agor/core/types';
-import { ROLES, SessionStatus } from '@agor/core/types';
+import { isAgenticToolDefaultConfigurationReference, ROLES, SessionStatus } from '@agor/core/types';
 import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
@@ -85,7 +86,7 @@ const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
 const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
 function sessionConfigurationSource(
-  data: Pick<Session, 'model_config' | 'permission_config'>
+  data: Pick<CreateSessionInput, 'model_config' | 'permission_config'>
 ): import('@agor/core/types').AgenticToolConfigurationSource {
   return {
     configuration: {
@@ -96,6 +97,25 @@ function sessionConfigurationSource(
       codexNetworkAccess: data.permission_config?.codex?.networkAccess,
     },
   };
+}
+
+function resolvedSessionPresetId(
+  reference: CreateSessionInput['agentic_tool_preset_id']
+): Session['agentic_tool_preset_id'] {
+  if (reference && isAgenticToolDefaultConfigurationReference(reference)) {
+    throw new BadRequest('agentic_tool_preset_id must be resolved before session creation');
+  }
+  return reference;
+}
+
+function resolvedSessionModelConfig(
+  modelConfig: CreateSessionInput['model_config']
+): Session['model_config'] {
+  if (modelConfig == null) return modelConfig;
+  if (!isResolvedModelConfig(modelConfig)) {
+    throw new BadRequest('model_config must be resolved before session creation');
+  }
+  return modelConfig;
 }
 
 /**
@@ -324,15 +344,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       model_config: originalModelConfig,
       ...sessionData
     } = data;
-    let createData: Partial<Session> = {
-      ...sessionData,
-      agentic_tool_preset_id: configurationReference,
-      model_config: originalModelConfig,
-    };
-    if (!params?._agenticConfigResolved) {
+    let createData: Partial<Session> = { ...sessionData };
+    if (params?._agenticConfigResolved) {
+      createData = {
+        ...createData,
+        agentic_tool_preset_id: resolvedSessionPresetId(configurationReference),
+        model_config: resolvedSessionModelConfig(originalModelConfig),
+      };
+    } else {
       const source = configurationReference
         ? ({ reference: configurationReference } as const)
-        : sessionConfigurationSource(createData);
+        : sessionConfigurationSource(data);
       let materialized: MaterializedAgenticToolConfiguration;
       try {
         materialized = await materializeAgenticToolConfiguration(this.db, {
