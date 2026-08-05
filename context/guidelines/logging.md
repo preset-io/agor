@@ -1,7 +1,9 @@
 # Operational logging guidelines
 
-Operational logs should tell a safe, bounded story of what Agor did. They are an
-event stream for operators, not a transcript, payload archive, or metrics warehouse.
+**Keep the operational stream lean.** Its job is to answer, at a somewhat high level, “what was
+the system doing at the time?” An operator should be able to follow meaningful lifecycle changes
+and outcomes without searching through implementation chatter. Logs are a safe, bounded system
+narrative—not a transcript, payload archive, exhaustive trace, or metrics warehouse.
 
 ## Current surfaces and responsibilities
 
@@ -15,28 +17,33 @@ Write normal events to stdout (`console.log`/`info`/`debug`) and warnings/errors
 (`console.warn`/`error`). In foreground development, these streams appear in the terminal. The
 installed CLI's detached daemon currently combines both streams in `~/.agor/logs/daemon.log`;
 containers, systemd, and other process managers may capture and route them differently. Emit the
-stream and let the execution environment own routing and retention. Do not claim a destination the
-code does not guarantee.
-
-CLI `this.log`/`this.error` output is a user interface, not operational logging. Browser console
-output is likewise not a reliable server-side operational stream.
+stream and let the execution environment own routing and retention. CLI output is a user interface,
+and browser console output is not a reliable server-side operational stream.
 
 ## What to log
 
 - Log meaningful lifecycle or operation outcomes: process startup/shutdown, task dispatch and
   terminal state, environment start/stop, retry exhaustion, degraded fallbacks, and configuration
-  changes with operational impact. An operator should be able to reconstruct what happened.
+  changes with operational impact.
 - Log once at the layer that owns the outcome. A lower layer that cannot recover should return a
-  typed/sanitized failure; the owning layer records the final failure. Do not log and rethrow merely
-  to have every layer repeat it.
+  sanitized failure; the owning layer records it. Do not log and rethrow merely to repeat it.
 - Prefer stable operation/event names and fields. With today's console API, use a consistent prefix
-  and bounded `key=value` values; use structured objects only where the receiving logger already
-  supports them. Permitted UUID entity IDs are useful correlation fields. Avoid arbitrary,
-  high-cardinality text other than permitted IDs.
+  and bounded `key=value` values. Permitted UUID entity IDs are useful correlation fields. Avoid
+  arbitrary, high-cardinality text other than permitted IDs.
 - Do not emit per-token, per-chunk, per-heartbeat, per-row, or per-loop success logs. Omit them,
-  aggregate a useful completion summary, or use an existing sampler/rate limiter. If a genuinely
-  useful atomic event remains, put it at `debug` (or `trace` if a future logger supports it), not
-  `info`.
+  aggregate a useful completion summary, or use an existing sampler/rate limiter.
+
+### Debug logging is exceptional
+
+Do not add `debug` calls as a second copy of normal operations. `LOG_LEVEL=debug` should not make
+Agor's logs unusable. For one-off investigation, add diagnostics locally and remove them before
+merging.
+
+Permanent debug logging needs a recurring operator problem that the lifecycle stream cannot
+diagnose. Keep it narrow and bounded. An existing `AGOR_DEBUG_*` flag can be preferable to enabling
+all debug calls; do not add one without a known support workflow. Flags such as
+`DEBUG_SDK_MESSAGES` do **not** relax privacy: debug output must never dump SDK messages or other
+prohibited content. Omit diagnostics that only explain ordinary control flow.
 
 ## Safety boundary
 
@@ -47,18 +54,14 @@ environment values, raw request bodies/headers, commands, stdout/stderr from chi
 that may contain secrets. Redaction helpers are narrow, not permission to log an otherwise unsafe
 object. If safety is uncertain, omit the value and log its safe category or presence instead.
 
-UUID entity IDs may be correlation identifiers. Tenant IDs may be used on the same basis when the
-event needs tenant correlation, but must come from trusted tenant context—not request data—and are
-identifiers, never authorization. Do not expose or infer one tenant's data through another tenant's
-logs. Avoid names, slugs, paths, and counts whose presence would reveal tenant data unless the
-approved analytics/accounting path explicitly requires them.
+UUID entity IDs may be correlation identifiers. Tenant IDs may be used on the same basis, but must
+come from trusted tenant context—not request data—and never authorize access. Do not expose or infer
+one tenant's data through another tenant's logs.
 
-Errors must remain useful without dumping the source. Keep a stable error category/code,
-operation, relevant UUIDs, retryability/outcome, and a bounded message known to be sanitized. Do
-not blindly log provider/network/database exceptions, `Error` objects, stacks, commands, payloads,
-or captured stdout/stderr: their messages and properties can contain secrets or PII. Include a
-stack only at `debug`, only after reviewing its contents, and never assume development makes unsafe
-data acceptable.
+Errors must remain useful without dumping the source. Keep a stable category/code, operation,
+relevant UUIDs, retryability/outcome, and a bounded sanitized message. Do not blindly log
+provider/network/database exceptions, `Error` objects, stacks, commands, payloads, or captured
+stdout/stderr. Include a reviewed stack only at `debug`; development does not make unsafe data safe.
 
 ```ts
 // Good: stable, correlatable, bounded.
@@ -69,8 +72,8 @@ console.warn(
 // Bad: the exception may contain a URL, headers, query text, or payload.
 console.error('[tasks.dispatch] failed', error);
 
-// Good: summarize a high-frequency stream once.
-console.debug(`[executor.stream] completed task_id=${taskId} chunks=${chunkCount}`);
+// Good: summarize a meaningful completed operation once.
+console.log(`[executor.stream] completed task_id=${taskId} chunks=${chunkCount}`);
 
 // Bad: noisy and potentially content-bearing.
 console.log('[executor.stream] chunk', chunk);
@@ -97,8 +100,9 @@ analytics or telemetry.
 ## Contributor checklist
 
 - Is this event useful for diagnosis or action, and does the owning layer log it only once?
-- Is `error` an operation failure, `warn` degraded/risky but continuing, `info` a meaningful normal
-  lifecycle event shown by default, and `debug`/`trace` bounded diagnostic detail normally hidden?
+- Is `error` an operation failure, `warn` degraded/risky but continuing, and `info` a meaningful
+  lifecycle event shown by default? If this is `debug`/`trace`, what recurring support problem
+  justifies keeping it in the codebase?
 - Are every message and field safe even if an upstream error or value is hostile?
 - Is volume bounded under load, with atomic events omitted, summarized, or controlled?
 - Is this a system narrative (log), curated analysis event (analytics/telemetry), or durable usage
