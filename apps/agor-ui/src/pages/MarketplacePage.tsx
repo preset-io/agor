@@ -12,7 +12,7 @@
 import type { User } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { ArrowLeftOutlined, ShopOutlined } from '@ant-design/icons';
-import { Alert, Button, Layout, Space, Typography, theme } from 'antd';
+import { Button, Layout, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
@@ -25,6 +25,15 @@ const HEADER_HEIGHT = 56;
 
 export interface MarketplacePageProps {
   client: AgorClient | null;
+  /**
+   * The daemon socket has connected and authenticated.
+   *
+   * The client object exists from the moment the socket is being built, so
+   * this — not `client !== null` — is what says a read will be answered. The
+   * workspace shell blocks its whole render until it is true; a lightweight
+   * surface renders immediately and has to carry the distinction itself.
+   */
+  connected: boolean;
   currentUser?: User | null;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
@@ -32,6 +41,7 @@ export interface MarketplacePageProps {
 
 export const MarketplacePage: React.FC<MarketplacePageProps> = ({
   client,
+  connected,
   currentUser,
   onUserSettingsClick,
   onLogout,
@@ -89,16 +99,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
-          {client ? (
-            <CatalogTab client={client} />
-          ) : (
-            <Alert
-              type="warning"
-              showIcon
-              message="Not connected to the Agor daemon"
-              description="The catalog needs a live connection to load."
-            />
-          )}
+          <CatalogTab client={client} connected={connected} />
         </div>
       </Content>
     </Layout>

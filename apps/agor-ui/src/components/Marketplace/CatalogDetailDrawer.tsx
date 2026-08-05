@@ -26,7 +26,7 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
-import { capabilityLabel, connectBlockedReason, entryTitle } from './catalogPresentation';
+import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
 
 const { Title, Paragraph, Text, Link } = Typography;
 
@@ -97,7 +97,8 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     setBranchId(preferred);
   }, [branchOptions, defaultBranchId, branchId]);
 
-  const blockedReason = entry ? connectBlockedReason(entry) : undefined;
+  const connect = entry ? connectStatus(entry) : undefined;
+  const blockedReason = connect?.readiness === 'blocked' ? connect.detail : undefined;
   const title = entry ? entryTitle(entry) : '';
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
@@ -116,7 +117,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     <Drawer
       open={open}
       onClose={onClose}
-      width={480}
+      size={480}
       destroyOnHidden
       title={
         entry && (
@@ -180,6 +181,15 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 ))}
               </Space>
             </div>
+          )}
+
+          {connect && connect.readiness !== 'blocked' && (
+            <Alert
+              type={connect.readiness === 'ready' ? 'success' : 'info'}
+              showIcon
+              message={connect.label}
+              description={connect.detail}
+            />
           )}
 
           <Alert

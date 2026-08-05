@@ -7,11 +7,15 @@
  * deliberately not hydrated into the workspace store, which models a
  * fully-loaded tenant-scoped collection kept live by socket events. The catalog
  * has no writers a browser can observe and nothing to keep live.
+ *
+ * Reads wait for `ready`. The client object exists from the moment the socket
+ * is being built, well before it has connected and authenticated, so a surface
+ * that fetches on `client !== null` asks an anonymous socket and is refused.
  */
 
 import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
 import type { AgorClient, FindResult } from '@agor-live/client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /** The catalog service always paginates; an array is only a defensive fallback. */
 function asPage(result: FindResult<MCPCatalogEntry>): { data: MCPCatalogEntry[]; total: number } {
@@ -27,23 +31,39 @@ export interface CatalogFilterState {
   category?: MCPCatalogCategory;
   capability?: string;
   reviewedOnly: boolean;
+  connectableOnly: boolean;
   sort: MCPCatalogSort;
 }
 
 export function isFilterActive(filters: CatalogFilterState): boolean {
   return Boolean(
-    filters.search.trim() || filters.category || filters.capability || filters.reviewedOnly
+    filters.search.trim() ||
+      filters.category ||
+      filters.capability ||
+      filters.reviewedOnly ||
+      filters.connectableOnly
   );
 }
 
+/**
+ * Load state as three exclusive cases.
+ *
+ * A boolean pair let "the read failed" and "the catalog has nothing to show"
+ * reach the same branch, and an empty grid is the more plausible-looking of
+ * the two — so a broken read rendered as an honest-looking answer. `empty` is
+ * now only reachable from a read that actually returned.
+ */
+export type CatalogStatus = 'loading' | 'ready' | 'error';
+
 export interface CatalogSearchResult {
   entries: MCPCatalogEntry[];
-  /** Rows matching the active filters. */
+  status: CatalogStatus;
+  /** Rows matching the active filters. Meaningful only when `ready`. */
   matchCount: number;
   /** Rows in the catalog with no filters applied, for "N of M". */
   catalogSize: number | null;
-  loading: boolean;
   error: string | null;
+  retry: () => void;
 }
 
 function buildQuery(filters: CatalogFilterState, page: number): Record<string, unknown> {
@@ -53,6 +73,7 @@ function buildQuery(filters: CatalogFilterState, page: number): Record<string, u
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.capability ? { capability: filters.capability } : {}),
     ...(filters.reviewedOnly ? { curated: true } : {}),
+    ...(filters.connectableOnly ? { probed_auth_type: 'none' } : {}),
     sort: filters.sort,
     $limit: CATALOG_PAGE_SIZE,
     $skip: (page - 1) * CATALOG_PAGE_SIZE,
@@ -60,28 +81,41 @@ function buildQuery(filters: CatalogFilterState, page: number): Record<string, u
 }
 
 export function useCatalogSearch(
-  client: AgorClient,
+  client: AgorClient | null,
+  ready: boolean,
   filters: CatalogFilterState,
   page: number
 ): CatalogSearchResult {
   const [entries, setEntries] = useState<MCPCatalogEntry[]>([]);
+  const [status, setStatus] = useState<CatalogStatus>('loading');
   const [matchCount, setMatchCount] = useState(0);
   const [catalogSize, setCatalogSize] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
 
   // Responses can land out of order — a cheap `$skip` page overtaking a slow
   // search. Only the newest request may write state.
   const requestSeq = useRef(0);
 
-  const { search, category, capability, reviewedOnly, sort } = filters;
+  const { search, category, capability, reviewedOnly, connectableOnly, sort } = filters;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {
+    if (!client || !ready) {
+      // Not a result, so not an empty one. Hold the loading state until the
+      // socket can actually answer.
+      setStatus('loading');
+      return;
+    }
+
     const seq = ++requestSeq.current;
     let cancelled = false;
-    setLoading(true);
+    setStatus('loading');
 
-    const query = buildQuery({ search, category, capability, reviewedOnly, sort }, page);
+    const query = buildQuery(
+      { search, category, capability, reviewedOnly, connectableOnly, sort },
+      page
+    );
     client
       .service('mcp-catalog')
       .find({ query })
@@ -91,33 +125,44 @@ export function useCatalogSearch(
         setEntries(matched.data);
         setMatchCount(matched.total);
         setError(null);
+        setStatus('ready');
       })
       .catch((err: unknown) => {
         if (cancelled || seq !== requestSeq.current) return;
         setEntries([]);
         setMatchCount(0);
         setError(err instanceof Error ? err.message : 'Could not load the catalog');
-      })
-      .finally(() => {
-        if (cancelled || seq !== requestSeq.current) return;
-        setLoading(false);
+        setStatus('error');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [client, search, category, capability, reviewedOnly, sort, page]);
+  }, [
+    client,
+    ready,
+    search,
+    category,
+    capability,
+    reviewedOnly,
+    connectableOnly,
+    sort,
+    page,
+    retryToken,
+  ]);
 
   // The unfiltered size is the M in "N of M". It changes only when ingestion
-  // runs, so it is read once rather than alongside every filtered page.
+  // runs, so it is read once rather than alongside every filtered page. A
+  // failure here only costs the count, never the grid.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {
+    if (!client || !ready) return;
     let cancelled = false;
     client
       .service('mcp-catalog')
       .find({ query: { $limit: 1 } })
       .then((result) => {
-        if (cancelled) return;
-        setCatalogSize(asPage(result).total);
+        if (!cancelled) setCatalogSize(asPage(result).total);
       })
       .catch(() => {
         if (!cancelled) setCatalogSize(null);
@@ -125,7 +170,9 @@ export function useCatalogSearch(
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, ready, retryToken]);
 
-  return { entries, matchCount, catalogSize, loading, error };
+  const retry = useCallback(() => setRetryToken((token) => token + 1), []);
+
+  return { entries, status, matchCount, catalogSize, error, retry };
 }
