@@ -6,8 +6,22 @@ import type {
   TenantAgenticToolName,
   TenantAgenticToolSettings,
 } from '@agor-live/client';
-import { Alert, Select, Space, Spin, Switch, Tabs, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import {
+  Alert,
+  Badge,
+  ConfigProvider,
+  Flex,
+  Menu,
+  Select,
+  Space,
+  Spin,
+  Switch,
+  Tabs,
+  Typography,
+  theme,
+} from 'antd';
+import type { CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { agorStore } from '../../store/agorStore';
 import {
   type AgenticToolFieldConfig,
@@ -21,6 +35,20 @@ import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
 }
+
+// Visually-hidden text so a tool's availability is never conveyed by dot color
+// alone: assistive tech reads the label while sighted users see the dot.
+const SR_ONLY_STYLE: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
 
 const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
   'claude-code': 'Claude Code',
@@ -77,6 +105,12 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<Partial<Record<AgenticToolConfigField, boolean>>>({});
+  // Tool selection moved out of a stacked outer <Tabs> into a secondary sidebar
+  // Menu (mirrors User Settings' AI Providers rail); the inner Authentication /
+  // Presets split is now the only <Tabs> in this panel. `subTab` is kept
+  // controlled so it persists as you switch tools.
+  const [selectedTool, setSelectedTool] = useState<TenantAgenticToolName | null>(null);
+  const [subTab, setSubTab] = useState<'authentication' | 'presets'>('authentication');
 
   const load = useCallback(async () => {
     if (!client) return;
@@ -122,6 +156,40 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
     }
   };
 
+  const toolNames = Object.keys(TOOL_LABELS) as TenantAgenticToolName[];
+  const firstEnabledTool = toolNames.find((tool) => settings[tool]?.enabled !== false);
+  // Follow first-enabled until the admin explicitly picks a tool, then stick.
+  const activeTool = selectedTool ?? firstEnabledTool ?? 'claude-code';
+
+  // Secondary rail: muted selected pill so it reads as sub-navigation inside the
+  // Settings content pane rather than a second main nav rail.
+  const railTheme = useMemo(
+    () => ({
+      components: {
+        Menu: {
+          itemSelectedBg: token.colorFillTertiary,
+          itemSelectedColor: token.colorText,
+        },
+      },
+    }),
+    [token.colorFillTertiary, token.colorText]
+  );
+
+  const toolMenuItems = toolNames.map((tool) => {
+    const enabled = settings[tool]?.enabled !== false;
+    return {
+      key: tool,
+      icon: <ToolIcon tool={tool} size={18} />,
+      label: (
+        <Space size={8}>
+          <Badge color={enabled ? token.colorSuccess : token.colorTextQuaternary} />
+          <span>{TOOL_LABELS[tool]}</span>
+          <span style={SR_ONLY_STYLE}>{enabled ? 'Available' : 'Disabled'}</span>
+        </Space>
+      ),
+    };
+  });
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: token.paddingLG }}>
@@ -129,6 +197,17 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       </div>
     );
   }
+
+  const current = settings[activeTool] ?? {
+    tool: activeTool,
+    enabled: true,
+    resolution_policy: 'user_preferred' as const,
+    inline_configuration_allowed: true,
+    connection: {},
+  };
+  const fieldStatus: FieldStatus = Object.fromEntries(
+    Object.entries(current.connection).map(([field, status]) => [field, status?.configured])
+  );
 
   return (
     <div style={{ padding: token.paddingMD }}>
@@ -148,143 +227,138 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         showIcon
         style={{ marginBottom: token.marginLG }}
       />
-      <Tabs
-        defaultActiveKey={
-          (Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).find(
-            (tool) => settings[tool]?.enabled !== false
-          ) ?? 'claude-code'
-        }
-        items={(Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).map((tool) => {
-          const current = settings[tool] ?? {
-            tool,
-            enabled: true,
-            resolution_policy: 'user_preferred' as const,
-            inline_configuration_allowed: true,
-            connection: {},
-          };
-          const fieldStatus: FieldStatus = Object.fromEntries(
-            Object.entries(current.connection).map(([field, status]) => [field, status?.configured])
-          );
-          return {
-            key: tool,
-            label: (
-              <Space size={6}>
-                <ToolIcon tool={tool} size={18} />
-                <span>{TOOL_LABELS[tool]}</span>
-              </Space>
-            ),
-            children: (
-              <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                <Space>
-                  <Switch
-                    checked={current.enabled}
-                    onChange={(enabled) => void patch(tool, { enabled })}
-                  />
-                  <Typography.Text>
-                    {current.enabled ? 'Available in this workspace' : 'Disabled in this workspace'}
-                  </Typography.Text>
-                </Space>
-                <Tabs
-                  defaultActiveKey="authentication"
-                  items={[
-                    {
-                      key: 'authentication',
-                      label: 'Authentication',
-                      children:
-                        TENANT_TOOL_FIELDS[tool].length > 0 ? (
-                          <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                            <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                              <Typography.Text strong>Credential resolution</Typography.Text>
-                              <Select
-                                value={current.resolution_policy}
-                                style={{ width: '100%', maxWidth: 420 }}
-                                options={RESOLUTION_POLICIES.map((policy) => ({
-                                  value: policy.value,
-                                  label: policy.label,
-                                  title: policy.description,
-                                }))}
-                                onChange={(resolution_policy) =>
-                                  void patch(tool, { resolution_policy })
-                                }
-                              />
-                              <Typography.Text type="secondary">
-                                {
-                                  RESOLUTION_POLICIES.find(
-                                    (policy) => policy.value === current.resolution_policy
-                                  )?.description
-                                }
-                              </Typography.Text>
-                            </Space>
-                            <ApiKeyFields
-                              tool={tool as AgenticToolName}
-                              fields={TENANT_TOOL_FIELDS[tool]}
-                              fieldStatus={fieldStatus}
-                              onSave={async (field, value) => {
-                                setSaving((state) => ({ ...state, [field]: true }));
-                                try {
-                                  await patch(tool, { connection: { [field]: value } });
-                                } finally {
-                                  setSaving((state) => ({ ...state, [field]: false }));
-                                }
-                              }}
-                              onClear={async (field) => {
-                                setSaving((state) => ({ ...state, [field]: true }));
-                                try {
-                                  await patch(tool, { connection: { [field]: null } });
-                                } finally {
-                                  setSaving((state) => ({ ...state, [field]: false }));
-                                }
-                              }}
-                              saving={saving}
-                            />
-                          </Space>
-                        ) : (
-                          <Alert
-                            type="info"
-                            showIcon
-                            title="No workspace authentication settings"
-                            description={`${TOOL_LABELS[tool]} does not currently expose a centrally managed connection.`}
+      <Flex gap={token.marginLG} align="stretch">
+        <ConfigProvider theme={railTheme}>
+          <Menu
+            mode="inline"
+            selectedKeys={[activeTool]}
+            onClick={({ key }) => setSelectedTool(key as TenantAgenticToolName)}
+            items={toolMenuItems}
+            style={{
+              width: 200,
+              flex: '0 0 200px',
+              background: 'transparent',
+              borderInlineEnd: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          />
+        </ConfigProvider>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Space size={8} align="center">
+              <ToolIcon tool={activeTool} size={20} />
+              <Typography.Title level={5} style={{ margin: 0 }}>
+                {TOOL_LABELS[activeTool]}
+              </Typography.Title>
+            </Space>
+            <Space>
+              <Switch
+                checked={current.enabled}
+                onChange={(enabled) => void patch(activeTool, { enabled })}
+              />
+              <Typography.Text>
+                {current.enabled ? 'Available in this workspace' : 'Disabled in this workspace'}
+              </Typography.Text>
+            </Space>
+            <Tabs
+              activeKey={subTab}
+              onChange={(key) => setSubTab(key as 'authentication' | 'presets')}
+              items={[
+                {
+                  key: 'authentication',
+                  label: 'Authentication',
+                  children:
+                    TENANT_TOOL_FIELDS[activeTool].length > 0 ? (
+                      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                          <Typography.Text strong>Credential resolution</Typography.Text>
+                          <Select
+                            value={current.resolution_policy}
+                            style={{ width: '100%', maxWidth: 420 }}
+                            options={RESOLUTION_POLICIES.map((policy) => ({
+                              value: policy.value,
+                              label: policy.label,
+                              title: policy.description,
+                            }))}
+                            onChange={(resolution_policy) =>
+                              void patch(activeTool, { resolution_policy })
+                            }
                           />
-                        ),
-                    },
-                    {
-                      key: 'presets',
-                      label: 'Presets',
-                      children: (
-                        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                          <Space direction="vertical" size="small">
-                            <Space>
-                              <Switch
-                                checked={current.inline_configuration_allowed}
-                                onChange={(inline_configuration_allowed) =>
-                                  void patch(tool, { inline_configuration_allowed })
-                                }
-                              />
-                              <Typography.Text strong>Allow inline configuration</Typography.Text>
-                            </Space>
-                            <Typography.Text type="secondary">
-                              {current.inline_configuration_allowed
-                                ? 'Members may choose a preset or define configuration directly.'
-                                : 'Members must choose an administrator-managed preset.'}
-                            </Typography.Text>
-                          </Space>
-                          {client && (
-                            <AgenticToolPresetsManager
-                              client={client}
-                              tool={tool}
-                              onError={setError}
-                            />
-                          )}
+                          <Typography.Text type="secondary">
+                            {
+                              RESOLUTION_POLICIES.find(
+                                (policy) => policy.value === current.resolution_policy
+                              )?.description
+                            }
+                          </Typography.Text>
                         </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </Space>
-            ),
-          };
-        })}
-      />
+                        <ApiKeyFields
+                          tool={activeTool as AgenticToolName}
+                          fields={TENANT_TOOL_FIELDS[activeTool]}
+                          fieldStatus={fieldStatus}
+                          onSave={async (field, value) => {
+                            setSaving((state) => ({ ...state, [field]: true }));
+                            try {
+                              await patch(activeTool, { connection: { [field]: value } });
+                            } finally {
+                              setSaving((state) => ({ ...state, [field]: false }));
+                            }
+                          }}
+                          onClear={async (field) => {
+                            setSaving((state) => ({ ...state, [field]: true }));
+                            try {
+                              await patch(activeTool, { connection: { [field]: null } });
+                            } finally {
+                              setSaving((state) => ({ ...state, [field]: false }));
+                            }
+                          }}
+                          saving={saving}
+                        />
+                      </Space>
+                    ) : (
+                      <Alert
+                        type="info"
+                        showIcon
+                        title="No workspace authentication settings"
+                        description={`${TOOL_LABELS[activeTool]} does not currently expose a centrally managed connection.`}
+                      />
+                    ),
+                },
+                {
+                  key: 'presets',
+                  label: 'Presets',
+                  children: (
+                    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                      <Space direction="vertical" size="small">
+                        <Space>
+                          <Switch
+                            checked={current.inline_configuration_allowed}
+                            onChange={(inline_configuration_allowed) =>
+                              void patch(activeTool, { inline_configuration_allowed })
+                            }
+                          />
+                          <Typography.Text strong>Allow inline configuration</Typography.Text>
+                        </Space>
+                        <Typography.Text type="secondary">
+                          {current.inline_configuration_allowed
+                            ? 'Members may choose a preset or define configuration directly.'
+                            : 'Members must choose an administrator-managed preset.'}
+                        </Typography.Text>
+                      </Space>
+                      {client && (
+                        <AgenticToolPresetsManager
+                          client={client}
+                          tool={activeTool}
+                          onError={setError}
+                        />
+                      )}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Space>
+        </div>
+      </Flex>
     </div>
   );
 };
