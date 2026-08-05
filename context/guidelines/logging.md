@@ -7,22 +7,22 @@ operators, not a transcript, payload archive, or metrics warehouse.
 at the time?” An operator should be able to follow meaningful lifecycle changes and outcomes
 without searching through implementation chatter.
 
+This document owns the operational logging policy. For the exact mechanics of the current console
+patch, process entry points, and destinations, see
+[`packages/core/src/utils/LOGGING.md`](../../packages/core/src/utils/LOGGING.md).
+
 ## Current surfaces and responsibilities
 
-The daemon and executor currently use `console.*`, patched by
-[`packages/core/src/utils/logger.ts`](../../packages/core/src/utils/logger.ts). The patch filters
-`debug`/`info`/`warn`/`error` using `LOG_LEVEL` (`info` in production, `debug` otherwise) and adds
-systemd journal priorities; it is not a structured logger or redactor. `console.log` is `info` and
-there is no `trace` today.
+The daemon and executor currently use a patched `console.*`. The patch filters output, but it is not
+a structured logger or redactor. The implementation document linked above owns the current level
+mapping, defaults, systemd behavior, startup points, and detached-daemon capture details.
 
 Write normal events to stdout (`console.log`/`info`/`debug`) and warnings/errors to stderr
-(`console.warn`/`error`). In foreground development, these streams appear in the terminal. The
-installed CLI's detached daemon currently combines both streams in `~/.agor/logs/daemon.log`;
-containers, systemd, and other process managers may capture and route them differently. Emit the
-stream and let the execution environment own routing and retention. CLI output is a user interface,
-not operational logging. Do not add permanent `console.*` operational logging in `agor-ui`:
-browser output is user-controlled, inconsistently retained, and unavailable to server operators.
-Use UI feedback for failures; remove temporary browser diagnostics before merging.
+(`console.warn`/`error`). Emit the stream and let the execution environment own routing and
+retention. CLI output is a user interface, not operational logging. Do not add permanent `console.*`
+operational logging in `agor-ui`: browser output is user-controlled, inconsistently retained, and
+unavailable to server operators. Use UI feedback for failures; remove temporary browser diagnostics
+before merging.
 
 ## What to log
 
@@ -35,8 +35,10 @@ Use UI feedback for failures; remove temporary browser diagnostics before mergin
 - A lower layer that cannot recover should return a sanitized failure. Do not log and rethrow merely
   to repeat the owning layer's event.
 - Prefer stable operation/event names and fields. With today's console API, use a consistent prefix
-  and bounded `key=value` values. Permitted UUID entity IDs are useful correlation fields. Avoid
-  arbitrary, high-cardinality text other than permitted IDs.
+  and bounded `key=value` values. Include an identifier only when it is operationally necessary for
+  correlation, its classification permits logging, and the destination's access controls and
+  retention are appropriate. UUID shape alone does not make an identifier safe. Avoid arbitrary,
+  high-cardinality text.
 - Do not emit per-token, per-chunk, per-heartbeat, per-row, or per-loop success logs. Omit them,
   aggregate a useful completion summary, or use an existing sampler/rate limiter.
 
@@ -47,8 +49,12 @@ one-off diagnostics locally and remove them before merging.
 
 Permanent debug logging needs a recurring operator problem that the lifecycle stream cannot
 diagnose. An existing narrow `AGOR_DEBUG_*` flag can be preferable to enabling all debug calls; do
-not add one without a known support workflow. `DEBUG_SDK_MESSAGES` does **not** relax privacy: debug
-output must never dump SDK messages or other prohibited content.
+not add one without a known support workflow.
+
+`DEBUG_SDK_MESSAGES=true` is a legacy unsafe diagnostic that dumps raw SDK messages from the
+executor. Raw messages can contain prohibited content. It must not be enabled where process output
+is retained or shared, and new logging must not copy this pattern. Its presence does not relax any
+rule in this policy.
 
 ## Safety boundary
 
@@ -61,8 +67,12 @@ not mean safe: tokens, provider errors, URLs, environment values, and generated 
 prohibited. Redaction helpers are narrow, not permission to log an otherwise unsafe object. If
 safety is uncertain, omit the value and log its safe category or presence instead.
 
-UUID entity IDs may be correlation identifiers. Tenant IDs may be used likewise, but must come from
-trusted tenant context and never authorize access. Never expose or infer cross-tenant data.
+Identifiers are data, and UUID shape alone is not a safety classification. Use an entity or tenant
+identifier only when it is operationally necessary for correlation, its classification permits
+logging, and the destination's access controls and retention are appropriate. Tenant IDs must come
+from trusted tenant context and are correlation data only; they must never authorize access.
+Logging an identifier must never cause cross-tenant exposure or allow cross-tenant data to be
+inferred.
 
 Keep errors useful without dumping the source: stable category/code, operation, relevant UUIDs,
 retryability/outcome, and a bounded sanitized message. Do not blindly log exceptions, `Error`
