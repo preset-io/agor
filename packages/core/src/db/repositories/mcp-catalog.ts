@@ -12,7 +12,6 @@
  */
 
 import type {
-  MCPCatalogCuratedField,
   MCPCatalogCurationUpsert,
   MCPCatalogEntry,
   MCPCatalogEntryData,
@@ -21,6 +20,7 @@ import type {
   MCPCatalogProbeResult,
   MCPCatalogRegistryUpsert,
   MCPCatalogSort,
+  MCPCatalogSourceValues,
 } from '@agor/core/types';
 import { and, asc, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
@@ -62,6 +62,49 @@ export function serializeCapabilityTags(capabilities: string[] | undefined): str
   ];
   if (normalized.length === 0) return null;
   return `${CAPABILITY_DELIMITER}${normalized.join(CAPABILITY_DELIMITER)}${CAPABILITY_DELIMITER}`;
+}
+
+/**
+ * Columns both writers can fill, derived from what each side last published.
+ *
+ * Deriving rather than accumulating is what makes a withdrawal recoverable. A
+ * row that stored only the winning value could not answer "what should this be
+ * now that curation stopped supplying it" — the registry's copy would be gone,
+ * and nothing would rewrite it until that server happened to republish.
+ *
+ * Editorial copy prefers curation because that is the point of the overlay. The
+ * connect surface prefers the registry because it is the authority on its own
+ * endpoints, and `transport` travels with whichever `remote_url` won: a registry
+ * `stdio` beside a curated HTTPS remote would describe the row as unconnectable
+ * over HTTP when it is not.
+ */
+function deriveSharedColumns(
+  registry: MCPCatalogSourceValues,
+  curation: MCPCatalogSourceValues
+): {
+  title: string | null;
+  description: string | null;
+  website_url: string | null;
+  remote_url: string | null;
+  transport: MCPCatalogEntry['transport'] | null;
+} {
+  const surface = registry.remote_url ? registry : curation.remote_url ? curation : null;
+  return {
+    title: curation.title ?? registry.title ?? null,
+    description: curation.description ?? registry.description ?? null,
+    website_url: curation.website_url ?? registry.website_url ?? null,
+    remote_url: surface?.remote_url ?? null,
+    // With no remote at all the registry may still describe a package-only
+    // release, which is a real transport for a row nothing can dial over HTTP.
+    transport: (surface ? surface.transport : registry.transport) ?? null,
+  };
+}
+
+/** Strip undefined members so an absent value is absent from the stored blob. */
+function sourceValues(values: MCPCatalogSourceValues): MCPCatalogSourceValues {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== undefined)
+  ) as MCPCatalogSourceValues;
 }
 
 /**
@@ -170,6 +213,9 @@ export class MCPCatalogRepository {
   private conditionsFor(filters: MCPCatalogFilters): SQL[] {
     const conditions: SQL[] = [];
 
+    if (filters.catalog_entry_id) {
+      conditions.push(eq(mcpCatalogEntries.catalog_entry_id, filters.catalog_entry_id));
+    }
     if (filters.search?.trim()) {
       const term = filters.search.trim();
       conditions.push(
@@ -291,25 +337,30 @@ export class MCPCatalogRepository {
       updated_at: now,
     };
 
+    const registrySide = sourceValues({
+      title: entry.title,
+      description: entry.description,
+      website_url: entry.website_url,
+      remote_url: entry.remote_url,
+      transport: entry.transport,
+    });
+
     if (!existing) {
+      const shared = deriveSharedColumns(registrySide, {});
       const row: MCPCatalogEntryInsert = {
         catalog_entry_id: generateId(),
         created_at: now,
         name: entry.name,
-        title: entry.title ?? null,
-        description: entry.description ?? null,
-        website_url: entry.website_url ?? null,
-        transport: entry.transport ?? null,
-        remote_url: entry.remote_url ?? null,
-        has_remote: Boolean(entry.remote_url),
+        ...shared,
+        has_remote: Boolean(shared.remote_url),
         data: {
           registry_mirrored: true,
+          registry: registrySide,
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
           registry_status: entry.registry_status,
           repository_source: entry.repository_source,
-          ...(entry.remote_url ? { connect_surface_source: 'registry' as const } : {}),
         },
         ...registryColumns,
       };
@@ -325,64 +376,24 @@ export class MCPCatalogRepository {
     if (storedAt !== null && incomingAt !== null && incomingAt <= storedAt) return 'unchanged';
 
     const existingData = existing.data ?? {};
-    // Ownership is per field, not per row. `curated` only says an overlay
-    // exists; most curated entries leave `title` and `description` to the
-    // registry, so deferring on the strength of the row flag would pin whichever
-    // registry copy happened to land first and never accept a correction.
-    const curatedFields = new Set<MCPCatalogCuratedField>(existingData.curated_fields ?? []);
-
-    // Editorial copy the overlay actually wrote is curation's; the rest tracks
-    // the registry, including back to null when a republication drops it.
-    const editorial = <T>(
-      field: MCPCatalogCuratedField,
-      curatedValue: T | null,
-      incoming: T | undefined
-    ): T | null => (curatedFields.has(field) ? curatedValue : (incoming ?? null));
-
-    // The connect surface is the registry's wherever it has an opinion. Where it
-    // has none, only a URL curation supplied survives — a registry-owned URL
-    // must not outlive the publication that carried it, or a package-only
-    // release leaves the row advertising an endpoint nobody publishes.
-    const curationOwnsSurface = existingData.connect_surface_source === 'curation';
-    const registrySuppliedRemote = entry.remote_url !== undefined;
-    const remoteUrl = registrySuppliedRemote
-      ? (entry.remote_url ?? null)
-      : curationOwnsSurface
-        ? existing.remote_url
-        : null;
-    // `transport` describes `remote_url`, so it follows whichever one won.
-    // Taking the registry's `stdio` while keeping a curated remote URL would
-    // describe the row as unconnectable over HTTP when it is not.
-    const transport =
-      registrySuppliedRemote || !curationOwnsSurface
-        ? (entry.transport ?? null)
-        : (existing.transport ?? null);
-    const probeReset = probeInvalidation(existing.remote_url, remoteUrl);
+    const shared = deriveSharedColumns(registrySide, existingData.curation ?? {});
+    const probeReset = probeInvalidation(existing.remote_url, shared.remote_url);
 
     await update(this.db, mcpCatalogEntries)
       .set({
         ...registryColumns,
-        title: editorial('title', existing.title, entry.title),
-        description: editorial('description', existing.description, entry.description),
-        website_url:
-          entry.website_url ?? (curatedFields.has('website_url') ? existing.website_url : null),
-        transport,
-        remote_url: remoteUrl,
-        has_remote: Boolean(remoteUrl),
+        ...shared,
+        has_remote: Boolean(shared.remote_url),
         ...(probeReset ?? {}),
         data: {
           ...(probeReset ? withoutProbeMetadata(existingData) : existingData),
           registry_mirrored: true,
+          registry: registrySide,
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
           registry_status: entry.registry_status,
           repository_source: entry.repository_source,
-          connect_surface_source: registrySuppliedRemote
-            ? ('registry' as const)
-            : curationOwnsSurface
-              ? ('curation' as const)
-              : undefined,
         },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
@@ -398,15 +409,16 @@ export class MCPCatalogRepository {
     const now = new Date();
     const existing = await this.rawByName(entry.name);
 
-    // Recorded so the registry writer can tell a value this overlay chose from
-    // one it merely inherited. Rewritten in full each seed: dropping `title`
-    // from `curated.yaml` has to hand the field back to the registry, which an
-    // additive set could never express.
-    const curatedFields = ([] as MCPCatalogCuratedField[]).concat(
-      entry.title === undefined ? [] : 'title',
-      entry.description === undefined ? [] : 'description',
-      entry.website_url === undefined ? [] : 'website_url'
-    );
+    // Rewritten in full each seed rather than merged into what is already
+    // stored: dropping `title` from `curated.yaml` has to hand that field back
+    // to the registry, and an additive update could never express a removal.
+    const curationSide = sourceValues({
+      title: entry.title,
+      description: entry.description,
+      website_url: entry.website_url,
+      remote_url: entry.remote_url,
+      transport: entry.transport,
+    });
 
     const curationColumns = {
       curated: true,
@@ -422,60 +434,35 @@ export class MCPCatalogRepository {
     };
 
     if (!existing) {
+      const shared = deriveSharedColumns({}, curationSide);
       await insert(this.db, mcpCatalogEntries)
         .values({
           catalog_entry_id: generateId(),
           created_at: now,
           name: entry.name,
-          title: entry.title ?? null,
-          description: entry.description ?? null,
-          website_url: entry.website_url ?? null,
-          transport: entry.transport ?? null,
-          remote_url: entry.remote_url ?? null,
-          has_remote: Boolean(entry.remote_url),
-          data: {
-            capabilities: entry.capabilities,
-            curated_fields: curatedFields,
-            ...(entry.remote_url ? { connect_surface_source: 'curation' as const } : {}),
-          },
+          ...shared,
+          has_remote: Boolean(shared.remote_url),
+          data: { capabilities: entry.capabilities, curation: curationSide },
           ...curationColumns,
         } satisfies MCPCatalogEntryInsert)
         .run();
       return 'created';
     }
 
-    // `transport` describes `remote_url`, so the pair moves as a unit from one
-    // source or the other, never mixed: a registry package-only row (`stdio`,
-    // no remote) keeping its `stdio` while curation supplies an HTTPS remote
-    // would describe the row as unconnectable over HTTP when it is not.
-    //
-    // Ownership is read from recorded provenance rather than inferred from the
-    // column being non-null. Inferring it would pin the first curated URL
-    // forever, because an edited `curated.yaml` would see its own earlier value
-    // sitting there and defer to it.
     const existingData = existing.data ?? {};
-    const registryOwnsSurface =
-      existingData.connect_surface_source === 'registry' && Boolean(existing.remote_url);
-    const connectSurface = registryOwnsSurface
-      ? { remote_url: existing.remote_url, transport: existing.transport }
-      : { remote_url: entry.remote_url ?? null, transport: entry.transport ?? null };
-    const probeReset = probeInvalidation(existing.remote_url, connectSurface.remote_url);
+    const shared = deriveSharedColumns(existingData.registry ?? {}, curationSide);
+    const probeReset = probeInvalidation(existing.remote_url, shared.remote_url);
 
     await update(this.db, mcpCatalogEntries)
       .set({
         ...curationColumns,
-        title: entry.title ?? existing.title,
-        description: entry.description ?? existing.description,
-        website_url: entry.website_url ?? existing.website_url,
-        transport: connectSurface.transport,
-        remote_url: connectSurface.remote_url,
-        has_remote: Boolean(connectSurface.remote_url),
+        ...shared,
+        has_remote: Boolean(shared.remote_url),
         ...(probeReset ?? {}),
         data: {
           ...(probeReset ? withoutProbeMetadata(existingData) : existingData),
           capabilities: entry.capabilities,
-          curated_fields: curatedFields,
-          ...(registryOwnsSurface ? {} : { connect_surface_source: 'curation' as const }),
+          curation: curationSide,
         },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
@@ -504,6 +491,12 @@ export class MCPCatalogRepository {
       return 'deleted';
     }
 
+    // The endpoint has to leave the registry's stored side as well, not just the
+    // column: the next curation seed re-derives the row, and a `remote_url` left
+    // sitting in `data.registry` would put the withdrawn server straight back on
+    // offer.
+    const data = existing.data ?? {};
+    const { remote_url, transport, ...registrySide } = data.registry ?? {};
     await update(this.db, mcpCatalogEntries)
       .set({
         remote_url: null,
@@ -514,7 +507,11 @@ export class MCPCatalogRepository {
         probed_at: null,
         auth_server_origin: null,
         updated_at: new Date(),
-        data: { ...withoutProbeMetadata(existing.data ?? {}), registry_status: 'deleted' },
+        data: {
+          ...withoutProbeMetadata(data),
+          registry: registrySide,
+          registry_status: 'deleted',
+        },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
@@ -589,10 +586,13 @@ export class MCPCatalogRepository {
       return 'deleted';
     }
 
-    const curationOwnsSurface = data.connect_surface_source === 'curation';
-    const remoteUrl = curationOwnsSurface ? null : existing.remote_url;
-    const probeReset = probeInvalidation(existing.remote_url, remoteUrl);
-    const { capabilities, curated_fields, connect_surface_source, ...registryData } = data;
+    // Withdrawing the overlay re-derives the row from the registry side alone,
+    // which is what restores registry copy the overlay had been covering. A row
+    // that stored only the winning value would keep hand-written text on an
+    // uncurated row, attributed to a registry that never published it.
+    const { capabilities, curation, ...registryData } = data;
+    const shared = deriveSharedColumns(registryData.registry ?? {}, {});
+    const probeReset = probeInvalidation(existing.remote_url, shared.remote_url);
 
     await update(this.db, mcpCatalogEntries)
       .set({
@@ -607,9 +607,8 @@ export class MCPCatalogRepository {
         // making it.
         verified: false,
         popularity_rank: null,
-        remote_url: remoteUrl,
-        has_remote: Boolean(remoteUrl),
-        transport: curationOwnsSurface ? null : existing.transport,
+        ...shared,
+        has_remote: Boolean(shared.remote_url),
         ...(probeReset ?? {}),
         updated_at: new Date(),
         data: probeReset ? withoutProbeMetadata(registryData) : registryData,

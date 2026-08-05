@@ -131,13 +131,22 @@ export interface MCPCatalogPackage {
 }
 
 /**
- * Columns both writers can fill, so ownership has to be recorded rather than
- * guessed. Everything outside this list belongs to exactly one writer by
+ * What one writer published for the columns both writers can fill.
+ *
+ * Each side is kept verbatim so the effective row is derived rather than
+ * accumulated. Storing only the winner plus a marker saying who won cannot
+ * survive a withdrawal: when curation drops a field there is nothing left to
+ * fall back to, and the registry will not rewrite it unless it happens to
+ * republish. Everything outside this shape belongs to exactly one writer by
  * construction — `benefit` is only ever curated, `version` only ever mirrored.
  */
-export const MCP_CATALOG_CURATED_FIELDS = ['title', 'description', 'website_url'] as const;
-
-export type MCPCatalogCuratedField = (typeof MCP_CATALOG_CURATED_FIELDS)[number];
+export interface MCPCatalogSourceValues {
+  title?: string;
+  description?: string;
+  website_url?: string;
+  remote_url?: string;
+  transport?: MCPCatalogTransport;
+}
 
 /**
  * Everything about an entry that is neither filtered nor sorted, stored in the
@@ -166,25 +175,10 @@ export interface MCPCatalogEntryData {
   repository_source?: string;
   /** Challenge scheme from a `credentials` probe verdict, e.g. `Basic`. */
   probed_auth_scheme?: string;
-  /**
-   * Which writer owns the stored `remote_url` / `transport` pair.
-   *
-   * Without it the two writers cannot tell "curation supplied this" from
-   * "the registry supplied this", so neither can safely update it: curation
-   * could not correct its own URL, and the registry could not tell a gap it
-   * should fill from a value it must not clobber.
-   */
-  connect_surface_source?: 'registry' | 'curation';
-  /**
-   * Overlay columns `curated.yaml` supplied a value for on the last seed.
-   *
-   * `curated` says the row has a curation overlay; it does not say which
-   * columns that overlay actually filled. Most curated entries deliberately
-   * leave `title` and `description` to the registry, so treating the row-level
-   * flag as per-field ownership freezes whichever registry copy landed first
-   * and lets a stale value outlive the publication that produced it.
-   */
-  curated_fields?: MCPCatalogCuratedField[];
+  /** What the registry last published for the shared columns. */
+  registry?: MCPCatalogSourceValues;
+  /** What `curated.yaml` last supplied for the shared columns. */
+  curation?: MCPCatalogSourceValues;
   /**
    * The URL the cached probe verdict describes.
    *
@@ -261,6 +255,8 @@ export type MCPCatalogSort = 'popularity' | 'name' | 'recently_updated' | 'relev
  * service's `fetchData` seam maps the Feathers query onto this shape.
  */
 export interface MCPCatalogFilters {
+  /** Exact row identity, so a caller holding an id can narrow in SQL. */
+  catalog_entry_id?: string;
   /** Case-insensitive substring match over name, title, and description. */
   search?: string;
   category?: MCPCatalogCategory;

@@ -36,6 +36,24 @@ const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Delay before the first run so daemon boot is not competing with it. */
 const DEFAULT_INITIAL_DELAY_MS = 60_000;
 
+/**
+ * Node's timer ceiling. A delay above this does not run late — it overflows the
+ * 32-bit field and is silently rescheduled at 1 ms, turning "sync twice a month"
+ * into a continuous loop that reapplies all fifty curated rows forever. The
+ * curation seed runs before the registry-sync check, so this churns the database
+ * even with the sync switched off.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** Floor on the interval, so a mistyped small value cannot spin either. */
+const MIN_INTERVAL_MS = 60_000;
+
+/** Hold a delay inside the range `setTimeout` and `setInterval` honour. */
+function clampTimerMs(value: number, minimum: number): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.min(Math.max(value, minimum), MAX_TIMER_MS);
+}
+
 export interface MCPCatalogIngestionOptions {
   intervalMs?: number;
   initialDelayMs?: number;
@@ -60,8 +78,15 @@ export function resolveMCPCatalogOptions(
   const options: MCPCatalogIngestionOptions = {
     registrySyncEnabled: settings?.registry_sync_enabled === true,
   };
-  if (typeof settings?.sync_interval_hours === 'number' && settings.sync_interval_hours > 0) {
-    options.intervalMs = settings.sync_interval_hours * 60 * 60 * 1000;
+  if (
+    typeof settings?.sync_interval_hours === 'number' &&
+    Number.isFinite(settings.sync_interval_hours) &&
+    settings.sync_interval_hours > 0
+  ) {
+    options.intervalMs = clampTimerMs(
+      settings.sync_interval_hours * 60 * 60 * 1000,
+      MIN_INTERVAL_MS
+    );
   }
   if (typeof settings?.probe_budget === 'number' && settings.probe_budget >= 0) {
     options.probeBudget = settings.probe_budget;
@@ -111,12 +136,19 @@ export class MCPCatalogIngestionWorker {
 
   start(): void {
     if (this.intervalHandle || this.initialHandle) return;
-    const intervalMs = this.options.intervalMs ?? DEFAULT_INTERVAL_MS;
+    // Clamped here rather than only where config is parsed, because this is the
+    // call that overflows: a caller constructing the worker directly reaches
+    // `setInterval` without passing through `resolveMCPCatalogOptions`.
+    const intervalMs = clampTimerMs(
+      this.options.intervalMs ?? DEFAULT_INTERVAL_MS,
+      MIN_INTERVAL_MS
+    );
+    const initialDelayMs = clampTimerMs(this.options.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS, 0);
     this.initialHandle = setTimeout(() => {
       this.initialHandle = undefined;
       void this.runOnce();
       this.intervalHandle = setInterval(() => void this.runOnce(), intervalMs);
-    }, this.options.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS);
+    }, initialDelayMs);
   }
 
   stop(): void {

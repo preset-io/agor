@@ -102,6 +102,46 @@ describe('probeRemoteAuthType', () => {
   });
 
   it.each([
+    [
+      'a result carrying only serverInfo',
+      JSON.stringify({ jsonrpc: '2.0', id: 1, result: { serverInfo: {} } }),
+    ],
+    [
+      'a result answering a different request id',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 999,
+        result: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          serverInfo: { name: 'example' },
+        },
+      }),
+    ],
+    [
+      'a result with no capabilities',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { protocolVersion: '2025-06-18', serverInfo: { name: 'example' } },
+      }),
+    ],
+    [
+      'a result whose serverInfo has no name',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: {} },
+      }),
+    ],
+    [
+      'a result with an empty protocolVersion',
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { protocolVersion: '', capabilities: {}, serverInfo: { name: 'example' } },
+      }),
+    ],
     ['a marketing page', '<!doctype html><html><body>Buy our thing</body></html>'],
     ['an unrelated JSON API', JSON.stringify({ status: 'ok', uptime: 1234 })],
     ['an empty body', ''],
@@ -349,6 +389,30 @@ describe('probeRemoteAuthType', () => {
       expect(result.probed_auth_type).toBe('none');
     }
   );
+
+  it('accepts a server that echoes the request id as a string', async () => {
+    // JSON-RPC permits a string id, and rejecting one would under-report a
+    // server that is genuinely open.
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: '1',
+            result: {
+              protocolVersion: '2025-06-18',
+              capabilities: {},
+              serverInfo: { name: 'example', version: '1' },
+            },
+          }),
+          { status: 200 }
+        )
+    );
+
+    const result = await probeRemoteAuthType('https://open.example.com/mcp', { now, fetchImpl });
+
+    expect(result.probed_auth_type).toBe('none');
+  });
 
   it('sends an unauthenticated initialize as the handshake', async () => {
     const spy = mockFetch(async () => new Response(INITIALIZE_RESULT, { status: 200 }));

@@ -270,4 +270,27 @@ describe('MCPCatalogService write surface', () => {
       expect(instance[method]).toBeUndefined();
     }
   });
+
+  dbTest('narrows on catalog_entry_id rather than ignoring it', async ({ db }) => {
+    const repository = await seedCatalog(db);
+    await repository.upsertCuration({
+      name: 'com.target/mcp',
+      category: 'observability',
+      capabilities: ['traces'],
+      benefit: 'Traces things',
+      starter_prompt: 'Trace something',
+      permission_disclosure: 'Reads traces',
+      verified: true,
+    });
+    const target = await repository.findByName('com.target/mcp');
+
+    const found = await service(db).find({
+      query: { catalog_entry_id: target?.catalog_entry_id },
+    });
+
+    // A filter the service accepted but ignored would return every row, which
+    // is a worse answer than refusing the query.
+    expect(found.data).toHaveLength(1);
+    expect(found.data[0]?.name).toBe('com.target/mcp');
+  });
 });

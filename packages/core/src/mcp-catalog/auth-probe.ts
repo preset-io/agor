@@ -20,6 +20,9 @@ import { isPublicHttpUrl } from '../utils/url';
 /** Protocol version sent in the probe handshake. */
 const PROBE_PROTOCOL_VERSION = '2025-06-18';
 
+/** JSON-RPC id the probe sends, and the only id an accepted answer may carry. */
+const PROBE_REQUEST_ID = 1;
+
 /** Default per-probe budget. A catalog sweep must not stall on one slow host. */
 const DEFAULT_PROBE_TIMEOUT_MS = 8_000;
 
@@ -61,20 +64,31 @@ function createProbeFetch(
   return createPinnedFetch({ timeoutMs, maxBytes: MAX_METADATA_BYTES });
 }
 
+/** True for a non-null, non-array object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * True when a body carries a JSON-RPC 2.0 `initialize` result.
+ * True when a body carries the JSON-RPC 2.0 `initialize` result this probe
+ * asked for.
  *
  * Status alone says nothing about what answered. A marketing page, a captive
  * portal, and an API gateway's "healthy" stub all return 200, and recording
  * that as `none` would put a connect-directly button in front of something that
- * is not an MCP server at all. Only a well-formed handshake means the endpoint
+ * is not an MCP server at all. Only a complete handshake means the endpoint
  * both speaks MCP and accepted an unauthenticated client.
  *
- * `protocolVersion` or `serverInfo` is enough: both are prescribed for an
- * initialize result and neither appears by accident, while requiring the full
- * result shape would misreport servers that trim optional fields.
+ * Every prescribed member of `InitializeResult` is required, and the response
+ * `id` must be the one this probe sent — an unsolicited notification or an
+ * answer to somebody else's request says nothing about whether *this* request
+ * was accepted. `serverInfo.version` is the exception: it carries no signal the
+ * name does not, so demanding it would only misreport servers that trim it.
+ *
+ * Every rejection lands on `unknown`, never `none`, so a server this is too
+ * strict about is under-advertised rather than wrongly advertised as open.
  */
-function isInitializeResult(body: string): boolean {
+function isInitializeResult(body: string, requestId: number = PROBE_REQUEST_ID): boolean {
   for (const candidate of jsonPayloadsIn(body)) {
     let parsed: unknown;
     try {
@@ -82,13 +96,18 @@ function isInitializeResult(body: string): boolean {
     } catch {
       continue;
     }
-    if (!parsed || typeof parsed !== 'object') continue;
-    const message = parsed as { jsonrpc?: unknown; result?: unknown };
-    if (message.jsonrpc !== '2.0') continue;
-    if (!message.result || typeof message.result !== 'object') continue;
-    const result = message.result as { protocolVersion?: unknown; serverInfo?: unknown };
-    if (typeof result.protocolVersion === 'string') return true;
-    if (result.serverInfo && typeof result.serverInfo === 'object') return true;
+    if (!isRecord(parsed)) continue;
+    if (parsed.jsonrpc !== '2.0') continue;
+    // JSON-RPC permits a string id; compare by rendering rather than by type so
+    // a server that echoes `"1"` is not treated as answering a different call.
+    if (String(parsed.id) !== String(requestId)) continue;
+    const result = parsed.result;
+    if (!isRecord(result)) continue;
+    if (typeof result.protocolVersion !== 'string' || !result.protocolVersion) continue;
+    if (!isRecord(result.capabilities)) continue;
+    if (!isRecord(result.serverInfo)) continue;
+    if (typeof result.serverInfo.name !== 'string' || !result.serverInfo.name) continue;
+    return true;
   }
   return false;
 }
@@ -213,7 +232,7 @@ export async function probeRemoteAuthType(
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        id: 1,
+        id: PROBE_REQUEST_ID,
         method: 'initialize',
         params: {
           protocolVersion: PROBE_PROTOCOL_VERSION,

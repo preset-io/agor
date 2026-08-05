@@ -276,6 +276,41 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ---
 
+## MCP catalog (`mcp_catalog.*`)
+
+Agor ships a browsable catalog of MCP servers. Around fifty curated entries are
+checked into the repository and reapplied on every daemon start, so the
+marketplace is populated even with no network access.
+
+Mirroring the public [MCP registry](https://registry.modelcontextprotocol.io) on
+top of that is **off by default**. Turning it on makes outbound requests to the
+registry and, while probing which servers need authorization, to arbitrary
+hosts those registry records name.
+
+```yaml
+# ~/.agor/config.yaml
+mcp_catalog:
+  registry_sync_enabled: false # true = also mirror the public registry
+  sync_interval_hours: 6
+  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
+  # registry_url: https://registry.internal  # advanced override
+```
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `registry_sync_enabled` | `false` | Mirror the public registry in addition to the curated entries. |
+| `sync_interval_hours` | `6` | Held between one minute and roughly 24 days; values outside that range are clamped. |
+| `probe_budget` | `40` | Entries auth-probed per sync. `0` disables probing while leaving the mirror on. |
+| `registry_url` | official registry | Point at a private mirror. |
+
+The registry is far larger than one sync can walk, so each run resumes from
+where the previous one stopped and the probe sweep always gets a share of the
+run's time budget. Outbound probes only connect to public addresses: the
+hostname is resolved first and refused unless every resolved address is
+globally reachable.
+
+---
+
 ## What's next?
 
 - [Getting Started](/guide/getting-started) (add your first repo and create a session).

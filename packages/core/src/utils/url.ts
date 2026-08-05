@@ -324,46 +324,142 @@ function parseIPv4Literal(host: string): number | null {
   return address >>> 0;
 }
 
-/** True when a 32-bit IPv4 address is outside the public internet. */
-function isPrivateIPv4(address: number): boolean {
-  const octet = (shift: number): number => (address >>> shift) & 0xff;
-  const a = octet(24);
-  const b = octet(16);
+/**
+ * IPv4 blocks the IANA special-purpose registry does not mark globally
+ * reachable, as CIDR base/prefix pairs.
+ *
+ * Deliberately a data table feeding a default-deny test rather than a chain of
+ * octet comparisons. The predicate below answers "is this in globally reachable
+ * space", so a range nobody thought of fails closed; the previous shape asked
+ * "is this one of the bad ones", where anything unlisted was quietly allowed and
+ * every missed range had to be discovered one at a time.
+ *
+ * AS112 and AMT delegations are absent on purpose: the registry marks those
+ * globally reachable, so refusing them would be wrong rather than cautious.
+ */
+const IPV4_NON_GLOBAL: ReadonlyArray<readonly [string, number]> = [
+  ['0.0.0.0', 8], // "this network"
+  ['10.0.0.0', 8], // RFC 1918
+  ['100.64.0.0', 10], // RFC 6598 CGNAT
+  ['127.0.0.0', 8], // loopback
+  ['169.254.0.0', 16], // link-local, including cloud metadata
+  ['172.16.0.0', 12], // RFC 1918
+  ['192.0.0.0', 24], // IETF protocol assignments
+  ['192.0.2.0', 24], // TEST-NET-1
+  ['192.88.99.0', 24], // deprecated 6to4 relay anycast
+  ['192.168.0.0', 16], // RFC 1918
+  ['198.18.0.0', 15], // RFC 2544 benchmarking
+  ['198.51.100.0', 24], // TEST-NET-2
+  ['203.0.113.0', 24], // TEST-NET-3
+  ['224.0.0.0', 4], // multicast
+  ['240.0.0.0', 4], // reserved, and 255.255.255.255 broadcast within it
+];
 
-  if (a === 0) return true; // 0.0.0.0/8 "this network"
-  if (a === 10) return true; // RFC 1918
-  if (a === 127) return true; // loopback
-  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
-  if (a === 172 && b >= 16 && b <= 31) return true; // RFC 1918
-  if (a === 192 && b === 168) return true; // RFC 1918
-  if (a === 100 && b >= 64 && b <= 127) return true; // RFC 6598 CGNAT
-  if (a === 192 && b === 0) return true; // RFC 6890 protocol assignments
-  if (a >= 224) return true; // multicast, reserved, broadcast
-  return false;
+/** True when a 32-bit IPv4 address sits in globally reachable unicast space. */
+function isGloballyReachableIPv4(address: number): boolean {
+  for (const [base, prefix] of IPV4_NON_GLOBAL) {
+    const blockBase = parseIPv4Literal(base);
+    if (blockBase === null) continue;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    if ((address & mask) >>> 0 === (blockBase & mask) >>> 0) return false;
+  }
+  return true;
 }
 
-/** True when an IPv6 literal (already stripped of brackets) is not public. */
-function isPrivateIPv6(host: string): boolean {
-  const address = host.toLowerCase().split('%')[0];
-  if (address === '::1' || address === '::' || address === '') return true;
-  // fc00::/7 unique-local, fe80::/10 link-local.
-  if (/^f[cd][0-9a-f]{0,2}:/.test(address)) return true;
-  if (/^fe[89ab][0-9a-f]?:/.test(address)) return true;
-  // IPv4-mapped and IPv4-compatible forms tunnel the whole IPv4 space through.
-  // `URL` normalizes `::ffff:127.0.0.1` to the hex form `::ffff:7f00:1`, so
-  // both spellings have to be recognised.
-  const dotted = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
-  if (dotted) {
-    const parsed = parseIPv4Literal(dotted[1]);
-    return parsed === null || isPrivateIPv4(parsed);
+/**
+ * Expand an IPv6 literal into eight 16-bit groups, or null when it is not one.
+ *
+ * Written out rather than pattern-matched on a few spellings because the
+ * classifier below tests prefixes: `::`, an embedded IPv4 tail, and a
+ * zero-compressed middle all have to reach the same numeric form, or an address
+ * would be judged on its spelling instead of its value.
+ */
+function parseIPv6(input: string): number[] | null {
+  const address = input.toLowerCase().split('%')[0];
+  if (!address) return null;
+
+  const halves = address.split('::');
+  if (halves.length > 2) return null;
+
+  const toGroups = (part: string): number[] | null => {
+    if (!part) return [];
+    const groups: number[] = [];
+    const pieces = part.split(':');
+    for (const [index, piece] of pieces.entries()) {
+      // An embedded IPv4 tail occupies the final two groups.
+      if (piece.includes('.')) {
+        if (index !== pieces.length - 1) return null;
+        if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(piece)) return null;
+        const embedded = parseIPv4Literal(piece);
+        if (embedded === null) return null;
+        groups.push((embedded >>> 16) & 0xffff, embedded & 0xffff);
+        continue;
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(piece)) return null;
+      groups.push(Number.parseInt(piece, 16));
+    }
+    return groups;
+  };
+
+  const head = toGroups(halves[0]);
+  const tail = halves.length === 2 ? toGroups(halves[1]) : [];
+  if (head === null || tail === null) return null;
+
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const gap = 8 - head.length - tail.length;
+  if (gap < 1) return null;
+  return [...head, ...Array(gap).fill(0), ...tail];
+}
+
+/**
+ * IPv6 blocks inside global unicast that are still not globally reachable.
+ *
+ * Everything outside `2000::/3` — loopback, unique-local, link-local,
+ * multicast, the deprecated site-local range, NAT64, discard-only — is already
+ * refused by the allowlist, so only the exceptions carved out of global unicast
+ * need naming here.
+ */
+const IPV6_NON_GLOBAL_UNICAST: ReadonlyArray<readonly [string, number]> = [
+  ['2001:0:0:0:0:0:0:0', 32], // Teredo
+  ['2001:2:0:0:0:0:0:0', 48], // benchmarking
+  ['2001:db8:0:0:0:0:0:0', 32], // documentation
+  ['2002:0:0:0:0:0:0:0', 16], // deprecated 6to4
+];
+
+/** True when an IPv6 literal sits in globally reachable unicast space. */
+function isGloballyReachableIPv6(host: string): boolean {
+  const groups = parseIPv6(host);
+  if (groups === null) return false;
+
+  // IPv4-mapped and IPv4-compatible forms tunnel the whole IPv4 space through,
+  // so they are judged as the IPv4 address they carry.
+  const leadingZeroes = groups.slice(0, 5).every((group) => group === 0);
+  const embedded = ((groups[6] << 16) | groups[7]) >>> 0;
+  if (leadingZeroes && groups[5] === 0xffff) return isGloballyReachableIPv4(embedded);
+  if (leadingZeroes && groups[5] === 0 && embedded > 1) {
+    return isGloballyReachableIPv4(embedded);
   }
-  const hex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(address);
-  if (hex) {
-    const high = Number.parseInt(hex[1], 16);
-    const low = Number.parseInt(hex[2], 16);
-    return isPrivateIPv4(((high << 16) | low) >>> 0);
+
+  // The allowlist: global unicast is 2000::/3 and nothing else.
+  if ((groups[0] & 0xe000) !== 0x2000) return false;
+
+  for (const [base, prefix] of IPV6_NON_GLOBAL_UNICAST) {
+    const blockGroups = parseIPv6(base);
+    if (blockGroups === null) continue;
+    let bitsLeft = prefix;
+    let matches = true;
+    for (let index = 0; index < 8 && bitsLeft > 0; index += 1) {
+      const take = Math.min(16, bitsLeft);
+      const mask = take === 16 ? 0xffff : ((0xffff << (16 - take)) & 0xffff) >>> 0;
+      if ((groups[index] & mask) !== (blockGroups[index] & mask)) {
+        matches = false;
+        break;
+      }
+      bitsLeft -= take;
+    }
+    if (matches) return false;
   }
-  return false;
+  return true;
 }
 
 /**
@@ -382,9 +478,9 @@ function isPrivateIPv6(host: string): boolean {
 export function isPrivateIpAddress(address: string): boolean {
   const literal = address.trim().replace(/^\[|\]$/g, '');
   if (!literal) return true;
-  if (literal.includes(':')) return isPrivateIPv6(literal);
+  if (literal.includes(':')) return !isGloballyReachableIPv6(literal);
   const ipv4 = parseIPv4Literal(literal);
-  return ipv4 === null || isPrivateIPv4(ipv4);
+  return ipv4 === null || !isGloballyReachableIPv4(ipv4);
 }
 
 /**
@@ -424,10 +520,10 @@ export function isPublicHttpUrl(rawUrl: string): boolean {
   if (host === 'metadata.google.internal') return false;
 
   // `URL.hostname` keeps IPv6 literals bracketed; nothing else may contain ':'.
-  if (host.startsWith('[') && host.endsWith(']')) return !isPrivateIPv6(host.slice(1, -1));
+  if (host.startsWith('[') && host.endsWith(']')) return isGloballyReachableIPv6(host.slice(1, -1));
 
   const ipv4 = parseIPv4Literal(host);
-  if (ipv4 !== null) return !isPrivateIPv4(ipv4);
+  if (ipv4 !== null) return isGloballyReachableIPv4(ipv4);
 
   return true;
 }

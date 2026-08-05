@@ -62,6 +62,9 @@ export class MCPCatalogService {
   private filtersFor(query: Query): MCPCatalogFilters {
     const filters: MCPCatalogFilters = {};
 
+    if (typeof query.catalog_entry_id === 'string') {
+      filters.catalog_entry_id = query.catalog_entry_id;
+    }
     if (typeof query.name === 'string') filters.names = [query.name];
     if (typeof query.search === 'string') filters.search = query.search;
     if (typeof query.category === 'string') {

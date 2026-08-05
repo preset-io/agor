@@ -54,6 +54,23 @@ describe('createGuardedLookup', () => {
     await expect(resolveThrough(lookup, 'evil.example')).rejects.toThrow(/Refusing to connect/);
   });
 
+  it.each([
+    ['RFC 2544 benchmarking', '198.18.0.1'],
+    ['IPv6 multicast', 'ff02::1'],
+    ['IPv6 deprecated site-local', 'fec0::1'],
+    ['deprecated 6to4', '2002::1'],
+    ['NAT64 well-known prefix', '64:ff9b::1'],
+    ['TEST-NET-3', '203.0.113.1'],
+  ])(
+    'refuses a name resolving into %s, which is not globally reachable',
+    async (_label, address) => {
+      // Ranges outside global unicast reach the guard through DNS, not just
+      // through a literal URL, so the resolved path is asserted separately.
+      const lookup = createGuardedLookup(answering(address));
+      await expect(resolveThrough(lookup, 'evil.example')).rejects.toThrow(/Refusing to connect/);
+    }
+  );
+
   it('refuses when only one of several answers is private', async () => {
     // The whole point of pinning: a record mixing a public and a private
     // address must not become a coin flip decided by resolver ordering.
@@ -123,6 +140,12 @@ describe('createPinnedFetch', () => {
           // MCP server does for the rest of a session.
           response.writeHead(200, { 'content-type': 'text/event-stream' });
           response.write('data: {"done":true}\n\n');
+          return;
+        }
+        if (url === '/hang') {
+          // Headers, then silence: an idle-socket timer would never fire here.
+          response.writeHead(200, { 'content-type': 'text/plain' });
+          response.write('.');
           return;
         }
         if (url === '/no-content') {
@@ -201,10 +224,10 @@ describe('createPinnedFetch', () => {
     expect(response.status).toBe(204);
   });
 
-  it('gives up on a host that never answers', async () => {
-    // Reserved for documentation (RFC 5737) and routed nowhere, so the socket
-    // hangs rather than being refused.
-    await expect(pinned({ timeoutMs: 150 })('http://203.0.113.1/')).rejects.toThrow(/Timed out/);
+  it('bounds the whole exchange, not just socket idleness', async () => {
+    // A host that sends headers and one byte then stalls keeps the socket
+    // technically active, so only a total deadline ends this.
+    await expect(pinned({ timeoutMs: 150 })(`${origin}/hang`)).rejects.toThrow(/Timed out/);
   });
 
   it.each([

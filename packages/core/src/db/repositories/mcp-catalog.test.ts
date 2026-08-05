@@ -633,3 +633,105 @@ describe('retireCuration', () => {
     ]);
   });
 });
+
+describe('handing a field back to the registry', () => {
+  const curation = (
+    overrides: Partial<MCPCatalogCurationUpsert> = {}
+  ): MCPCatalogCurationUpsert => ({
+    name: 'com.example/mcp',
+    category: 'dev-tools',
+    capabilities: ['code-repos'],
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+    ...overrides,
+  });
+
+  dbTest('restores the registry value when the overlay drops a field', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title',
+      description: 'Registry description',
+      website_url: 'https://registry.example.com',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(
+      curation({
+        title: 'Curated title',
+        description: 'Curated description',
+        website_url: 'https://curated.example.com',
+      })
+    );
+
+    // The curator deletes all three lines. No republication follows, so nothing
+    // else will ever rewrite these columns.
+    await repository.upsertCuration(curation());
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      title: 'Registry title',
+      description: 'Registry description',
+      website_url: 'https://registry.example.com',
+    });
+  });
+
+  dbTest('restores registry copy when the whole overlay is withdrawn', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      title: 'Registry title',
+      description: 'Registry description',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(
+      curation({ title: 'Curated title', description: 'Curated description' })
+    );
+
+    expect(await repository.retireCuration('com.example/mcp')).toBe('uncurated');
+
+    // Leaving curated copy on an uncurated row attributes hand-written text to
+    // the registry, which never published it.
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      curated: false,
+      title: 'Registry title',
+      description: 'Registry description',
+    });
+  });
+
+  dbTest(
+    'falls back to the curated remote the moment the registry drops its own',
+    async ({ db }) => {
+      const repository = new MCPCatalogRepository(db);
+      await repository.upsertRegistryEntry({
+        name: 'com.example/mcp',
+        remote_url: 'https://registry.example.com/mcp',
+        transport: 'streamable-http',
+        registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+      });
+      // Curation supplies a remote too; the registry's takes precedence while it
+      // is published.
+      await repository.upsertCuration(
+        curation({ remote_url: 'https://curated.example.com/mcp', transport: 'sse' })
+      );
+      expect(await repository.findByName('com.example/mcp')).toMatchObject({
+        remote_url: 'https://registry.example.com/mcp',
+      });
+
+      // A package-only release withdraws the registry endpoint.
+      await repository.upsertRegistryEntry({
+        name: 'com.example/mcp',
+        packages: [{ registry_type: 'npm', identifier: 'example-mcp' }],
+        registry_updated_at: new Date('2026-02-01T00:00:00.000Z'),
+      });
+
+      // The curated endpoint is still the file's answer, so the row should offer
+      // it immediately rather than going unconnectable until the next seed.
+      expect(await repository.findByName('com.example/mcp')).toMatchObject({
+        remote_url: 'https://curated.example.com/mcp',
+        transport: 'sse',
+        has_remote: true,
+      });
+    }
+  );
+});

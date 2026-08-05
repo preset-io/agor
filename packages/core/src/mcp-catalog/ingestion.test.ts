@@ -413,8 +413,11 @@ describe('runCatalogIngestion', () => {
       // `transport` follows the remote that won, so the row stays coherent.
       transport: 'streamable-http',
       has_remote: true,
-      // The registry does have an opinion about the website, so it takes it.
-      website_url: 'https://example.com',
+      // Editorial copy the overlay supplied stays the overlay's. A curator who
+      // writes `website_url` into the file means it; letting the registry win
+      // there would make the field unusable for any server the registry also
+      // publishes, which is every server worth curating.
+      website_url: 'https://sentry.io',
       has_package: true,
     });
   });
