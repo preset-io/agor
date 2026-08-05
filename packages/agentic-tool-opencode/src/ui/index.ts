@@ -1,12 +1,16 @@
 import { OpenCodeModelSelector } from './OpenCodeModelSelector.js';
+import { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
+import { OpenCodeReadiness } from './OpenCodeReadiness.js';
 
 export {
   type OpenCodeModelConfig,
   OpenCodeModelSelector,
   type OpenCodeModelSelectorProps,
 } from './OpenCodeModelSelector.js';
+export { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
+export { OpenCodeReadiness } from './OpenCodeReadiness.js';
 
-export const OPENCODE_UI_CONTRIBUTION = Object.freeze({
+export const OPENCODE_UI_CONTRIBUTION = {
   name: 'opencode',
   agentSelectionOption: {
     icon: '🌐',
@@ -20,6 +24,8 @@ export const OPENCODE_UI_CONTRIBUTION = Object.freeze({
   },
   modelLabel: 'OpenCode LLM Provider',
   ModelSelector: OpenCodeModelSelector,
+  ProviderSettings: OpenCodeProviderSettings,
+  Readiness: OpenCodeReadiness,
   permissionModes: [
     {
       mode: 'default',
@@ -30,8 +36,8 @@ export const OPENCODE_UI_CONTRIBUTION = Object.freeze({
     },
     {
       mode: 'autoEdit',
-      label: 'Auto',
-      description: 'Auto-approves all operations · recommended for OpenCode',
+      label: 'Accept edits',
+      description: 'Auto-approves edits, asks for other operations · recommended for OpenCode',
       icon: 'edit',
       tone: 'success',
     },
@@ -43,4 +49,4 @@ export const OPENCODE_UI_CONTRIBUTION = Object.freeze({
       tone: 'warning',
     },
   ],
-} as const);
+} as const;

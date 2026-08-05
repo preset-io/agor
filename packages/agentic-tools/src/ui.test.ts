@@ -6,9 +6,11 @@ describe('agentic-tool UI integrations', () => {
     const integration = getAgenticToolUIIntegration('opencode');
     expect(integration).toMatchObject({
       modelLabel: 'OpenCode LLM Provider',
-      agentSelectionOption: { beta: true },
+      agentSelectionOption: { description: expect.stringMatching(/open-source terminal ai/i) },
     });
     expect(integration.ModelSelector).toBeTypeOf('function');
+    expect(integration.ProviderSettings).toBeTypeOf('function');
+    expect(integration.Readiness).toBeTypeOf('function');
     expect(integration.permissionModes).toHaveLength(3);
   });
 });

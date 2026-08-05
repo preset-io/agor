@@ -4,6 +4,7 @@ import {
   AGENTIC_TOOL_CAPABILITIES,
   AGENTIC_TOOL_DISPLAY_NAMES,
   AGENTIC_TOOL_INTEGRATIONS,
+  getAgenticToolModelSelectionError,
   TOOL_API_KEY_NAMES,
 } from './index.js';
 
@@ -16,7 +17,7 @@ describe('agentic-tool integrations', () => {
     expect(AGENTIC_TOOL_INTEGRATIONS.opencode).toMatchObject({
       name: 'opencode',
       displayName: 'OpenCode',
-      authentication: 'none',
+      authentication: 'runtime-managed',
       sdkVersion: '@opencode-ai/sdk@1.14.33',
       unverifiedTerminationReason: 'OpenCode server-side execution termination is not verified.',
     });
@@ -25,5 +26,11 @@ describe('agentic-tool integrations', () => {
       AGENTIC_TOOL_INTEGRATIONS.opencode.capabilities
     );
     expect(AGENTIC_TOOL_DISPLAY_NAMES.opencode).toBe('OpenCode');
+    expect(
+      getAgenticToolModelSelectionError('opencode', { provider: 'openai', model: '' })
+    ).toMatch(/provider and model/i);
+    expect(
+      getAgenticToolModelSelectionError('opencode', { provider: 'openai', model: 'gpt-5' })
+    ).toBeUndefined();
   });
 });

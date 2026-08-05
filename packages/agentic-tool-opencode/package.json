@@ -12,6 +12,12 @@
       "import": "./dist/shared/index.js",
       "require": "./dist/shared/index.cjs"
     },
+    "./daemon": {
+      "source": "./src/daemon/index.ts",
+      "types": "./dist/daemon/index.d.ts",
+      "import": "./dist/daemon/index.js",
+      "require": "./dist/daemon/index.cjs"
+    },
     "./runtime": {
       "source": "./src/runtime/index.ts",
       "types": "./dist/runtime/index.d.ts",
@@ -36,9 +42,13 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "@opencode-ai/sdk": "1.14.33"
+    "@opencode-ai/sdk": "1.14.33",
+    "opencode-ai": "1.14.33",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^24.6.0",
     "concurrently": "^9.2.1",
     "tsup": "^8.5.1",
@@ -46,8 +56,13 @@
     "vitest": "^4.1.10",
     "@ant-design/icons": "^6.3.2",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
     "antd": "^6.5.0",
-    "react": "^19.2.7"
+    "jsdom": "^27.1.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsx": "^4.23.0"
   },
   "peerDependencies": {
     "@ant-design/icons": "^6.3.2",

@@ -87,6 +87,18 @@ export function getAgenticToolIntegration(tool: AgenticToolName): AgenticToolInt
   return AGENTIC_TOOL_INTEGRATIONS[tool];
 }
 
+export function getAgenticToolModelSelectionError(
+  tool: AgenticToolName,
+  input: { provider?: string; model?: string } | null | undefined
+): string | undefined {
+  const policy = AGENTIC_TOOL_INTEGRATIONS[tool].modelSelection;
+  return policy && !policy.isComplete(input) ? policy.missingError : undefined;
+}
+
+export function agenticToolRequiresModelSelection(tool: AgenticToolName): boolean {
+  return Boolean(AGENTIC_TOOL_INTEGRATIONS[tool].modelSelection);
+}
+
 export const TOOL_API_KEY_NAMES = Object.freeze(
   Object.fromEntries(
     Object.values(AGENTIC_TOOL_INTEGRATIONS).flatMap((integration) =>

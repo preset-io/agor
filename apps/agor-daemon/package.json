@@ -26,6 +26,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agor/agentic-tool-opencode": "workspace:*",
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@aws-sdk/client-s3": "^3.1101.0",
