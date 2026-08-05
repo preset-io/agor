@@ -1461,6 +1461,15 @@ export const mcpCatalogEntries = sqliteTable(
     probed_at: t.timestamp('probed_at'),
     auth_server_origin: text('auth_server_origin'),
 
+    /**
+     * Registry lifecycle state, e.g. `active` or `deleted`.
+     *
+     * A real column rather than a blob key because the browse read filters on
+     * it: a withdrawn server left only in the blob still matches every query
+     * and, being curated, still sorts to the top of the catalog.
+     */
+    registry_status: text('registry_status'),
+
     data: t.json<MCPCatalogEntryData>('data').notNull(),
   },
   (table) => ({

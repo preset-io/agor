@@ -33,6 +33,7 @@
  * the PostgreSQL schema exclusively.
  */
 
+import type { MCPCatalogEntryData } from '@agor/core/types';
 import { is } from 'drizzle-orm';
 import { getTableConfig, type PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { mcpCatalogEntries } from './schema.postgres';
@@ -89,6 +90,9 @@ export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_
  * - `computed-from-repo` — Agor computed it, from repository data alone.
  * - `row-identity` — this row's own identity and write timestamps.
  * - `probe` — discovered by probing a public endpoint the registry named.
+ * - `composite` — a JSON column whose keys have different sources, classified
+ *   one level down in {@link GLOBAL_BLOB_KEY_SOURCES}. Not a licence to skip
+ *   the question: a `composite` column with no entry there is a type error.
  *
  * A column fed by user behaviour fits none of these. It belongs in its own
  * tenant-scoped table, and the absence of a label is the prompt to build one.
@@ -99,7 +103,8 @@ export type GlobalColumnSource =
   | 'computed-from-registry'
   | 'computed-from-repo'
   | 'row-identity'
-  | 'probe';
+  | 'probe'
+  | 'composite';
 
 /**
  * Every column of every global table, classified.
@@ -138,12 +143,48 @@ export const GLOBAL_TABLE_COLUMN_SOURCES = {
     probed_auth_type: 'probe',
     probed_at: 'probe',
     auth_server_origin: 'probe',
-    data: 'computed-from-registry',
+    registry_status: 'registry',
+    data: 'composite',
   },
   // One key per table in GLOBAL_TABLES, spelled out rather than `Record<string,
   // ...>` so each table is checked against its own columns.
 } satisfies {
   mcp_catalog_entries: Record<ColumnsOf<typeof mcpCatalogEntries>, GlobalColumnSource>;
+};
+
+/**
+ * Every key of every `composite` column, classified.
+ *
+ * The column-level guard is airtight against the easy mistake and blind to the
+ * likely one. A JSON column is schemaless in the database: a `connect_count` or
+ * a `last_used_by_tenant` key needs no migration, changes no Drizzle table, and
+ * so trips nothing at the column level — while breaking the same invariant a new
+ * column would. The `satisfies` below closes that by binding to the TypeScript
+ * interface the blob is written through, which is the one place such a key has
+ * to be declared.
+ *
+ * Keys are optional on the interface but required here: `Required<...>` is what
+ * makes an unclassified key a compile error rather than a silently absent entry.
+ */
+export const GLOBAL_BLOB_KEY_SOURCES = {
+  mcp_catalog_entries: {
+    data: {
+      remotes: 'registry',
+      packages: 'registry',
+      registry_icons: 'registry',
+      registry_mirrored: 'computed-from-registry',
+      registry: 'registry',
+      capabilities: 'repo',
+      curation: 'repo',
+      repository_source: 'registry',
+      probed_auth_scheme: 'probe',
+      probed_url: 'probe',
+    },
+  },
+} satisfies {
+  mcp_catalog_entries: {
+    data: Record<keyof Required<MCPCatalogEntryData>, GlobalColumnSource>;
+  };
 };
 
 /** Full classification of a table, including non-tenant tables. */
@@ -256,6 +297,22 @@ export function classifyPostgresTables(): TableClassificationResult {
       if (reachesScoped) {
         transitive.add(name);
         changed = true;
+      }
+    }
+  }
+
+  // Checked once the fixpoint has settled, so `transitive` is complete. A global
+  // table is skipped by the loop above and can never be classified transitive no
+  // matter what it references, which makes the exemption honest only while the
+  // table reaches no tenant-scoped row. An FK from here into tenant space would
+  // leave deletion either blocking on the constraint or cascading rows out of a
+  // table declared untouchable — and every other guard would still pass.
+  for (const name of global) {
+    for (const fk of metas.get(name)?.foreignKeys ?? []) {
+      if (direct.has(fk.parentTable) || transitive.has(fk.parentTable)) {
+        throw new Error(
+          `${name} is declared global but has a foreign key into tenant-scoped ${fk.parentTable}`
+        );
       }
     }
   }

@@ -568,6 +568,13 @@
       "when": 1786400000000,
       "tag": "0082_mcp_catalog_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1786000000000,
+      "tag": "0075_mcp_catalog_registry_status",
+      "breakpoints": true
     }
   ]
 }

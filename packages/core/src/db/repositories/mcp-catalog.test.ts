@@ -825,3 +825,77 @@ describe('a registry withdrawal followed by a curation change', () => {
     });
   });
 });
+
+describe('withdrawn servers and the browse read', () => {
+  const curation = (name: string): MCPCatalogCurationUpsert => ({
+    name,
+    category: 'dev-tools',
+    capabilities: ['code-repos'],
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+    popularity_rank: 1,
+  });
+
+  dbTest('excludes a withdrawn row from the default browse read in SQL', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({ name: 'com.live/mcp', version: '1' });
+    await repository.upsertCuration(curation('com.live/mcp'));
+    await repository.upsertRegistryEntry({ name: 'com.gone/mcp', version: '1' });
+    await repository.upsertCuration(curation('com.gone/mcp'));
+    await repository.retireWithdrawnEntry('com.gone/mcp');
+
+    const listed = await repository.findAll({ exclude_registry_status: 'deleted' });
+
+    // A curated row sorts first, so a withdrawn one left in the result set is
+    // not merely present — it is the first thing the marketplace shows.
+    expect(listed.map((entry) => entry.name)).toEqual(['com.live/mcp']);
+    expect(await repository.count({ exclude_registry_status: 'deleted' })).toBe(1);
+  });
+
+  dbTest('keeps rows the registry never described a state for', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    // A curation-only row has no registry state at all. `<>` against NULL is
+    // NULL, so a bare inequality would silently drop every one of them.
+    await repository.upsertCuration(curation('invented.example/mcp'));
+
+    const listed = await repository.findAll({ exclude_registry_status: 'deleted' });
+    expect(listed.map((entry) => entry.name)).toEqual(['invented.example/mcp']);
+  });
+
+  dbTest('surfaces the state as a column rather than a blob key', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      version: '1',
+      registry_status: 'active',
+    });
+
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      registry_status: 'active',
+    });
+    expect(await repository.findAll({ registry_status: 'active' })).toHaveLength(1);
+    expect(await repository.findAll({ registry_status: 'deleted' })).toHaveLength(0);
+  });
+
+  dbTest('omits the data blob from a list read but keeps it on get', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      version: '1',
+      remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }],
+      packages: [{ registry_type: 'npm', identifier: 'example-mcp' }],
+    });
+
+    // The blob is the bulk of a row and nothing in a listing renders it.
+    const [listed] = await repository.findAll({});
+    expect(listed.remotes).toBeUndefined();
+    expect(listed.packages).toBeUndefined();
+    expect(listed.name).toBe('com.example/mcp');
+
+    const hydrated = await repository.findByName('com.example/mcp');
+    expect(hydrated?.remotes).toHaveLength(1);
+    expect(hydrated?.packages).toHaveLength(1);
+  });
+});

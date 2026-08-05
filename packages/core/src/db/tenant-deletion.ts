@@ -535,6 +535,35 @@ function assertDeclaredGlobalRelation(relation: CatalogRelation, qualifiedName: 
   }
 }
 
+/**
+ * Reject a declared-global table that points a foreign key at tenant space.
+ *
+ * The declaration exempts a table from the whole tenant contract, which is only
+ * defensible while it holds no reference to a tenant-scoped row. A constraint
+ * into one leaves deletion blocking on it or cascading rows out of a table
+ * nothing is allowed to touch, and every other guard here would still pass.
+ *
+ * Only outgoing references count. The contract also carries constraints that
+ * point *at* this table, and those name the global itself rather than a tenant
+ * table, so they cannot be confused for one.
+ */
+function assertGlobalReferencesNoTenantTable(
+  relation: CatalogRelation,
+  liveTenantTables: ReadonlySet<string>
+): void {
+  const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
+  for (const constraint of relation.foreignKeyContract.split('\n')) {
+    if (!constraint) continue;
+    const referenced = /REFERENCES\s+"?([A-Za-z0-9_]+)"?/i.exec(constraint)?.[1];
+    if (!referenced || referenced === relation.tableName) continue;
+    if (liveTenantTables.has(referenced)) {
+      throw new TenantDeletionCatalogError(
+        `Refusing tenant deletion: ${qualifiedName} is declared global but references tenant-scoped ${referenced}`
+      );
+    }
+  }
+}
+
 interface CatalogAudit {
   liveTenantTables: ReadonlySet<string>;
   fingerprint: string;
@@ -550,6 +579,7 @@ async function auditLiveTenantCatalog(
 ): Promise<CatalogAudit> {
   const relations = await readTenantCatalog(db);
   const liveTenantTables = new Set<string>();
+  const declaredGlobals: CatalogRelation[] = [];
 
   for (const relation of relations) {
     const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
@@ -570,6 +600,7 @@ async function auditLiveTenantCatalog(
     }
     if (GLOBAL_TABLES.has(relation.tableName)) {
       assertDeclaredGlobalRelation(relation, qualifiedName);
+      declaredGlobals.push(relation);
       continue;
     }
     if (!relation.hasTenantColumn) {
@@ -595,6 +626,14 @@ async function auditLiveTenantCatalog(
     throw new TenantDeletionCatalogError(
       'Refusing tenant deletion: live-catalog discovery found zero tenant-contract tables'
     );
+  }
+
+  // Deferred until the tenant set is complete: an outgoing foreign key is only
+  // judgeable once every tenant-contract table is known. The compiled schema is
+  // checked for the same property, but only the live catalog sees a constraint
+  // added out of band.
+  for (const relation of declaredGlobals) {
+    assertGlobalReferencesNoTenantTable(relation, liveTenantTables);
   }
 
   const uncovered = [...liveTenantTables].filter((name) => !planNames.has(name)).sort();

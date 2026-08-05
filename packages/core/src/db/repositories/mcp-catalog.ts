@@ -35,6 +35,9 @@ import { RepositoryError } from './base';
  */
 const CAPABILITY_DELIMITER = '|';
 
+/** Registry lifecycle state marking a server the registry no longer publishes. */
+export const WITHDRAWN_REGISTRY_STATUS = 'deleted';
+
 /** Escape character used for every LIKE pattern this repository builds. */
 const LIKE_ESCAPE = '\\';
 
@@ -161,11 +164,52 @@ function orderFor(sort: MCPCatalogSort | undefined): SQL[] {
   }
 }
 
+/**
+ * Columns a list read returns, omitting `data`.
+ *
+ * The blob holds up to twenty remotes, twenty packages and twenty icon URLs per
+ * row, none of which a browse listing renders. Selecting it turns a page of
+ * results into megabytes; `get()` still hydrates the whole row for the one
+ * entry a caller opened.
+ */
+const LIST_COLUMNS = {
+  catalog_entry_id: mcpCatalogEntries.catalog_entry_id,
+  created_at: mcpCatalogEntries.created_at,
+  updated_at: mcpCatalogEntries.updated_at,
+  name: mcpCatalogEntries.name,
+  version: mcpCatalogEntries.version,
+  registry_updated_at: mcpCatalogEntries.registry_updated_at,
+  title: mcpCatalogEntries.title,
+  description: mcpCatalogEntries.description,
+  website_url: mcpCatalogEntries.website_url,
+  repository_url: mcpCatalogEntries.repository_url,
+  transport: mcpCatalogEntries.transport,
+  remote_url: mcpCatalogEntries.remote_url,
+  has_remote: mcpCatalogEntries.has_remote,
+  has_package: mcpCatalogEntries.has_package,
+  curated: mcpCatalogEntries.curated,
+  category: mcpCatalogEntries.category,
+  capability_tags: mcpCatalogEntries.capability_tags,
+  benefit: mcpCatalogEntries.benefit,
+  starter_prompt: mcpCatalogEntries.starter_prompt,
+  permission_disclosure: mcpCatalogEntries.permission_disclosure,
+  icon_url: mcpCatalogEntries.icon_url,
+  verified: mcpCatalogEntries.verified,
+  popularity_rank: mcpCatalogEntries.popularity_rank,
+  probed_auth_type: mcpCatalogEntries.probed_auth_type,
+  probed_at: mcpCatalogEntries.probed_at,
+  auth_server_origin: mcpCatalogEntries.auth_server_origin,
+  registry_status: mcpCatalogEntries.registry_status,
+} as const;
+
+/** A row as returned by a list read: every column except the blob. */
+type ListRow = { [K in keyof typeof LIST_COLUMNS]: MCPCatalogEntryRow[K] };
+
 export class MCPCatalogRepository {
   constructor(private db: Database) {}
 
-  private rowToEntry(row: MCPCatalogEntryRow): MCPCatalogEntry {
-    const data = row.data ?? {};
+  private rowToEntry(row: MCPCatalogEntryRow | ListRow): MCPCatalogEntry {
+    const data = 'data' in row ? (row.data ?? {}) : {};
     return {
       catalog_entry_id: row.catalog_entry_id as MCPCatalogEntryID,
       created_at: new Date(row.created_at),
@@ -203,7 +247,7 @@ export class MCPCatalogRepository {
       remotes: data.remotes,
       packages: data.packages,
       registry_icons: data.registry_icons,
-      registry_status: data.registry_status,
+      registry_status: row.registry_status ?? undefined,
       repository_source: data.repository_source,
       probed_auth_scheme: data.probed_auth_scheme,
     };
@@ -247,6 +291,16 @@ export class MCPCatalogRepository {
     if (filters.probed_auth_type) {
       conditions.push(eq(mcpCatalogEntries.probed_auth_type, filters.probed_auth_type));
     }
+    if (filters.registry_status) {
+      conditions.push(eq(mcpCatalogEntries.registry_status, filters.registry_status));
+    }
+    if (filters.exclude_registry_status) {
+      // NULL means the registry never said, which is not the excluded state;
+      // a bare `<>` would drop those rows because NULL compares to nothing.
+      conditions.push(
+        sql`(${mcpCatalogEntries.registry_status} IS NULL OR ${mcpCatalogEntries.registry_status} <> ${filters.exclude_registry_status})`
+      );
+    }
     if (filters.names) {
       // An empty allowlist means "nothing matches", which `inArray` cannot express.
       if (filters.names.length === 0) return [sql`1 = 0`];
@@ -260,7 +314,7 @@ export class MCPCatalogRepository {
   async findAll(filters: MCPCatalogFilters = {}): Promise<MCPCatalogEntry[]> {
     try {
       const conditions = this.conditionsFor(filters);
-      let query = select(this.db).from(mcpCatalogEntries);
+      let query = select(this.db, LIST_COLUMNS).from(mcpCatalogEntries);
       if (conditions.length > 0) query = query.where(and(...conditions));
       query = query.orderBy(...orderFor(filters.sort));
       if (filters.limit !== undefined) query = query.limit(filters.limit);
@@ -269,7 +323,7 @@ export class MCPCatalogRepository {
       if (filters.offset) query = query.offset(filters.offset);
 
       const rows = await query.all();
-      return rows.map((row: MCPCatalogEntryRow) => this.rowToEntry(row));
+      return rows.map((row: ListRow) => this.rowToEntry(row));
     } catch (error) {
       throw new RepositoryError(
         `Failed to list MCP catalog entries: ${error instanceof Error ? error.message : String(error)}`,
@@ -334,6 +388,7 @@ export class MCPCatalogRepository {
       registry_updated_at: entry.registry_updated_at ?? null,
       repository_url: entry.repository_url ?? null,
       has_package: (entry.packages?.length ?? 0) > 0,
+      registry_status: entry.registry_status ?? null,
       updated_at: now,
     };
 
@@ -359,7 +414,6 @@ export class MCPCatalogRepository {
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
-          registry_status: entry.registry_status,
           repository_source: entry.repository_source,
         },
         ...registryColumns,
@@ -392,7 +446,6 @@ export class MCPCatalogRepository {
           remotes: entry.remotes,
           packages: entry.packages,
           registry_icons: entry.registry_icons,
-          registry_status: entry.registry_status,
           repository_source: entry.repository_source,
         },
       })
@@ -514,13 +567,12 @@ export class MCPCatalogRepository {
         has_remote: Boolean(shared.remote_url),
         version: null,
         registry_updated_at: null,
+        // A column, so the browse read can exclude it. Left only in the blob it
+        // matched every query, and a curated row sorts first.
+        registry_status: WITHDRAWN_REGISTRY_STATUS,
         ...(probeReset ?? {}),
         updated_at: new Date(),
-        data: {
-          ...remaining,
-          registry_mirrored: false,
-          registry_status: 'deleted',
-        },
+        data: { ...remaining, registry_mirrored: false },
       })
       .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
       .run();
@@ -587,9 +639,10 @@ export class MCPCatalogRepository {
     // columns are the fallback for rows mirrored before the marker existed;
     // both are registry-only, so neither can be true of a curation-created row.
     const registryIsLive =
-      data.registry_mirrored === true ||
-      existing.version !== null ||
-      existing.registry_updated_at !== null;
+      existing.registry_status !== WITHDRAWN_REGISTRY_STATUS &&
+      (data.registry_mirrored === true ||
+        existing.version !== null ||
+        existing.registry_updated_at !== null);
 
     if (!registryIsLive) {
       await deleteFrom(this.db, mcpCatalogEntries)

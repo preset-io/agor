@@ -15,12 +15,12 @@
  * the repository has no create/update/delete to adapt.
  */
 
-import { PAGINATION } from '@agor/core/config';
 import {
   getCurrentTenantId,
   MCPCatalogRepository,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  WITHDRAWN_REGISTRY_STATUS,
 } from '@agor/core/db';
 import type {
   AuthenticatedParams,
@@ -35,6 +35,15 @@ import type {
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Query } from '../adapters/drizzle';
+
+/**
+ * Page bounds for the catalog, deliberately not the shared defaults.
+ *
+ * The shared bound is 10,000 rows either way, which for a full registry mirror
+ * is a multi-megabyte answer to a bare `GET`. A browse surface shows a screenful
+ * at a time, and the ceiling is what a caller may raise it to.
+ */
+const MCP_CATALOG_PAGINATION = { DEFAULT_LIMIT: 24, MAX_LIMIT: 100 } as const;
 
 export type MCPCatalogParams = QueryParams<{
   name?: string;
@@ -78,6 +87,14 @@ export class MCPCatalogService {
       filters.probed_auth_type = query.probed_auth_type as MCPCatalogProbedAuthType;
     }
     if (typeof query.sort === 'string') filters.sort = query.sort as MCPCatalogSort;
+    // Withdrawn servers are excluded unless a caller asks for a specific state.
+    // They keep their curation, which sorts them to the top of the default
+    // ordering, so leaving them in offers a server nobody publishes first.
+    if (typeof query.registry_status === 'string') {
+      filters.registry_status = query.registry_status;
+    } else {
+      filters.exclude_registry_status = WITHDRAWN_REGISTRY_STATUS;
+    }
 
     return filters;
   }
@@ -106,7 +123,10 @@ export class MCPCatalogService {
     const query = (params?.query ?? {}) as Query;
     const filters = this.filtersFor(query);
 
-    const limit = Math.min(query.$limit ?? PAGINATION.DEFAULT_LIMIT, PAGINATION.MAX_LIMIT);
+    const limit = Math.min(
+      query.$limit ?? MCP_CATALOG_PAGINATION.DEFAULT_LIMIT,
+      MCP_CATALOG_PAGINATION.MAX_LIMIT
+    );
     const skip = query.$skip ?? 0;
 
     return this.withTenantDatabase(async (repository) => {

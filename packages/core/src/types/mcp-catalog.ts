@@ -159,8 +159,6 @@ export interface MCPCatalogEntryData {
   packages?: MCPCatalogPackage[];
   /** Registry-supplied icon URLs (present on ~10% of entries). */
   registry_icons?: string[];
-  /** `_meta["io.modelcontextprotocol.registry/official"].status`. */
-  registry_status?: string;
   /**
    * Set once the registry mirror has written this row.
    *
@@ -266,6 +264,13 @@ export interface MCPCatalogFilters {
   curated?: boolean;
   has_remote?: boolean;
   probed_auth_type?: MCPCatalogProbedAuthType;
+  /** Exact registry lifecycle state. */
+  registry_status?: string;
+  /**
+   * Exclude rows whose registry lifecycle state matches, so the browse read can
+   * drop withdrawn servers without naming every state that is still live.
+   */
+  exclude_registry_status?: string;
   names?: string[];
   sort?: MCPCatalogSort;
   limit?: number;

@@ -293,4 +293,44 @@ describe('MCPCatalogService write surface', () => {
     expect(found.data).toHaveLength(1);
     expect(found.data[0]?.name).toBe('com.target/mcp');
   });
+
+  dbTest('defaults to a screenful rather than the shared ten-thousand', async ({ db }) => {
+    await seedCatalog(db);
+
+    const result = await service(db).find({});
+
+    // The shared bound is 10,000 either way, which for a full registry mirror
+    // is a multi-megabyte answer to a bare GET.
+    expect(result.limit).toBe(24);
+    expect(result.data).toHaveLength(24);
+  });
+
+  dbTest('caps a caller asking for more than the ceiling', async ({ db }) => {
+    await seedCatalog(db);
+
+    const result = await service(db).find({ query: { $limit: 100 } });
+    expect(result.limit).toBe(100);
+  });
+
+  dbTest('hides a withdrawn server from the default browse read', async ({ db }) => {
+    const repository = await seedCatalog(db);
+    await repository.upsertCuration({
+      name: 'com.gone/mcp',
+      category: 'observability',
+      capabilities: ['traces'],
+      benefit: 'Traces things',
+      starter_prompt: 'Trace something',
+      permission_disclosure: 'Reads traces',
+      verified: true,
+      popularity_rank: 1,
+    });
+    await repository.retireWithdrawnEntry('com.gone/mcp');
+
+    const listed = await service(db).find({});
+    expect(listed.data.map((entry) => entry.name)).not.toContain('com.gone/mcp');
+
+    // Still reachable for a caller that asks for that state by name.
+    const asked = await service(db).find({ query: { registry_status: 'deleted' } });
+    expect(asked.data.map((entry) => entry.name)).toEqual(['com.gone/mcp']);
+  });
 });

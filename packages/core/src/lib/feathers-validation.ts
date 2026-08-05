@@ -291,6 +291,10 @@ export const mcpCatalogQuerySchema = Type.Intersect(
       probed_auth_type: Type.Optional(
         Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
       ),
+      // Asking for a lifecycle state by name opts out of the default exclusion
+      // of withdrawn servers, so it has to survive validation rather than be
+      // stripped as an unknown key.
+      registry_status: Type.Optional(Type.String({ maxLength: 32 })),
       sort: Type.Optional(
         Type.Union([
           Type.Literal('popularity'),
@@ -306,7 +310,10 @@ export const mcpCatalogQuerySchema = Type.Intersect(
     // arbitrary columns would silently do nothing. Listing only what is
     // implemented keeps the schema an accurate contract rather than a wish.
     Type.Object({
-      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+      // Mirrors MCP_CATALOG_PAGINATION.MAX_LIMIT in the catalog service. Every
+      // row carries curation copy and registry metadata, so a page bound the
+      // shared schema would allow is a multi-megabyte response.
+      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
       $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
     }),
   ],

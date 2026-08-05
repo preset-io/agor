@@ -5,6 +5,7 @@ import * as postgresSchema from './schema.postgres';
 import {
   buildTenantDeletionManifest,
   classifyPostgresTables,
+  GLOBAL_BLOB_KEY_SOURCES,
   GLOBAL_TABLE_COLUMN_SOURCES,
   GLOBAL_TABLES,
   TENANT_SCOPE_COLUMN,
@@ -130,6 +131,68 @@ describe('tenant deletion manifest ordering', () => {
         if (parentIndex === undefined) continue; // parent not in manifest
         // The referencing (child) row must be deleted before the referenced row.
         expect(childIndex).toBeLessThan(parentIndex);
+      }
+    }
+  });
+});
+
+describe('global tables and tenant references', () => {
+  it('classifies the blob keys of every composite column', () => {
+    // The column-level `satisfies` cannot see inside a JSON column: a key added
+    // to the blob needs no migration and changes no Drizzle table. This asserts
+    // the two maps describe the same columns; the key-level exhaustiveness is a
+    // `satisfies` against `MCPCatalogEntryData`, so an unclassified key is a
+    // tsc error rather than a failure here.
+    const columnSources = GLOBAL_TABLE_COLUMN_SOURCES as Record<string, Record<string, string>>;
+    const blobSources = GLOBAL_BLOB_KEY_SOURCES as Record<
+      string,
+      Record<string, Record<string, string>>
+    >;
+
+    for (const [table, columns] of Object.entries(columnSources)) {
+      const composite = Object.entries(columns)
+        .filter(([, source]) => source === 'composite')
+        .map(([column]) => column)
+        .sort();
+      expect(Object.keys(blobSources[table] ?? {}).sort()).toEqual(composite);
+    }
+  });
+
+  it('never labels a blob key with a source a tenant counter could take', () => {
+    // Same reasoning as the column vocabulary: every label names what the value
+    // was computed *from*, so a usage counter finds none that fits.
+    const permitted = new Set([
+      'registry',
+      'repo',
+      'computed-from-registry',
+      'computed-from-repo',
+      'row-identity',
+      'probe',
+    ]);
+    for (const columns of Object.values(
+      GLOBAL_BLOB_KEY_SOURCES as Record<string, Record<string, Record<string, string>>>
+    )) {
+      for (const keys of Object.values(columns)) {
+        for (const source of Object.values(keys)) expect(permitted.has(source)).toBe(true);
+      }
+    }
+  });
+
+  it('refuses a declared-global table that references tenant space', () => {
+    // A global table is skipped before the transitive fixpoint, so it can never
+    // be classified transitive no matter what it points at. An FK into a tenant
+    // table would leave deletion blocking on the constraint or cascading rows
+    // out of a table declared untouchable, with every other guard still passing.
+    const { direct, transitive, global } = classifyPostgresTables();
+    const scoped = new Set([...direct, ...transitive]);
+
+    for (const name of global) {
+      const table = Object.values(postgresSchema).find(
+        (value) => is(value, PgTable) && getTableConfig(value).name === name
+      );
+      for (const fk of getTableConfig(table as PgTable).foreignKeys) {
+        const parent = getTableConfig(fk.reference().foreignTable).name;
+        expect(scoped.has(parent), `${name} references tenant-scoped ${parent}`).toBe(false);
       }
     }
   });
