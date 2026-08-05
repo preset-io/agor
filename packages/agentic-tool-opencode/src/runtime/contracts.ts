@@ -1,4 +1,11 @@
-import type { ExecutorPulseKind, Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ContentBlock,
+  ExecutorPulseKind,
+  Message,
+  MessageID,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 
 export interface OpenCodeMessagesService {
   create(data: Partial<Message>): Promise<Message>;
@@ -58,5 +65,5 @@ export interface OpenCodeTaskResult {
 
 export interface OpenCodeRuntimeDependencies {
   getDaemonUrl?: () => Promise<string>;
-  enrichContentBlocks?: (blocks: Array<Record<string, unknown>>) => void;
+  enrichContentBlocks?: (blocks: ContentBlock[]) => void;
 }
