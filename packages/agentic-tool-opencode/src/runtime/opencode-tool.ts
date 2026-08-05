@@ -616,20 +616,7 @@ export class OpenCodeTool {
           'OpenCode event collector did not settle within the shutdown timeout'
         );
         this.dependencies.cancelPendingPermissions?.(input.agorSessionId);
-        // Child containment must start even if iterator.return() or the
-        // collector itself ignores cancellation forever.
-        const [abortResult, collectorResult, closeResult] = await Promise.allSettled([
-          activeSessionAbort,
-          collectorStop,
-          close(),
-        ]);
-        const failures = [abortResult, collectorResult, closeResult].flatMap((result) =>
-          result.status === 'rejected' ? [result.reason] : []
-        );
-        if (failures.length > 1) {
-          throw new AggregateError(failures, 'OpenCode runtime cleanup failed in multiple phases');
-        }
-        if (failures.length === 1) throw failures[0];
+        await this.settleRuntimeCleanup(activeSessionAbort, collectorStop, close);
       })();
       return cleanupPromise;
     };
@@ -688,6 +675,28 @@ export class OpenCodeTool {
     if (turnFailure) throw turnFailure;
     if (!outcome) throw new Error('OpenCode turn ended without a result');
     return outcome;
+  }
+
+  private async settleRuntimeCleanup(
+    activeSessionAbort: Promise<void>,
+    collectorStop: Promise<void>,
+    close: () => Promise<void>
+  ): Promise<void> {
+    const collectorStopResult = Promise.allSettled([collectorStop]);
+    // Keep the server reachable until its active session abort settles.
+    // Child containment still starts without waiting for collector shutdown.
+    const abortResults = await Promise.allSettled([activeSessionAbort]);
+    const [collectorResults, closeResults] = await Promise.all([
+      collectorStopResult,
+      Promise.allSettled([close()]),
+    ]);
+    const failures = [...abortResults, ...collectorResults, ...closeResults].flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    );
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'OpenCode runtime cleanup failed in multiple phases');
+    }
+    if (failures.length === 1) throw failures[0];
   }
 
   private async abortActiveSession(
