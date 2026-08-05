@@ -1952,7 +1952,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               background: token.colorBgElevated,
               borderRight: `1px solid ${token.colorBorderSecondary}`,
               overflow: 'auto',
-              padding: '20px 0',
+              padding: `20px ${token.marginSM}px`,
             }}
           >
             <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>
