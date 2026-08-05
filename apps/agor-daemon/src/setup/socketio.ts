@@ -344,6 +344,10 @@ export function createSocketIOConfig(
 
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
+    // Intentionally system-global: keep only a saturated count, never socket,
+    // user, tenant, channel, or client metadata.
+    let unauthenticatedDisconnects = 0;
+    const authenticatedSockets = new WeakSet<Socket>();
 
     const logAuthenticated = (socketId: string, userId?: string) => {
       console.log(
@@ -471,6 +475,9 @@ export function createSocketIOConfig(
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       activeConnections++;
+      if (isAuthenticated(getSocketAuthState(socket))) {
+        authenticatedSockets.add(socket);
+      }
       const user = (socket as FeathersSocket).feathers?.user;
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: ${user ? 'handshake' : 'anonymous'}, user: ${user ? shortId(user.user_id) : 'unknown'}, total: ${activeConnections})`
@@ -889,9 +896,19 @@ export function createSocketIOConfig(
       // Track disconnections
       socket.on('disconnect', (reason) => {
         activeConnections--;
+        const disconnectedBeforeAuthentication =
+          !authenticatedSockets.has(socket) && !isAuthenticated(getSocketAuthState(socket));
+        if (disconnectedBeforeAuthentication) {
+          unauthenticatedDisconnects = Math.min(
+            unauthenticatedDisconnects + 1,
+            Number.MAX_SAFE_INTEGER
+          );
+        }
         const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;
         if (reason === 'transport error') {
           console.warn(message);
+        } else if (disconnectedBeforeAuthentication) {
+          return;
         } else if (reason === 'transport close' || reason === 'client namespace disconnect') {
           console.debug(message);
         } else {
@@ -920,6 +937,7 @@ export function createSocketIOConfig(
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
         if ((socket as FeathersSocket).feathers === context.connection) {
+          authenticatedSockets.add(socket);
           logAuthenticated(socket.id, userId);
           // Terminal-executor identities get no user room (see connection handler).
           if (!isTerminalExecutorIdentity(result.user)) {
@@ -934,7 +952,11 @@ export function createSocketIOConfig(
     // and periods with no connection churn remain observable.
     const metricsInterval = setInterval(
       () => {
-        console.log(`ws_active_connections=${activeConnections}`);
+        const disconnectedBeforeAuthentication = unauthenticatedDisconnects;
+        unauthenticatedDisconnects = 0;
+        console.log(
+          `ws_active_connections=${activeConnections} ws_unauthenticated_disconnects=${disconnectedBeforeAuthentication}`
+        );
       },
       5 * 60 * 1000
     );

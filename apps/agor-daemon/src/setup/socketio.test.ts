@@ -199,8 +199,16 @@ function buildHarness(opts: Partial<SocketIOOptions> = {}) {
     ...opts,
   } as SocketIOOptions);
   config.callback(io as any);
+  openHarnesses.add(io);
   return { io, config, app };
 }
+
+const openHarnesses = new Set<FakeIO>();
+
+afterEach(() => {
+  for (const io of openHarnesses) io.engine.closeHandler?.();
+  openHarnesses.clear();
+});
 
 function connect(io: FakeIO, socket: FakeSocket) {
   io.sockets.sockets.set(socket.id, socket);
@@ -364,11 +372,15 @@ describe('Socket.IO lifecycle logging', () => {
 
     vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     io.engine.closeHandler?.();
     vi.advanceTimersByTime(5 * 60 * 1000);
@@ -376,10 +388,11 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it.each(['transport close', 'client namespace disconnect'])(
-    'demotes benign disconnect reason %s below info',
+    'keeps benign authenticated disconnect reason %s below info',
     (reason) => {
       const { io } = buildHarness();
       const socket = makeSocket('browser-sock');
+      asUser(socket, ALICE);
       connect(io, socket);
 
       socket.handlers.get('disconnect')?.(reason);
@@ -393,6 +406,8 @@ describe('Socket.IO lifecycle logging', () => {
     const { io } = buildHarness();
     const transportErrorSocket = makeSocket('transport-error');
     const pingTimeoutSocket = makeSocket('ping-timeout');
+    asUser(transportErrorSocket, ALICE);
+    asUser(pingTimeoutSocket, ALICE);
     connect(io, transportErrorSocket);
     connect(io, pingTimeoutSocket);
 
@@ -401,6 +416,70 @@ describe('Socket.IO lifecycle logging', () => {
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
+  });
+
+  it('aggregates sockets that disconnect before authentication and resets each interval', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const firstAnonymousSocket = makeSocket('anonymous-1');
+    const secondAnonymousSocket = makeSocket('anonymous-2');
+    const previouslyAuthenticatedSocket = makeSocket('authenticated');
+    asUser(previouslyAuthenticatedSocket, ALICE);
+
+    connect(io, firstAnonymousSocket);
+    connect(io, secondAnonymousSocket);
+    connect(io, previouslyAuthenticatedSocket);
+    previouslyAuthenticatedSocket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    firstAnonymousSocket.handlers.get('disconnect')?.('ping timeout');
+    secondAnonymousSocket.handlers.get('disconnect')?.('client namespace disconnect');
+    previouslyAuthenticatedSocket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Socket.io disconnected: authenticated (reason: ping timeout')
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('anonymous-');
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=2'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
+
+    io.engine.closeHandler?.();
+    const logCountAfterClose = logSpy.mock.calls.length;
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
+  });
+
+  it('preserves transport-error warnings while aggregating unauthenticated disconnects', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const socket = makeSocket('transport-error');
+    connect(io, socket);
+    debugSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('transport error');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=1'
+    );
   });
 });
 
