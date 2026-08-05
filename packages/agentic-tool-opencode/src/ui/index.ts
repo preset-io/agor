@@ -15,7 +15,6 @@ export const OPENCODE_UI_CONTRIBUTION = {
   agentSelectionOption: {
     icon: '🌐',
     description: 'Open-source terminal AI with 75+ LLM providers',
-    beta: true,
   },
   onboardingOption: {
     symbol: '⚙',

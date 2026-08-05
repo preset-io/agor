@@ -17,7 +17,7 @@ vi.mock('../../store/agorStore', () => ({
 
 const agents: AgenticToolOption[] = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'x' },
-  { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y', beta: true },
+  { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y' },
 ];
 
 function gridEl(container: HTMLElement): HTMLElement {
@@ -73,6 +73,8 @@ describe('AgentSelectionGrid tile layout', () => {
   });
 
   it('renders every agent name in full in the small variant (no text BETA pill)', () => {
+    expect(AVAILABLE_AGENTS.find((agent) => agent.id === 'opencode')?.beta).not.toBe(true);
+
     render(
       <AgentSelectionGrid
         agents={AVAILABLE_AGENTS}
