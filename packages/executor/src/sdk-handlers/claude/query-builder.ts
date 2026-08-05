@@ -40,7 +40,7 @@ import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
-function summarizeMcpConfigCounts(config: unknown): string {
+export function summarizeMcpConfigCounts(config: unknown): string {
   let total = 0;
   let remote = 0;
   let stdio = 0;
@@ -48,6 +48,9 @@ function summarizeMcpConfigCounts(config: unknown): string {
 
   if (config && typeof config === 'object') {
     for (const server of Object.values(config as MCPServersConfig)) {
+      if (!server || typeof server !== 'object' || Array.isArray(server)) {
+        continue;
+      }
       total += 1;
       const type = server.type || 'stdio';
       if (type === 'stdio') {

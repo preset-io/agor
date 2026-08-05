@@ -48,12 +48,32 @@ import { Claude } from '@agor/core/sdk';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
+import {
+  formatListForLog,
+  type QuerySetupDeps,
+  setupQuery,
+  summarizeMcpConfigCounts,
+} from './query-builder.js';
 
 describe('MCP logging helpers', () => {
   it('formats long server lists without dumping every entry', () => {
     expect(formatListForLog(['a', 'b', 'c'], 5)).toBe('a, b, c');
     expect(formatListForLog(['a', 'b', 'c', 'd'], 2)).toBe('a, b +2 more');
+  });
+
+  it('ignores malformed server entries when summarizing MCP config', () => {
+    expect(
+      summarizeMcpConfigCounts({
+        remote: { type: 'http', env: { SECRET: 'not-logged' } },
+        stdio: { command: 'server', env: {} },
+        nullServer: null,
+        undefinedServer: undefined,
+        stringServer: 'invalid',
+        numberServer: 42,
+        booleanServer: true,
+        arrayServer: [{ type: 'sse', env: { ALSO_SECRET: 'not-logged' } }],
+      })
+    ).toBe('mcp_total=2 mcp_remote=1 mcp_stdio=1 mcp_with_env=1');
   });
 });
 
