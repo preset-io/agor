@@ -8,20 +8,15 @@
  */
 
 import type { Branch } from '@agor/core/types';
-import type { AgorClient, FindResult } from '@agor-live/client';
+import type { AgorClient } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 
-const BRANCH_LIMIT = 200;
 const LAST_BRANCH_KEY = 'agor-marketplace-branch';
 
 export interface ConnectTargets {
   branches: Branch[];
   loading: boolean;
   error: string | null;
-}
-
-function toArray(result: FindResult<Branch>): Branch[] {
-  return Array.isArray(result) ? result : result.data;
 }
 
 export function useConnectTargets(client: AgorClient, enabled: boolean): ConnectTargets {
@@ -35,12 +30,15 @@ export function useConnectTargets(client: AgorClient, enabled: boolean): Connect
     let cancelled = false;
     setLoading(true);
 
+    // Every accessible branch, not a first page. A branch missing from this
+    // list is a destination the user simply cannot pick, with nothing on screen
+    // to say why — so a silent cap here reads as "you have no such branch".
     client
       .service('branches')
-      .find({ query: { archived: false, $limit: BRANCH_LIMIT } })
+      .findAll({ query: { archived: false } })
       .then((result) => {
         if (cancelled) return;
-        setBranches(toArray(result));
+        setBranches(result);
         setError(null);
         setLoaded(true);
       })

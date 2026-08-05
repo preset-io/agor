@@ -128,7 +128,15 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
   );
 
   const handleConnect = useCallback(
-    async ({ branchId, agenticTool }: { branchId: string; agenticTool: AgenticToolName }) => {
+    async ({
+      branchId,
+      agenticTool,
+      acknowledgedDisclosure,
+    }: {
+      branchId: string;
+      agenticTool: AgenticToolName;
+      acknowledgedDisclosure: string;
+    }) => {
       if (!selected) return;
       setConnecting(true);
       setConnectError(null);
@@ -137,6 +145,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client }) => {
           catalog_key: selected.catalog_entry_id,
           branch_id: branchId,
           agentic_tool: agenticTool,
+          acknowledged_disclosure: acknowledgedDisclosure,
         });
         rememberConnectBranchId(branchId);
         if (result.starter_prompt) {

@@ -23,6 +23,7 @@ const CURATED: MCPCatalogEntry = {
   title: 'Linear',
   benefit: 'Read and update your Linear issues.',
   starter_prompt: 'List the issues assigned to me this cycle.',
+  permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
   transport: 'streamable-http',
   remote_url: 'https://mcp.linear.app/mcp',
   has_remote: true,
@@ -94,6 +95,7 @@ const request = {
   catalog_key: LINEAR,
   branch_id: 'branch-1',
   agentic_tool: 'claude-code' as const,
+  acknowledged_disclosure: CURATED.permission_disclosure as string,
 };
 
 describe('mcp-catalog/connect', () => {
@@ -318,6 +320,30 @@ describe('mcp-catalog/connect', () => {
       expect.anything(),
       expect.objectContaining({ mcpCatalogInstall: { entry_name: LINEAR } })
     );
+  });
+
+  it('refuses a connect that never showed what the server can access', async () => {
+    const { app, created } = buildApp(CURATED);
+
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, acknowledged_disclosure: '' },
+        params
+      )
+    ).rejects.toThrow(/acknowledged_disclosure is required/);
+    expect(created.mcpServers).toHaveLength(0);
+  });
+
+  it('refuses a disclosure that no longer matches the catalog row', async () => {
+    const { app, created } = buildApp(CURATED);
+
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, acknowledged_disclosure: 'Reads nothing at all.' },
+        params
+      )
+    ).rejects.toThrow(/has changed since it was shown/);
+    expect(created.mcpServers).toHaveLength(0);
   });
 
   it('refuses an uncurated entry', async () => {
