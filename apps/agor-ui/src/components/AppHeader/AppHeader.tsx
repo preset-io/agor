@@ -290,21 +290,26 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
-        <Tooltip title="Marketplace">
-          <Button
-            type="text"
-            icon={<ShopOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href={marketplaceHref}
-            aria-label="Marketplace"
-            onClick={(event) => {
-              if (isPlainLeftClick(event)) {
-                event.preventDefault();
-                navigate('/marketplace');
-              }
-            }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          />
-        </Tooltip>
+        {/* Labelled, where the rest of this row is icon-only: a marketplace is a
+            surface people are meant to come back to, and an icon alone is a
+            weaker invitation than the word. No tooltip — it would only repeat
+            what is already on screen. */}
+        <Button
+          type="text"
+          // Decorative beside the visible word — without this the icon's own
+          // label joins the accessible name ("shop Marketplace").
+          icon={<ShopOutlined aria-hidden style={{ fontSize: token.fontSizeLG }} />}
+          href={marketplaceHref}
+          onClick={(event) => {
+            if (isPlainLeftClick(event)) {
+              event.preventDefault();
+              navigate('/marketplace');
+            }
+          }}
+          style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}
+        >
+          Marketplace
+        </Button>
         <Tooltip title="Knowledge Base">
           <Button
             type="text"

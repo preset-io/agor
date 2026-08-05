@@ -98,6 +98,13 @@ describe('AppHeader Marketplace button', () => {
     expect(button).toHaveAttribute('href', '/ui/marketplace');
   });
 
+  it('shows the word without hovering — the label is why it earned a top-level slot', () => {
+    renderHeader();
+
+    // Visible text, not a tooltip or an aria-label standing in for one.
+    expect(screen.getByText('Marketplace')).toBeVisible();
+  });
+
   it('navigates to /marketplace via SPA navigation on plain click', () => {
     renderHeader();
 
