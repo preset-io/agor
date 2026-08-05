@@ -648,7 +648,12 @@ describe('GatewayService Slack thread catch-up', () => {
 
     expect(result).toMatchObject({ success: true, sessionId: 'sess-new', created: true });
     expect(threadMapRepo.findByThread).not.toHaveBeenCalled();
-    expect(sessionsCreate).toHaveBeenCalled();
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        custom_context: expect.objectContaining({ gateway_source: expect.any(Object) }),
+      }),
+      { _agenticConfigResolved: true }
+    );
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: 'C123-100.000000',

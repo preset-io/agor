@@ -54,6 +54,8 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  /** Opaque, daemon-authorized context interpreted by the selected integration. */
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
 }
@@ -295,6 +297,7 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
+        agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });

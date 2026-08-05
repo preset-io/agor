@@ -5,6 +5,9 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { homedir } from 'node:os';
+import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
+
 import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
@@ -61,6 +64,7 @@ import {
 } from './executor-tracking.js';
 import { shouldRegisterLocalHostOperations } from './host/availability.js';
 import { createLocalDaemonHostOperations } from './host/local/local-daemon-host-operations.js';
+import { registerOpenCodeServices } from './integrations/opencode/index.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -580,6 +584,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/check-auth', createCheckAuthService(db));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
+  registerOpenCodeServices(ctx);
+
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the Unix identity that runs Codex and flips their auth
   // method to subscription. Token material never leaves the daemon.
@@ -795,6 +801,14 @@ function createExecuteHandler(
     ) {
       throw new Error('Preset-backed sessions cannot override permission mode per task');
     }
+    if (session.agentic_tool === 'opencode') {
+      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
+      OPENCODE_DAEMON_CONTRIBUTION.admitExecutor({
+        tenantId,
+        config,
+        modelConfig: session.model_config ?? undefined,
+      });
+    }
 
     // Generate session token for executor authentication
     const appWithExecutor = app as unknown as {
@@ -834,8 +848,12 @@ function createExecuteHandler(
     }
 
     // Determine Unix user for executor
-    const { resolveUnixUserForImpersonation, validateResolvedUnixUser, UnixUserNotFoundError } =
-      await import('@agor/core/unix');
+    const {
+      getHomedirFromUsername,
+      resolveUnixUserForImpersonation,
+      validateResolvedUnixUser,
+      UnixUserNotFoundError,
+    } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
     const configExecutorUser = config.execution?.executor_unix_user;
@@ -848,6 +866,7 @@ function createExecuteHandler(
     });
 
     const executorUnixUser = impersonationResult.unixUser;
+    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : homedir();
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;
     const permissionModeForPayload =
@@ -935,7 +954,7 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        await runWithTenantDatabaseScope(db, tenantId, (_tenantDb) =>
           appendSystemMessage({
             app,
             db,
@@ -951,11 +970,22 @@ function createExecuteHandler(
 
     executorEnv.DAEMON_URL = daemonUrl;
 
+    const openCodeExecutorPayload = () => {
+      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
+      if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
+      return OPENCODE_DAEMON_CONTRIBUTION.getExecutorPayload({
+        tenantId,
+        session,
+        homeDir: executorHomeDir,
+      });
+    };
+
     // Build executor payload
     const executorPayload = {
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
+      ...(session.agentic_tool === 'opencode' ? openCodeExecutorPayload() : {}),
       env: executorEnv,
       params: {
         sessionId,

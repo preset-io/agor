@@ -467,6 +467,8 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
+  'opencode-auth',
+  'opencode-models',
   'claude-models',
   'copilot-models',
   'cursor-models',

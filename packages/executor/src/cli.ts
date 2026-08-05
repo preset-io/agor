@@ -15,9 +15,15 @@
  * impersonation - it's already running as the correct user.
  */
 
+import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 
-import { executeCommand, getRegisteredCommands } from './commands/index.js';
+import {
+  executeCommand,
+  executeInteractiveCommand,
+  getRegisteredCommands,
+} from './commands/index.js';
+import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -48,6 +54,10 @@ async function readStdin(): Promise<string> {
 
 function emitExecutorResult(result: unknown): void {
   console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
+}
+
+function emitInteractiveEvent(event: unknown): void {
+  console.log(`AGOR_EXECUTOR_INTERACTIVE_EVENT ${JSON.stringify(event)}`);
 }
 
 /**
@@ -118,6 +128,45 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
 }
 
 /**
+ * Bounded JSON-lines transport for commands that require intermediate events
+ * or one or more command-owned control frames.
+ */
+async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promise<void> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  const iterator = lines[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done || !first.value.trim()) throw new Error('missing payload');
+    const payload = ExecutorPayloadSchema.parse(JSON.parse(first.value));
+    const result = await executeInteractiveCommand(
+      payload,
+      { dryRun: options.dryRun },
+      {
+        emit: emitInteractiveEvent,
+        async read() {
+          const next = await iterator.next();
+          if (next.done) throw new Error('Interactive command input closed');
+          return JSON.parse(next.value) as unknown;
+        },
+      }
+    );
+    emitExecutorResult(result);
+    process.exitCode = result.success ? 0 : 1;
+  } catch {
+    emitExecutorResult({
+      success: false,
+      error: {
+        code: 'INTERACTIVE_COMMAND_PROTOCOL_INVALID',
+        message: 'Interactive executor input was invalid.',
+      },
+    });
+    process.exitCode = 1;
+  } finally {
+    lines.close();
+  }
+}
+
+/**
  * Handle prompt command - requires special handling for long-running WebSocket
  */
 async function handlePromptPayload(
@@ -167,7 +216,6 @@ async function handlePromptPayload(
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
 
   if (!ToolRegistry.has(payload.params.tool)) {
@@ -195,6 +243,7 @@ async function handlePromptPayload(
     permissionMode: payload.params.permissionMode,
     daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
+    agenticToolContext: payload.agenticToolContext,
     resolvedConfig: payload.resolvedConfig,
   });
 
@@ -226,11 +275,11 @@ async function handleLegacyMode(values: {
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
+  const tool = values.tool as string;
 
-  if (!ToolRegistry.has(values.tool as string)) {
-    console.error(`Invalid tool: ${values.tool}`);
+  if (!ToolRegistry.has(tool)) {
+    console.error(`Invalid tool: ${tool}`);
     console.error(`Valid tools: ${ToolRegistry.getAll().join(', ')}`);
     process.exit(1);
   }
@@ -246,7 +295,7 @@ async function handleLegacyMode(values: {
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
     prompt: values.prompt as string,
-    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
+    tool,
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
     daemonUrl: resolvedDaemonUrl,
   });
@@ -273,9 +322,7 @@ function printUsage(): void {
   console.error('  --session-id <id>        Session ID to execute prompt for');
   console.error('  --task-id <id>           Task ID created by daemon');
   console.error('  --prompt <text>          User prompt to execute');
-  console.error(
-    '  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)'
-  );
+  console.error(`  --tool <name>            SDK tool (${ToolRegistry.getAll().join(', ')})`);
   console.error('  --permission-mode <mode> Permission mode (ask, auto, allow-all)');
   console.error('  --daemon-url <url>       Daemon WebSocket URL (default: http://localhost:3030)');
   console.error('');
@@ -294,11 +341,16 @@ async function main() {
   // Register Handlebars helpers ONCE at startup (needed for template rendering)
   const { registerHandlebarsHelpers } = await import('@agor/core/templates/handlebars-helpers');
   registerHandlebarsHelpers();
+  await initializeToolRegistry();
 
   // Parse command-line arguments
   const { values } = parseArgs({
     options: {
       stdin: {
+        type: 'boolean',
+        default: false,
+      },
+      'interactive-command': {
         type: 'boolean',
         default: false,
       },
@@ -333,7 +385,9 @@ async function main() {
   });
 
   // Route to appropriate mode
-  if (values.stdin) {
+  if (values['interactive-command']) {
+    await handleInteractiveCommandMode({ dryRun: values['dry-run'] || false });
+  } else if (values.stdin) {
     await handleStdinMode({ dryRun: values['dry-run'] || false });
   } else if (values['session-token']) {
     // Legacy mode - use CLI arguments

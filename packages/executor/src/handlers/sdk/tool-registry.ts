@@ -13,7 +13,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -32,6 +32,7 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
@@ -50,6 +51,30 @@ export interface ToolConfig {
   /** Tool runner function */
   runner: ToolRunner;
 }
+
+export interface AgenticToolAuxiliaryInput {
+  context: unknown;
+  request: unknown;
+  dryRun?: boolean;
+}
+
+export interface AgenticToolInteractiveChannel {
+  emit(event: unknown): void;
+  read(): Promise<unknown>;
+}
+
+export interface AgenticToolAuxiliaryAdapter {
+  execute(input: AgenticToolAuxiliaryInput): Promise<ExecutorResult>;
+  executeInteractive?(
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult>;
+}
+
+const auxiliaryAdapters: Partial<Record<Tool, () => Promise<AgenticToolAuxiliaryAdapter>>> = {
+  opencode: async () =>
+    (await import('@agor/agentic-tool-opencode/runtime')).OPENCODE_AUXILIARY_ADAPTER,
+};
 
 /**
  * Tool registry - centralized configuration for all tools
@@ -110,6 +135,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
     }
@@ -119,6 +145,51 @@ export class ToolRegistry {
       throw new Error(`Unknown tool: ${tool}`);
     }
     return config.runner(params);
+  }
+
+  static async executeAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput
+  ): Promise<ExecutorResult> {
+    const loader = auxiliaryAdapters[tool];
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    return (await loader()).execute(input);
+  }
+
+  static async executeInteractiveAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult> {
+    const loader = auxiliaryAdapters[tool];
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    const adapter = await loader();
+    if (!adapter.executeInteractive) {
+      return {
+        success: false,
+        error: {
+          code: 'INTERACTIVE_COMMAND_UNSUPPORTED',
+          message: `Agentic tool does not support interactive auxiliary operations: ${tool}`,
+        },
+      };
+    }
+    return adapter.executeInteractive(input, channel);
   }
 }
 

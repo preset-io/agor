@@ -165,7 +165,7 @@ describe('termination coordinator', () => {
 
   it('contains a terminal task before releasing its tracked executor', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
-    const state = appDouble();
+    const state = appDouble('opencode');
     state.claim(task(TaskStatus.COMPLETED), 'terminal');
 
     await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
@@ -244,7 +244,7 @@ describe('termination coordinator', () => {
 
   it('contains a terminal SDK-health race in the background', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
-    const state = appDouble();
+    const state = appDouble('opencode');
     state.claim(task(TaskStatus.COMPLETED), 'terminal');
 
     const result = await beginExecutorTermination({
@@ -314,16 +314,34 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
-  it('does not infer OpenCode provider quiescence from local process absence', async () => {
+  it('does not infer provider quiescence from verified local process-group absence', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble('opencode');
     state.claim(stopping('user_stop'));
-    state.settle(task(TaskStatus.STOPPING), 'unverified');
+    state.settle(
+      task(TaskStatus.STOPPING, {
+        termination_request: stopping('user_stop').termination_request,
+        sdk_failure: { termination: 'unverified' },
+      }),
+      'unverified'
+    );
 
     await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
       status: 'unverified',
       reason: 'OpenCode server-side execution termination is not verified.',
+      task: { status: TaskStatus.STOPPING, sdk_failure: { termination: 'unverified' } },
     });
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        outcome: 'unverified',
+        errorMessage: expect.stringContaining(
+          'OpenCode server-side execution termination is not verified.'
+        ),
+      }),
+      expect.objectContaining({ suppressTerminalQueueProcessing: true })
+    );
+    expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
   it('generically contains historical Claude CLI work during recovery', async () => {

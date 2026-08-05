@@ -123,8 +123,8 @@ export const BasePayloadSchema = z.object({
   /** Environment variables to inject */
   env: z.record(z.string(), z.string()).optional(),
 
-  /** Data home directory override */
-  dataHome: z.string().optional(),
+  /** Opaque, daemon-authorized context interpreted by the selected adapter. */
+  agenticToolContext: z.record(z.string(), z.unknown()).optional(),
 
   /**
    * Daemon-resolved config slice. See {@link ResolvedConfigSliceSchema}.
@@ -159,6 +159,21 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
+// Agentic-tool Auxiliary Invocation Payload
+// ═══════════════════════════════════════════════════════════
+
+export const AgenticToolInvokePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('agentic-tool.invoke'),
+  params: z.object({
+    tool: ToolTypeSchema,
+    /** Adapter-owned request validated by the selected integration. */
+    request: z.record(z.string(), z.unknown()),
+  }),
+});
+
+export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Git Clone Payload
@@ -941,6 +956,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
  */
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
+  AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
@@ -1018,6 +1034,7 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
 export function getSupportedCommands(): string[] {
   return [
     'prompt',
+    'agentic-tool.invoke',
     'git.clone',
     'git.branch.add',
     'git.branch.remove',

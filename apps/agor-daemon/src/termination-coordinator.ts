@@ -145,11 +145,11 @@ async function runContainment(
     untrackExecutorProcess(current.session_id, current.task_id);
     return { status: 'terminal', task: current };
   }
-  const providerUnverifiedReason = isAgenticToolName(tool)
+  const descriptorUnverifiedReason = isAgenticToolName(tool)
     ? getAgenticToolIntegration(tool).unverifiedTerminationReason
     : undefined;
   const unverifiedReason =
-    containment.status === 'unverified' ? containment.reason : providerUnverifiedReason;
+    containment.status === 'unverified' ? containment.reason : descriptorUnverifiedReason;
   if (unverifiedReason !== undefined) {
     const reason = unverifiedReason;
     const diagnosis: SdkFailure = current.sdk_failure

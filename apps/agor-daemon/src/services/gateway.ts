@@ -81,6 +81,7 @@ import {
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import type { SessionParams } from './sessions.js';
 
 /**
  * Inbound message data (platform → session)
@@ -2114,7 +2115,7 @@ export class GatewayService {
     } else {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as unknown as {
-        create: (data: Partial<Session>) => Promise<Session>;
+        create: (data: Partial<Session>, params?: SessionParams) => Promise<Session>;
         setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
 
@@ -2197,29 +2198,32 @@ export class GatewayService {
         `gateway user ${user.user_id}`
       );
 
-      const session = await sessionsService.create({
-        title: data.text.substring(0, 100),
-        description: data.text,
-        branch_id: channel.target_branch_id,
-        created_by: user.user_id,
-        // Stamp session with creator's unix_username for executor impersonation.
-        // Normally set by the setSessionUnixUsername hook, but that hook skips
-        // internal calls (no provider). Gateway sessions are internal, so we
-        // must set it explicitly. When user alignment is active, this uses the
-        // aligned user's unix_username; otherwise the channel owner's.
-        unix_username: user.unix_username ?? null,
-        status: SessionStatus.IDLE,
-        agentic_tool: agenticTool,
-        agentic_tool_preset_id: agenticConfig?.presetId,
-        permission_config: gatewayPermissionConfig,
-        model_config: gatewayModelConfig,
-        tasks: [],
-        // Denormalized gateway metadata (immutable snapshot at creation time)
-        // Avoids N+1 lookups when rendering board cards
-        custom_context: {
-          gateway_source: gatewaySource,
+      const session = await sessionsService.create(
+        {
+          title: data.text.substring(0, 100),
+          description: data.text,
+          branch_id: channel.target_branch_id,
+          created_by: user.user_id,
+          // Stamp session with creator's unix_username for executor impersonation.
+          // Normally set by the setSessionUnixUsername hook, but that hook skips
+          // internal calls (no provider). Gateway sessions are internal, so we
+          // must set it explicitly. When user alignment is active, this uses the
+          // aligned user's unix_username; otherwise the channel owner's.
+          unix_username: user.unix_username ?? null,
+          status: SessionStatus.IDLE,
+          agentic_tool: agenticTool,
+          agentic_tool_preset_id: agenticConfig?.presetId,
+          permission_config: gatewayPermissionConfig,
+          model_config: gatewayModelConfig,
+          tasks: [],
+          // Denormalized gateway metadata (immutable snapshot at creation time)
+          // Avoids N+1 lookups when rendering board cards
+          custom_context: {
+            gateway_source: gatewaySource,
+          },
         },
-      });
+        { _agenticConfigResolved: true }
+      );
 
       sessionId = session.session_id;
       created = true;

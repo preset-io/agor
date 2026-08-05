@@ -323,8 +323,8 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
-      // Integrations without host-managed credentials are ready at this boundary.
-      if (getAgenticToolIntegration(tool).authentication === 'none') {
+      // Runtime-managed integrations authenticate inside their isolated native runtime.
+      if (getAgenticToolIntegration(tool).authentication === 'runtime-managed') {
         return authed('native');
       }
 
