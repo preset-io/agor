@@ -1440,6 +1440,7 @@ export const App: React.FC<AppProps> = ({
           currentBoardId={headerBoardId}
           onBoardChange={navigation.goToBoard}
           onHomeClick={handleHomeClick}
+          onUpdateBoard={onUpdateBoard}
           onUserClick={handleHeaderUserClick}
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
