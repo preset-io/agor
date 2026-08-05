@@ -27,8 +27,76 @@ vi.mock('../../store/agorStore', () => ({
 }));
 
 vi.mock('../AgenticConfigChipRow', () => ({
-  AgenticConfigChipRow: () => <div data-testid="config-chip-row" />,
+  AgenticConfigChipRow: ({ tool }: { tool: string }) => (
+    <div data-testid="config-chip-row" data-tool={tool} />
+  ),
 }));
+
+vi.mock('../AgentSelectionGrid', () => ({
+  AVAILABLE_AGENTS: [
+    { id: 'claude-code', name: 'Claude Code', icon: '🤖' },
+    { id: 'codex', name: 'Codex', icon: '💻' },
+  ],
+  AgentSelectionGrid: ({
+    selectedAgentId,
+    onSelect,
+    variant,
+  }: {
+    selectedAgentId: string | null;
+    onSelect: (id: string) => void;
+    variant?: string;
+  }) => (
+    <div data-testid="agent-grid" data-selected={selectedAgentId ?? ''} data-variant={variant}>
+      <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
+        codex
+      </button>
+    </div>
+  ),
+}));
+
+// Passthrough drop zone that exposes a file-drop trigger.
+vi.mock('../SessionPanel/SessionComposerDropZone', () => ({
+  SessionComposerDropZone: ({
+    children,
+    onFilesDrop,
+  }: {
+    children: React.ReactNode;
+    onFilesDrop: (files: File[]) => void;
+  }) => (
+    <div>
+      <button
+        type="button"
+        data-testid="drop-file"
+        onClick={() => onFilesDrop([new File(['x'], 'shot.png', { type: 'image/png' })])}
+      >
+        drop
+      </button>
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('../SessionPanel/SessionAttachmentTray', () => ({
+  SessionAttachmentTray: ({ attachments }: { attachments: unknown[] }) => (
+    <div data-testid="attach-tray" data-count={attachments.length} />
+  ),
+}));
+
+vi.mock('../SessionPanel/useComposerAttachments', async () => {
+  const { useState } = await vi.importActual<typeof import('react')>('react');
+  return {
+    useComposerAttachments: () => {
+      const [attachments, setAttachments] = useState<{ id: string; file: File }[]>([]);
+      return {
+        attachments,
+        addAttachments: (files: File[]) =>
+          setAttachments((prev) => [...prev, ...files.map((file) => ({ id: file.name, file }))]),
+        removeAttachment: (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id)),
+        clearAttachments: () => setAttachments([]),
+      };
+    },
+  };
+});
 
 vi.mock('../AutocompleteTextarea', () => ({
   AutocompleteTextarea: ({
@@ -99,7 +167,7 @@ function renderCompose(opts: {
   onCreateSession?: (config: unknown, boardId: string) => Promise<string | null>;
 }) {
   const onCreateSession = opts.onCreateSession ?? vi.fn().mockResolvedValue('session-new');
-  render(
+  const result = render(
     <MemoryRouter initialEntries={[opts.pathname ?? '/b/x/']}>
       <AntApp>
         <NavbarComposeButton
@@ -111,7 +179,7 @@ function renderCompose(opts: {
       </AntApp>
     </MemoryRouter>
   );
-  return { onCreateSession };
+  return { onCreateSession, ...result };
 }
 
 function openPopover() {
@@ -121,14 +189,90 @@ function openPopover() {
 describe('NavbarComposeButton', () => {
   beforeEach(() => {
     goToSession.mockClear();
+    localStorage.clear();
   });
 
-  it('opens the compose popover from the navbar trigger', async () => {
+  it('opens the compose popover with a heading and prompt', async () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
     expect(await screen.findByTestId('compose-prompt')).toBeInTheDocument();
+    expect(screen.getByText('Ask your primary assistant')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send & Open' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send in Background' })).toBeInTheDocument();
+  });
+
+  it('explains the null-primary state above the inline picker', async () => {
+    renderCompose({ primary: null });
+    openPopover();
+    expect(await screen.findByTestId('pick-teammate')).toBeInTheDocument();
+    expect(screen.getByText(/don't have a primary assistant yet/i)).toBeInTheDocument();
+  });
+
+  it('shows the first-time hint once, then never again after dismissal', async () => {
+    const { unmount } = renderCompose({ primary: primaryBranch });
+    openPopover();
+    expect(await screen.findByText(/Ask for anything/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss tip' }));
+    expect(screen.queryByText(/Ask for anything/i)).not.toBeInTheDocument();
+
+    // Remount fresh: the dismissal persisted, so the hint stays gone.
+    unmount();
+    renderCompose({ primary: primaryBranch });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.queryByText(/Ask for anything/i)).not.toBeInTheDocument();
+  });
+
+  it('routes the picked tool into the chip row and the created session', async () => {
+    const { onCreateSession } = renderCompose({
+      primary: primaryBranch,
+      currentBoardId: 'board-current',
+    });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'claude-code');
+
+    fireEvent.click(screen.getByTestId('pick-codex'));
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex');
+
+    fireEvent.change(screen.getByTestId('compose-prompt'), { target: { value: 'go' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0][0]).toMatchObject({ agent: 'codex' });
+  });
+
+  it('renders the agent picker as the compact select variant', async () => {
+    renderCompose({ primary: primaryBranch });
+    openPopover();
+    expect(await screen.findByTestId('agent-grid')).toHaveAttribute('data-variant', 'select');
+  });
+
+  it('shows the resolved primary as a tag once resolved', async () => {
+    renderCompose({ primary: primaryBranch });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    // The tag renders the bare teammate name; the wayfinding sentence embeds it in prose.
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+  });
+
+  it('lets a dropped file be sent even with an empty prompt', async () => {
+    const { onCreateSession } = renderCompose({
+      primary: primaryBranch,
+      currentBoardId: 'board-current',
+    });
+    openPopover();
+    await screen.findByTestId('compose-prompt');
+    expect(screen.getByTestId('attach-tray')).toHaveAttribute('data-count', '0');
+    // Empty prompt + no attachment → send is blocked.
+    expect(screen.getByRole('button', { name: 'Send & Open' })).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('drop-file'));
+    expect(screen.getByTestId('attach-tray')).toHaveAttribute('data-count', '1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0][0].attachmentFiles).toHaveLength(1);
   });
 
   it('gives the trigger and Send & Open primary weight, Send in Background secondary', async () => {

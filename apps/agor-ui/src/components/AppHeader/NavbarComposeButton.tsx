@@ -2,12 +2,18 @@ import type {
   AgenticToolName,
   AgorClient,
   Branch,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
   EffortLevel,
   PermissionMode,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, getTeammateConfig } from '@agor-live/client';
-import { EditOutlined } from '@ant-design/icons';
+import {
+  getDefaultPermissionMode,
+  getTeammateConfig,
+  mapToCodexPermissionConfig,
+} from '@agor-live/client';
+import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   App as AntApp,
   Button,
@@ -24,6 +30,7 @@ import {
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
@@ -33,12 +40,16 @@ import {
   getUserAgenticToolDefault,
   getUserDefaultConfigurationSource,
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import type { NewSessionConfig } from '../NewSessionModal';
+import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
+import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
+import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 
-// Compact composer defaults to Claude Code; the chip row still lets the model be tuned.
-const COMPOSE_TOOL: AgenticToolName = 'claude-code';
+const DEFAULT_TOOL: AgenticToolName = 'claude-code';
+const HINT_DISMISSED_KEY = 'agor:compose-hint-dismissed';
 
 type SendMode = 'open' | 'background';
 
@@ -59,12 +70,16 @@ function teammateName(branch: Branch): string {
   return getTeammateConfig(branch)?.displayName ?? branch.name;
 }
 
+function teammateEmoji(branch: Branch): string | undefined {
+  return getTeammateConfig(branch)?.emoji;
+}
+
 /**
  * Global compose affordance: ask your primary assistant from anywhere. Resolves
- * the caller's primary teammate branch, mounts a compact model picker + prompt,
- * and either navigates to the new session ("Send & Open") or leaves the user in
- * place ("Send in Background"). A null primary shows the Settings picker inline
- * and resumes the send once one is chosen, preserving the typed prompt.
+ * the caller's primary teammate branch, mounts an agent picker + config chips +
+ * prompt, and either navigates to the new session ("Send & Open") or leaves the
+ * user in place ("Send in Background"). A null primary shows the Settings picker
+ * inline and resumes the send once one is chosen, preserving the typed prompt.
  */
 export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   client,
@@ -85,14 +100,26 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [open, setOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_TOOL);
   const [prompt, setPrompt] = useState('');
   const [pendingSend, setPendingSend] = useState<SendMode | null>(null);
   const [submitting, setSubmitting] = useState<SendMode | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
   );
+  const [hintDismissed, setHintDismissed] = useLocalStorage<boolean>(HINT_DISMISSED_KEY, false);
+  const { attachments, addAttachments, removeAttachment, clearAttachments } =
+    useComposerAttachments({ sessionId: null, showError: (msg) => message.error(msg) });
 
   const onBoardSurface = !!currentBoardId && !isKnowledgePath(location.pathname);
+
+  // One lightweight tinted-box treatment, shared by the tip and the no-primary banner.
+  const bannerBox: React.CSSProperties = {
+    padding: `${token.paddingXS}px ${token.paddingSM}px`,
+    background: token.colorFillQuaternary,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadius,
+  };
 
   // Resolve the primary teammate each time the popover opens — access can change
   // between opens (branch archived, unshared), and null is the "needs picking" signal.
@@ -117,37 +144,55 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     };
   }, [open, client]);
 
-  // Seed the chip-row form from the user's Claude Code default on open. Only keyed
-  // on `open` so a live user refresh can't wipe edits made while the popover is up.
+  // Seed the chip-row form from the user's default on open. Only keyed on `open`
+  // so a live user refresh can't wipe edits made while the popover is up.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on open
   useEffect(() => {
     if (!open) return;
-    const agentDefaults = getUserAgenticToolDefault(currentUser, COMPOSE_TOOL).configuration;
+    setSelectedAgent(DEFAULT_TOOL);
+    const agentDefaults = getUserAgenticToolDefault(currentUser, DEFAULT_TOOL).configuration;
     form.resetFields();
     form.setFieldsValue({
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, COMPOSE_TOOL),
-      ...getFormValuesFromConfig(COMPOSE_TOOL, agentDefaults),
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, DEFAULT_TOOL),
+      ...getFormValuesFromConfig(DEFAULT_TOOL, agentDefaults),
       mcpServerIds: currentUser?.default_mcp_server_ids,
     });
   }, [open, form]);
+
+  // Re-seed config defaults when the picked tool changes (mirrors NewSessionModal).
+  useEffect(() => {
+    const tool = selectedAgent as AgenticToolName;
+    const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
+    form.setFieldsValue({
+      ...getFormValuesFromConfig(tool, agentDefaults),
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, tool),
+      ...(tool !== 'codex' && {
+        codexSandboxMode: undefined,
+        codexApprovalPolicy: undefined,
+        codexNetworkAccess: undefined,
+      }),
+    });
+  }, [selectedAgent, form, currentUser]);
 
   const closeAndReset = () => {
     setOpen(false);
     setPrompt('');
     setPendingSend(null);
     setPrimaryBranch(null);
+    clearAttachments();
   };
 
   const buildConfig = (branch: Branch): NewSessionConfig => {
+    const tool = selectedAgent as AgenticToolName;
     const values = form.getFieldsValue(true);
-    const agentDefaults = getUserAgenticToolDefault(currentUser, COMPOSE_TOOL).configuration;
+    const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
     const permissionMode: PermissionMode =
       (values.permissionMode as PermissionMode | undefined) ??
       agentDefaults?.permissionMode ??
-      getDefaultPermissionMode(COMPOSE_TOOL);
+      getDefaultPermissionMode(tool);
     const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
     const inlineConfig = isInline
-      ? buildConfigFromFormValues(COMPOSE_TOOL, {
+      ? buildConfigFromFormValues(tool, {
           modelConfig: values.modelConfig,
           effort: values.effort,
           permissionMode: values.permissionMode,
@@ -158,9 +203,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         ? branch.mcp_server_ids
         : currentUser?.default_mcp_server_ids;
 
-    return {
+    const config: NewSessionConfig = {
       branch_id: branch.branch_id,
-      agent: COMPOSE_TOOL,
+      agent: tool,
       agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
       initialPrompt: prompt,
       modelConfig: isInline
@@ -171,7 +216,27 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
       mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
       permissionMode,
+      attachmentFiles:
+        attachments.length > 0 ? attachments.map((attachment) => attachment.file) : undefined,
     };
+
+    if (tool === 'codex') {
+      const codexDefaults = mapToCodexPermissionConfig(permissionMode);
+      config.codexSandboxMode =
+        (values.codexSandboxMode as CodexSandboxMode | undefined) ??
+        agentDefaults?.codexSandboxMode ??
+        codexDefaults.sandboxMode;
+      config.codexApprovalPolicy =
+        (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
+        agentDefaults?.codexApprovalPolicy ??
+        codexDefaults.approvalPolicy;
+      config.codexNetworkAccess =
+        values.codexNetworkAccess ??
+        agentDefaults?.codexNetworkAccess ??
+        codexDefaults.networkAccess;
+    }
+
+    return config;
   };
 
   const doSend = async (mode: SendMode, branch: Branch) => {
@@ -199,6 +264,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         setOpen(false);
         setPrompt('');
         setPendingSend(null);
+        clearAttachments();
         setInPlaceResult({ sessionId, branch });
       }
     } finally {
@@ -224,7 +290,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     }
   };
 
-  const sendDisabled = resolving || submitting !== null || !prompt.trim();
+  const sendDisabled =
+    resolving || submitting !== null || (!prompt.trim() && attachments.length === 0);
 
   const wayfinding = (() => {
     if (!primaryBranch) return null;
@@ -240,7 +307,46 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   })();
 
   const content = (
-    <div style={{ width: 600, maxWidth: '90vw' }}>
+    <div style={{ width: 680, maxWidth: '90vw' }}>
+      <Flex
+        align="center"
+        justify="space-between"
+        gap={token.marginSM}
+        style={{ marginBottom: token.marginSM }}
+      >
+        <Typography.Text strong>Ask your primary assistant</Typography.Text>
+        {primaryBranch && (
+          <Tag
+            icon={teammateEmoji(primaryBranch) ? undefined : <RobotOutlined />}
+            style={{ marginInlineEnd: 0 }}
+          >
+            {teammateEmoji(primaryBranch) ? `${teammateEmoji(primaryBranch)} ` : ''}
+            {teammateName(primaryBranch)}
+          </Tag>
+        )}
+      </Flex>
+
+      {!hintDismissed && (
+        <Flex
+          align="flex-start"
+          gap={token.marginXS}
+          style={{ ...bannerBox, marginBottom: token.marginSM }}
+        >
+          <BulbOutlined style={{ color: token.colorTextTertiary, marginTop: 3 }} />
+          <Typography.Text type="secondary" style={{ flex: 1, fontSize: token.fontSizeSM }}>
+            Ask for anything — setup help, finding a feature, fixing something. Your assistant
+            handles it for you.
+          </Typography.Text>
+          <Button
+            type="text"
+            size="small"
+            aria-label="Dismiss tip"
+            icon={<CloseOutlined style={{ fontSize: token.fontSizeSM }} />}
+            onClick={() => setHintDismissed(true)}
+          />
+        </Flex>
+      )}
+
       {resolving ? (
         <Flex justify="center" style={{ padding: token.paddingLG }}>
           <Spin />
@@ -249,12 +355,28 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         <Form form={form} layout="vertical" requiredMark={false}>
           {!primaryBranch && (
             <div style={{ marginBottom: token.marginSM }}>
+              <div style={{ ...bannerBox, marginBottom: token.marginSM }}>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  You don't have a primary assistant yet — pick one to continue.
+                </Typography.Text>
+              </div>
               <PrimaryTeammatePicker client={client} compact onPicked={handlePicked} />
             </div>
           )}
 
+          <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>
+            <AgentSelectionGrid
+              agents={AVAILABLE_AGENTS}
+              selectedAgentId={selectedAgent}
+              onSelect={setSelectedAgent}
+              variant="select"
+              showComparisonLink={false}
+              fallbackToFirstVisibleAgent
+            />
+          </Form.Item>
+
           <AgenticConfigChipRow
-            tool={COMPOSE_TOOL}
+            tool={selectedAgent as AgenticToolName}
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
@@ -262,17 +384,27 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           />
 
           <Form.Item style={{ marginBottom: token.marginXS }}>
-            <AutocompleteTextarea
-              value={prompt}
-              onChange={setPrompt}
-              placeholder="Ask your primary assistant…"
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              client={client}
-              sessionId={null}
-              userById={userById}
-              enableKnowledgeMentions
-              kbLinkTarget="absolute-route"
-            />
+            <SessionComposerDropZone disabled={submitting !== null} onFilesDrop={addAttachments}>
+              <SessionAttachmentTray
+                attachments={attachments}
+                disabled={submitting !== null}
+                onRemove={removeAttachment}
+              />
+              <AutocompleteTextarea
+                value={prompt}
+                onChange={setPrompt}
+                placeholder="Ask your primary assistant…"
+                autoSize={{ minRows: 2, maxRows: 6 }}
+                client={client}
+                sessionId={null}
+                userById={userById}
+                enableKnowledgeMentions
+                kbLinkTarget="absolute-route"
+                onFilesDrop={addAttachments}
+                filesDropDisabled={submitting !== null}
+                showFilesDropOverlay={false}
+              />
+            </SessionComposerDropZone>
           </Form.Item>
 
           {wayfinding && (
