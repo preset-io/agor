@@ -7,12 +7,28 @@ License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
 
 Parameters
 
-Licensor:             Maxime Beauchemin
+Licensor:             Preset, Inc.
 Licensed Work:        Agor
-                      The Licensed Work is (c) 2025 Maxime Beauchemin
-Additional Use Grant: None
+                      The Licensed Work is (c) 2025 Preset, Inc.
+Additional Use Grant: You may make production use of the Licensed Work,
+                      provided that you may not use the Licensed Work for an
+                      Agor Offering.
+
+                      An "Agor Offering" is a commercial product or service
+                      offered to third parties whose primary purpose is to
+                      provide the functionality of the Licensed Work to
+                      orchestrate or manage AI coding agents. This includes
+                      offering the Licensed Work on a hosted or managed basis,
+                      or bundling the Licensed Work in a product for customers
+                      to operate.
+
+                      Consulting, support, and integration services, including
+                      operating a deployment solely for a specific customer's
+                      own internal use, are not an Agor Offering.
 Change Date:          2029-01-15
 Change License:       Apache License, Version 2.0
+
+For alternative commercial licensing arrangements, contact Preset, Inc.
 
 ---
 

@@ -1,14 +1,44 @@
-import type { Board, Branch } from '@agor-live/client';
-import { DownOutlined, HomeOutlined, SearchOutlined } from '@ant-design/icons';
+import type { AgorClient, Board, Branch, User } from '@agor-live/client';
+import { DownOutlined, EditOutlined, HomeOutlined, SearchOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Divider, Dropdown, Input, Space, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Divider,
+  Dropdown,
+  Grid,
+  Input,
+  Space,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
+import { BoardEditModal } from '../BoardEditModal';
 
 const { Text } = Typography;
 const { useToken } = theme;
 
 const FILTER_THRESHOLD = 8;
+
+function useCoarsePointer() {
+  const [coarse, setCoarse] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(hover: none), (pointer: coarse)').matches
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.('(hover: none), (pointer: coarse)');
+    if (!query) return;
+    const update = () => setCoarse(query.matches);
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+  return coarse;
+}
 
 interface BoardSwitcherProps {
   boards: Board[];
@@ -16,6 +46,9 @@ interface BoardSwitcherProps {
   onBoardChange: (boardId: string) => void;
   onHomeClick?: () => void;
   branchById: Map<string, Branch>;
+  client?: AgorClient | null;
+  currentUser?: User | null;
+  onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void | Promise<void>;
 }
 
 export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
@@ -24,12 +57,20 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   onBoardChange,
   onHomeClick,
   branchById,
+  client = null,
+  currentUser,
+  onUpdateBoard,
 }) => {
   const { token } = useToken();
   const [filterText, setFilterText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [triggerActive, setTriggerActive] = useState(false);
+  const screens = Grid.useBreakpoint();
+  const coarsePointer = useCoarsePointer();
 
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
+  const canManage = useCanManageBoard(client, currentBoard, currentUser);
 
   const branchCountByBoard = useMemo(() => {
     const counts = new Map<string, number>();
@@ -138,79 +179,136 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     </Button>
   );
 
-  return (
-    <Dropdown
-      menu={{ items: boardMenuItems }}
-      trigger={['click']}
-      placement="bottomLeft"
-      open={dropdownOpen}
-      onOpenChange={(open) => {
-        setDropdownOpen(open);
-        if (!open) setFilterText('');
-      }}
-      popupRender={(menu) => (
-        <div
-          style={{
-            backgroundColor: token.colorBgElevated,
-            borderRadius: token.borderRadiusLG,
-            boxShadow: token.boxShadowSecondary,
-            minWidth: 290,
-          }}
-        >
-          <div
-            style={{
-              position: 'sticky',
-              top: 0,
-              zIndex: 1,
-              padding: '8px 8px 0',
-              background: token.colorBgElevated,
-              borderTopLeftRadius: token.borderRadiusLG,
-              borderTopRightRadius: token.borderRadiusLG,
-            }}
-          >
-            {homeRow}
-            <Divider style={{ margin: '8px 0 0' }} />
-          </div>
-          {showFilter && (
-            <>
-              <div style={{ padding: '8px 12px' }}>
-                <Input
-                  placeholder="Filter boards..."
-                  prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  size="small"
-                  allowClear
-                  autoFocus
-                  aria-label="Filter boards"
-                />
-              </div>
-              <Divider style={{ margin: 0 }} />
-            </>
-          )}
-          <div style={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>{menu}</div>
-        </div>
-      )}
-    >
+  const editButton = canManage && currentBoard && (
+    <Tooltip title="Edit current board">
       <Button
         type="text"
-        style={{
-          width: '100%',
-          height: 'auto',
-          padding: '8px 12px',
-          textAlign: 'left',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
+        size="small"
+        icon={<EditOutlined />}
+        aria-label={`Edit current board: ${currentBoard.name}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDropdownOpen(false);
+          setEditing(true);
+        }}
+      />
+    </Tooltip>
+  );
+
+  return (
+    <>
+      <div
+        style={{ position: 'relative', width: '100%' }}
+        onPointerEnter={() => setTriggerActive(true)}
+        onPointerLeave={() => setTriggerActive(false)}
+        onFocus={() => setTriggerActive(true)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setTriggerActive(false);
         }}
       >
-        <Space size={8}>
-          <span style={{ fontSize: 18 }}>{currentBoard ? currentBoard.icon || '📋' : '🏠'}</span>
-          <Text strong>{currentBoard?.name || 'Home'}</Text>
-        </Space>
-        <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-      </Button>
-    </Dropdown>
+        <Dropdown
+          menu={{ items: boardMenuItems }}
+          trigger={['click']}
+          placement="bottomLeft"
+          open={dropdownOpen}
+          onOpenChange={(open) => {
+            setDropdownOpen(open);
+            if (!open) setFilterText('');
+          }}
+          popupRender={(menu) => (
+            <div
+              style={{
+                backgroundColor: token.colorBgElevated,
+                borderRadius: token.borderRadiusLG,
+                boxShadow: token.boxShadowSecondary,
+                minWidth: 290,
+              }}
+            >
+              <div
+                style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 1,
+                  padding: '8px 8px 0',
+                  background: token.colorBgElevated,
+                  borderTopLeftRadius: token.borderRadiusLG,
+                  borderTopRightRadius: token.borderRadiusLG,
+                }}
+              >
+                {homeRow}
+                <Divider style={{ margin: '8px 0 0' }} />
+              </div>
+              {showFilter && (
+                <>
+                  <div style={{ padding: '8px 12px' }}>
+                    <Input
+                      placeholder="Filter boards..."
+                      prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
+                      value={filterText}
+                      onChange={(e) => setFilterText(e.target.value)}
+                      size="small"
+                      allowClear
+                      autoFocus
+                      aria-label="Filter boards"
+                    />
+                  </div>
+                  <Divider style={{ margin: 0 }} />
+                </>
+              )}
+              <div style={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>{menu}</div>
+            </div>
+          )}
+        >
+          <Button
+            type="text"
+            style={{
+              width: '100%',
+              height: 'auto',
+              padding: '8px 12px',
+              textAlign: 'left',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
+              <span style={{ fontSize: 18 }}>
+                {currentBoard ? currentBoard.icon || '📋' : '🏠'}
+              </span>
+              <Text strong ellipsis style={{ minWidth: 0 }}>
+                {currentBoard?.name || 'Home'}
+              </Text>
+            </Space>
+            <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+          </Button>
+        </Dropdown>
+        {editButton && (
+          <span
+            style={{
+              position: 'absolute',
+              // Keep one base spacing unit between the overlay action and the
+              // dropdown caret without reserving any navbar layout width.
+              right: token.paddingLG + token.sizeUnit,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              opacity: !screens.md || coarsePointer || triggerActive ? 1 : 0,
+              pointerEvents: !screens.md || coarsePointer || triggerActive ? 'auto' : 'none',
+              transition: `opacity ${token.motionDurationFast}`,
+            }}
+          >
+            {editButton}
+          </span>
+        )}
+      </div>
+      <BoardEditModal
+        board={currentBoard ?? null}
+        client={client}
+        open={editing && Boolean(currentBoard)}
+        onClose={() => setEditing(false)}
+        onUpdate={onUpdateBoard}
+      />
+    </>
   );
 };
 

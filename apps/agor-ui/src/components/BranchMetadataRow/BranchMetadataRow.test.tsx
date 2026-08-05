@@ -14,14 +14,18 @@ const branch = {
   pull_request_url: 'https://github.com/preset-io/agor/pull/2',
 } as Branch;
 
-const userById = new Map<string, User>([
-  ['user-2', { user_id: 'user-2', name: 'sam', email: 'sam@example.com' } as User],
-]);
+const sam = { user_id: 'user-2', name: 'sam', email: 'sam@example.com', role: 'member' } as User;
+const alice = {
+  user_id: 'user-3',
+  name: 'alice',
+  email: 'alice@example.com',
+  role: 'member',
+} as User;
 
 describe('BranchMetadataRow', () => {
-  it('renders the pill and metadata links inline in a single wrapping row', () => {
+  it('renders the pill, owner badge, and metadata links inline', () => {
     render(
-      <BranchMetadataRow branch={branch} repo={repo} userById={userById} currentUserId="user-1">
+      <BranchMetadataRow branch={branch} repo={repo} owners={[sam]} currentUserId="user-1">
         <div data-testid="branch-pill" />
       </BranchMetadataRow>
     );
@@ -29,21 +33,40 @@ describe('BranchMetadataRow', () => {
     const pill = screen.getByTestId('branch-pill');
     const issue = screen.getByText(/Issue:/);
     const pr = screen.getByText(/PR:/);
-    const createdBy = screen.getByText('sam');
+    const ownerName = screen.getByText('sam');
 
-    // All items share ONE row container (no stacked second row), pill first.
     const row = pill.parentElement as HTMLElement;
-    for (const item of [issue, pr, createdBy]) {
+    for (const item of [issue, pr, ownerName]) {
       expect(row.contains(item)).toBe(true);
     }
     expect(row.firstElementChild).toBe(pill);
-    // Pill precedes every metadata link in document order.
-    for (const item of [createdBy, issue, pr]) {
+    for (const item of [ownerName, issue, pr]) {
       expect(pill.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
   });
 
-  it('omits metadata links the branch does not have and created-by without a user map', () => {
+  it('shows multiple owners', () => {
+    render(
+      <BranchMetadataRow branch={branch} repo={repo} owners={[sam, alice]} currentUserId="user-1">
+        <div data-testid="branch-pill" />
+      </BranchMetadataRow>
+    );
+
+    expect(screen.getByText('sam')).toBeInTheDocument();
+    expect(screen.getByText('alice')).toBeInTheDocument();
+  });
+
+  it('hides owner tag when the sole owner is the current user', () => {
+    render(
+      <BranchMetadataRow branch={branch} repo={repo} owners={[sam]} currentUserId="user-2">
+        <div data-testid="branch-pill" />
+      </BranchMetadataRow>
+    );
+
+    expect(screen.queryByText('sam')).not.toBeInTheDocument();
+  });
+
+  it('omits metadata links the branch does not have and owner tag without owners', () => {
     render(
       <BranchMetadataRow
         branch={{ ...branch, issue_url: undefined, pull_request_url: undefined } as Branch}

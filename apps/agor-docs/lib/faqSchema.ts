@@ -49,7 +49,7 @@ const faqItems: Array<{ question: string; answer: string }> = [
       'Use different branches for isolation: different features or issues, competing implementations, or work that would conflict on disk. Fork a session within a branch for parallel work on the same feature that needs the same starting context and won’t conflict on the filesystem — implementation, tests, docs, and review can all share one branch.',
   },
   {
-    question: "What does Agor's open-source telemetry collect?",
+    question: "What does Agor's community telemetry collect?",
     answer:
       'When enabled, Agor sends lightweight anonymous install and aggregate usage summaries: version, install channel, OS family, deployment kind, broad configuration modes, and aggregate counts like sessions and prompts. It never sends prompts, messages, repo names, file paths, code, emails, secrets, or tokens. Disable it with AGOR_TELEMETRY=0, DO_NOT_TRACK=1, or "agor telemetry off".',
   },

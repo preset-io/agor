@@ -44,6 +44,7 @@ export interface AppHeaderProps {
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   onHomeClick?: () => void;
+  onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void | Promise<void>;
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
@@ -111,6 +112,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   currentBoardId,
   onBoardChange,
   onHomeClick,
+  onUpdateBoard,
   onUserClick,
   instanceLabel,
   instanceDescription,
@@ -241,6 +243,9 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             onBoardChange={onBoardChange || (() => {})}
             onHomeClick={onHomeClick}
             branchById={branchById}
+            client={presenceClient}
+            currentUser={user}
+            onUpdateBoard={onUpdateBoard}
           />
         </div>
         {boards.length > 0 && (

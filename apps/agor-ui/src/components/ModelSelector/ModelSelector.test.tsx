@@ -12,7 +12,7 @@ describe('ModelSelector (Claude)', () => {
       />
     );
     // Closed control shows the friendly display name, not the raw id.
-    expect(screen.getByText('Claude Sonnet 5')).toBeInTheDocument();
+    expect(screen.getByText('Claude Sonnet 5 — 1M')).toBeInTheDocument();
     expect(screen.getByText('Pin a specific version…')).toBeInTheDocument();
   });
 
@@ -104,8 +104,9 @@ describe('ModelSelector (Claude)', () => {
 
     fireEvent.mouseDown(screen.getByRole('combobox'));
 
-    expect(screen.getByText('Claude Opus 4.7')).toBeInTheDocument();
-    expect(screen.getByText('Claude Sonnet 4.6')).toBeInTheDocument();
+    expect(screen.getByText('Claude Opus 4.7 — 200k')).toBeInTheDocument();
+    expect(screen.getByText('Claude Opus 4.7 — 1M')).toBeInTheDocument();
+    expect(screen.getByText('Claude Sonnet 4.6 — 200k')).toBeInTheDocument();
   });
 });
 

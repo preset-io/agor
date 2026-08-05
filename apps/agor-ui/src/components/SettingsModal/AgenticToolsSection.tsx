@@ -115,12 +115,8 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       setError(null);
       const updated = await client.service('agentic-tool-settings').patch(tool, data);
       setSettings((current) => ({ ...current, [tool]: updated }));
-      const currentStore = agorStore.getState().agenticToolSettingsByName;
-      agorStore
-        .getState()
-        .setAgenticToolSettings(
-          [...currentStore.values()].filter((item) => item.tool !== tool).concat(updated)
-        );
+      // Single-row admin edit: merge without touching the hydration gate.
+      agorStore.getState().upsertAgenticToolSetting(updated);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save agentic tool');
     }

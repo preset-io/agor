@@ -804,11 +804,11 @@ export interface AgorPathSettings {
 }
 
 /**
- * Public open-source telemetry settings.
+ * Public community telemetry settings.
  *
  * This is intentionally separate from `analytics`: `analytics` is for
  * operator-configured instance analytics, while `telemetry` is Agor's
- * lightweight opt-in/open-source install and aggregate usage telemetry.
+ * lightweight opt-in community install and aggregate usage telemetry.
  */
 export interface AgorTelemetrySettings {
   /** Ongoing telemetry opt-in. Undefined means the user has not answered yet. */
@@ -1013,7 +1013,7 @@ export interface AgorConfig {
   /** Backend analytics settings. Disabled by default. */
   analytics?: AgorAnalyticsSettings;
 
-  /** Public open-source telemetry settings. */
+  /** Public community telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */

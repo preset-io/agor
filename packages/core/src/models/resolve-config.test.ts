@@ -26,6 +26,12 @@ describe('resolveModelConfig', () => {
     });
   });
 
+  it('preserves the Claude Code context-window suffix as model identity', () => {
+    expect(resolveModelConfig({ model: 'claude-opus-5[1m]' }, { now })?.model).toBe(
+      'claude-opus-5[1m]'
+    );
+  });
+
   it('preserves explicit mode', () => {
     expect(
       resolveModelConfig({ mode: 'exact', model: 'claude-sonnet-4-5-20250929' }, { now })

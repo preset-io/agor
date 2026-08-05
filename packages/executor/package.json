@@ -2,6 +2,7 @@
   "name": "@agor/executor",
   "version": "0.1.0",
   "description": "Agor executor process - isolated execution environment",
+  "license": "BUSL-1.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -96,7 +96,9 @@ describe('AgenticToolConfigurationPicker', () => {
   it('shows "My default" with resolved model + permission summary', async () => {
     renderPicker(userWithConfigDefault);
     await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Sonnet 5 · Accept edits/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/My default · Claude Sonnet 5 — 1M · Accept edits/)
+      ).toBeInTheDocument()
     );
   });
 

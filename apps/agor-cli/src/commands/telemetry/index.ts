@@ -8,7 +8,7 @@ import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
 export default class Telemetry extends Command {
-  static description = 'Show Agor open-source telemetry status';
+  static description = 'Show Agor community telemetry status';
 
   async run(): Promise<void> {
     await this.parse(Telemetry);
@@ -16,7 +16,7 @@ export default class Telemetry extends Command {
     const enabled = config.telemetry?.enabled === true;
     const configured = config.telemetry?.enabled !== undefined;
 
-    this.log(chalk.bold('Agor open-source telemetry'));
+    this.log(chalk.bold('Agor community telemetry'));
     const status = enabled
       ? chalk.green('enabled')
       : chalk.yellow(configured ? 'disabled' : 'not configured');

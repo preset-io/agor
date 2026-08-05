@@ -16,16 +16,23 @@ export function flattenSearchableValue(value: SearchableValue): string[] {
   return [String(value)];
 }
 
+export function matchesSettingsSearchTokens<T>(
+  item: T,
+  tokens: string[],
+  accessors: Array<SearchAccessor<T>>
+): boolean {
+  if (tokens.length === 0) return true;
+
+  const fields = accessors.flatMap((accessor) => flattenSearchableValue(accessor(item)));
+  return matchSearchTokens(tokens, fields);
+}
+
 export function matchesSettingsSearch<T>(
   item: T,
   query: string,
   accessors: Array<SearchAccessor<T>>
 ): boolean {
-  const tokens = getSettingsSearchTokens(query);
-  if (tokens.length === 0) return true;
-
-  const fields = accessors.flatMap((accessor) => flattenSearchableValue(accessor(item)));
-  return matchSearchTokens(tokens, fields);
+  return matchesSettingsSearchTokens(item, getSettingsSearchTokens(query), accessors);
 }
 
 export function filterBySettingsSearch<T>(

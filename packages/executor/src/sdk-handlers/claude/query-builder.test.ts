@@ -31,12 +31,6 @@ vi.mock('../base/mcp-scoping.js', () => ({
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
 }));
-vi.mock('./model-utils.js', () => ({
-  parseModelWithBetas: vi.fn((model: string) => ({
-    model: model.replace('[1m]', ''),
-    betas: model.includes('[1m]') ? ['context-1m-2025-08-07'] : [],
-  })),
-}));
 vi.mock('./permissions/permission-hooks.js', () => ({
   createCanUseToolCallback: vi.fn(
     () => () => Promise.resolve({ behavior: 'allow', updatedInput: {} })
@@ -327,7 +321,7 @@ describe('setupQuery - Local Settings Support', () => {
       branch_id: 'test-branch' as BranchID,
       model_config: {
         mode: 'alias',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-4-6[1m]',
         updated_at: '2026-06-11T00:00:00.000Z',
         advisorModel: 'opus',
       },
@@ -336,6 +330,7 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.model).toBe('claude-sonnet-4-6[1m]');
     // The advisor goes through the SDK's extraArgs → `--advisor opus`.
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'opus' });
     // EACCES regression guard: we must NOT pass `settings` as an object, which
@@ -344,7 +339,7 @@ describe('setupQuery - Local Settings Support', () => {
     expect(callArgs.options.settings).toBeUndefined();
   });
 
-  it('strips advisorModel [1m] suffix, passes base model via --advisor, adds the SDK beta', async () => {
+  it('passes advisorModel [1m] through to Claude Code without translating it to a beta', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
       session_id: 'test-session' as SessionID,
@@ -360,9 +355,9 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7' });
+    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7[1m]' });
     expect(callArgs.options.settings).toBeUndefined();
-    expect(callArgs.options.betas).toEqual(['context-1m-2025-08-07']);
+    expect(callArgs.options.betas).toBeUndefined();
   });
 
   it('omits --advisor (and settings) entirely when no advisorModel is set', async () => {

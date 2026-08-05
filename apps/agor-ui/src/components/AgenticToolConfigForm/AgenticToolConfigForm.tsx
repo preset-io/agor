@@ -60,6 +60,9 @@ const MODEL_LABELS: Record<string, string> = {
   cursor: 'Cursor Model',
 };
 
+/** The rendered label of a tool's model/provider selector (defaults to Claude). */
+export const modelLabelForTool = (tool: string): string => MODEL_LABELS[tool] ?? 'Claude Model';
+
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,
   showHelpText = true,
@@ -67,7 +70,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   client,
   showAdvisor = true,
 }) => {
-  const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
+  const modelLabel = modelLabelForTool(agenticTool);
   const showCodexFields = agenticTool === 'codex' && !compact;
   const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[agenticTool];
   const effortLevels = toolCapabilities.reasoningEffortLevels;

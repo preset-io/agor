@@ -36,7 +36,6 @@ import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
-import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
@@ -158,11 +157,12 @@ export async function setupQuery(
   });
 
   // Determine model to use (session config or default)
-  // Models may include [1m] suffix for extended context — strip it for SDK and add beta flag
+  // `[1m]` is a first-class Claude Code model-selection suffix. Keep it on
+  // the SDK model option so Claude Code can apply provider/account entitlement,
+  // compaction, and routing consistently; it strips the suffix at the provider
+  // boundary itself.
   const modelConfig = session.model_config;
-  const rawModel = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
-  const { model, betas } = parseModelWithBetas(rawModel);
-  const sdkBetas = new Set(betas);
+  const model = modelConfig?.model || DEFAULT_CLAUDE_MODEL;
 
   // Determine CWD from branch (if session has one)
   let cwd = process.cwd();
@@ -289,17 +289,9 @@ export async function setupQuery(
   // >= 2.1.175) and writes no settings file, so it sidesteps the collision entirely.
   const rawAdvisorModel = session.model_config?.advisorModel?.trim();
   if (rawAdvisorModel) {
-    const { model: advisorModel, betas: advisorBetas } = parseModelWithBetas(rawAdvisorModel);
-    for (const beta of advisorBetas) sdkBetas.add(beta);
     const extraArgs = (queryOptions.extraArgs as Record<string, string | null> | undefined) ?? {};
-    extraArgs.advisor = advisorModel;
+    extraArgs.advisor = rawAdvisorModel;
     queryOptions.extraArgs = extraArgs;
-  }
-
-  // Add beta flags (e.g., 1M context window for [1m] model variants)
-  const betaList = [...sdkBetas];
-  if (betaList.length > 0) {
-    queryOptions.betas = betaList;
   }
 
   // Add canUseTool callback if permission service is available and taskId provided.

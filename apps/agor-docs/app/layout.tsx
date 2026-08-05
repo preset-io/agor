@@ -107,7 +107,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   description: DEFAULT_DESCRIPTION,
                   applicationCategory: 'DeveloperApplication',
                   operatingSystem: 'macOS, Linux, Windows',
-                  // Open-source (BSL 1.1) build is free to self-host.
+                  // Source-available BSL 1.1 build permits self-hosted production use.
                   offers: {
                     '@type': 'Offer',
                     price: '0',
