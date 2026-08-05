@@ -177,6 +177,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   );
   const [showCronPicker, setShowCronPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const executionOwnerResolved =
+    !schedule?.created_by || executionOwner?.user_id === schedule.created_by;
 
   // Initialize form when modal opens or the schedule prop changes.
   useEffect(() => {
@@ -495,6 +497,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
             branchId={branchId}
             defaultResolution="schedule-run"
             currentUser={executionOwner}
+            configurationOwnerResolved={executionOwnerResolved}
           />
         )}
 

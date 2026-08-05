@@ -35,6 +35,8 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   defaultResolution?: 'save' | 'schedule-run';
   /** Current user — resolves "My default" and gates the save-as-default checkbox. */
   currentUser?: User | null;
+  /** False while a persisted configuration's execution owner is still hydrating. */
+  configurationOwnerResolved?: boolean;
   /** Render the MCP servers field inside the picker (default true). */
   renderMcpField?: boolean;
   /** Offer the "Save as my default" checkbox while inline config is active. */
@@ -77,6 +79,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   fieldName = 'agenticToolPresetId',
   defaultResolution = 'save',
   currentUser,
+  configurationOwnerResolved = true,
   renderMcpField = true,
   enableSaveAsDefault = false,
   ...formProps
@@ -112,9 +115,17 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   });
 
   useEffect(() => {
-    if (!loaded || isValidSource(selected)) return;
+    if (!configurationOwnerResolved || !loaded || isValidSource(selected)) return;
     form.setFieldValue(fieldName, preferredSource);
-  }, [fieldName, form, isValidSource, loaded, preferredSource, selected]);
+  }, [
+    configurationOwnerResolved,
+    fieldName,
+    form,
+    isValidSource,
+    loaded,
+    preferredSource,
+    selected,
+  ]);
 
   const configurationLabel = (
     <Space size={4}>

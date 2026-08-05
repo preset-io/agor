@@ -56,10 +56,15 @@ export function normalizePersistedScheduleAgenticToolConfig(
       `Invalid default configuration reference: ${String(config.configuration_reference)}`
     );
   }
+  const normalizedPresetReference = config.preset_id
+    ? normalizeDefaultReference(config.preset_id)
+    : undefined;
+  const configurationReference = normalizedReference ?? normalizedPresetReference;
+  const { preset_id: _presetId, ...snapshot } = config;
   return {
-    ...config,
+    ...(configurationReference ? snapshot : config),
     agentic_tool: config.agentic_tool,
-    ...(normalizedReference ? { configuration_reference: normalizedReference } : {}),
+    ...(configurationReference ? { configuration_reference: configurationReference } : {}),
   };
 }
 

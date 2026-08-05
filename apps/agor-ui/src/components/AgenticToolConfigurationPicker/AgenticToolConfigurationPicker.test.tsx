@@ -95,6 +95,45 @@ function renderPicker(
 }
 
 describe('AgenticToolConfigurationPicker', () => {
+  it('preserves a stored owner default until that owner is hydrated', async () => {
+    const onFinish = vi.fn();
+    const client = makeClient();
+    const Harness = ({ owner, resolved }: { owner: User | null; resolved: boolean }) => (
+      <Form
+        initialValues={{ agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION }}
+        onFinish={onFinish}
+      >
+        <AgenticToolConfigurationPicker
+          tool="claude-code"
+          client={client}
+          mcpServerById={new Map()}
+          currentUser={owner}
+          configurationOwnerResolved={resolved}
+        />
+        <Form.Item shouldUpdate noStyle>
+          {({ getFieldValue }) => (
+            <output data-testid="selected-source">{getFieldValue('agenticToolPresetId')}</output>
+          )}
+        </Form.Item>
+        <Button htmlType="submit">Save</Button>
+      </Form>
+    );
+    const { rerender } = render(<Harness owner={null} resolved={false} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(
+        USER_DEFAULT_AGENTIC_CONFIGURATION
+      )
+    );
+
+    rerender(<Harness owner={userWithConfigDefault} resolved />);
+    await screen.findByText(/My default · Claude Sonnet 5 · Accept edits/);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onFinish).toHaveBeenCalledOnce());
+    expect(onFinish.mock.calls[0][0].agenticToolPresetId).toBe(USER_DEFAULT_AGENTIC_CONFIGURATION);
+  });
+
   it('shows "My default" with resolved model + permission summary', async () => {
     renderPicker(userWithConfigDefault);
     await waitFor(() =>
