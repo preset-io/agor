@@ -521,17 +521,15 @@ describe('POST /mcp with personal API keys', () => {
     }));
 
     await withMcpServer({ users: { get: getUser } }, async (baseUrl) => {
-      const sessionIds: string[] = [];
-      for (let i = 0; i < 100; i++) {
-        sessionIds.push(await initializeStatefulMcp(baseUrl));
-      }
+      const oldestSessionId = await initializeStatefulMcp(baseUrl);
+      await Promise.all(Array.from({ length: 99 }, () => initializeStatefulMcp(baseUrl)));
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       await initializeStatefulMcp(baseUrl);
 
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
-        `⚠️  MCP streamable HTTP session limit reached; evicting ${sessionIds[0]}`
+        `⚠️  MCP streamable HTTP session limit reached; evicting ${oldestSessionId}`
       );
     });
   });
