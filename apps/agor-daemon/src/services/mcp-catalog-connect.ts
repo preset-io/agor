@@ -144,13 +144,23 @@ function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCat
  * re-read it instead of connecting against the old one.
  */
 function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unknown): void {
+  const stored = (entry.permission_disclosure ?? '').trim();
+  // Curation requires a disclosure on every entry it writes, so this is a
+  // curation gap rather than a caller's mistake — say that, instead of telling
+  // the user prose they never saw has changed.
+  if (!stored) {
+    throw new BadRequest(
+      `${entry.name} states nothing about what it can access, so it cannot be connected`
+    );
+  }
+
   const shown = typeof acknowledged === 'string' ? acknowledged.trim() : '';
   if (!shown) {
     throw new BadRequest(
       `acknowledged_disclosure is required: connecting ${entry.name} must follow showing what it can access`
     );
   }
-  if (shown !== (entry.permission_disclosure ?? '').trim()) {
+  if (shown !== stored) {
     throw new BadRequest(
       `The access disclosure for ${entry.name} has changed since it was shown; review it again before connecting`
     );

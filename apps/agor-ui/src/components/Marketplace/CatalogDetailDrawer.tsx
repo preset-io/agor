@@ -79,13 +79,6 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
 
   const entryId = entry?.catalog_entry_id;
 
-  // The acknowledgement records *which* server was acknowledged, rather than a
-  // boolean an effect resets when the entry changes. An effect would leave one
-  // render in which the new server's disclosure sits above an already-enabled
-  // connect button, carrying consent from the server before it.
-  const [acknowledgedEntryId, setAcknowledgedEntryId] = useState<string | null>(null);
-  const acknowledged = entryId !== undefined && acknowledgedEntryId === entryId;
-
   const branchOptions = useMemo(
     () =>
       branches.map((branch) => ({
@@ -107,6 +100,16 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   const blockedReason = entry ? connectBlockedReason(entry) : undefined;
   const title = entry ? entryTitle(entry) : '';
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
+
+  // Consent records the server *and* the words it was given for, rather than a
+  // boolean some effect resets. A boolean leaves one render in which a newly
+  // opened server's disclosure sits above an already-enabled button; keying on
+  // the server alone still lets a re-opened entry arrive pre-consented after
+  // curation rewrote what it discloses. The endpoint's contract is the text, so
+  // this is too.
+  const [consent, setConsent] = useState<{ entryId: string; disclosure: string } | null>(null);
+  const acknowledged =
+    entryId !== undefined && consent?.entryId === entryId && consent.disclosure === disclosure;
   const canConnect = Boolean(!blockedReason && acknowledged && branchId && !connecting);
 
   return (
@@ -190,7 +193,11 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                   <Checkbox
                     checked={acknowledged}
                     onChange={(event) =>
-                      setAcknowledgedEntryId(event.target.checked ? (entryId ?? null) : null)
+                      setConsent(
+                        event.target.checked && entryId !== undefined
+                          ? { entryId, disclosure }
+                          : null
+                      )
                     }
                   >
                     I understand what this server can access

@@ -334,6 +334,15 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers).toHaveLength(0);
   });
 
+  it('refuses an entry that states nothing about what it can access', async () => {
+    const { app, created } = buildApp({ ...CURATED, permission_disclosure: undefined });
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /states nothing about what it can access/
+    );
+    expect(created.mcpServers).toHaveLength(0);
+  });
+
   it('refuses a disclosure that no longer matches the catalog row', async () => {
     const { app, created } = buildApp(CURATED);
 

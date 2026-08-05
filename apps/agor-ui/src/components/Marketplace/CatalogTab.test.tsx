@@ -39,6 +39,7 @@ const LINEAR = {
   catalog_entry_id: 'entry-linear',
   name: 'app.linear/linear',
   title: 'Linear',
+  permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
 };
 
 /** Every catalog read the page makes, in call order, so queries can be asserted. */
@@ -182,6 +183,33 @@ describe('connect', () => {
     const linear = within(await screen.findByRole('dialog'));
     expect(linear.getByRole('checkbox')).not.toBeChecked();
     expect(linear.getByRole('button', { name: /Connect/ })).toBeDisabled();
+  });
+
+  it('withdraws consent when the disclosure it was given for is rewritten', async () => {
+    const drawer = await openDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
+
+    // A reseed rewrites what this server discloses while the drawer is open.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    catalogRows = [{ ...DEEPWIKI, permission_disclosure: 'Now also writes to your repositories.' }];
+    fireEvent.click(screen.getByRole('switch', { name: /Reviewed by Preset/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
+
+    const reopened = within(await screen.findByRole('dialog'));
+    expect(reopened.getByText('Now also writes to your repositories.')).toBeVisible();
+    expect(reopened.getByRole('checkbox')).not.toBeChecked();
+    expect(reopened.getByRole('button', { name: /Connect/ })).toBeDisabled();
+  });
+
+  it('offers no connect control for an entry that discloses nothing', async () => {
+    catalogRows = [{ ...DEEPWIKI, permission_disclosure: '' }];
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
+    const drawer = within(await screen.findByRole('dialog'));
+
+    expect(drawer.getByText(/has not stated what it can access/)).toBeVisible();
+    expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
   });
 
   it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
