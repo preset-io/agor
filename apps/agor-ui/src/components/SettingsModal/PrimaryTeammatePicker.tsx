@@ -133,7 +133,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
           Currently <Typography.Text strong>{teammateLabel(current)}</Typography.Text> on{' '}
           {teammateContext(current, boardById, repoById)}.
         </Typography.Text>
-      ) : (
+      ) : compact ? null : (
         <Typography.Text type="secondary">
           No primary assistant set — pick one below to use as your default for personal work.
         </Typography.Text>
