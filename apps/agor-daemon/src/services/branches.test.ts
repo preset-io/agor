@@ -2163,3 +2163,123 @@ describe('BranchesService environment health recovery', () => {
     expect(result.environment_instance?.status).toBe('running');
   });
 });
+
+describe('BranchesService remote environment readiness gate', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /**
+   * Remote envs (a Codespace) have no frozen health_check_url — the reachable
+   * address only exists after `start`, so the lifecycle command reports it as a
+   * `health` fact. These cover the gate + catch-up sync added for that path.
+   */
+  const remoteBranch = (overrides: Record<string, unknown> = {}) => ({
+    branch_id: 'wt-remote-health' as BranchID,
+    repo_id: 'repo-1',
+    name: 'wt-remote-health',
+    path: '/tmp/wt-remote-health',
+    branch_unique_id: 1,
+    // deliberately no health_check_url — this is the remote-env shape
+    environment_instance: {
+      status: 'starting',
+      facts: {
+        url: 'https://cs-8088.app.github.dev',
+        health: 'https://cs-8088.app.github.dev/health',
+      },
+      last_command: { action: 'start', status: 'succeeded' },
+      ...overrides,
+    },
+  });
+
+  const serviceFor = (branch: unknown) => {
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    return service;
+  };
+
+  it('probes the `health` fact and fires a catch-up sync on starting -> running', async () => {
+    const branch = remoteBranch();
+    const service = serviceFor(branch);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // The fact URL is what gets probed — not a frozen health_check_url.
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://cs-8088.app.github.dev/health',
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({ status: 'running' }),
+      undefined
+    );
+    // Commits made while the codespace was still building land now.
+    expect(syncEnvironment).toHaveBeenCalledWith(branch.branch_id, undefined);
+    expect(result.environment_instance?.status).toBe('running');
+  });
+
+  it('holds at starting while the app is not yet serving, and does not sync', async () => {
+    const branch = remoteBranch();
+    const service = serviceFor(branch);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment');
+    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
+    // Connection refused: the codespace exists but the app is still building.
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    // This is the whole point of the gate: a start that "succeeded" must NOT
+    // be reported as running until the app actually answers.
+    expect(result.environment_instance?.status).toBe('starting');
+    expect(updateEnvironment).not.toHaveBeenCalled();
+    expect(syncEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('still reaches running when the variant defines no sync command', async () => {
+    const branch = remoteBranch();
+    const service = serviceFor(branch);
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    vi.spyOn(service, 'syncEnvironment').mockRejectedValue(
+      new Error('Environment variant "local" defines no sync command')
+    );
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    // The catch-up sync is fire-and-forget; a variant without `sync` must not
+    // break the health check that triggered it.
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(result.environment_instance?.status).toBe('running');
+  });
+});
