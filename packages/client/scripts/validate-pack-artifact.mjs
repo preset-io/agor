@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
+import path, { delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -74,22 +74,52 @@ const typeFiles = packedFiles.filter(
   (file) => file.endsWith('.d.ts') || file.endsWith('.d.cts') || file.endsWith('.d.mts')
 );
 
-// Matches import/export/require statements referencing @agor/core, but not
-// occurrences inside comments or doc-strings.
-const importPattern = /(?:^|[\s;])(?:import|export|require)\s.*['"]@agor\/core(?:\/[^'"]*)?['"]/m;
+// Matches imports of private workspace packages, but not comments or doc-strings.
+const workspaceImportPattern =
+  /(?:^|[\s;])(?:import|export|require)\s.*['"]@agor\/(?:core|agentic-tools|agentic-tool-opencode)(?:\/[^'"]*)?['"]/m;
 
 for (const file of runtimeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (importPattern.test(content)) {
-    fail(`Runtime artifact still references @agor/core: ${path.relative(packedRoot, file)}`);
+  if (workspaceImportPattern.test(content)) {
+    fail(
+      `Runtime artifact still references a workspace package: ${path.relative(packedRoot, file)}`
+    );
   }
 }
 
 for (const file of typeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (importPattern.test(content)) {
-    fail(`Type artifact still references @agor/core: ${path.relative(packedRoot, file)}`);
+  if (workspaceImportPattern.test(content)) {
+    fail(`Type artifact still references a workspace package: ${path.relative(packedRoot, file)}`);
   }
+}
+
+const requiredCompatibilityExports = [
+  'TOOL_API_KEY_NAMES',
+  'AGENTIC_TOOL_DISPLAY_NAMES',
+  'AGENTIC_TOOL_KEY_CREATION_URL',
+  'AGENTIC_TOOL_CAPABILITIES',
+];
+try {
+  execFileSync(
+    process.execPath,
+    [
+      '-e',
+      `const client = require(${JSON.stringify(path.join(packedRoot, 'dist/index.cjs'))}); for (const name of ${JSON.stringify(requiredCompatibilityExports)}) { if (!(name in client)) throw new Error('Missing runtime export: ' + name); }`,
+    ],
+    {
+      env: {
+        ...process.env,
+        NODE_PATH: [path.join(packageDir, 'node_modules'), process.env.NODE_PATH]
+          .filter(Boolean)
+          .join(delimiter),
+      },
+    }
+  );
+} catch (error) {
+  fail(
+    `Packed client is missing agentic-tool compatibility exports: ${error instanceof Error ? error.message : String(error)}`
+  );
 }
 
 try {
@@ -102,5 +132,5 @@ try {
 }
 
 if (!process.exitCode) {
-  console.log('✅ npm pack artifact is standalone (no workspace deps or @agor/core references)');
+  console.log('✅ npm pack artifact is standalone (no private workspace references)');
 }

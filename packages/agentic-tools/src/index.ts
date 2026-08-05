@@ -1,5 +1,5 @@
 import { OPENCODE_INTEGRATION } from '@agor/agentic-tool-opencode';
-import type { AgenticToolName, PersistedAgenticToolName } from '@agor/core/types';
+import type { AgenticToolName } from '@agor/core/types';
 import type {
   AgenticToolDisplayNames,
   AgenticToolIntegration,
@@ -121,7 +121,3 @@ export const AGENTIC_TOOL_DISPLAY_NAMES = Object.freeze({
   ),
   'claude-code-cli': 'Claude Code CLI (removed)',
 }) as AgenticToolDisplayNames;
-
-export function getAgenticToolDisplayName(tool: PersistedAgenticToolName): string {
-  return AGENTIC_TOOL_DISPLAY_NAMES[tool];
-}

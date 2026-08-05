@@ -530,7 +530,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@opencode-ai/sdk':
-        specifier: ^1.2.20
+        specifier: 1.14.33
         version: 1.14.33
     devDependencies:
       '@ant-design/icons':
@@ -676,7 +676,7 @@ importers:
         specifier: ^0.144.0
         version: 0.144.0
       '@opencode-ai/sdk':
-        specifier: ^1.2.20
+        specifier: 1.14.33
         version: 1.14.33
       '@slack/socket-mode':
         specifier: ^2.0.7
@@ -829,6 +829,9 @@ importers:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
     devDependencies:
+      '@agor/agentic-tools':
+        specifier: workspace:*
+        version: link:../agentic-tools
       '@agor/core':
         specifier: workspace:*
         version: link:../core

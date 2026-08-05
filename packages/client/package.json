@@ -52,6 +52,7 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
