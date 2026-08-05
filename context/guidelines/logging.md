@@ -1,9 +1,11 @@
 # Operational logging guidelines
 
-**Keep the operational stream lean.** Its job is to answer, at a somewhat high level, “what was
-the system doing at the time?” An operator should be able to follow meaningful lifecycle changes
-and outcomes without searching through implementation chatter. Logs are a safe, bounded system
-narrative—not a transcript, payload archive, exhaustive trace, or metrics warehouse.
+Operational logs should tell a safe, bounded story of what Agor did. They are an event stream for
+operators, not a transcript, payload archive, or metrics warehouse.
+
+**Keep that story lean.** Its job is to answer, at a somewhat high level, “what was the system doing
+at the time?” An operator should be able to follow meaningful lifecycle changes and outcomes
+without searching through implementation chatter.
 
 ## Current surfaces and responsibilities
 
