@@ -326,6 +326,19 @@ describe('termination coordinator', () => {
     });
   });
 
+  it('generically contains historical Claude CLI work during recovery', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    const state = appDouble('claude-code-cli');
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(task(TaskStatus.FAILED));
+
+    await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.FAILED },
+    });
+    expect(containExecutorProcess).toHaveBeenCalledWith(sessionId, taskId);
+  });
+
   it('requires the short Task ID before force-failing unverified work', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
     const state = appDouble();

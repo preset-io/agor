@@ -27,12 +27,12 @@ import {
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
 import type {
-  AgenticToolName,
   AuthCheckResult,
   AuthCheckStatus,
   AuthenticatedParams,
   UserID,
 } from '@agor/core/types';
+import { isAgenticToolName } from '@agor/core/types';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
 import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
@@ -311,26 +311,24 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
+      if (!isAgenticToolName(tool)) return unknown('Unsupported tool');
+
       const userId = params?.user?.user_id as UserID | undefined;
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for agent authentication');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      if (
-        !(await withTenantDatabase((tenantDb) =>
-          isTenantAgenticToolEnabled(tool as AgenticToolName, tenantDb)
-        ))
-      ) {
+      if (!(await withTenantDatabase((tenantDb) => isTenantAgenticToolEnabled(tool, tenantDb)))) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
       // Integrations without host-managed credentials are ready at this boundary.
-      if (getAgenticToolIntegration(tool as AgenticToolName).authentication === 'none') {
+      if (getAgenticToolIntegration(tool).authentication === 'none') {
         return authed('native');
       }
 
-      const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];
+      const keyName = TOOL_API_KEY_NAMES[tool];
       if (!keyName) {
         return unknown('Unsupported tool');
       }
@@ -360,13 +358,12 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
-      const toolName = tool as AgenticToolName;
       const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
         (tenantDb) =>
           resolveApiKey(keyName, {
             userId,
             db: tenantDb,
-            tool: toolName,
+            tool,
           })
       );
 

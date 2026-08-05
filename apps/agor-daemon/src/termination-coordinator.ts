@@ -2,14 +2,14 @@ import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import { shortId } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
-  AgenticToolName,
   Params,
+  PersistedAgenticToolName,
   SdkFailure,
   Task,
   TaskID,
   TerminationCause,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import { containExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
 
@@ -70,7 +70,7 @@ async function claimRequest(input: TerminationInput) {
   );
 }
 
-async function loadAgenticTool(input: TerminationInput): Promise<AgenticToolName> {
+async function loadAgenticTool(input: TerminationInput): Promise<PersistedAgenticToolName> {
   const task = await input.app.service('tasks').get(input.taskId, internalParams(input.params));
   const session = await input.app
     .service('sessions')
@@ -114,7 +114,7 @@ async function waitForExecutorQuiescence(input: TerminationInput, requested: Tas
 async function runContainment(
   input: TerminationInput,
   requested: Task,
-  tool: AgenticToolName
+  tool: PersistedAgenticToolName
 ): Promise<TerminationResult> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   const current = await waitForExecutorQuiescence(input, requested);
@@ -145,7 +145,9 @@ async function runContainment(
     untrackExecutorProcess(current.session_id, current.task_id);
     return { status: 'terminal', task: current };
   }
-  const providerUnverifiedReason = getAgenticToolIntegration(tool).unverifiedTerminationReason;
+  const providerUnverifiedReason = isAgenticToolName(tool)
+    ? getAgenticToolIntegration(tool).unverifiedTerminationReason
+    : undefined;
   const unverifiedReason =
     containment.status === 'unverified' ? containment.reason : providerUnverifiedReason;
   if (unverifiedReason !== undefined) {
@@ -211,7 +213,7 @@ export async function requestExecutorTermination(
 function startContainment(
   input: TerminationInput,
   requested: Task,
-  tool: AgenticToolName
+  tool: PersistedAgenticToolName
 ): Promise<TerminationResult> {
   const existing = operations.get(requested.task_id);
   if (existing) return existing;

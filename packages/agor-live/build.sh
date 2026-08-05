@@ -335,11 +335,7 @@ rm -rf "$SCRIPT_DIR/dist.old"
 
 echo ""
 echo "📦 Setting up @agor package symlinks for local development..."
-mkdir -p "$SCRIPT_DIR/node_modules/@agor"
-for package_name in core git; do
-  rm -rf "$SCRIPT_DIR/node_modules/@agor/$package_name"
-  ln -s "../../dist/$package_name" "$SCRIPT_DIR/node_modules/@agor/$package_name"
-done
+node "$SCRIPT_DIR/scripts/postinstall.js"
 
 # ── Package sizes ────────────────────────────────────────────────────────────
 

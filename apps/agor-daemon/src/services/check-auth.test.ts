@@ -151,6 +151,17 @@ describe('check-auth Claude subscription tokens', () => {
 describe('check-auth tri-state', () => {
   const params = { user: { user_id: 'user-1' } } as never;
 
+  it('rejects unsupported tools before reading tenant settings', async () => {
+    await expect(service().create({ tool: 'unsupported' }, params)).resolves.toEqual({
+      status: 'unknown',
+      authenticated: false,
+      method: 'none',
+      hint: 'Unsupported tool',
+    });
+    expect(isTenantAgenticToolEnabledMock).not.toHaveBeenCalled();
+    expect(resolveApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it('claude stored API key rejected with 401 → unauthenticated', async () => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: 'sk-bad', source: 'user', useNativeAuth: false });
     const fetchMock = vi
