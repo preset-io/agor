@@ -540,13 +540,16 @@ describe('runCatalogIngestion', () => {
     });
 
     expect(result.withdrawn).toBe(1);
-    // The card survives with its curation; only the connect surface is gone.
+    // The registry withdrew its own listing, not the curator's. `curated.yaml`
+    // still names this endpoint, so it stays on offer and the curator decides
+    // whether to remove the entry. Blanking it here would not have held anyway:
+    // the next seed re-derives the row from the curation side and restores it.
     expect(await repository.findByName('io.sentry/mcp')).toMatchObject({
       benefit: 'Hand-written benefit',
       curated: true,
-      has_remote: false,
-      remote_url: undefined,
-      transport: undefined,
+      has_remote: true,
+      remote_url: 'https://mcp.sentry.dev/mcp',
+      transport: 'streamable-http',
     });
   });
 

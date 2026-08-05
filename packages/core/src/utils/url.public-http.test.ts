@@ -109,6 +109,12 @@ describe('globally reachable address space', () => {
     ['100::1', 'discard-only'],
     ['2001::1', 'Teredo'],
     ['2001:2::1', 'benchmarking'],
+    ['2001:10::1', 'deprecated ORCHID'],
+    ['2001:5::1', 'an unlisted allocation inside IETF Protocol Assignments'],
+    ['3fff::1', 'documentation'],
+    ['5f00::1', 'SRv6 SIDs'],
+    ['64:ff9b:1::1', 'IPv4-IPv6 translation, local use'],
+    ['100:0:0:1::1', 'dummy prefix'],
     ['2001:db8::1', 'documentation'],
     ['2002::1', 'deprecated 6to4'],
     ['fc00::1', 'unique-local'],
@@ -137,12 +143,39 @@ describe('globally reachable address space', () => {
     ['2001:4860:4860::8888', 'public IPv6 resolver'],
     ['2606:2800:220::1', 'public IPv6 host'],
     ['2a00:1450:4001:80f::200e', 'public IPv6 host'],
+    // Carved back out of the denied `2001::/23` parent because the registry
+    // marks each of these globally reachable.
+    ['2001:1::1', 'Port Control Protocol anycast'],
+    ['2001:1::2', 'TURN anycast'],
+    ['2001:1::3', 'DNS-SD Service Registration Protocol anycast'],
+    ['2001:3::1', 'AMT'],
+    ['2001:4:112::1', 'AS112-v6'],
+    ['2001:20::1', 'ORCHIDv2'],
+    ['2001:30::1', 'Drone Remote ID Protocol Entity Tags'],
+    ['2620:4f:8000::1', 'Direct Delegation AS112'],
   ];
 
   it.each(globallyReachable)('allows %s (%s) through both paths', (address) => {
     const host = address.includes(':') ? `[${address}]` : address;
     expect(isPrivateIpAddress(address)).toBe(false);
     expect(isPublicHttpUrl(`http://${host}/`)).toBe(true);
+  });
+
+  it('refuses an unlisted allocation inside a denied parent block', () => {
+    // The structural property. `2001::/23` is denied as a whole and only the
+    // sub-blocks the registry marks reachable are admitted, so an allocation
+    // nobody has heard of yet is refused rather than waiting to be enumerated.
+    expect(isPrivateIpAddress('2001:5::1')).toBe(true);
+    expect(isPrivateIpAddress('2001:ff::1')).toBe(true);
+    expect(isPublicHttpUrl('http://[2001:5::1]/')).toBe(false);
+  });
+
+  it('refuses the NAT64 well-known prefix despite its registry marking', () => {
+    // Deliberately stricter than the registry: an address here embeds an
+    // arbitrary IPv4 destination, so reaching it is a route into whatever that
+    // address turns out to be — including RFC 1918.
+    expect(isPrivateIpAddress('64:ff9b::7f00:1')).toBe(true);
+    expect(isPrivateIpAddress('64:ff9b::a00:1')).toBe(true);
   });
 
   it('refuses an address it cannot parse rather than assuming it is public', () => {

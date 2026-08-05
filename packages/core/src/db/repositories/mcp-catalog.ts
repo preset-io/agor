@@ -474,11 +474,14 @@ export class MCPCatalogRepository {
    * Retire a row the registry has withdrawn.
    *
    * An uncurated row is deleted outright: it exists only to mirror a registry
-   * record that no longer exists. A curated row is kept but has its
-   * registry-owned connect surface cleared, so it stops being offered without
-   * silently destroying hand-written curation — the curator is told through the
-   * returned outcome and decides whether to remove the entry from
-   * `curated.yaml`.
+   * record that no longer exists.
+   *
+   * A curated row keeps its curation and is re-derived from it. The registry
+   * source stops being live — its stored values, its mirror marker, and its
+   * identity columns all go — so an endpoint the registry published is
+   * withdrawn while one `curated.yaml` supplies stays on offer. The curator is
+   * told through the returned outcome and decides whether to drop the entry;
+   * until they do, the file remains the source of truth for what is offered.
    */
   async retireWithdrawnEntry(name: string): Promise<'deleted' | 'retired-curated' | 'absent'> {
     const existing = await this.rawByName(name);
@@ -491,25 +494,31 @@ export class MCPCatalogRepository {
       return 'deleted';
     }
 
-    // The endpoint has to leave the registry's stored side as well, not just the
-    // column: the next curation seed re-derives the row, and a `remote_url` left
-    // sitting in `data.registry` would put the withdrawn server straight back on
-    // offer.
+    // The registry source stops being live, not merely loses its endpoint. Every
+    // signal that says "the registry publishes this" has to go together —
+    // `data.registry`, the mirror marker, and the `version` / `registry_updated_at`
+    // columns — because a curation withdrawal later reads all of them to decide
+    // whether anything is left underneath the overlay. Leaving any one behind
+    // turns a withdrawn server into a browsable uncurated row.
     const data = existing.data ?? {};
-    const { remote_url, transport, ...registrySide } = data.registry ?? {};
+    const { registry, ...remaining } = withoutProbeMetadata(data);
+    // Re-derived from whatever source is still live rather than blanked: only
+    // the registry withdrew, so an endpoint curation still supplies is still the
+    // file's answer and stays on offer.
+    const shared = deriveSharedColumns({}, data.curation ?? {});
+    const probeReset = probeInvalidation(existing.remote_url, shared.remote_url);
+
     await update(this.db, mcpCatalogEntries)
       .set({
-        remote_url: null,
-        has_remote: false,
-        transport: null,
-        // The verdict described an endpoint that is no longer offered.
-        probed_auth_type: 'unknown',
-        probed_at: null,
-        auth_server_origin: null,
+        ...shared,
+        has_remote: Boolean(shared.remote_url),
+        version: null,
+        registry_updated_at: null,
+        ...(probeReset ?? {}),
         updated_at: new Date(),
         data: {
-          ...withoutProbeMetadata(data),
-          registry: registrySide,
+          ...remaining,
+          registry_mirrored: false,
           registry_status: 'deleted',
         },
       })
@@ -572,14 +581,17 @@ export class MCPCatalogRepository {
     if (!existing?.curated) return 'absent';
 
     const data = existing.data ?? {};
-    // The fallback covers rows mirrored before the marker existed; both signals
-    // are registry-only, so neither can be true of a curation-created row.
-    const registryMirrored =
+    // "Live", not "ever mirrored": a withdrawn registry source clears all three
+    // of these together, so a row whose registry half is gone is deleted rather
+    // than left browsable with nothing behind it. The version and timestamp
+    // columns are the fallback for rows mirrored before the marker existed;
+    // both are registry-only, so neither can be true of a curation-created row.
+    const registryIsLive =
       data.registry_mirrored === true ||
       existing.version !== null ||
       existing.registry_updated_at !== null;
 
-    if (!registryMirrored) {
+    if (!registryIsLive) {
       await deleteFrom(this.db, mcpCatalogEntries)
         .where(eq(mcpCatalogEntries.catalog_entry_id, existing.catalog_entry_id))
         .run();

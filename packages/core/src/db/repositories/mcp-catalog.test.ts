@@ -735,3 +735,93 @@ describe('handing a field back to the registry', () => {
     }
   );
 });
+
+describe('a registry withdrawal followed by a curation change', () => {
+  const curation = (
+    name: string,
+    overrides: Partial<MCPCatalogCurationUpsert> = {}
+  ): MCPCatalogCurationUpsert => ({
+    name,
+    category: 'dev-tools',
+    capabilities: ['code-repos'],
+    benefit: 'Benefit',
+    starter_prompt: 'Prompt',
+    permission_disclosure: 'Discloses things',
+    verified: true,
+    ...overrides,
+  });
+
+  const withdrawnRow = async (repository: MCPCatalogRepository) => {
+    await repository.upsertRegistryEntry({
+      name: 'com.example/mcp',
+      version: '1.2.3',
+      remote_url: 'https://registry.example.com/mcp',
+      transport: 'streamable-http',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(
+      curation('com.example/mcp', {
+        remote_url: 'https://curated.example.com/mcp',
+        transport: 'sse',
+      })
+    );
+    expect(await repository.retireWithdrawnEntry('com.example/mcp')).toBe('retired-curated');
+  };
+
+  dbTest('keeps offering the endpoint curation still supplies', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await withdrawnRow(repository);
+
+    // Only the registry withdrew. The curated endpoint is still the file's
+    // answer, so wiping it leaves the row unconnectable until a later seed
+    // happens to put it back.
+    expect(await repository.findByName('com.example/mcp')).toMatchObject({
+      remote_url: 'https://curated.example.com/mcp',
+      transport: 'sse',
+      has_remote: true,
+    });
+  });
+
+  dbTest('deletes rather than uncurates when the overlay is then removed', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await withdrawnRow(repository);
+
+    // Nothing publishes this server any more, so there is no registry half to
+    // fall back to. Leaving a row behind puts a withdrawn server back on offer
+    // with no curation behind it.
+    expect(await repository.retireCuration('com.example/mcp')).toBe('deleted');
+    expect(await repository.findByName('com.example/mcp')).toBeNull();
+  });
+
+  dbTest('does not leave the old name behind when the entry is renamed', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await withdrawnRow(repository);
+
+    // A rename is a delete plus an add against the natural key.
+    await repository.upsertCuration(curation('com.example/renamed-mcp'));
+    expect(await repository.retireCuration('com.example/mcp')).toBe('deleted');
+
+    expect(await repository.findByName('com.example/mcp')).toBeNull();
+    expect(await repository.findByName('com.example/renamed-mcp')).toMatchObject({
+      curated: true,
+    });
+  });
+
+  dbTest('still uncurates a row the registry continues to publish', async ({ db }) => {
+    const repository = new MCPCatalogRepository(db);
+    await repository.upsertRegistryEntry({
+      name: 'com.live/mcp',
+      version: '1.2.3',
+      description: 'Registry description',
+      registry_updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    await repository.upsertCuration(curation('com.live/mcp'));
+
+    // The counterfactual: no withdrawal, so the registry half survives.
+    expect(await repository.retireCuration('com.live/mcp')).toBe('uncurated');
+    expect(await repository.findByName('com.live/mcp')).toMatchObject({
+      curated: false,
+      description: 'Registry description',
+    });
+  });
+});

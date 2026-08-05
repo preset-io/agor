@@ -61,6 +61,10 @@ describe('createGuardedLookup', () => {
     ['deprecated 6to4', '2002::1'],
     ['NAT64 well-known prefix', '64:ff9b::1'],
     ['TEST-NET-3', '203.0.113.1'],
+    ['Teredo', '2001::1'],
+    ['an unlisted IETF Protocol Assignments sub-block', '2001:5::1'],
+    ['SRv6 SIDs', '5f00::1'],
+    ['new documentation space', '3fff::1'],
   ])(
     'refuses a name resolving into %s, which is not globally reachable',
     async (_label, address) => {
@@ -70,6 +74,13 @@ describe('createGuardedLookup', () => {
       await expect(resolveThrough(lookup, 'evil.example')).rejects.toThrow(/Refusing to connect/);
     }
   );
+
+  it('still admits the reachable blocks carved out of a denied parent', async () => {
+    // ORCHIDv2 sits inside `2001::/23`, which is denied wholesale; the registry
+    // marks it globally reachable, so it has to survive the parent deny.
+    const lookup = createGuardedLookup(answering('2001:20::1'));
+    await expect(resolveThrough(lookup, 'orchid.example')).resolves.toBe('2001:20::1');
+  });
 
   it('refuses when only one of several answers is private', async () => {
     // The whole point of pinning: a record mixing a public and a private

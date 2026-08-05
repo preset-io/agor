@@ -412,19 +412,50 @@ function parseIPv6(input: string): number[] | null {
 }
 
 /**
- * IPv6 blocks inside global unicast that are still not globally reachable.
+ * Allocations inside `2000::/3` that the IANA IPv6 Special-Purpose Address
+ * Registry does not mark globally reachable.
  *
- * Everything outside `2000::/3` — loopback, unique-local, link-local,
- * multicast, the deprecated site-local range, NAT64, discard-only — is already
- * refused by the allowlist, so only the exceptions carved out of global unicast
- * need naming here.
+ * `2001::/23` is listed as the whole IETF Protocol Assignments block, not as its
+ * individual sub-allocations. Denying the parent is the point: Teredo,
+ * benchmarking and the deprecated ORCHID range are refused without being named,
+ * and the next allocation carved out of that block is refused before anyone
+ * hears about it. Enumerating sub-blocks instead is what turns each new
+ * allocation into a fresh finding.
  */
 const IPV6_NON_GLOBAL_UNICAST: ReadonlyArray<readonly [string, number]> = [
-  ['2001:0:0:0:0:0:0:0', 32], // Teredo
-  ['2001:2:0:0:0:0:0:0', 48], // benchmarking
-  ['2001:db8:0:0:0:0:0:0', 32], // documentation
-  ['2002:0:0:0:0:0:0:0', 16], // deprecated 6to4
+  ['2001::', 23], // IETF Protocol Assignments
+  ['2001:db8::', 32], // documentation
+  ['2002::', 16], // deprecated 6to4
+  ['3fff::', 20], // documentation
 ];
+
+/**
+ * Sub-allocations the registry does mark globally reachable, carved back out of
+ * a denied parent above. Matched first, so the most specific listing wins.
+ */
+const IPV6_GLOBAL_EXCEPTIONS: ReadonlyArray<readonly [string, number]> = [
+  ['2001:1::1', 128], // Port Control Protocol anycast
+  ['2001:1::2', 128], // TURN anycast
+  ['2001:1::3', 128], // DNS-SD Service Registration Protocol anycast
+  ['2001:3::', 32], // AMT
+  ['2001:4:112::', 48], // AS112-v6
+  ['2001:20::', 28], // ORCHIDv2
+  ['2001:30::', 28], // Drone Remote ID Protocol Entity Tags
+];
+
+/** True when eight 16-bit groups fall inside a CIDR block. */
+function matchesIPv6Prefix(groups: number[], base: string, prefix: number): boolean {
+  const blockGroups = parseIPv6(base);
+  if (blockGroups === null) return false;
+  let bitsLeft = prefix;
+  for (let index = 0; index < 8 && bitsLeft > 0; index += 1) {
+    const take = Math.min(16, bitsLeft);
+    const mask = take === 16 ? 0xffff : (0xffff << (16 - take)) & 0xffff;
+    if ((groups[index] & mask) !== (blockGroups[index] & mask)) return false;
+    bitsLeft -= take;
+  }
+  return true;
+}
 
 /** True when an IPv6 literal sits in globally reachable unicast space. */
 function isGloballyReachableIPv6(host: string): boolean {
@@ -440,30 +471,27 @@ function isGloballyReachableIPv6(host: string): boolean {
     return isGloballyReachableIPv4(embedded);
   }
 
-  // The allowlist: global unicast is 2000::/3 and nothing else.
+  // The allowlist: global unicast is 2000::/3 and nothing else. Everything
+  // below it — loopback, unique-local, link-local, multicast, site-local,
+  // NAT64, discard-only, SRv6 SIDs — is refused without being enumerated.
+  //
+  // Stricter than the registry in one place, deliberately: it marks the NAT64
+  // well-known prefix globally reachable, but an address there embeds an
+  // arbitrary IPv4 destination, so reaching it is a route into whatever that
+  // IPv4 address turns out to be.
   if ((groups[0] & 0xe000) !== 0x2000) return false;
 
+  for (const [base, prefix] of IPV6_GLOBAL_EXCEPTIONS) {
+    if (matchesIPv6Prefix(groups, base, prefix)) return true;
+  }
   for (const [base, prefix] of IPV6_NON_GLOBAL_UNICAST) {
-    const blockGroups = parseIPv6(base);
-    if (blockGroups === null) continue;
-    let bitsLeft = prefix;
-    let matches = true;
-    for (let index = 0; index < 8 && bitsLeft > 0; index += 1) {
-      const take = Math.min(16, bitsLeft);
-      const mask = take === 16 ? 0xffff : ((0xffff << (16 - take)) & 0xffff) >>> 0;
-      if ((groups[index] & mask) !== (blockGroups[index] & mask)) {
-        matches = false;
-        break;
-      }
-      bitsLeft -= take;
-    }
-    if (matches) return false;
+    if (matchesIPv6Prefix(groups, base, prefix)) return false;
   }
   return true;
 }
 
 /**
- * True when a resolved IP literal is outside the public internet.
+ * True when a resolved IP literal is outside globally reachable space.
  *
  * Takes the numeric address a resolver returned, not a hostname, so it is the
  * check to apply between resolution and connection. Anything unparseable is
@@ -471,9 +499,9 @@ function isGloballyReachableIPv6(host: string): boolean {
  *
  * Kept here beside {@link isPublicHttpUrl} so both halves of the outbound
  * filter — the URL a caller was handed and the address it actually resolves to
- * — share one definition of "private". This file is browser-safe by design (see
- * the header note about `node:crypto`), so the resolve-and-pin machinery that
- * consumes this lives in `utils/pinned-fetch.ts` instead.
+ * — share one definition. This file is browser-safe by design (see the header
+ * note about `node:crypto`), so the resolve-and-pin machinery that consumes
+ * this lives in `utils/pinned-fetch.ts` instead.
  */
 export function isPrivateIpAddress(address: string): boolean {
   const literal = address.trim().replace(/^\[|\]$/g, '');
