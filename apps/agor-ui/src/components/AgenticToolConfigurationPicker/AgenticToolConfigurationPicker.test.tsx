@@ -127,7 +127,7 @@ describe('AgenticToolConfigurationPicker', () => {
     );
 
     rerender(<Harness owner={userWithConfigDefault} resolved />);
-    await screen.findByText(/My default · Claude Sonnet 5 · Accept edits/);
+    await screen.findByText(/My default · Claude Sonnet 5 — 1M · Accept edits/);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onFinish).toHaveBeenCalledOnce());
